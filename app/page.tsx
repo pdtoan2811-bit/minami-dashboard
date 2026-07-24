@@ -19,15 +19,16 @@ export default function Page() {
         <span className="text-2xl">🌸</span>
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Minami Dashboard</h1>
-          <p className="text-xs text-neutral-500">Holding the thread · mock data</p>
+          <p className="text-xs text-neutral-500">Holding the thread · live snapshot · 2026-07-24</p>
         </div>
       </header>
 
       <Card>
         <CardHeader><Zap className="h-4 w-4 text-[--sakura]" /><CardTitle>Token log</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-2 gap-4">
-          <Stat label="Today" value={tokenLog.todayTokens.toLocaleString()} sub={`$${tokenLog.todayCostUsd.toFixed(2)}`} />
-          <Stat label="This week" value={tokenLog.weekTokens.toLocaleString()} sub={`$${tokenLog.weekCostUsd.toFixed(2)}`} />
+        <CardContent>
+          {tokenLog.connected ? null : (
+            <p className="text-sm text-neutral-400">No usage source connected yet — per-session cost lands here once Minami logs it.</p>
+          )}
         </CardContent>
       </Card>
 
