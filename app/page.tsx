@@ -1,0 +1,81 @@
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { analytics, people, taskLog, tokenLog, traceBack } from "@/lib/data";
+import { Activity, GitBranch, ListTodo, Users, Zap } from "lucide-react";
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-xs text-neutral-500">{label}</span>
+      <span className="text-2xl font-semibold tracking-tight">{value}</span>
+      {sub && <span className="text-xs text-neutral-400">{sub}</span>}
+    </div>
+  );
+}
+
+export default function Page() {
+  return (
+    <main className="mx-auto flex max-w-md flex-col gap-4 px-4 pb-16 pt-8">
+      <header className="flex items-center gap-2">
+        <span className="text-2xl">🌸</span>
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Minami Dashboard</h1>
+          <p className="text-xs text-neutral-500">Holding the thread · mock data</p>
+        </div>
+      </header>
+
+      <Card>
+        <CardHeader><Zap className="h-4 w-4 text-[--sakura]" /><CardTitle>Token log</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-2 gap-4">
+          <Stat label="Today" value={tokenLog.todayTokens.toLocaleString()} sub={`$${tokenLog.todayCostUsd.toFixed(2)}`} />
+          <Stat label="This week" value={tokenLog.weekTokens.toLocaleString()} sub={`$${tokenLog.weekCostUsd.toFixed(2)}`} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><ListTodo className="h-4 w-4 text-[--sakura]" /><CardTitle>Task log</CardTitle></CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {taskLog.map((t) => (
+            <div key={t.id} className="flex items-center justify-between gap-3 text-sm">
+              <span className="truncate">{t.title}</span>
+              <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500 dark:bg-white/10">{t.status}</span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><GitBranch className="h-4 w-4 text-[--sakura]" /><CardTitle>Trace-back</CardTitle></CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {traceBack.map((t) => (
+            <div key={t.id} className="text-sm">
+              <span className="font-medium">{t.chat}</span>
+              <span className="text-neutral-400"> → {t.where}</span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><Activity className="h-4 w-4 text-[--sakura]" /><CardTitle>Analytics</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-2 gap-4">
+          <Stat label="Active projects" value={String(analytics.activeProjects)} />
+          <Stat label="Open tasks" value={String(analytics.openTasks)} />
+          <Stat label="Notes" value={String(analytics.notesTotal)} />
+          <Stat label="Captures / 7d" value={String(analytics.captureRate7d)} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><Users className="h-4 w-4 text-[--sakura]" /><CardTitle>People around me</CardTitle></CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {people.map((p) => (
+            <div key={p.id} className="flex items-center justify-between text-sm">
+              <span>{p.name}</span>
+              <span className="text-xs text-neutral-400">{p.relation} · {p.lastTouch}</span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </main>
+  );
+}

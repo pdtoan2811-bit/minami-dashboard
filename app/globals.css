@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+:root {
+  --sakura: #e8859b;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+}
