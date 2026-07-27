@@ -49,6 +49,11 @@ function costOf(e) {
     (e.outputTokens || 0) / 1e6 * p.out
   );
 }
+// What the same turn WOULD cost on Opus — the baseline savings are measured against.
+const OPUS = PRICES["claude-opus-4-8"];
+function opusOf(e) {
+  return ((e.inputTokens || 0) + (e.cacheReadTokens || 0) * 0.1) / 1e6 * OPUS.in + (e.outputTokens || 0) / 1e6 * OPUS.out;
+}
 
 const sseClients = new Set();
 function broadcast(ev) {
@@ -72,10 +77,11 @@ function readEvents() {
 function aggregate() {
   const evs = readEvents();
   const bySource = {}, byModel = {};
-  let totalIn = 0, totalOut = 0, cost = 0;
+  let totalIn = 0, totalOut = 0, cost = 0, opusCost = 0;
   for (const e of evs) {
     const c = costOf(e);
     cost += c;
+    opusCost += opusOf(e);
     totalIn += e.inputTokens || 0;
     totalOut += e.outputTokens || 0;
     const s = (bySource[e.source] ||= { source: e.source, events: 0, inTok: 0, outTok: 0, cost: 0, lastTs: 0 });
@@ -85,7 +91,7 @@ function aggregate() {
     m.events++; m.tok += (e.inputTokens || 0) + (e.outputTokens || 0); m.cost += c;
   }
   return {
-    totals: { events: evs.length, inTok: totalIn, outTok: totalOut, cost },
+    totals: { events: evs.length, inTok: totalIn, outTok: totalOut, cost, opusCost },
     bySource: Object.values(bySource).sort((a, b) => b.cost - a.cost),
     byModel: Object.values(byModel).sort((a, b) => b.cost - a.cost),
     recent: evs.slice(-25).reverse(),

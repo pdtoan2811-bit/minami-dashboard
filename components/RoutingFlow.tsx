@@ -1,90 +1,130 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { MODELS, OPUS_TIER, WORKLOAD, costUsd, tintOf, type Tier } from "@/lib/routing";
+import { useEffect, useState } from "react";
+import { MODELS, eventCost, opusEquivCost, tierFromModel } from "@/lib/routing";
 
-type Ev = { id: number; label: string; tier: Tier; tint: string; cost: number; opus: number };
-type Totals = { routed: number; opus: number; byTier: Record<string, number> };
+const METRICS_URL = (process.env.NEXT_PUBLIC_METRICS_URL || "").replace(/\/$/, "");
+const METRICS_KEY = process.env.NEXT_PUBLIC_METRICS_KEY || "";
+
+type Ev = { id: number; source: string; tier: string; tint: string; cost: number; opus: number };
+type State = { routed: number; opus: number; byTier: Record<string, number>; feed: Ev[] };
+
+const EMPTY: State = { routed: 0, opus: 0, byTier: {}, feed: [] };
+const SRC = (s: string) => (s === "local-mac" ? "Mac" : s === "minami-cloud" ? "cloud" : s);
+
+let counter = 0;
+function toEv(e: { source?: string; model?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }): Ev {
+  const m = tierFromModel(e.model);
+  return {
+    id: ++counter,
+    source: e.source || "unknown",
+    tier: m.tier,
+    tint: m.tint,
+    cost: eventCost(e.inputTokens, e.outputTokens, e.cacheReadTokens, e.model),
+    opus: opusEquivCost(e.inputTokens, e.outputTokens, e.cacheReadTokens),
+  };
+}
 
 export function RoutingFlow() {
-  const [events, setEvents] = useState<Ev[]>([]);
-  const [totals, setTotals] = useState<Totals>({ routed: 0, opus: 0, byTier: {} });
+  const [st, setSt] = useState<State>(EMPTY);
   const [live, setLive] = useState(false);
-  const idRef = useRef(0);
+  const q = METRICS_KEY ? `?k=${encodeURIComponent(METRICS_KEY)}` : "";
 
-  // Client-only: start empty (hydration-safe), then stream a sample workload through the router.
   useEffect(() => {
-    setLive(true);
-    const tick = () => {
-      const w = WORKLOAD[Math.floor(Math.random() * WORKLOAD.length)];
-      const cost = costUsd(w.in, w.out, w.tier);
-      const opus = costUsd(w.in, w.out, OPUS_TIER);
-      const ev: Ev = { id: ++idRef.current, label: w.label, tier: w.tier, tint: tintOf(w.tier), cost, opus };
-      setEvents((prev) => [ev, ...prev].slice(0, 6));
-      setTotals((prev) => ({
-        routed: prev.routed + cost,
-        opus: prev.opus + opus,
-        byTier: { ...prev.byTier, [w.tier]: (prev.byTier[w.tier] ?? 0) + 1 },
-      }));
-    };
-    tick();
-    const iv = setInterval(tick, 1300);
-    return () => clearInterval(iv);
-  }, []);
+    if (!METRICS_URL) return;
+    let cancelled = false;
+    let es: EventSource | null = null;
 
-  const saved = totals.opus > 0 ? (1 - totals.routed / totals.opus) * 100 : 0;
-  const pct = totals.opus > 0 ? Math.max(2, (totals.routed / totals.opus) * 100) : 100;
+    // Seed from history so the meter isn't empty on load.
+    fetch(METRICS_URL + "/stats" + q)
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled || !d?.totals) return;
+        const byTier: Record<string, number> = {};
+        for (const m of d.byModel || []) byTier[tierFromModel(m.model).tier] = (byTier[tierFromModel(m.model).tier] || 0) + m.events;
+        setSt({
+          routed: d.totals.cost || 0,
+          // Prefer the server's cache-accurate Opus baseline; fall back for older servers.
+          opus: d.totals.opusCost ?? opusEquivCost(d.totals.inTok, d.totals.outTok, 0),
+          byTier,
+          feed: (d.recent || []).slice(0, 6).map(toEv),
+        });
+      })
+      .catch(() => {});
+
+    try {
+      es = new EventSource(METRICS_URL + "/stream" + q);
+      es.onopen = () => setLive(true);
+      es.onerror = () => setLive(false);
+      es.onmessage = (msg) => {
+        let e: { hello?: boolean; source?: string; model?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number };
+        try { e = JSON.parse(msg.data); } catch { return; }
+        if (e.hello) return;
+        const ev = toEv(e);
+        setSt((prev) => ({
+          routed: prev.routed + ev.cost,
+          opus: prev.opus + ev.opus,
+          byTier: { ...prev.byTier, [ev.tier]: (prev.byTier[ev.tier] || 0) + 1 },
+          feed: [ev, ...prev.feed].slice(0, 6),
+        }));
+      };
+    } catch { /* no SSE */ }
+
+    return () => { cancelled = true; es?.close(); };
+  }, [q]);
+
+  if (!METRICS_URL) {
+    return (
+      <p className="text-sm text-neutral-400">
+        No live stream. Set <code className="text-xs">NEXT_PUBLIC_METRICS_URL</code> to stream real turns
+        routed across models from both machines.
+      </p>
+    );
+  }
+
+  const saved = st.opus > 0 ? (1 - st.routed / st.opus) * 100 : 0;
+  const pct = st.opus > 0 ? Math.max(2, (st.routed / st.opus) * 100) : 100;
 
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-3 gap-2">
-        <Metric label="Routed" value={`$${totals.routed.toFixed(4)}`} />
-        <Metric label="If all-Opus" value={`$${totals.opus.toFixed(4)}`} />
+        <Metric label="Routed" value={`$${st.routed.toFixed(4)}`} />
+        <Metric label="If all-Opus" value={`$${st.opus.toFixed(4)}`} />
         <Metric label="Saved" value={`${saved.toFixed(0)}%`} accent />
       </div>
 
-      {/* routed cost as a slice of the all-Opus bill */}
       <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-white/10">
-        <div
-          className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${pct}%`, background: "var(--sakura)" }}
-        />
+        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: "var(--sakura)" }} />
       </div>
 
-      {/* tier lanes with live counts */}
       <div className="grid grid-cols-4 gap-2">
         {MODELS.map((m) => (
           <div key={m.tier} className="flex flex-col items-center rounded-xl border border-black/5 py-2 dark:border-white/10">
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: m.tint }} />
             <span className="mt-1 text-[10px] font-medium">{m.tier.split(" ")[0]}</span>
-            <span className="text-[11px] tabular-nums text-neutral-400">{totals.byTier[m.tier] ?? 0}</span>
+            <span className="text-[11px] tabular-nums text-neutral-400">{st.byTier[m.tier] ?? 0}</span>
           </div>
         ))}
       </div>
 
       <div className="flex items-center gap-1.5 text-[10px] text-neutral-400">
         <span className={`h-1.5 w-1.5 rounded-full ${live ? "animate-pulse bg-green-500" : "bg-neutral-300"}`} />
-        live routing · sample stream
+        {live ? "live routing · real turns" : "connecting…"}
       </div>
 
       <div className="flex flex-col gap-1">
-        {events.map((e) => (
-          <div
-            key={e.id}
-            className="flex animate-[slidein_.4s_ease] items-center justify-between gap-2 rounded-lg bg-neutral-100/60 px-2 py-1 text-xs dark:bg-white/5"
-          >
+        {st.feed.map((e) => (
+          <div key={e.id} className="flex animate-[slidein_.4s_ease] items-center justify-between gap-2 rounded-lg bg-neutral-100/60 px-2 py-1 text-xs dark:bg-white/5">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: e.tint }} />
-              <span className="truncate">{e.label}</span>
+              <span className="truncate">{SRC(e.source)} · {e.tier.split(" ")[0]}</span>
             </span>
             <span className="shrink-0 text-[11px] text-neutral-400">
-              {e.tier.split(" ")[0]} ·{" "}
-              <span className="tabular-nums text-green-600 dark:text-green-400">
-                −${(e.opus - e.cost).toFixed(4)}
-              </span>
+              <span className="tabular-nums text-green-600 dark:text-green-400">−${(e.opus - e.cost).toFixed(4)}</span>
             </span>
           </div>
         ))}
+        {st.feed.length === 0 && <p className="text-xs text-neutral-400">Waiting for the next turn from either machine…</p>}
       </div>
     </div>
   );

@@ -25,26 +25,19 @@ export const ROUTING_RULES: { work: string; tier: Tier; why: string }[] = [
   { work: "very long autonomous run, hardest reasoning", tier: "Fable 5", why: "only when Opus visibly struggles — 2× Opus" },
 ];
 
-// Minami's real recurring jobs, each tagged with the tier the routing skill sends it to, plus a
-// typical token footprint so the live meter reflects the shape of real work (not billed spend).
-export const WORKLOAD: { label: string; tier: Tier; in: number; out: number }[] = [
-  { label: "grep the vault", tier: "Haiku 4.5", in: 4000, out: 300 },
-  { label: "check qone status", tier: "Haiku 4.5", in: 3000, out: 200 },
-  { label: "run sync.sh", tier: "Haiku 4.5", in: 1500, out: 150 },
-  { label: "draft a Slack reply", tier: "Sonnet 5", in: 6000, out: 1200 },
-  { label: "reconcile qone → vault", tier: "Sonnet 5", in: 50000, out: 10000 },
-  { label: "compact memory", tier: "Sonnet 5", in: 40000, out: 6000 },
-  { label: "hold the thread / decide", tier: "Opus 4.8", in: 20000, out: 4000 },
-  { label: "final reply anh reads", tier: "Opus 4.8", in: 15000, out: 3000 },
-];
-
-export const OPUS_TIER: Tier = "Opus 4.8";
-
-export function tintOf(tier: Tier): string {
-  return MODELS.find((m) => m.tier === tier)!.tint;
+// Resolve a real model id (e.g. "claude-sonnet-5") to its tier/price/tint. Defaults to Opus.
+export function tierFromModel(model?: string) {
+  return MODELS.find((m) => (model || "").includes(m.id)) || MODELS.find((m) => m.tier === "Opus 4.8")!;
 }
 
-export function costUsd(inTok: number, outTok: number, tier: Tier): number {
-  const m = MODELS.find((x) => x.tier === tier)!;
-  return (inTok / 1e6) * m.in + (outTok / 1e6) * m.out;
+// Actual cost of a real turn, given its token counts + model (cache reads billed at 0.1x input).
+export function eventCost(inTok = 0, outTok = 0, cacheTok = 0, model?: string): number {
+  const m = tierFromModel(model);
+  return ((inTok + cacheTok * 0.1) / 1e6) * m.in + (outTok / 1e6) * m.out;
+}
+
+// What the same turn WOULD have cost on Opus — the baseline the routing saving is measured against.
+const OPUS = MODELS.find((m) => m.tier === "Opus 4.8")!;
+export function opusEquivCost(inTok = 0, outTok = 0, cacheTok = 0): number {
+  return ((inTok + cacheTok * 0.1) / 1e6) * OPUS.in + (outTok / 1e6) * OPUS.out;
 }
