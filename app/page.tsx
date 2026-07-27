@@ -46,15 +46,20 @@ const iconOf = (p: string) => PROJECT_ICON[p] || "cube";
 // A 3D icon that, on hover of its parent `.group`, cross-fades from the front render to the
 // angled ("dynamic") render + a slight CSS 3D turn — a lightweight faux-3D rotation (the assets
 // are static renders, not GLB models). Active projects float gently.
+// 3D icon (transparent 3dicons render). Default premium motion: gently TILT, then ROTATE, on loop.
+// Hover faces it front + scales up. Active projects run the cycle a touch faster.
 function ProjectIcon({ name, big, active }: { name: string; big?: boolean; active?: boolean }) {
   const icon = iconOf(name);
-  const s = big ? "h-12 w-12" : "h-8 w-8";
+  const s = big ? "h-14 w-14" : "h-9 w-9";
   return (
-    <div className={`relative shrink-0 [perspective:520px] ${s} ${active ? "animate-[float_3s_ease-in-out_infinite]" : ""}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={`/icons/${icon}.webp`} alt="" draggable={false} className="absolute inset-0 h-full w-full object-contain drop-shadow-[0_6px_12px_rgba(0,0,0,0.45)] transition-opacity duration-300 group-hover:opacity-0" />
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={`/icons/${icon}-dyn.webp`} alt="" draggable={false} className="absolute inset-0 h-full w-full object-contain opacity-0 drop-shadow-[0_8px_16px_rgba(0,0,0,0.5)] transition-all duration-300 group-hover:opacity-100 group-hover:[transform:rotateY(-14deg)_scale(1.08)]" />
+    <div className={`relative shrink-0 [perspective:600px] ${s}`}>
+      <motion.img
+        src={`/icons/${icon}.webp`} alt="" draggable={false}
+        className="h-full w-full object-contain [transform-style:preserve-3d] drop-shadow-[0_10px_16px_rgba(0,0,0,0.5)]"
+        animate={{ rotateZ: [0, 7, 7, 0, 0], rotateY: [0, 0, 22, -22, 0] }}
+        transition={{ duration: active ? 6 : 8, times: [0, 0.14, 0.5, 0.86, 1], repeat: Infinity, ease: "easeInOut" }}
+        whileHover={{ scale: 1.16, rotateY: 0, rotateZ: 0 }}
+      />
     </div>
   );
 }
