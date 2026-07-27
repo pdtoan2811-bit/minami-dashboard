@@ -173,13 +173,19 @@ export default function BentoHome() {
             <div className={`grid auto-rows-[8.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
               {projects.map((p, i) => {
                 const r = p.weight / maxW;
-                const big = !proj && r >= 0.6, wide = !proj && !big && r >= 0.28;
+                const big = r >= 0.6, wide = !big && r >= 0.28;
                 const span = big ? "col-span-2 row-span-2" : wide ? "col-span-2" : "";
                 const pc = accent(p.name);
                 const activeSel = i === sel && !proj;
+                const age = Date.now() - p.last;
+                const status = p.active ? { label: "live", tint: "#4ade80", pulse: true }
+                  : age < 12 * 3600e3 ? { label: "recent", tint: "#e8859b", pulse: false }
+                  : age < 3 * 86400e3 ? { label: "active", tint: "#6c9cf5", pulse: false } : null;
+                const bright = activeSel || project === p.name || p.active;
+                const dim = bright ? 1 : age < 86400e3 ? 0.9 : age < 3 * 86400e3 ? 0.72 : age < 7 * 86400e3 ? 0.56 : 0.42;
                 return (
                   <motion.button layout key={p.name} data-i={i} onMouseEnter={() => setSel(i)} onClick={() => openProject(p)}
-                    initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} whileHover={{ y: -4 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}
+                    initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: dim, scale: 1 }} whileHover={{ y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}
                     style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)`, ["--sakura" as string]: "#e8859b" }}
                     className={`group relative flex flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left backdrop-blur ${span} ${
                       project === p.name ? "border-[--sakura] ring-1 ring-[--sakura]" : activeSel ? "border-[--sakura]/70 ring-1 ring-[--sakura] shadow-[0_22px_50px_-22px_rgba(232,133,155,0.6)]" : "border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_14px_34px_-18px_rgba(0,0,0,0.8)] hover:border-white/25"
@@ -187,7 +193,7 @@ export default function BentoHome() {
                     {p.active && <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl" style={{ background: pc + "44" }} />}
                     <div className="relative flex items-start justify-between">
                       <ProjectIcon name={p.name} big={big} active={p.active} />
-                      {p.active && <span className="flex items-center gap-1 text-[10px] text-green-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />live</span>}
+                      {status && <span className="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium" style={{ borderColor: status.tint + "55", color: status.tint, background: status.tint + "1e" }}>{status.pulse && <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: status.tint }} />}{status.label}</span>}
                     </div>
                     <p className={`relative mt-1.5 font-semibold tracking-tight ${big ? "text-xl" : "text-sm"}`}>{p.name}</p>
                     {big && <p className="relative mt-0.5 line-clamp-1 text-xs text-neutral-400">↳ {p.latest}</p>}
