@@ -41,3 +41,8 @@ body {
 .bento-in {
   animation: bentoIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}

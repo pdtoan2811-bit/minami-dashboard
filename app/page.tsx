@@ -16,14 +16,8 @@ type SessionMeta = {
 type Turn = { role: "user" | "assistant"; text: string; tools: { name: string; input: unknown }[]; ts: number; model?: string };
 
 const TIER_TINT: Record<string, string> = { Haiku: "#6cc4a1", Sonnet: "#e8859b", Opus: "#b98cff", Fable: "#f0a868" };
-const EMOJI: Record<string, string> = {
-  secondBrain: "🧠", ownegoCentral: "🏢", ownego: "🏢", ecomIntel: "🛍️", qdn: "🌐", qdnNewWebsite: "🌐",
-  "QSortby-website": "🔀", dataAnalyticsOwnego: "📊", adecosNew: "📦", adecosRMF: "📦", CV: "📄",
-  "claude-status-bar-acos": "📟", qikifyDataKnowledge: "📚", minami: "🌸",
-};
 const PALETTE = ["#e8859b", "#b98cff", "#6cc4a1", "#6c9cf5", "#f0a868", "#e86c8b"];
 function hashN(s: string) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); }
-const thumb = (p: string) => EMOJI[p] || "◆";
 const accent = (p: string) => PALETTE[hashN(p) % PALETTE.length];
 const short = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
 function ago(ms: number) {
@@ -38,6 +32,32 @@ function isTrivial(s: SessionMeta) {
 }
 const goalOf = (s: SessionMeta) => s.goal || "General";
 const titleOf = (s: SessionMeta) => s.task || s.title;
+
+// Project → 3D icon (assets from 3dicons.co, in /public/icons). Fallback: cube.
+const PROJECT_ICON: Record<string, string> = {
+  secondBrain: "bulb", minami: "magic-trick", ownegoCentral: "rocket", ownego: "rocket",
+  dataAnalyticsOwnego: "chart", qikifyDataKnowledge: "notebook", app: "mobile",
+  cvtools: "file-text", CV: "file-text", guides: "explorer", userGuideTools: "explorer",
+  "design-hub": "color-palette", toolkit: "tools", "claude-status-bar-acos": "setting",
+  qdn: "link", qdnNewWebsite: "link", ecomIntel: "money-bag", "QSortby-website": "puzzle",
+};
+const iconOf = (p: string) => PROJECT_ICON[p] || "cube";
+
+// A 3D icon that, on hover of its parent `.group`, cross-fades from the front render to the
+// angled ("dynamic") render + a slight CSS 3D turn — a lightweight faux-3D rotation (the assets
+// are static renders, not GLB models). Active projects float gently.
+function ProjectIcon({ name, big, active }: { name: string; big?: boolean; active?: boolean }) {
+  const icon = iconOf(name);
+  const s = big ? "h-12 w-12" : "h-8 w-8";
+  return (
+    <div className={`relative shrink-0 [perspective:520px] ${s} ${active ? "animate-[float_3s_ease-in-out_infinite]" : ""}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={`/icons/${icon}.webp`} alt="" draggable={false} className="absolute inset-0 h-full w-full object-contain drop-shadow-[0_6px_12px_rgba(0,0,0,0.45)] transition-opacity duration-300 group-hover:opacity-0" />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={`/icons/${icon}-dyn.webp`} alt="" draggable={false} className="absolute inset-0 h-full w-full object-contain opacity-0 drop-shadow-[0_8px_16px_rgba(0,0,0,0.5)] transition-all duration-300 group-hover:opacity-100 group-hover:[transform:rotateY(-14deg)_scale(1.08)]" />
+    </div>
+  );
+}
 
 type Project = { name: string; sessions: SessionMeta[]; reqs: number; tokens: number; last: number; active: boolean; goals: string[]; latest: string; weight: number };
 const WINDOWS: { label: string; days: number | null }[] = [
@@ -148,7 +168,7 @@ export default function BentoHome() {
                     }`}>
                     {p.active && <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl" style={{ background: pc + "44" }} />}
                     <div className="relative flex items-start justify-between">
-                      <span className={big ? "text-3xl" : "text-xl"}>{thumb(p.name)}</span>
+                      <ProjectIcon name={p.name} big={big} active={p.active} />
                       {p.active && <span className="flex items-center gap-1 text-[10px] text-green-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />live</span>}
                     </div>
                     <p className={`relative mt-1.5 font-semibold tracking-tight ${big ? "text-xl" : "text-sm"}`}>{p.name}</p>
@@ -171,8 +191,8 @@ export default function BentoHome() {
         {proj && (
           <>
             <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2.5">
-              <button onClick={closePanel} className="flex items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
-                <span className="text-lg">{thumb(proj.name)}</span><span className="font-semibold">{proj.name}</span>
+              <button onClick={closePanel} className="group flex items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
+                <ProjectIcon name={proj.name} /><span className="font-semibold">{proj.name}</span>
               </button>
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{proj.sessions.length} chats · {short(proj.reqs)} req</span>
               <button onClick={() => setPanes((p) => (p.length < MAX_PANES ? [...p, ""] : p))} disabled={panes.length >= MAX_PANES}
@@ -216,7 +236,7 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
   return (
     <div className={`flex min-w-0 flex-1 flex-col ${idx > 0 ? "border-l border-white/10" : ""}`} style={{ ["--sakura" as string]: "#e8859b" } as React.CSSProperties}>
       <div className="relative flex items-center gap-2 border-b border-white/[0.07] px-4 py-2">
-        <span className="text-sm">{thumb(proj)}</span>
+        <ProjectIcon name={proj} />
         <button onClick={() => setMenu((v) => !v)} className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/10">
           <span className="min-w-0"><span className="block truncate text-[13px] font-semibold">{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span><span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span></span>
           <span className="text-neutral-500">⌄</span>
