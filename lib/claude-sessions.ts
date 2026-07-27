@@ -60,6 +60,9 @@ export type SessionMeta = {
   active: boolean;
   task?: string;   // specific task (Project > Goal > Task)
   goal?: string;   // mid-level objective within the project, for grouping
+  lastRole: string; // "user" | "assistant" — who spoke last (a cheap review signal)
+  tail: string;      // short snippet of the last message (for the semantic review check)
+  review?: boolean;  // LLM-decided: does this session need the user's attention?
 };
 
 type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string };
@@ -67,7 +70,7 @@ type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; tim
 const cache = new Map<string, { mtime: number; meta: SessionMeta }>();
 
 function summarize(file: string, id: string): SessionMeta {
-  let title = "", lastPrompt = "", model = "", cwd = "", gitBranch = "", firstUser = "";
+  let title = "", lastPrompt = "", model = "", cwd = "", gitBranch = "", firstUser = "", lastText = "", lastRole = "";
   let tin = 0, tout = 0, cost = 0, messages = 0, tools = 0, lastTs = 0;
   const toolSet = new Set<string>();
   const raw = fs.readFileSync(file, "utf8");
@@ -87,6 +90,7 @@ function summarize(file: string, id: string): SessionMeta {
       if (typeof c === "string") txt = c;
       else if (Array.isArray(c)) txt = c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join(" ");
       if (txt.trim() && !firstUser) firstUser = txt.trim();
+      if (txt.trim()) { lastText = txt.trim(); lastRole = "user"; }
     } else if (r.type === "assistant") {
       messages++;
       const m = r.message || {};
@@ -98,7 +102,12 @@ function summarize(file: string, id: string): SessionMeta {
         const p = priceFor(m.model);
         cost += ((u.input_tokens || 0) + (u.cache_read_input_tokens || 0) * 0.1) / 1e6 * p.in + (u.output_tokens || 0) / 1e6 * p.out;
       }
-      for (const b of m.content || []) if (b?.type === "tool_use") { tools++; if (b.name && toolSet.size < 12) toolSet.add(b.name); }
+      let atxt = "";
+      for (const b of m.content || []) {
+        if (b?.type === "tool_use") { tools++; if (b.name && toolSet.size < 12) toolSet.add(b.name); }
+        else if (b?.type === "text" && b.text) atxt += b.text + " ";
+      }
+      if (atxt.trim()) { lastText = atxt.trim(); lastRole = "assistant"; }
     }
   }
   const project = cwd ? cwd.split("/").filter(Boolean).pop() || cwd : (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
@@ -111,6 +120,7 @@ function summarize(file: string, id: string): SessionMeta {
     model, tier: tierOf(model),
     tokensIn: tin, tokensOut: tout, cost, messages, tools,
     toolNames: [...toolSet].slice(0, 8),
+    lastRole, tail: lastText.replace(/\s+/g, " ").slice(0, 200),
     lastActivity, active: Date.now() - lastActivity < 120000,
   };
 }
@@ -139,7 +149,7 @@ export function listSessions(): SessionMeta[] {
   }
   // Merge the semantic layer (meaningful task title + topic) from the enrichment cache.
   const enr = getEnrichment();
-  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; } }
+  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; m.review = e.review; } }
   return out.sort((a, b) => b.lastActivity - a.lastActivity).slice(0, 60);
 }
 

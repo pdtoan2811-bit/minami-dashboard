@@ -11,7 +11,7 @@ type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
   model: string; tier: string; tokensIn: number; tokensOut: number; cost: number;
   messages: number; tools: number; toolNames: string[]; lastActivity: number; active: boolean;
-  task?: string; goal?: string;
+  task?: string; goal?: string; lastRole?: string; tail?: string; review?: boolean;
 };
 type Turn = { role: "user" | "assistant"; text: string; tools: { name: string; input: unknown }[]; ts: number; model?: string };
 
@@ -63,7 +63,7 @@ function ProjectIcon({ name, big, active }: { name: string; big?: boolean; activ
   );
 }
 
-type Project = { name: string; sessions: SessionMeta[]; reqs: number; tokens: number; last: number; active: boolean; goals: string[]; latest: string; weight: number };
+type Project = { name: string; sessions: SessionMeta[]; reqs: number; tokens: number; last: number; active: boolean; review: boolean; goals: string[]; latest: string; weight: number };
 const WINDOWS: { label: string; days: number | null }[] = [
   { label: "24h", days: 1 }, { label: "7d", days: 7 }, { label: "30d", days: 30 }, { label: "All", days: null },
 ];
@@ -108,7 +108,7 @@ export default function BentoHome() {
       const reqs = ss.reduce((a, x) => a + x.messages, 0);
       const tokens = ss.reduce((a, x) => a + x.tokensIn + x.tokensOut, 0);
       const latest = [...ss].sort((a, b) => b.lastActivity - a.lastActivity)[0];
-      return { name, sessions: ss, reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
+      return { name, sessions: ss, reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), review: ss.some((x) => x.review && Date.now() - x.lastActivity < 3 * 86400e3), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
     });
     const sorters = {
       recent: (a: Project, b: Project) => b.last - a.last,
@@ -179,9 +179,10 @@ export default function BentoHome() {
                 const activeSel = i === sel && !proj;
                 const age = Date.now() - p.last;
                 const status = p.active ? { label: "live", tint: "#4ade80", pulse: true }
+                  : p.review ? { label: "review", tint: "#f0a868", pulse: true }
                   : age < 12 * 3600e3 ? { label: "recent", tint: "#e8859b", pulse: false }
                   : age < 3 * 86400e3 ? { label: "active", tint: "#6c9cf5", pulse: false } : null;
-                const bright = activeSel || project === p.name || p.active;
+                const bright = activeSel || project === p.name || p.active || p.review;
                 const dim = bright ? 1 : age < 86400e3 ? 0.9 : age < 3 * 86400e3 ? 0.72 : age < 7 * 86400e3 ? 0.56 : 0.42;
                 return (
                   <motion.button layout key={p.name} data-i={i} onMouseEnter={() => setSel(i)} onClick={() => openProject(p)}

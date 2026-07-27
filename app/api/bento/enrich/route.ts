@@ -9,6 +9,7 @@ export async function POST() {
   try {
     const digests: Digest[] = listSessions().map((s) => ({
       id: s.id, project: s.project, title: s.title, lastPrompt: s.lastPrompt, toolNames: s.toolNames, messages: s.messages,
+      lastRole: s.lastRole, tail: s.tail,
     }));
     const map = enrich(digests);
     return Response.json({ enrichment: map });

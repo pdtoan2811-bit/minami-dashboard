@@ -15,8 +15,8 @@ export const ENRICH_MARKER = ".minami-bento"; // sessions spawned by the summari
 // Project > Goal > Task. `project` is deterministic (cwd); `goal` is a mid-level objective WITHIN
 // the project that groups related sessions; `task` is the specific session. Curate this file by hand
 // or via the `bento-taxonomy` skill — it's the source of truth and only auto-filled when missing.
-export type Entry = { messages: number; goal: string; task: string };
-export type Digest = { id: string; project: string; title: string; lastPrompt: string; toolNames: string[]; messages: number };
+export type Entry = { messages: number; goal: string; task: string; review: boolean };
+export type Digest = { id: string; project: string; title: string; lastPrompt: string; toolNames: string[]; messages: number; lastRole: string; tail: string };
 
 function readCache(): Record<string, Entry> {
   try { return JSON.parse(fs.readFileSync(CACHE, "utf8")); } catch { return {}; }
@@ -28,7 +28,7 @@ export function getEnrichment(): Record<string, Entry> { return readCache(); }
 
 function needs(d: Digest, cache: Record<string, Entry>): boolean {
   const e = cache[d.id];
-  return !e || !e.goal || Math.abs(e.messages - d.messages) > 8; // !e.goal migrates old topic-only entries
+  return !e || !e.goal || e.review === undefined || Math.abs(e.messages - d.messages) > 8;
 }
 
 // Summarize un-enriched sessions in one Haiku call, into Project > Goal > Task. Goals are reused
@@ -46,17 +46,19 @@ export function enrich(digests: Digest[]): Record<string, Entry> {
   }
   const known = Object.entries(goalsByProject).map(([p, g]) => `${p}: ${[...g].join(" | ")}`).join("\n") || "(none yet)";
 
+  // Compact digest per session (kept short to save tokens): intent + who-spoke-last + a tail snippet.
   const lines = todo.map((d, i) =>
-    `${i + 1}. id=${d.id} | project=${d.project} | intent="${(d.lastPrompt || d.title).slice(0, 180)}" | tools=${d.toolNames.slice(0, 6).join(",")}`
+    `${i + 1}. id=${d.id} | project=${d.project} | intent="${(d.lastPrompt || d.title).slice(0, 110)}" | lastRole=${d.lastRole} | tail="${(d.tail || "").slice(0, 140)}" | tools=${d.toolNames.slice(0, 5).join(",")}`
   ).join("\n");
 
   const prompt =
     `You classify Claude Code sessions into a Project > Goal > Task hierarchy for a dashboard.\n` +
     `The PROJECT is given. For each session infer:\n` +
-    `- goal: the mid-level OBJECTIVE within that project this session serves (2-5 words). REUSE an existing goal for the project when it fits; only coin a new one when nothing matches.\n` +
-    `- task: the specific thing this session is doing (4-7 words, concrete) — NEVER generic like "Slack turn"/"chat".\n\n` +
+    `- goal: the mid-level OBJECTIVE within that project (2-5 words). REUSE an existing goal when it fits; only coin a new one otherwise.\n` +
+    `- task: the specific thing this session is doing (4-7 words, concrete) — NEVER generic like "Slack turn"/"chat".\n` +
+    `- review: true if the session likely NEEDS THE USER'S ATTENTION now — i.e. the last turn (see lastRole/tail) is the assistant asking a question, presenting options or a decision, reporting an error/blocker, or finishing something that needs verification (it's waiting on the user). false if it's mid-work or a clearly closed/trivial exchange.\n\n` +
     `Existing goals per project:\n${known}\n\n` +
-    `Return ONLY a JSON array: [{"id":"<id>","goal":"<goal>","task":"<task>"}].\n\n` +
+    `Return ONLY a JSON array: [{"id":"<id>","goal":"<goal>","task":"<task>","review":true|false}].\n\n` +
     `Sessions:\n${lines}`;
 
   try {
@@ -71,10 +73,13 @@ export function enrich(digests: Digest[]): Record<string, Entry> {
       const arr = JSON.parse(m[0]) as any[];
       for (const it of arr) {
         const d = todo.find((x) => x.id === it?.id);
-        if (d && it?.task && !cache[it.id]) {
-          cache[it.id] = { messages: d.messages, goal: String(it.goal || "General").slice(0, 40), task: String(it.task).slice(0, 70) };
-        } else if (d && it?.task && cache[it.id]) {
-          cache[it.id] = { messages: d.messages, goal: String(it.goal || cache[it.id].goal).slice(0, 40), task: String(it.task).slice(0, 70) };
+        if (d && it?.task) {
+          cache[it.id] = {
+            messages: d.messages,
+            goal: String(it.goal || cache[it.id]?.goal || "General").slice(0, 40),
+            task: String(it.task).slice(0, 70),
+            review: !!it.review,
+          };
         }
       }
       writeCache(cache);
