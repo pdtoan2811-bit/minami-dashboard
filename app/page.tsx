@@ -166,7 +166,7 @@ export default function BentoHome() {
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5">
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">No local Claude Code sessions in this window. Bento mirrors <code className="text-xs">~/.claude/projects</code> — run it locally.</div>
           : (
@@ -253,7 +253,8 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
   }, [sessionId, isNew]);
   const turns = detail?.turns || [];
   const visible = showTools ? turns : turns.filter((t) => t.text.trim());
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [visible.length]);
+  // Jump straight to the last message (no scroll animation) when the transcript loads/updates.
+  useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [visible.length]);
   const cur = sessions.find((s) => s.id === sessionId);
   const proj = sessions[0]?.project || "";
   const chats = [...sessions].sort((a, b) => b.lastActivity - a.lastActivity);
