@@ -14,10 +14,21 @@ The repo ships **mock data only** (`lib/data.ts`) plus the real model-routing ta
 (`lib/routing.ts`, safe to publish). Sensitive values (real spend, task titles, people) load at
 runtime from qone / the vault sync endpoint via env vars (`.env.example`) and stay out of git.
 
-## Local dev
+## Bento — local mission control for Claude Code  (`/bento`)
+
+An immersive, full-screen grid where **every Claude Code session on your machine is a live tile** —
+one glance replaces hunting across terminal windows. Click / press `↵` on a tile and the grid slides
+left to reveal a peek panel with that session's messages + tool log, live-tailing.
+
+- **Local-only.** Bento mirrors `~/.claude/projects/*.jsonl`, so it only works when you run it on the
+  machine where you use Claude Code — not on the Vercel deploy (which has no access to your home dir).
+- **Phase 1 (now):** read-only mirror — grid, semantic titles, per-session tokens/cost/tier, keyboard
+  nav (`↑↓←→` / `Tab`, `↵` open, `esc` close), slide-in peek with transcript + expandable tool calls.
+- **Phase 2 (next):** wire the peek panel to `@anthropic-ai/claude-agent-sdk` so you can chat, approve
+  permissions, pick a permission mode, add files, and use tools — the full alternative to CLI windows.
 
 ```bash
 npm install
-npm run dev     # http://localhost:3000
+npm run dev     # http://localhost:3000/bento   ← run locally to mirror your sessions
 npm run build   # production build
 ```

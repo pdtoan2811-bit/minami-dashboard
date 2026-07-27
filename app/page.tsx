@@ -20,10 +20,13 @@ export default function Page() {
     <main className="mx-auto w-full max-w-md px-4 pb-16 pt-8 lg:max-w-5xl xl:max-w-6xl">
       <header className="mb-4 flex items-center gap-2 lg:mb-6">
         <span className="text-2xl lg:text-3xl">🌸</span>
-        <div>
+        <div className="flex-1">
           <h1 className="text-lg font-semibold tracking-tight lg:text-2xl">Minami Dashboard</h1>
           <p className="text-xs text-neutral-500">Holding the thread · live snapshot · 2026-07-27</p>
         </div>
+        <a href="/bento" className="rounded-full border border-black/10 px-3 py-1 text-xs font-medium text-neutral-600 transition-colors hover:border-[--sakura] hover:text-[--sakura] dark:border-white/15 dark:text-neutral-300">
+          Bento ↗
+        </a>
       </header>
 
       {/* Masonry: 1 column on mobile, 2 on tablet, 3 on desktop. Cards never split across columns. */}
