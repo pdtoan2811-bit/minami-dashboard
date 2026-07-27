@@ -34,17 +34,27 @@ app/
   page.tsx          Bento home — grid, chat side-panel, Markdown renderer
   dashboard/        Metrics view (usage heatmap, live routing, savings)
   settings/         Preferences (stored in the browser)
-  api/bento/        Node-runtime routes over ~/.claude/projects
+  api/bento/        Node-runtime routes over ~/.claude/projects (read-only mirror)
+  api/agent/        Node-runtime routes that DRIVE live sessions (send/stream/permission/mode)
 lib/
   claude-sessions.ts  Read + summarize session transcripts (server-only)
   bento-enrich.ts     Semantic Project›Goal›Task layer (local Haiku, cached)
   routing.ts          Single source of truth for model prices & routing rules
   panels.ts           Pluggable JSON data source for the personal cards
+  sources.ts          Machine-label map for the metrics cards
+  agent/manager.ts    Live-session engine over @anthropic-ai/claude-agent-sdk (Phase 2, server-only)
+  use-agent.ts        Client hook that drives one pane (send / stream / permission)
   use-settings.ts     localStorage-backed settings hook
 components/          UI pieces (Nav, RoutingFlow, UsagePanel, UsageHeatmap, …)
 server/             Optional zero-dep metrics collector (Node + systemd + Stop hook)
 public/icons/       3D icons from 3dicons.co
 ```
+
+**Live drive & safety.** `lib/agent/manager.ts` is the only place that talks to the Agent SDK. It
+keeps a `query()` alive per pane, streams events over SSE, and blocks on `canUseTool` for the approval
+prompt. Never pass `bypassPermissions` to the SDK — `safeMode()` clamps anything outside
+`default | acceptEdits | plan`. The SDK pulls in a transitive `@hono/node-server` advisory
+(path traversal, **Windows-only**); we don't run its static server and don't downgrade the SDK for it.
 
 ## Conventions
 

@@ -34,7 +34,11 @@ single board:
 | | |
 |---|---|
 | **Bento home** (`/`) | Live grid of every local Claude Code project. Weighted tile sizes, keyboard nav (`↑↓←→` / `Tab`, `↵` open, `esc` close), search, sort (Recent / Busy / A–Z), configurable time window. |
-| **Chat side-panel** | Slide-in transcript per project, live-tailing. Up to two parallel chats per project. Markdown + `highlight.js` code blocks. Draggable, persisted width. |
+| **Chat side-panel** | Slide-in transcript per project, live-tailing. Rich rendering — GFM tables, task lists, blockquotes, links, and syntax-highlighted code with copy. |
+| **Up to 4 chats · 2×2 grid** | Open several chats of a topic at once, like windows on a foldable. Clicking a tile restores its recent chats (within the date filter); your open/closed layout is remembered per topic; add any chat from a picker. |
+| **New topic + folder picker** | A `＋ New topic` tile starts a fresh chat in any folder you browse to — no existing session required. |
+| **Repo & tech attach bar** | Each topic shows its git repo (link) and the tech it uses (Shopify, ClickHouse, BigQuery, Google Cloud, …) as brand icons, detected from `.git`, `package.json`, and config files. |
+| **Live drive** (Phase 2) | Actually run Claude Code from the panel — send messages, watch tokens stream in, and approve/deny tool calls inline. `Plan`/`Code` toggle (default Code) + approval level (`ask` / `auto-edits`), with a live "what it's doing" hint. Uses your existing Claude login (no API key). |
 | **Semantic labels** | Sessions are grouped **Project › Goal › Task** and flagged for review by a cheap local Haiku pass (uses your Claude subscription via the `claude` CLI — no API key). Cached to disk; curate by hand or via the `bento-taxonomy` skill. |
 | **Metrics** (`/dashboard`) | Usage heatmap (cohort calendar), live model-routing feed, per-machine usage, routing table + savings. Optional — needs the metrics server below. |
 | **Pluggable panels** | Task log / Trace-back / Analytics / People read from a JSON file you provide (`MINAMI_PANELS_FILE`). Empty and harmless by default. |
@@ -56,6 +60,9 @@ That's the whole thing. No env vars required for the Bento home. For a productio
 ```bash
 npm run build && npm start
 ```
+
+> New here? **[SETUP.md](SETUP.md)** has a full walkthrough — including a prompt you can paste into
+> Claude Code to have it set Bento up for you.
 
 > **Deploying to Vercel etc. won't show your sessions** — a cloud host has no access to your home
 > directory. Bento is a local tool by design. Deploy only the `/dashboard` metrics view if you want a
@@ -112,18 +119,32 @@ and serves live aggregates over SSE. Zero dependencies (Node's `http` + a JSONL 
 - **`lib/panels.ts`** — pluggable data source for the personal cards.
 - **`server/`** — the optional metrics collector (Node, systemd unit, Stop hook).
 
+## Driving sessions (live)
+
+The chat composer runs Claude Code directly via [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk).
+Type a message → it streams the reply token-by-token, shows tool activity, and — for anything that
+needs approval — pauses with an inline **Approve / Deny** prompt. New chats start a fresh session in
+the project's directory; opening an existing chat and sending **resumes** it. Every turn is persisted
+to `~/.claude/projects/…` exactly like the CLI, so history is never lost.
+
+**Permission modes** (pick per chat): `default` asks before risky tools · `acceptEdits` auto-approves
+file edits · `plan` proposes without applying. `bypassPermissions` is intentionally **not selectable**
+— the server clamps any other value to `default`. Because it loads your own settings
+(`~/.claude`, project `.claude`), your existing allow-rules, `CLAUDE.md`, and MCP servers all apply,
+just like the terminal. It drives the **local** machine, so it only works when you run Bento locally.
+
 ## Roadmap
 
-- **Phase 1 — Observe (now).** Read-only mirror: live grid, semantic titles, per-session
+- **Phase 1 — Observe.** ✅ Read-only mirror: live grid, semantic titles, per-session
   tokens/cost/tier, transcript side-panel, cross-machine metrics.
-- **Phase 2 — Drive (next).** Wire the chat composer to `@anthropic-ai/claude-agent-sdk` so you can
-  send messages, approve permissions (default / acceptEdits / plan — never bypass), add files, and use
-  tools — a full alternative to CLI windows.
-- **Phase 3 — Share.** Per-topic thumbnails and open-source packaging.
+- **Phase 2 — Drive.** ✅ Send messages, stream replies, approve/deny tools, permission modes,
+  resume — a real alternative to CLI windows.
+- **Phase 3 — Share (next).** Per-topic thumbnails, file attachments in chat, and open-source packaging.
 
 ## Tech
 
-Next.js 15 (App Router, React 19) · Tailwind v4 · framer-motion · highlight.js · lucide-react.
+Next.js 15 (App Router, React 19) · Tailwind v4 · framer-motion · highlight.js · lucide-react ·
+`@anthropic-ai/claude-agent-sdk` (live drive).
 
 ## License
 

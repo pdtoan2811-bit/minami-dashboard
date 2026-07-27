@@ -2,10 +2,15 @@
 
 import { Nav } from "@/components/Nav";
 import { useSetting } from "@/lib/use-settings";
-import hljs from "highlight.js";
-import "highlight.js/styles/github-dark.css";
+import { useAgent, type AgentMode } from "@/lib/use-agent";
+import Markdown from "@/components/Markdown";
+import FolderPicker from "@/components/FolderPicker";
+import AttachBar from "@/components/AttachBar";
+import BrandIcon, { type Icon } from "@/components/BrandIcon";
+import AskCard from "@/components/AskCard";
+import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -14,6 +19,7 @@ type SessionMeta = {
   task?: string; goal?: string; lastRole?: string; tail?: string; review?: boolean;
 };
 type Turn = { role: "user" | "assistant"; text: string; tools: { name: string; input: unknown }[]; ts: number; model?: string };
+type RenderTurn = { role: "user" | "assistant"; text: string; tools: { name: string; input: unknown }[]; streaming?: boolean };
 
 const TIER_TINT: Record<string, string> = { Haiku: "#6cc4a1", Sonnet: "#e8859b", Opus: "#b98cff", Fable: "#f0a868" };
 const PALETTE = ["#e8859b", "#b98cff", "#6cc4a1", "#6c9cf5", "#f0a868", "#e86c8b"];
@@ -79,11 +85,40 @@ function ProjectIcon({ name, big, active }: { name: string; big?: boolean; activ
   );
 }
 
-type Project = { name: string; sessions: SessionMeta[]; reqs: number; tokens: number; last: number; active: boolean; review: boolean; goals: string[]; latest: string; weight: number };
+type Project = { name: string; sessions: SessionMeta[]; cwd: string; reqs: number; tokens: number; last: number; active: boolean; review: boolean; goals: string[]; latest: string; weight: number };
 const WINDOWS: { label: string; days: number | null }[] = [
   { label: "24h", days: 1 }, { label: "3d", days: 3 }, { label: "7d", days: 7 }, { label: "30d", days: 30 }, { label: "All", days: null },
 ];
-const MAX_PANES = 2;
+const MAX_PANES = 4;
+
+const MODE_HINT: Record<AgentMode, string> = {
+  default: "Ask before running tools that need approval",
+  acceptEdits: "Auto-approve file edits; still ask for other tools",
+  plan: "Plan only — propose changes without applying them",
+  bypassPermissions: "⚠ Auto-approve EVERY tool with no prompt — including destructive ones",
+};
+// Inline "thinking" indicator: three bouncing dots + a live hint of what Claude is doing.
+function ThinkingLine({ label }: { label: string }) {
+  return (
+    <span className="flex items-center gap-2 text-xs text-neutral-400">
+      <span className="flex gap-0.5">
+        {[0, 1, 2].map((i) => <span key={i} className="think-dot h-1.5 w-1.5 rounded-full" style={{ background: "var(--sakura)", animationDelay: `${i * 0.15}s` }} />)}
+      </span>
+      <span className="italic">{label}</span>
+    </span>
+  );
+}
+
+// A readable one-line-ish preview of what a tool wants to do, for the permission prompt.
+function permPreview(tool: string, input: unknown): string {
+  const o = (input || {}) as Record<string, unknown>;
+  if (tool === "Bash" && o.command) return String(o.command);
+  if (o.file_path) {
+    const edit = o.old_string ? `\n- ${String(o.old_string).slice(0, 160)}\n+ ${String(o.new_string || "").slice(0, 160)}` : "";
+    return String(o.file_path) + edit;
+  }
+  try { return JSON.stringify(input, null, 2).slice(0, 600); } catch { return String(input); }
+}
 
 export default function BentoHome() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -97,6 +132,12 @@ export default function BentoHome() {
   const [sel, setSel] = useState(0);
   const [project, setProject] = useState<string | null>(null);
   const [panes, setPanes] = useState<string[]>([]);
+  const [addMenu, setAddMenu] = useState(false); // "add a chat to the mix" picker
+  const [openPanesMap, setOpenPanesMap] = useSetting<Record<string, string[]>>("openPanes", {}); // remembered per topic
+  const [newTopic, setNewTopic] = useState<Project | null>(null); // ad-hoc topic opened via the folder picker
+  const [picker, setPicker] = useState(false); // folder picker modal open
+  const [techIcons, setTechIcons] = useState<Record<string, Icon>>({}); // brand icon SVGs
+  const [attachMap, setAttachMap] = useState<Record<string, { tech: string[] }>>({}); // per-project tech
   const [showTools] = useSetting<boolean>("showToolLogs", false);
   const [panelW, setPanelW] = useSetting<number>("panelWidth", 60); // chat panel width %, persisted
   const [isDragging, setDragging] = useState(false);
@@ -128,7 +169,7 @@ export default function BentoHome() {
       const reqs = ss.reduce((a, x) => a + x.messages, 0);
       const tokens = ss.reduce((a, x) => a + x.tokensIn + x.tokensOut, 0);
       const latest = [...ss].sort((a, b) => b.lastActivity - a.lastActivity)[0];
-      return { name, sessions: ss, reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), review: ss.some((x) => x.review), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
+      return { name, sessions: ss, cwd: ss[0]?.cwd || "", reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), review: ss.some((x) => x.review), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
     });
     const sorters = {
       recent: (a: Project, b: Project) => b.last - a.last,
@@ -141,10 +182,34 @@ export default function BentoHome() {
   }, [pool, q, sortBy]);
 
   const openProject = useCallback((p: Project) => {
-    const top = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity)[0];
-    setProject(p.name); setPanes(top ? [top.id] : []);
-  }, []);
-  const closePanel = () => { setProject(null); setPanes([]); };
+    // Default: open the recent combination (up to 4 sessions active within the date filter). If the
+    // user has customized which chats are open for this topic before, restore that instead.
+    const recent = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity).slice(0, MAX_PANES).map((s) => s.id);
+    const remembered = (openPanesMap[p.name] || []).filter((id) => id === "" || p.sessions.some((s) => s.id === id));
+    const initial = remembered.length ? remembered.slice(0, MAX_PANES) : (recent.length ? recent : [""]);
+    setNewTopic(null); setProject(p.name); setPanes(initial); setAddMenu(false);
+  }, [openPanesMap]);
+  const startTopic = (cwd: string, label?: string) => {
+    const name = label || cwd.split("/").filter(Boolean).pop() || cwd;
+    setPicker(false); setProject(null); setAddMenu(false);
+    setNewTopic({ name, sessions: [], cwd, reqs: 0, tokens: 0, last: Date.now(), active: false, review: false, goals: [], latest: "", weight: 0 });
+    setPanes([""]); // one fresh blank chat in the chosen folder (or home, for a folderless CLI)
+  };
+  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); };
+  // Remember the open set per topic so re-opening restores the same window layout.
+  useEffect(() => { if (project) setOpenPanesMap({ ...openPanesMap, [project]: panes }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [panes, project]);
+
+  // Brand/tech icons for the tiles: load the SVG set once, and batch-fetch each project's tech.
+  useEffect(() => { loadTechIcons().then(setTechIcons); }, []);
+  const projSig = projects.map((p) => `${p.name}:${p.cwd}`).join("|");
+  useEffect(() => {
+    if (!projects.length) return;
+    let a = true;
+    fetch("/api/bento/attach-batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ items: projects.map((p) => ({ name: p.name, cwd: p.cwd })) }) })
+      .then((r) => r.json()).then((d) => { if (a) setAttachMap(d.attach || {}); }).catch(() => {});
+    return () => { a = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projSig]);
 
   const onKey = useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") { closePanel(); return; }
@@ -170,7 +235,7 @@ export default function BentoHome() {
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   }, [isDragging, setPanelW]);
 
-  const proj = project ? projects.find((p) => p.name === project) : null;
+  const proj = project ? projects.find((p) => p.name === project) : newTopic;
   const maxW = Math.max(1, ...projects.map((p) => p.weight)); // size ratio is vs the busiest project
 
   return (
@@ -196,7 +261,12 @@ export default function BentoHome() {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5">
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
-          : projects.length === 0 ? <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">No local Claude Code sessions in this window. Bento mirrors <code className="text-xs">~/.claude/projects</code> — run it locally.</div>
+          : projects.length === 0 ? (
+            <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">
+              No local Claude Code sessions in this window. Bento mirrors <code className="text-xs">~/.claude/projects</code> — run it locally.
+              <div className="mt-4"><button onClick={() => setPicker(true)} className="rounded-lg border border-[var(--sakura)]/40 px-3 py-1.5 text-xs font-medium text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10">＋ Start a new topic</button></div>
+            </div>
+          )
           : (
             <div className={`grid auto-rows-[8.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
               {projects.map((p, i) => {
@@ -226,6 +296,12 @@ export default function BentoHome() {
                     </div>
                     <p className={`relative mt-1.5 font-semibold tracking-tight ${big ? "text-xl" : "text-sm"}`}>{p.name}</p>
                     {big && <p className="relative mt-0.5 line-clamp-1 text-xs text-neutral-400">↳ {p.latest}</p>}
+                    {(() => { const techs = attachMap[p.name]?.tech || []; const n = big ? 6 : 3; return techs.length > 0 && (
+                      <div className="relative mt-1.5 flex items-center gap-1.5">
+                        {techs.slice(0, n).map((s) => <BrandIcon key={s} slug={s} icons={techIcons} size={big ? 28 : 22} />)}
+                        {techs.length > n && <span className="text-[10px] text-neutral-500">+{techs.length - n}</span>}
+                      </div>
+                    ); })()}
                     <div className="relative mt-auto flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                       <span className={`font-semibold tabular-nums ${big ? "text-2xl" : "text-base"}`}>{short(p.reqs)}<span className="ml-1 text-[10px] font-normal text-neutral-500">req</span></span>
                       <span className="text-[11px] tabular-nums text-neutral-500">{short(p.tokens)} tok</span>
@@ -234,6 +310,12 @@ export default function BentoHome() {
                   </motion.button>
                 );
               })}
+              {/* Blank tile: start a brand-new topic/chat in any folder. */}
+              <button onClick={() => setPicker(true)} title="Start a new topic in a folder"
+                className="group flex flex-col items-center justify-center gap-1.5 rounded-[1.4rem] border border-dashed border-white/15 p-4 text-neutral-500 transition-colors hover:border-[var(--sakura)]/50 hover:text-[var(--sakura)]">
+                <span className="text-2xl leading-none transition-transform group-hover:scale-110">＋</span>
+                <span className="text-xs font-medium">New topic</span>
+              </button>
             </div>
           )}
         </div>
@@ -250,14 +332,34 @@ export default function BentoHome() {
               <button onClick={closePanel} className="group flex items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
                 <ProjectIcon name={proj.name} /><span className="font-semibold">{proj.name}</span>
               </button>
-              <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{proj.sessions.length} chats · {short(proj.reqs)} req</span>
-              <button onClick={() => setPanes((p) => (p.length < MAX_PANES ? [...p, ""] : p))} disabled={panes.length >= MAX_PANES}
-                className="ml-auto rounded-lg border border-[var(--sakura)]/40 px-2.5 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋ new chat</button>
+              <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>
+              {/* Add a chat to the mix: a blank one, or any of the topic's other sessions. */}
+              <div className="relative ml-auto">
+                <button onClick={() => setAddMenu((v) => !v)} disabled={panes.length >= MAX_PANES}
+                  className="rounded-lg border border-[var(--sakura)]/40 px-2.5 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋ add chat</button>
+                {addMenu && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setAddMenu(false)} />
+                    <div className="absolute right-0 top-full z-20 mt-1 max-h-96 w-72 overflow-y-auto rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
+                      <button onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, ""] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"><span className="text-[var(--sakura)]">＋</span> New blank chat</button>
+                      {proj.sessions.some((s) => !panes.includes(s.id)) && <div className="my-1 border-t border-white/10" />}
+                      {[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.includes(s.id)).map((s) => (
+                        <button key={s.id} onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, s.id] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/10">
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: s.active ? "#4ade80" : TIER_TINT[s.tier] }} />
+                          <span className="min-w-0 flex-1"><span className="block truncate text-xs">{titleOf(s)}</span><span className="block truncate text-[10px] text-neutral-500">{goalOf(s)} · {ago(s.lastActivity)}</span></span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
               <button onClick={closePanel} className="rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
             </div>
-            <div className="flex min-h-0 flex-1">
+            <AttachBar cwd={proj.cwd} project={proj.name} />
+            {/* Up to 4 chats in a 2×2 grid — like managing windows on a foldable. */}
+            <div className="grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
               {panes.map((id, idx) => (
-                <ChatColumn key={idx} sessionId={id} sessions={proj.sessions} idx={idx} count={panes.length} showTools={showTools}
+                <ChatColumn key={id || `new-${idx}`} sessionId={id} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? nid : x)))}
                   onClose={() => setPanes((p) => p.filter((_, j) => j !== idx))} />
               ))}
@@ -265,33 +367,59 @@ export default function BentoHome() {
           </>
         )}
       </div>
+
+      {picker && <FolderPicker onPick={startTopic} onClose={() => setPicker(false)} />}
     </div>
   );
 }
 
-function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClose }: {
-  sessionId: string; sessions: SessionMeta[]; idx: number; count: number; showTools: boolean; onPick: (id: string) => void; onClose: () => void;
+function ChatColumn({ sessionId, sessions, cwd: cwdProp, idx, count, showTools, onPick, onClose }: {
+  sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; onPick: (id: string) => void; onClose: () => void;
 }) {
   const [detail, setDetail] = useState<{ meta: SessionMeta | null; turns: Turn[] } | null>(null);
   const [menu, setMenu] = useState(false);
+  const [input, setInput] = useState("");
+  const [attachOpen, setAttachOpen] = useState(false); // file-attach picker
+  const [planning, setPlanning] = useState(false); // Plan vs Code — default Code
+  // Approval level in Code mode; persisted so your last choice (incl. bypass) becomes the default.
+  const [perm, setPerm] = useSetting<Exclude<AgentMode, "plan">>("permMode", "default");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const paneKey = useRef("pane-" + Math.random().toString(36).slice(2)).current;
+  const agent = useAgent(paneKey);
   const isNew = !sessionId;
+  // Poll the on-disk transcript for history — but stop once this pane is driving the session live
+  // (then the live turns are authoritative and the poll would just fight the stream).
   useEffect(() => {
-    if (isNew) { setDetail(null); return; }
+    if (isNew || agent.live) return;
     let a = true;
     const load = () => fetch(`/api/bento/session/${sessionId}`).then((r) => r.json()).then((d) => { if (a) setDetail(d); }).catch(() => {});
     load(); const iv = setInterval(load, 2500); return () => { a = false; clearInterval(iv); };
-  }, [sessionId, isNew]);
-  const turns = detail?.turns || [];
-  const visible = showTools ? turns : turns.filter((t) => t.text.trim());
-  // Jump straight to the last message (no scroll animation) when the transcript loads/updates.
-  useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [visible.length]);
+  }, [sessionId, isNew, agent.live]);
   const cur = sessions.find((s) => s.id === sessionId);
-  const proj = sessions[0]?.project || "";
+  const cwd = cwdProp || cur?.cwd || sessions[0]?.cwd || "";
+  const proj = sessions[0]?.project || cwd.split("/").filter(Boolean).pop() || "";
+  const fileTurns = detail?.turns || [];
+  // Unified render model: on-disk history until this pane goes live, then the streamed turns.
+  const source: RenderTurn[] = agent.live ? agent.turns : fileTurns;
+  const visible = showTools ? source : source.filter((t) => t.text.trim() || t.streaming);
   const chats = [...sessions].sort((a, b) => b.lastActivity - a.lastActivity);
 
+  const effectiveMode: AgentMode = planning ? "plan" : perm; // Plan overrides the approval level
+  const submit = () => {
+    const text = input.trim();
+    if (!text || agent.busy || !cwd) return;
+    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+    setInput("");
+  };
+  const setPlan = (on: boolean) => { setPlanning(on); agent.changeMode(on ? "plan" : perm); };
+  const setPermLevel = (m: Exclude<AgentMode, "plan">) => { setPerm(m); if (!planning) agent.changeMode(m); };
+  // Jump straight to the last message; keep pinned as tokens stream in.
+  useEffect(() => {
+    const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight;
+  }, [visible.length, source[source.length - 1]?.text.length, agent.pending, agent.busy]);
+
   return (
-    <div className={`flex min-w-0 flex-1 flex-col ${idx > 0 ? "border-l border-white/10" : ""}`}>
+    <div className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/40 ${count === 3 && idx === 2 ? "col-span-2" : ""}`}>
       <div className="relative flex items-center gap-2 border-b border-white/[0.07] px-4 py-2">
         <ProjectIcon name={proj} />
         <button onClick={() => setMenu((v) => !v)} className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/10">
@@ -314,14 +442,14 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
         )}
       </div>
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
-        {isNew ? (
+        {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
             <p className="text-2xl">✳</p>
             <p className="mt-2 text-sm font-medium text-neutral-300">New chat in {proj}</p>
-            <p className="mt-1 text-xs">Start a fresh conversation in this project — sending goes live in Phase 2 (Agent SDK).</p>
+            <p className="mt-1 text-xs">Type below to start a live Claude Code session in <code className="text-[11px] text-neutral-400">{cwd || proj}</code>.</p>
           </div>
         ) : visible.length === 0 ? (
-          turns.length === 0 ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null
+          agent.busy ? <p className="text-sm text-neutral-500">Working…</p> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
         ) : visible.map((t, i) => (
           <div key={i} className={`flex flex-col ${t.role === "user" ? "items-end" : "items-start"}`}>
             <span className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-neutral-600">{t.role === "user" ? "You" : "Claude"}</span>
@@ -329,6 +457,9 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
               ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[14px] leading-relaxed text-neutral-100 [overflow-wrap:anywhere]"
               : "w-full text-[14px] leading-[1.72] text-neutral-100/90 [overflow-wrap:anywhere]"}>
               {t.text && <Markdown text={t.text} />}
+              {t.streaming && (t.text
+                ? <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse align-middle" style={{ background: "var(--sakura)" }} />
+                : <ThinkingLine label={agent.activity?.label || (t.tools.length ? `using ${t.tools[t.tools.length - 1].name}` : "thinking")} />)}
               {showTools && t.tools.map((tool, j) => (
                 <details key={j} className="mt-2 rounded-lg border border-white/[0.06] bg-black/40 px-2.5 py-1.5 text-xs">
                   <summary className="cursor-pointer select-none text-neutral-400"><span className="mr-1.5 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-neutral-300">tool</span>{tool.name}</summary>
@@ -339,69 +470,67 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
           </div>
         ))}
       </div>
-      <div className="border-t border-white/10 px-4 py-3">
-        <div className="mb-2 flex items-center gap-1.5">
-          {["default", "acceptEdits", "plan"].map((m) => <span key={m} className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-neutral-500">{m}</span>)}
-          <span className="ml-auto text-[10px] text-neutral-600">read-only · live drive = Phase 2</span>
+
+      {/* Claude's AskUserQuestion — a real choice UI. */}
+      {agent.ask && <AskCard questions={agent.ask.questions} onAnswer={agent.answerAsk} />}
+
+      {/* Tool-permission prompt (default mode) — Claude is paused until the user decides. */}
+      {agent.pending && (
+        <div className="mx-4 mb-2 rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
+          <p className="text-xs text-neutral-200">Claude wants to use <span className="font-semibold text-[var(--sakura)]">{agent.pending.toolName}</span></p>
+          <pre className="mt-1.5 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-black/40 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-neutral-400">{permPreview(agent.pending.toolName, agent.pending.input)}</pre>
+          <div className="mt-2 flex items-center gap-2">
+            <button onClick={() => agent.respond("allow")} className="rounded-lg bg-[var(--sakura)] px-3 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90">Approve</button>
+            <button onClick={() => agent.respond("deny")} className="rounded-lg border border-white/15 px-3 py-1 text-xs text-neutral-300 transition-colors hover:bg-white/10">Deny</button>
+            <span className="ml-auto text-[10px] text-neutral-500">acceptEdits mode auto-approves file edits</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 opacity-60">
-          <span className="text-neutral-500">＋</span>
-          <input disabled placeholder="Chat with this session… (Phase 2)" className="flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-600" />
-          <span className="text-xs text-neutral-600">↵</span>
+      )}
+
+      <div className="border-t border-white/10 px-4 py-3">
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          {/* Plan vs Code — default Code. Plan proposes without applying. */}
+          <div className="flex items-center rounded-lg border border-white/10 p-0.5" title="Plan proposes changes first; Code executes">
+            {([["code", false], ["plan", true]] as const).map(([label, on]) => (
+              <button key={label} onClick={() => setPlan(on)}
+                className={`rounded-md px-2 py-0.5 text-[10px] font-medium capitalize transition-colors ${planning === on ? "bg-[var(--sakura)] text-white" : "text-neutral-500 hover:text-neutral-300"}`}>{label}</button>
+            ))}
+          </div>
+          {/* Approval level (only meaningful in Code mode). "bypass" auto-runs everything — danger. */}
+          <div className={`flex items-center gap-1 transition-opacity ${planning ? "pointer-events-none opacity-30" : ""}`}>
+            {(["default", "acceptEdits", "bypassPermissions"] as const).map((m) => {
+              const on = perm === m;
+              const bypass = m === "bypassPermissions";
+              return (
+                <button key={m} onClick={() => setPermLevel(m)} title={MODE_HINT[m]}
+                  className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${on
+                    ? (bypass ? "border-green-500/60 bg-green-500/15 text-green-400" : "border-[var(--sakura)]/60 bg-[var(--sakura)]/15 text-[var(--sakura)]")
+                    : (bypass ? "border-green-500/25 text-green-500/70 hover:text-green-400" : "border-white/10 text-neutral-500 hover:text-neutral-300")}`}>
+                  {m === "default" ? "ask" : m === "acceptEdits" ? "auto-edits" : "bypass"}</button>
+              );
+            })}
+          </div>
+          <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">
+            {agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
+              : agent.busy ? <><span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full" style={{ background: "var(--sakura)" }} /><span className="truncate">{agent.activity ? agent.activity.label : planning ? "planning…" : "working…"}</span></>
+              : agent.live ? <><span className="h-1.5 w-1.5 rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</> : "ready"}
+          </span>
+        </div>
+        <div className={`flex items-end gap-2 rounded-xl border bg-white/[0.03] px-3 py-2 transition-colors ${agent.busy ? "border-white/10 opacity-70" : "border-white/15 focus-within:border-[var(--sakura)]/60"}`}>
+          <button onClick={() => setAttachOpen(true)} disabled={!cwd} title="Attach a file (inserts its path for Claude to read)"
+            className="shrink-0 self-end rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
+          <textarea
+            value={input} onChange={(e) => setInput(e.target.value)} rows={1}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+            placeholder={agent.busy ? "Claude is working…" : `Message Claude in ${proj}…`}
+            className="max-h-32 min-h-[20px] flex-1 resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-neutral-600" />
+          <button onClick={submit} disabled={!input.trim() || agent.busy || !cwd}
+            className="shrink-0 rounded-lg bg-[var(--sakura)] px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30">↵</button>
         </div>
       </div>
+      {attachOpen && <FolderPicker pickFiles start={cwd} onClose={() => setAttachOpen(false)}
+        onPick={(p) => { setInput((v) => (v ? v.replace(/\s*$/, " ") : "") + p + " "); setAttachOpen(false); }} />}
     </div>
   );
 }
 
-/* ---------- minimal markdown ---------- */
-function inline(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-  let last = 0, k = 0, m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
-    const tok = m[0];
-    if (tok.startsWith("`")) nodes.push(<code key={k++} className="rounded bg-white/10 px-1 py-[1px] font-mono text-[0.85em] text-[#e8b3c0]">{tok.slice(1, -1)}</code>);
-    else nodes.push(<strong key={k++} className="font-semibold text-white">{tok.slice(2, -2)}</strong>);
-    last = m.index + tok.length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
-}
-function Markdown({ text }: { text: string }) {
-  const blocks = text.split(/(```[\s\S]*?```)/g).filter(Boolean);
-  return (
-    <div className="space-y-2">
-      {blocks.map((b, i) => {
-        if (b.startsWith("```")) {
-          const lang = (b.match(/^```([\w-]+)/) || [])[1];
-          const inner = b.replace(/^```[\w-]*\n?/, "").replace(/\n?```$/, "");
-          let html = "";
-          try { html = lang && hljs.getLanguage(lang) ? hljs.highlight(inner, { language: lang }).value : hljs.highlightAuto(inner).value; }
-          catch { html = inner.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string)); }
-          return (
-            <div key={i} className="my-1 overflow-hidden rounded-xl border border-white/10 bg-[#0d1117]">
-              {lang && <div className="border-b border-white/[0.06] px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-neutral-500">{lang}</div>}
-              <pre className="hljs overflow-x-auto bg-transparent p-3 text-[12.5px] leading-relaxed"><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
-            </div>
-          );
-        }
-        const out: ReactNode[] = [];
-        let bullets: ReactNode[] = [];
-        const flush = () => { if (bullets.length) { out.push(<ul key={`u${out.length}`} className="ml-4 list-disc space-y-0.5 marker:text-neutral-600">{bullets}</ul>); bullets = []; } };
-        for (const line of b.split("\n")) {
-          const t = line.replace(/\s+$/, "");
-          if (/^\s*[-*•]\s+/.test(t)) { bullets.push(<li key={`b${bullets.length}`}>{inline(t.replace(/^\s*[-*•]\s+/, ""))}</li>); continue; }
-          flush();
-          if (!t.trim()) continue;
-          const h = t.match(/^(#{1,3})\s+(.*)/);
-          if (h) { out.push(<p key={`h${out.length}`} className="pt-0.5 text-[13px] font-semibold text-white">{inline(h[2])}</p>); continue; }
-          out.push(<p key={`p${out.length}`} className="leading-relaxed">{inline(t)}</p>);
-        }
-        flush();
-        return <div key={i} className="space-y-1.5">{out}</div>;
-      })}
-    </div>
-  );
-}

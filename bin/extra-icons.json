@@ -1,0 +1,3 @@
+{
+  "_readme": "Add brands simple-icons doesn't ship, as \"slug\": { \"title\": \"Name\", \"hex\": \"RRGGBB\", \"path\": \"<svg path d>\" }. hex has no '#'. Then run: node bin/build-tech-icons.mjs . Entries without a path are ignored (the UI shows a lettermark tile instead)."
+}
