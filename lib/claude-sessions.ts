@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ENRICH_MARKER, getEnrichment } from "./bento-enrich";
 
 const PROJECTS = path.join(os.homedir(), ".claude", "projects");
 
@@ -54,8 +55,11 @@ export type SessionMeta = {
   cost: number;
   messages: number;
   tools: number;
+  toolNames: string[];
   lastActivity: number;
   active: boolean;
+  task?: string;   // LLM-generated meaningful task title
+  topic?: string;  // LLM-generated high-level topic for grouping
 };
 
 type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string };
@@ -65,6 +69,7 @@ const cache = new Map<string, { mtime: number; meta: SessionMeta }>();
 function summarize(file: string, id: string): SessionMeta {
   let title = "", lastPrompt = "", model = "", cwd = "", gitBranch = "", firstUser = "";
   let tin = 0, tout = 0, cost = 0, messages = 0, tools = 0, lastTs = 0;
+  const toolSet = new Set<string>();
   const raw = fs.readFileSync(file, "utf8");
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
@@ -93,7 +98,7 @@ function summarize(file: string, id: string): SessionMeta {
         const p = priceFor(m.model);
         cost += ((u.input_tokens || 0) + (u.cache_read_input_tokens || 0) * 0.1) / 1e6 * p.in + (u.output_tokens || 0) / 1e6 * p.out;
       }
-      for (const b of m.content || []) if (b?.type === "tool_use") tools++;
+      for (const b of m.content || []) if (b?.type === "tool_use") { tools++; if (b.name && toolSet.size < 12) toolSet.add(b.name); }
     }
   }
   const project = cwd ? cwd.split("/").filter(Boolean).pop() || cwd : (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
@@ -105,6 +110,7 @@ function summarize(file: string, id: string): SessionMeta {
     lastPrompt: (cleanTitle(lastPrompt) || cleanTitle(firstUser)).slice(0, 140),
     model, tier: tierOf(model),
     tokensIn: tin, tokensOut: tout, cost, messages, tools,
+    toolNames: [...toolSet].slice(0, 8),
     lastActivity, active: Date.now() - lastActivity < 120000,
   };
 }
@@ -125,11 +131,15 @@ export function listSessions(): SessionMeta[] {
         if (c && c.mtime === mtime) { out.push(c.meta); continue; }
         const meta = summarize(file, f.replace(/\.jsonl$/, ""));
         if (meta.messages === 0) continue;
+        if (meta.cwd.includes(ENRICH_MARKER)) continue; // hide the summarizer's own sessions
         cache.set(file, { mtime, meta });
         out.push(meta);
       } catch { /* skip unreadable */ }
     }
   }
+  // Merge the semantic layer (meaningful task title + topic) from the enrichment cache.
+  const enr = getEnrichment();
+  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.topic = e.topic; } }
   return out.sort((a, b) => b.lastActivity - a.lastActivity).slice(0, 60);
 }
 
