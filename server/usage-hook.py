@@ -13,8 +13,8 @@ Never blocks a turn; fails silent on any error.
 """
 import json
 import os
+import subprocess
 import sys
-import urllib.request
 
 
 def load_config():
@@ -86,14 +86,20 @@ def main():
         "inputTokens": itok,
         "outputTokens": otok,
         "cacheReadTokens": ctok,
-    }).encode()
-    req = urllib.request.Request(
-        url.rstrip("/") + "/ingest",
-        data=body,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-    )
+    })
+    # POST via curl — uses the system cert store, so HTTPS (Tailscale Funnel) works on macOS too,
+    # where Python's urllib can't find the CA bundle. curl is present on both machines.
     try:
-        urllib.request.urlopen(req, timeout=4).read()
+        subprocess.run(
+            [
+                "curl", "-s", "--max-time", "5", "-X", "POST",
+                url.rstrip("/") + "/ingest",
+                "-H", "Content-Type: application/json",
+                "-H", f"Authorization: Bearer {token}",
+                "-d", body,
+            ],
+            capture_output=True, timeout=8,
+        )
     except Exception:
         pass  # never block the turn
 
