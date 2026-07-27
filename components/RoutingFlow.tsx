@@ -6,18 +6,19 @@ import { MODELS, eventCost, opusEquivCost, tierFromModel } from "@/lib/routing";
 const METRICS_URL = (process.env.NEXT_PUBLIC_METRICS_URL || "").replace(/\/$/, "");
 const METRICS_KEY = process.env.NEXT_PUBLIC_METRICS_KEY || "";
 
-type Ev = { id: number; source: string; tier: string; tint: string; cost: number; opus: number };
+type Ev = { id: number; source: string; label: string; tier: string; tint: string; cost: number; opus: number };
 type State = { routed: number; opus: number; byTier: Record<string, number>; feed: Ev[] };
 
 const EMPTY: State = { routed: 0, opus: 0, byTier: {}, feed: [] };
 const SRC = (s: string) => (s === "local-mac" ? "Mac" : s === "minami-cloud" ? "cloud" : s);
 
 let counter = 0;
-function toEv(e: { source?: string; model?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }): Ev {
+function toEv(e: { source?: string; model?: string; label?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }): Ev {
   const m = tierFromModel(e.model);
   return {
     id: ++counter,
     source: e.source || "unknown",
+    label: e.label || "",
     tier: m.tier,
     tint: m.tint,
     cost: eventCost(e.inputTokens, e.outputTokens, e.cacheReadTokens, e.model),
@@ -57,7 +58,7 @@ export function RoutingFlow() {
       es.onopen = () => setLive(true);
       es.onerror = () => setLive(false);
       es.onmessage = (msg) => {
-        let e: { hello?: boolean; source?: string; model?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number };
+        let e: { hello?: boolean; source?: string; model?: string; label?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number };
         try { e = JSON.parse(msg.data); } catch { return; }
         if (e.hello) return;
         const ev = toEv(e);
@@ -117,9 +118,10 @@ export function RoutingFlow() {
           <div key={e.id} className="flex animate-[slidein_.4s_ease] items-center justify-between gap-2 rounded-lg bg-neutral-100/60 px-2 py-1 text-xs dark:bg-white/5">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: e.tint }} />
-              <span className="truncate">{SRC(e.source)} · {e.tier.split(" ")[0]}</span>
+              <span className="truncate">{e.label || `${SRC(e.source)} · ${e.tier.split(" ")[0]}`}</span>
             </span>
-            <span className="shrink-0 text-[11px] text-neutral-400">
+            <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-400">
+              <span>{e.tier.split(" ")[0]}</span>
               <span className="tabular-nums text-green-600 dark:text-green-400">−${(e.opus - e.cost).toFixed(4)}</span>
             </span>
           </div>

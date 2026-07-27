@@ -53,6 +53,7 @@ def main():
         return
 
     model, itok, otok, ctok = "", 0, 0, 0
+    last_user = ""
     try:
         last = None
         with open(transcript, "r", encoding="utf-8") as fh:
@@ -67,6 +68,19 @@ def main():
                 msg = row.get("message") or {}
                 if msg.get("usage"):
                     last = msg
+                # Capture the most recent real user prompt (skip tool-result-only turns) as the label.
+                if row.get("type") == "user" or msg.get("role") == "user":
+                    content = msg.get("content")
+                    txt = ""
+                    if isinstance(content, str):
+                        txt = content
+                    elif isinstance(content, list):
+                        txt = " ".join(
+                            b.get("text", "") for b in content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    if txt.strip():
+                        last_user = txt.strip()
         if last:
             model = last.get("model", "")
             u = last["usage"]
@@ -76,6 +90,9 @@ def main():
     except OSError:
         return
 
+    # A short, single-line "what was this turn" label for the dashboard feed.
+    label = last_user.split("\n", 1)[0].strip()[:60] if last_user else ""
+
     if itok == 0 and otok == 0 and ctok == 0:
         return
 
@@ -83,6 +100,7 @@ def main():
         "source": source,
         "session": payload.get("session_id", ""),
         "model": model,
+        "label": label,
         "inputTokens": itok,
         "outputTokens": otok,
         "cacheReadTokens": ctok,
