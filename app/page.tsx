@@ -1,6 +1,8 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ModelRouting } from "@/components/ModelRouting";
+import { RoutingFlow } from "@/components/RoutingFlow";
 import { analytics, people, taskLog, tokenLog, traceBack } from "@/lib/data";
-import { Activity, GitBranch, ListTodo, Users, Zap } from "lucide-react";
+import { Activity, GitBranch, ListTodo, Radio, Route, Users, Zap } from "lucide-react";
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -19,9 +21,19 @@ export default function Page() {
         <span className="text-2xl">🌸</span>
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Minami Dashboard</h1>
-          <p className="text-xs text-neutral-500">Holding the thread · live snapshot · 2026-07-24</p>
+          <p className="text-xs text-neutral-500">Holding the thread · live snapshot · 2026-07-27</p>
         </div>
       </header>
+
+      <Card>
+        <CardHeader><Radio className="h-4 w-4 text-[--sakura]" /><CardTitle>Live routing</CardTitle></CardHeader>
+        <CardContent><RoutingFlow /></CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><Route className="h-4 w-4 text-[--sakura]" /><CardTitle>Model routing</CardTitle></CardHeader>
+        <CardContent><ModelRouting /></CardContent>
+      </Card>
 
       <Card>
         <CardHeader><Zap className="h-4 w-4 text-[--sakura]" /><CardTitle>Token log</CardTitle></CardHeader>

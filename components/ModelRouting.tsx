@@ -1,0 +1,55 @@
+import { MODELS, ROUTING_RULES } from "@/lib/routing";
+
+export function ModelRouting() {
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs leading-relaxed text-neutral-500">
+        Spend the least, keep the output identical. Minami runs on{" "}
+        <span className="font-medium text-neutral-700 dark:text-neutral-300">Opus 4.8 · effort high</span>{" "}
+        and pushes grunt work down to a cheaper tier — the token-heavy part billed cheap, quality unchanged.
+      </p>
+
+      <div className="flex flex-col gap-2">
+        {ROUTING_RULES.map((r) => {
+          const m = MODELS.find((x) => x.tier === r.tier)!;
+          return (
+            <div key={r.work} className="rounded-lg border border-black/5 p-2 dark:border-white/10">
+              <p className="text-xs text-neutral-600 dark:text-neutral-300">{r.work}</p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: m.tint }} />
+                <span className="text-xs font-medium">{r.tier}</span>
+                <span className="text-[10px] text-neutral-400">· {r.why}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="overflow-hidden rounded-lg border border-black/5 dark:border-white/10">
+        <table className="w-full text-left text-[11px]">
+          <thead className="bg-neutral-100/60 text-neutral-500 dark:bg-white/5">
+            <tr>
+              <th className="px-2 py-1 font-medium">Model</th>
+              <th className="px-2 py-1 text-right font-medium">In</th>
+              <th className="px-2 py-1 text-right font-medium">Out</th>
+            </tr>
+          </thead>
+          <tbody className="tabular-nums">
+            {MODELS.map((m) => (
+              <tr key={m.tier} className="border-t border-black/5 dark:border-white/10">
+                <td className="px-2 py-1">
+                  <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" style={{ background: m.tint }} />
+                  {m.tier}
+                  <span className="ml-1 text-[10px] text-neutral-400">{m.note}</span>
+                </td>
+                <td className="px-2 py-1 text-right">${m.in}</td>
+                <td className="px-2 py-1 text-right">${m.out}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="px-2 py-1 text-[10px] text-neutral-400">$ / million tokens · Claude API · verified 2026-07-24</p>
+      </div>
+    </div>
+  );
+}
