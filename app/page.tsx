@@ -131,9 +131,9 @@ export default function BentoHome() {
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">No local Claude Code sessions in this window. Bento mirrors <code className="text-xs">~/.claude/projects</code> — run it locally.</div>
           : (
-            <div className={`grid auto-rows-[8.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
+            <div className={`grid auto-rows-[8.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
               {projects.map((p, i) => {
-                const r = p.weight / maxW, big = !proj && r >= 0.6, wide = !proj && !big && r >= 0.28;
+                const r = p.weight / maxW, big = r >= 0.6, wide = !big && r >= 0.28;
                 const span = big ? "col-span-2 row-span-2" : wide ? "col-span-2" : "";
                 const pc = accent(p.name);
                 const activeSel = i === sel && !proj;
@@ -173,8 +173,8 @@ export default function BentoHome() {
                 <span className="text-lg">{thumb(proj.name)}</span><span className="font-semibold">{proj.name}</span>
               </button>
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{proj.sessions.length} chats · {short(proj.reqs)} req</span>
-              <button onClick={() => setPanes((p) => (p.length < MAX_PANES ? [...p, pickNext(proj.sessions, p)] : p))} disabled={panes.length >= MAX_PANES}
-                className="ml-auto rounded-lg border border-[--sakura]/40 px-2.5 py-1 text-[11px] text-[--sakura] transition-colors hover:bg-[--sakura]/10 disabled:opacity-40" style={{ ["--sakura" as string]: "#e8859b" }}>＋ split</button>
+              <button onClick={() => setPanes((p) => (p.length < MAX_PANES ? [...p, ""] : p))} disabled={panes.length >= MAX_PANES}
+                className="ml-auto rounded-lg border border-[--sakura]/40 px-2.5 py-1 text-[11px] text-[--sakura] transition-colors hover:bg-[--sakura]/10 disabled:opacity-40" style={{ ["--sakura" as string]: "#e8859b" }}>＋ new chat</button>
               <button onClick={closePanel} className="rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
             </div>
             <div className="flex min-h-0 flex-1">
@@ -191,33 +191,32 @@ export default function BentoHome() {
   );
 }
 
-function pickNext(sessions: SessionMeta[], used: string[]): string {
-  const s = [...sessions].sort((a, b) => b.lastActivity - a.lastActivity).find((x) => !used.includes(x.id));
-  return (s || sessions[0])?.id;
-}
-
 function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClose }: {
   sessionId: string; sessions: SessionMeta[]; idx: number; count: number; showTools: boolean; onPick: (id: string) => void; onClose: () => void;
 }) {
   const [detail, setDetail] = useState<{ meta: SessionMeta | null; turns: Turn[] } | null>(null);
   const [menu, setMenu] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isNew = !sessionId;
   useEffect(() => {
+    if (isNew) { setDetail(null); return; }
     let a = true;
     const load = () => fetch(`/api/bento/session/${sessionId}`).then((r) => r.json()).then((d) => { if (a) setDetail(d); }).catch(() => {});
     load(); const iv = setInterval(load, 2500); return () => { a = false; clearInterval(iv); };
-  }, [sessionId]);
+  }, [sessionId, isNew]);
   const turns = detail?.turns || [];
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [turns.length]);
+  const visible = showTools ? turns : turns.filter((t) => t.text.trim());
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [visible.length]);
   const cur = sessions.find((s) => s.id === sessionId);
+  const proj = sessions[0]?.project || "";
   const chats = [...sessions].sort((a, b) => b.lastActivity - a.lastActivity);
 
   return (
     <div className={`flex min-w-0 flex-1 flex-col ${idx > 0 ? "border-l border-white/10" : ""}`} style={{ ["--sakura" as string]: "#e8859b" } as React.CSSProperties}>
       <div className="relative flex items-center gap-2 border-b border-white/[0.07] px-4 py-2">
-        <span className="text-sm">{thumb(cur?.project || "")}</span>
+        <span className="text-sm">{thumb(proj)}</span>
         <button onClick={() => setMenu((v) => !v)} className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/10">
-          <span className="min-w-0"><span className="block truncate text-[13px] font-semibold">{cur ? titleOf(cur) : "…"}</span><span className="block truncate text-[10px] text-neutral-500">{cur ? goalOf(cur) : ""}</span></span>
+          <span className="min-w-0"><span className="block truncate text-[13px] font-semibold">{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span><span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span></span>
           <span className="text-neutral-500">⌄</span>
         </button>
         {count > 1 && <button onClick={onClose} className="ml-auto rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
@@ -235,11 +234,21 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
           </>
         )}
       </div>
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
-        {turns.length === 0 ? <p className="text-sm text-neutral-500">Loading transcript…</p> : turns.map((t, i) => (
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
+        {isNew ? (
+          <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
+            <p className="text-2xl">✳</p>
+            <p className="mt-2 text-sm font-medium text-neutral-300">New chat in {proj}</p>
+            <p className="mt-1 text-xs">Start a fresh conversation in this project — sending goes live in Phase 2 (Agent SDK).</p>
+          </div>
+        ) : visible.length === 0 ? (
+          turns.length === 0 ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null
+        ) : visible.map((t, i) => (
           <div key={i} className={`flex flex-col ${t.role === "user" ? "items-end" : "items-start"}`}>
             <span className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-neutral-600">{t.role === "user" ? "You" : "Claude"}</span>
-            <div className={`rounded-2xl px-4 py-2.5 text-[13px] [overflow-wrap:anywhere] ${t.role === "user" ? "max-w-[88%] bg-[--sakura]/[0.14] text-neutral-100" : "w-full border border-white/[0.08] bg-white/[0.03] text-neutral-200"}`}>
+            <div className={t.role === "user"
+              ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-2.5 text-[13px] text-neutral-100 [overflow-wrap:anywhere]"
+              : "w-full text-[13px] leading-relaxed text-neutral-200 [overflow-wrap:anywhere]"}>
               {t.text && <Markdown text={t.text} />}
               {showTools && t.tools.map((tool, j) => (
                 <details key={j} className="mt-2 rounded-lg border border-white/[0.06] bg-black/40 px-2.5 py-1.5 text-xs">
@@ -247,9 +256,6 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
                   <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
                 </details>
               ))}
-              {!showTools && t.tools.length > 0 && !t.text && (
-                <span className="text-[11px] text-neutral-500">{t.tools.length} tool call{t.tools.length > 1 ? "s" : ""} · {t.tools.map((x) => x.name).slice(0, 4).join(", ")}</span>
-              )}
             </div>
           </div>
         ))}
