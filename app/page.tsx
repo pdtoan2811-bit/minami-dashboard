@@ -2,6 +2,8 @@
 
 import { Nav } from "@/components/Nav";
 import { useSetting } from "@/lib/use-settings";
+import hljs from "highlight.js";
+import "highlight.js/styles/github-dark.css";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -247,8 +249,8 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
           <div key={i} className={`flex flex-col ${t.role === "user" ? "items-end" : "items-start"}`}>
             <span className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-neutral-600">{t.role === "user" ? "You" : "Claude"}</span>
             <div className={t.role === "user"
-              ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-2.5 text-[13px] text-neutral-100 [overflow-wrap:anywhere]"
-              : "w-full text-[13px] leading-relaxed text-neutral-200 [overflow-wrap:anywhere]"}>
+              ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[14px] leading-relaxed text-neutral-100 [overflow-wrap:anywhere]"
+              : "w-full text-[14px] leading-[1.72] text-neutral-100/90 [overflow-wrap:anywhere]"}>
               {t.text && <Markdown text={t.text} />}
               {showTools && t.tools.map((tool, j) => (
                 <details key={j} className="mt-2 rounded-lg border border-white/[0.06] bg-black/40 px-2.5 py-1.5 text-xs">
@@ -296,8 +298,17 @@ function Markdown({ text }: { text: string }) {
     <div className="space-y-2">
       {blocks.map((b, i) => {
         if (b.startsWith("```")) {
+          const lang = (b.match(/^```([\w-]+)/) || [])[1];
           const inner = b.replace(/^```[\w-]*\n?/, "").replace(/\n?```$/, "");
-          return <pre key={i} className="overflow-x-auto rounded-lg border border-white/10 bg-black/50 p-3 font-mono text-[12px] leading-relaxed text-neutral-200"><code>{inner}</code></pre>;
+          let html = "";
+          try { html = lang && hljs.getLanguage(lang) ? hljs.highlight(inner, { language: lang }).value : hljs.highlightAuto(inner).value; }
+          catch { html = inner.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string)); }
+          return (
+            <div key={i} className="my-1 overflow-hidden rounded-xl border border-white/10 bg-[#0d1117]">
+              {lang && <div className="border-b border-white/[0.06] px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-neutral-500">{lang}</div>}
+              <pre className="hljs overflow-x-auto bg-transparent p-3 text-[12.5px] leading-relaxed"><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
+            </div>
+          );
         }
         const out: ReactNode[] = [];
         let bullets: ReactNode[] = [];
