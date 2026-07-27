@@ -56,9 +56,12 @@ function ProjectIcon({ name, big, active }: { name: string; big?: boolean; activ
       <motion.img
         src={`/icons/${icon}.webp`} alt="" draggable={false}
         className="h-full w-full object-contain [transform-style:preserve-3d] drop-shadow-[0_10px_16px_rgba(0,0,0,0.5)]"
-        animate={{ rotateZ: [0, 7, 7, 0, 0], rotateY: [0, 0, 22, -22, 0] }}
-        transition={{ duration: active ? 6 : 8, times: [0, 0.14, 0.5, 0.86, 1], repeat: Infinity, ease: "easeInOut" }}
-        whileHover={{ scale: 1.16, rotateY: 0, rotateZ: 0 }}
+        animate={{ rotateY: [-20, 20], rotateX: [7, -7] }}
+        transition={{
+          rotateY: { duration: active ? 3.6 : 5.6, repeat: Infinity, repeatType: "mirror", ease: "easeInOut" },
+          rotateX: { duration: active ? 4.7 : 7.3, repeat: Infinity, repeatType: "mirror", ease: "easeInOut" },
+        }}
+        whileHover={{ scale: 1.16 }}
       />
     </div>
   );
