@@ -46,3 +46,11 @@ body {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-5px); }
 }
+
+/* continuous, seamless 3D tumble for the icons (0% == 100% → no snap) */
+@keyframes spin3d {
+  0%   { transform: rotateY(-18deg) rotateX(6deg) rotateZ(-2deg); }
+  33%  { transform: rotateY(15deg) rotateX(-6deg) rotateZ(2deg); }
+  66%  { transform: rotateY(-7deg) rotateX(7deg) rotateZ(-1deg); }
+  100% { transform: rotateY(-18deg) rotateX(6deg) rotateZ(-2deg); }
+}

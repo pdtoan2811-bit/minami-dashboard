@@ -52,16 +52,12 @@ function ProjectIcon({ name, big, active }: { name: string; big?: boolean; activ
   const icon = iconOf(name);
   const s = big ? "h-14 w-14" : "h-9 w-9";
   return (
-    <div className={`relative shrink-0 [perspective:600px] ${s}`}>
-      <motion.img
+    <div className={`relative shrink-0 [perspective:600px] transition-transform duration-300 group-hover:scale-[1.16] ${s}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
         src={`/icons/${icon}.webp`} alt="" draggable={false}
         className="h-full w-full object-contain [transform-style:preserve-3d] drop-shadow-[0_10px_16px_rgba(0,0,0,0.5)]"
-        animate={{ rotateY: [-20, 20], rotateX: [7, -7] }}
-        transition={{
-          rotateY: { duration: active ? 3.6 : 5.6, repeat: Infinity, repeatType: "mirror", ease: "easeInOut" },
-          rotateX: { duration: active ? 4.7 : 7.3, repeat: Infinity, repeatType: "mirror", ease: "easeInOut" },
-        }}
-        whileHover={{ scale: 1.16 }}
+        style={{ animation: `spin3d ${active ? 4.5 : 6.8}s ease-in-out infinite` }}
       />
     </div>
   );
