@@ -19,6 +19,19 @@ function priceFor(model?: string) {
   const k = model ? Object.keys(PRICES).find((x) => model.includes(x)) : undefined;
   return k ? PRICES[k] : { in: 5, out: 25 };
 }
+// Turn a raw first-prompt into a meaningful title — strip known preambles (Minami's persona prompt,
+// the compaction prompt, local-command dumps) and surface the actual topic.
+function cleanTitle(raw: string): string {
+  if (!raw) return "";
+  const s = raw.trim();
+  const m = s.match(/Message:\s*"([^"]{2,140})"/); // Minami's brain prompt embeds the real Slack message here
+  if (m) return m[1].trim();
+  if (/^You are compacting/i.test(s)) return "Compacting memory";
+  if (/^You are Minami/i.test(s)) return "Minami · Slack turn";
+  if (/^<local-command/i.test(s) || /^<command-name/i.test(s) || /^Caveat: The messages/i.test(s)) return "";
+  return s.slice(0, 80);
+}
+
 export function tierOf(model?: string): string {
   if (!model) return "Opus";
   if (model.includes("haiku")) return "Haiku";
@@ -85,10 +98,11 @@ function summarize(file: string, id: string): SessionMeta {
   }
   const project = cwd ? cwd.split("/").filter(Boolean).pop() || cwd : (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
   const lastActivity = Math.max(lastTs, fs.statSync(file).mtimeMs);
+  const derived = title || cleanTitle(lastPrompt) || cleanTitle(firstUser) || project;
   return {
     id, project, cwd, gitBranch,
-    title: title || firstUser.slice(0, 64) || lastPrompt.slice(0, 64) || project,
-    lastPrompt: (lastPrompt || firstUser).slice(0, 140),
+    title: derived.slice(0, 80),
+    lastPrompt: (cleanTitle(lastPrompt) || cleanTitle(firstUser)).slice(0, 140),
     model, tier: tierOf(model),
     tokensIn: tin, tokensOut: tout, cost, messages, tools,
     lastActivity, active: Date.now() - lastActivity < 120000,
