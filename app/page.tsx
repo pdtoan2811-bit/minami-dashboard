@@ -143,6 +143,7 @@ export default function BentoHome() {
   useEffect(() => { window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onKey]);
 
   const proj = project ? projects.find((p) => p.name === project) : null;
+  const maxW = Math.max(1, ...projects.map((p) => p.weight)); // size ratio is vs the busiest project
 
   return (
     <div className="flex h-screen w-screen overflow-hidden text-neutral-100" style={{ background: "radial-gradient(1100px 620px at 25% -12%, #1c1622, #0b0a0d 58%)" }}>
@@ -169,9 +170,10 @@ export default function BentoHome() {
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">No local Claude Code sessions in this window. Bento mirrors <code className="text-xs">~/.claude/projects</code> — run it locally.</div>
           : (
-            <div className={`grid auto-rows-[8.5rem] gap-3 ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
+            <div className={`grid auto-rows-[8.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
               {projects.map((p, i) => {
-                const big = !proj && i === 0, wide = !proj && i > 0 && i <= 2;
+                const r = p.weight / maxW;
+                const big = !proj && r >= 0.6, wide = !proj && !big && r >= 0.28;
                 const span = big ? "col-span-2 row-span-2" : wide ? "col-span-2" : "";
                 const pc = accent(p.name);
                 const activeSel = i === sel && !proj;
