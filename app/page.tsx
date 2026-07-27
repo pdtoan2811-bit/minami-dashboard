@@ -75,6 +75,7 @@ export default function BentoHome() {
   const [enriching, setEnriching] = useState(false);
   const [q, setQ] = useState("");
   const [winDays, setWinDays] = useState<number | null>(30);
+  const [sortBy, setSortBy] = useState<"recent" | "busy" | "name">("recent");
   const [sel, setSel] = useState(0);
   const [project, setProject] = useState<string | null>(null);
   const [panes, setPanes] = useState<string[]>([]);
@@ -108,10 +109,16 @@ export default function BentoHome() {
       const tokens = ss.reduce((a, x) => a + x.tokensIn + x.tokensOut, 0);
       const latest = [...ss].sort((a, b) => b.lastActivity - a.lastActivity)[0];
       return { name, sessions: ss, reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
-    }).sort((a, b) => b.weight - a.weight);
+    });
+    const sorters = {
+      recent: (a: Project, b: Project) => b.last - a.last,
+      busy: (a: Project, b: Project) => b.weight - a.weight,
+      name: (a: Project, b: Project) => a.name.localeCompare(b.name),
+    };
+    list.sort(sorters[sortBy]);
     const ql = q.trim().toLowerCase();
     return ql ? list.filter((p) => `${p.name} ${p.goals.join(" ")} ${p.latest}`.toLowerCase().includes(ql)) : list;
-  }, [pool, q]);
+  }, [pool, q, sortBy]);
 
   const openProject = useCallback((p: Project) => {
     const top = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity)[0];
@@ -136,7 +143,6 @@ export default function BentoHome() {
   useEffect(() => { window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onKey]);
 
   const proj = project ? projects.find((p) => p.name === project) : null;
-  const maxW = projects[0]?.weight || 1;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden text-neutral-100" style={{ background: "radial-gradient(1100px 620px at 25% -12%, #1c1622, #0b0a0d 58%)" }}>
@@ -149,6 +155,12 @@ export default function BentoHome() {
           <div className="ml-auto flex items-center gap-2">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[--sakura]" style={{ ["--sakura" as string]: "#e8859b" }} />
             {!proj && <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 lg:flex">{WINDOWS.map((w) => <button key={w.label} onClick={() => setWinDays(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${winDays === w.days ? "bg-[--sakura] text-white" : "text-neutral-400 hover:text-neutral-200"}`} style={{ ["--sakura" as string]: "#e8859b" }}>{w.label}</button>)}</div>}
+            {!proj && <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex" title="Sort projects">
+              <span className="px-1 text-[10px] text-neutral-600">↕</span>
+              {([["recent", "Recent"], ["busy", "Busy"], ["name", "A–Z"]] as const).map(([k, label]) => (
+                <button key={k} onClick={() => setSortBy(k)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${sortBy === k ? "bg-[--sakura] text-white" : "text-neutral-400 hover:text-neutral-200"}`} style={{ ["--sakura" as string]: "#e8859b" }}>{label}</button>
+              ))}
+            </div>}
             <Nav />
           </div>
         </header>
@@ -157,9 +169,9 @@ export default function BentoHome() {
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">No local Claude Code sessions in this window. Bento mirrors <code className="text-xs">~/.claude/projects</code> — run it locally.</div>
           : (
-            <div className={`grid auto-rows-[8.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
+            <div className={`grid auto-rows-[8.5rem] gap-3 ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
               {projects.map((p, i) => {
-                const r = p.weight / maxW, big = r >= 0.6, wide = !big && r >= 0.28;
+                const big = !proj && i === 0, wide = !proj && i > 0 && i <= 2;
                 const span = big ? "col-span-2 row-span-2" : wide ? "col-span-2" : "";
                 const pc = accent(p.name);
                 const activeSel = i === sel && !proj;
