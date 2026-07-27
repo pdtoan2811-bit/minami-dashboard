@@ -19,6 +19,7 @@ type State = {
 
 const EMPTY: State = { routed: 0, opus: 0, tokIn: 0, tokOut: 0, byTier: {}, feed: [] };
 const SRC = (s: string) => (s === "local-mac" ? "Mac" : s === "minami-cloud" ? "cloud" : s);
+const SRC_TINT = (s: string) => (s === "local-mac" ? "#6c9cf5" : s === "minami-cloud" ? "#b98cff" : "#e8859b");
 const short = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
 
 let counter = 0;
@@ -65,7 +66,7 @@ export function RoutingFlow() {
           tokIn: d.totals.inTok || 0,
           tokOut: d.totals.outTok || 0,
           byTier,
-          feed: (d.recent || []).slice(0, 6).map(toEv),
+          feed: (d.recent || []).slice(0, 8).map(toEv),
         });
       })
       .catch(() => {});
@@ -91,7 +92,7 @@ export function RoutingFlow() {
             tokIn: prev.tokIn + ev.tokIn,
             tokOut: prev.tokOut + ev.tokOut,
             byTier,
-            feed: [ev, ...prev.feed].slice(0, 6),
+            feed: [ev, ...prev.feed].slice(0, 8),
           };
         });
       };
@@ -144,17 +145,30 @@ export function RoutingFlow() {
         {live ? "live routing · real turns" : "connecting…"}
       </div>
 
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1.5">
         {st.feed.map((e) => (
-          <div key={e.id} className="flex animate-[slidein_.4s_ease] items-center justify-between gap-2 rounded-lg bg-neutral-100/60 px-2 py-1 text-xs dark:bg-white/5">
-            <span className="flex min-w-0 items-center gap-1.5">
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: e.tint }} />
-              <span className="truncate">{e.label || `${SRC(e.source)} · ${e.tier.split(" ")[0]}`}</span>
-            </span>
-            <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-400">
+          <div
+            key={e.id}
+            className="animate-[slidein_.4s_ease] rounded-lg border-l-2 bg-neutral-100/60 py-1.5 pl-2.5 pr-2 dark:bg-white/5"
+            style={{ borderColor: e.tint }}
+          >
+            <p className="line-clamp-2 text-xs leading-snug text-neutral-700 [overflow-wrap:anywhere] dark:text-neutral-200">
+              {e.label || `${SRC(e.source)} turn`}
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-neutral-400">
+              <span className="inline-flex items-center gap-1">
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: SRC_TINT(e.source) }} />
+                {SRC(e.source)}
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: e.tint }} />
+                {e.tier.split(" ")[0]}
+              </span>
               <span className="tabular-nums">{short(e.tokIn + e.tokOut)} tok</span>
-              <span className="tabular-nums text-green-600 dark:text-green-400">−${(e.opus - e.cost).toFixed(4)}</span>
-            </span>
+              <span className="tabular-nums text-green-600 dark:text-green-400">
+                {e.opus - e.cost > 1e-9 ? `saved $${(e.opus - e.cost).toFixed(4)}` : "no saving"}
+              </span>
+            </div>
           </div>
         ))}
         {st.feed.length === 0 && <p className="text-xs text-neutral-400">Waiting for the next turn from either machine…</p>}
