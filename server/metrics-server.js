@@ -154,6 +154,29 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Per-day usage buckets for the last N days (for the calendar/cohort heatmap).
+  // tz = client's getTimezoneOffset() in minutes, so days bucket in the viewer's local time.
+  if (url.pathname === "/timeseries") {
+    const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days")) || 14));
+    const tz = Number(url.searchParams.get("tz")) || 0;
+    const localKey = (ts) => new Date((ts || 0) - tz * 60000).toISOString().slice(0, 10);
+    const now = Date.now();
+    const cutoff = now - days * 86400000;
+    const byDay = {};
+    for (const e of readEvents()) {
+      if ((e.ts || 0) < cutoff) continue;
+      const k = localKey(e.ts);
+      const b = (byDay[k] ||= { date: k, turns: 0, tokens: 0, cost: 0 });
+      b.turns++; b.tokens += (e.inputTokens || 0) + (e.outputTokens || 0); b.cost += costOf(e);
+    }
+    const out = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const k = localKey(now - i * 86400000);
+      out.push(byDay[k] || { date: k, turns: 0, tokens: 0, cost: 0 });
+    }
+    return send(res, 200, { days: out });
+  }
+
   send(res, 404, { error: "not found" });
 });
 

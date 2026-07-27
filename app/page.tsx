@@ -82,6 +82,8 @@ export default function BentoHome() {
   const [project, setProject] = useState<string | null>(null);
   const [panes, setPanes] = useState<string[]>([]);
   const [showTools] = useSetting<boolean>("showToolLogs", false);
+  const [panelW, setPanelW] = useSetting<number>("panelWidth", 60); // chat panel width %, persisted
+  const [isDragging, setDragging] = useState(false);
   const enrichLock = useRef(false);
   const rounds = useRef(0);
 
@@ -143,21 +145,29 @@ export default function BentoHome() {
     setSel(n);
   }, [sel, projects, project, openProject]);
   useEffect(() => { window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onKey]);
+  // draggable panel divider → persists width across sessions
+  useEffect(() => {
+    if (!isDragging) return;
+    const move = (e: MouseEvent) => setPanelW(Math.min(80, Math.max(30, Math.round((1 - e.clientX / window.innerWidth) * 100))));
+    const up = () => setDragging(false);
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  }, [isDragging, setPanelW]);
 
   const proj = project ? projects.find((p) => p.name === project) : null;
   const maxW = Math.max(1, ...projects.map((p) => p.weight)); // size ratio is vs the busiest project
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden text-neutral-100" style={{ background: "radial-gradient(1100px 620px at 25% -12%, #1c1622, #0b0a0d 58%)" }}>
+    <div className={`flex h-screen w-screen overflow-hidden text-neutral-100 ${isDragging ? "select-none" : ""}`} style={{ background: "radial-gradient(1100px 620px at 25% -12%, #1c1622, #0b0a0d 58%)", ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
       {/* Left: bento */}
-      <div className={`flex min-w-0 flex-col transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${proj ? "hidden w-0 md:flex md:w-[40%]" : "w-full"}`}>
+      <div className={`flex min-w-0 flex-col w-full md:w-[var(--lw)] ${proj ? "hidden md:flex" : ""} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-6 pb-2 pt-5">
           <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">Minami Bento</h1>
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
           <div className="ml-auto flex items-center gap-2">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[--sakura]" style={{ ["--sakura" as string]: "#e8859b" }} />
-            {!proj && <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 lg:flex">{WINDOWS.map((w) => <button key={w.label} onClick={() => setWinDays(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${winDays === w.days ? "bg-[--sakura] text-white" : "text-neutral-400 hover:text-neutral-200"}`} style={{ ["--sakura" as string]: "#e8859b" }}>{w.label}</button>)}</div>}
+            <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex">{WINDOWS.map((w) => <button key={w.label} onClick={() => setWinDays(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${winDays === w.days ? "bg-[--sakura] text-white" : "text-neutral-400 hover:text-neutral-200"}`} style={{ ["--sakura" as string]: "#e8859b" }}>{w.label}</button>)}</div>
             {!proj && <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex" title="Sort projects">
               <span className="px-1 text-[10px] text-neutral-600">↕</span>
               {([["recent", "Recent"], ["busy", "Busy"], ["name", "A–Z"]] as const).map(([k, label]) => (
@@ -213,8 +223,11 @@ export default function BentoHome() {
         </div>
       </div>
 
+      {/* draggable divider (persists panel width) */}
+      {proj && <div onMouseDown={() => setDragging(true)} title="Drag to resize" className="hidden w-1.5 shrink-0 cursor-col-resize bg-white/[0.06] transition-colors hover:bg-[--sakura]/60 md:block" style={{ ["--sakura" as string]: "#e8859b" }} />}
+
       {/* Right: chat SIDE PANEL */}
-      <div className={`min-h-0 border-l border-white/10 bg-neutral-900/50 backdrop-blur transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${proj ? "flex w-full flex-col md:w-[60%]" : "w-0 overflow-hidden"}`}>
+      <div className={`min-h-0 bg-neutral-900/50 backdrop-blur w-full md:w-[var(--rw)] ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {proj && (
           <>
             <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2.5">

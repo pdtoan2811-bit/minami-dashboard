@@ -3,8 +3,9 @@ import { Nav } from "@/components/Nav";
 import { ModelRouting } from "@/components/ModelRouting";
 import { RoutingFlow } from "@/components/RoutingFlow";
 import { UsagePanel } from "@/components/UsagePanel";
+import { UsageHeatmap } from "@/components/UsageHeatmap";
 import { analytics, people, taskLog, traceBack } from "@/lib/data";
-import { Activity, GitBranch, ListTodo, Radio, Route, Users, Zap } from "lucide-react";
+import { Activity, CalendarDays, GitBranch, ListTodo, Radio, Route, Users, Zap } from "lucide-react";
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -30,6 +31,11 @@ export default function Page() {
 
       {/* Masonry: 1 column on mobile, 2 on tablet, 3 on desktop. Cards never split across columns. */}
       <div className="gap-4 [column-fill:_balance] md:columns-2 xl:columns-3 [&>*]:mb-4 [&>*]:break-inside-avoid">
+      <Card>
+        <CardHeader><CalendarDays className="h-4 w-4 text-[--sakura]" /><CardTitle>Usage heatmap</CardTitle></CardHeader>
+        <CardContent><UsageHeatmap /></CardContent>
+      </Card>
+
       <Card>
         <CardHeader><Radio className="h-4 w-4 text-[--sakura]" /><CardTitle>Live routing</CardTitle></CardHeader>
         <CardContent><RoutingFlow /></CardContent>
