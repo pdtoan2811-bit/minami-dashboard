@@ -12,7 +12,10 @@ const DIR = path.join(os.homedir(), ".minami-bento");
 const CACHE = path.join(DIR, "cache.json");
 export const ENRICH_MARKER = ".minami-bento"; // sessions spawned by the summarizer live here — hide them
 
-export type Entry = { messages: number; task: string; topic: string };
+// Project > Goal > Task. `project` is deterministic (cwd); `goal` is a mid-level objective WITHIN
+// the project that groups related sessions; `task` is the specific session. Curate this file by hand
+// or via the `bento-taxonomy` skill — it's the source of truth and only auto-filled when missing.
+export type Entry = { messages: number; goal: string; task: string };
 export type Digest = { id: string; project: string; title: string; lastPrompt: string; toolNames: string[]; messages: number };
 
 function readCache(): Record<string, Entry> {
@@ -25,24 +28,35 @@ export function getEnrichment(): Record<string, Entry> { return readCache(); }
 
 function needs(d: Digest, cache: Record<string, Entry>): boolean {
   const e = cache[d.id];
-  return !e || Math.abs(e.messages - d.messages) > 8;
+  return !e || !e.goal || Math.abs(e.messages - d.messages) > 8; // !e.goal migrates old topic-only entries
 }
 
-// Summarize up to N un-enriched sessions in one Haiku call. Returns the full (merged) cache.
+// Summarize un-enriched sessions in one Haiku call, into Project > Goal > Task. Goals are reused
+// within a project for consistency. Only fills MISSING entries — curated edits are never clobbered.
 export function enrich(digests: Digest[]): Record<string, Entry> {
   const cache = readCache();
   const todo = digests.filter((d) => needs(d, cache)).slice(0, 16);
   if (!todo.length) return cache;
+
+  // Existing goals per project (so the model reuses them instead of inventing near-duplicates).
+  const goalsByProject: Record<string, Set<string>> = {};
+  for (const [id, e] of Object.entries(cache)) {
+    const d = digests.find((x) => x.id === id);
+    if (d && e.goal) (goalsByProject[d.project] ||= new Set()).add(e.goal);
+  }
+  const known = Object.entries(goalsByProject).map(([p, g]) => `${p}: ${[...g].join(" | ")}`).join("\n") || "(none yet)";
 
   const lines = todo.map((d, i) =>
     `${i + 1}. id=${d.id} | project=${d.project} | intent="${(d.lastPrompt || d.title).slice(0, 180)}" | tools=${d.toolNames.slice(0, 6).join(",")}`
   ).join("\n");
 
   const prompt =
-    `You label Claude Code coding/agent sessions for a dashboard. For EACH session, infer what it is REALLY doing.\n` +
-    `Return ONLY a JSON array, one object per session: [{"id":"<id>","task":"<4-7 word action title>","topic":"<1-3 word theme>"}].\n` +
-    `Rules: task = specific and meaningful (e.g. "Wire Bento usage metrics", "Fix Slack image sending") — NEVER generic ("Slack turn", "chat"). ` +
-    `topic = a short theme that GROUPS related sessions (reuse the same topic string across related sessions), e.g. "Minami infra", "Bento UI", "Ecom Intel", "Dashboard", "Deploy".\n\n` +
+    `You classify Claude Code sessions into a Project > Goal > Task hierarchy for a dashboard.\n` +
+    `The PROJECT is given. For each session infer:\n` +
+    `- goal: the mid-level OBJECTIVE within that project this session serves (2-5 words). REUSE an existing goal for the project when it fits; only coin a new one when nothing matches.\n` +
+    `- task: the specific thing this session is doing (4-7 words, concrete) — NEVER generic like "Slack turn"/"chat".\n\n` +
+    `Existing goals per project:\n${known}\n\n` +
+    `Return ONLY a JSON array: [{"id":"<id>","goal":"<goal>","task":"<task>"}].\n\n` +
     `Sessions:\n${lines}`;
 
   try {
@@ -57,12 +71,10 @@ export function enrich(digests: Digest[]): Record<string, Entry> {
       const arr = JSON.parse(m[0]) as any[];
       for (const it of arr) {
         const d = todo.find((x) => x.id === it?.id);
-        if (d && it?.task) {
-          cache[it.id] = {
-            messages: d.messages,
-            task: String(it.task).slice(0, 70),
-            topic: String(it.topic || "General").slice(0, 24),
-          };
+        if (d && it?.task && !cache[it.id]) {
+          cache[it.id] = { messages: d.messages, goal: String(it.goal || "General").slice(0, 40), task: String(it.task).slice(0, 70) };
+        } else if (d && it?.task && cache[it.id]) {
+          cache[it.id] = { messages: d.messages, goal: String(it.goal || cache[it.id].goal).slice(0, 40), task: String(it.task).slice(0, 70) };
         }
       }
       writeCache(cache);

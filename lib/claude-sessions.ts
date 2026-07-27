@@ -58,8 +58,8 @@ export type SessionMeta = {
   toolNames: string[];
   lastActivity: number;
   active: boolean;
-  task?: string;   // LLM-generated meaningful task title
-  topic?: string;  // LLM-generated high-level topic for grouping
+  task?: string;   // specific task (Project > Goal > Task)
+  goal?: string;   // mid-level objective within the project, for grouping
 };
 
 type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string };
@@ -139,7 +139,7 @@ export function listSessions(): SessionMeta[] {
   }
   // Merge the semantic layer (meaningful task title + topic) from the enrichment cache.
   const enr = getEnrichment();
-  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.topic = e.topic; } }
+  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; } }
   return out.sort((a, b) => b.lastActivity - a.lastActivity).slice(0, 60);
 }
 
