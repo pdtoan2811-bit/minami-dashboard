@@ -65,7 +65,7 @@ function ProjectIcon({ name, big, active }: { name: string; big?: boolean; activ
 
 type Project = { name: string; sessions: SessionMeta[]; reqs: number; tokens: number; last: number; active: boolean; review: boolean; goals: string[]; latest: string; weight: number };
 const WINDOWS: { label: string; days: number | null }[] = [
-  { label: "24h", days: 1 }, { label: "7d", days: 7 }, { label: "30d", days: 30 }, { label: "All", days: null },
+  { label: "24h", days: 1 }, { label: "3d", days: 3 }, { label: "7d", days: 7 }, { label: "30d", days: 30 }, { label: "All", days: null },
 ];
 const MAX_PANES = 2;
 
@@ -74,7 +74,9 @@ export default function BentoHome() {
   const [loaded, setLoaded] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [q, setQ] = useState("");
-  const [winDays, setWinDays] = useState<number | null>(30);
+  const [defaultWindow] = useSetting<number | null>("defaultWindow", 3);
+  const [winDays, setWinDays] = useState<number | null>(3);
+  useEffect(() => { setWinDays(defaultWindow); }, [defaultWindow]); // apply the user's default window
   const [sortBy, setSortBy] = useState<"recent" | "busy" | "name">("recent");
   const [sel, setSel] = useState(0);
   const [project, setProject] = useState<string | null>(null);
