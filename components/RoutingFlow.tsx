@@ -6,11 +6,12 @@ import { MODELS, eventCost, opusEquivCost, tierFromModel } from "@/lib/routing";
 const METRICS_URL = (process.env.NEXT_PUBLIC_METRICS_URL || "").replace(/\/$/, "");
 const METRICS_KEY = process.env.NEXT_PUBLIC_METRICS_KEY || "";
 
-type Ev = { id: number; source: string; label: string; tier: string; tint: string; cost: number; opus: number };
-type State = { routed: number; opus: number; byTier: Record<string, number>; feed: Ev[] };
+type Ev = { id: number; source: string; label: string; tier: string; tint: string; cost: number; opus: number; tok: number };
+type State = { routed: number; opus: number; tokens: number; byTier: Record<string, number>; feed: Ev[] };
 
-const EMPTY: State = { routed: 0, opus: 0, byTier: {}, feed: [] };
+const EMPTY: State = { routed: 0, opus: 0, tokens: 0, byTier: {}, feed: [] };
 const SRC = (s: string) => (s === "local-mac" ? "Mac" : s === "minami-cloud" ? "cloud" : s);
+const short = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
 
 let counter = 0;
 function toEv(e: { source?: string; model?: string; label?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }): Ev {
@@ -23,6 +24,7 @@ function toEv(e: { source?: string; model?: string; label?: string; inputTokens?
     tint: m.tint,
     cost: eventCost(e.inputTokens, e.outputTokens, e.cacheReadTokens, e.model),
     opus: opusEquivCost(e.inputTokens, e.outputTokens, e.cacheReadTokens),
+    tok: (e.inputTokens || 0) + (e.outputTokens || 0),
   };
 }
 
@@ -47,6 +49,7 @@ export function RoutingFlow() {
           routed: d.totals.cost || 0,
           // Prefer the server's cache-accurate Opus baseline; fall back for older servers.
           opus: d.totals.opusCost ?? opusEquivCost(d.totals.inTok, d.totals.outTok, 0),
+          tokens: (d.totals.inTok || 0) + (d.totals.outTok || 0),
           byTier,
           feed: (d.recent || []).slice(0, 6).map(toEv),
         });
@@ -65,6 +68,7 @@ export function RoutingFlow() {
         setSt((prev) => ({
           routed: prev.routed + ev.cost,
           opus: prev.opus + ev.opus,
+          tokens: prev.tokens + ev.tok,
           byTier: { ...prev.byTier, [ev.tier]: (prev.byTier[ev.tier] || 0) + 1 },
           feed: [ev, ...prev.feed].slice(0, 6),
         }));
@@ -88,9 +92,10 @@ export function RoutingFlow() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <Metric label="Routed" value={`$${st.routed.toFixed(4)}`} />
         <Metric label="If all-Opus" value={`$${st.opus.toFixed(4)}`} />
+        <Metric label="Tokens" value={short(st.tokens)} />
         <Metric label="Saved" value={`${saved.toFixed(0)}%`} accent />
       </div>
 
@@ -121,7 +126,7 @@ export function RoutingFlow() {
               <span className="truncate">{e.label || `${SRC(e.source)} · ${e.tier.split(" ")[0]}`}</span>
             </span>
             <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-400">
-              <span>{e.tier.split(" ")[0]}</span>
+              <span className="tabular-nums">{short(e.tok)} tok</span>
               <span className="tabular-nums text-green-600 dark:text-green-400">−${(e.opus - e.cost).toFixed(4)}</span>
             </span>
           </div>
