@@ -1,0 +1,17 @@
+[Unit]
+Description=Minami metrics API (Claude Code usage collector)
+After=network.target
+
+[Service]
+Type=simple
+Environment=HOME=/root
+Environment=PORT=8787
+Environment=METRICS_DIR=/root/.minami-metrics
+EnvironmentFile=/root/.minami-metrics.env
+ExecStart=/usr/bin/node /root/minami-dashboard/server/metrics-server.js
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target

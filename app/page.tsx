@@ -1,7 +1,8 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ModelRouting } from "@/components/ModelRouting";
 import { RoutingFlow } from "@/components/RoutingFlow";
-import { analytics, people, taskLog, tokenLog, traceBack } from "@/lib/data";
+import { UsagePanel } from "@/components/UsagePanel";
+import { analytics, people, taskLog, traceBack } from "@/lib/data";
 import { Activity, GitBranch, ListTodo, Radio, Route, Users, Zap } from "lucide-react";
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -38,12 +39,8 @@ export default function Page() {
       </Card>
 
       <Card>
-        <CardHeader><Zap className="h-4 w-4 text-[--sakura]" /><CardTitle>Token log</CardTitle></CardHeader>
-        <CardContent>
-          {tokenLog.connected ? null : (
-            <p className="text-sm text-neutral-400">No usage source connected yet — per-session cost lands here once Minami logs it.</p>
-          )}
-        </CardContent>
+        <CardHeader><Zap className="h-4 w-4 text-[--sakura]" /><CardTitle>Usage · both machines</CardTitle></CardHeader>
+        <CardContent><UsagePanel /></CardContent>
       </Card>
 
       <Card>
