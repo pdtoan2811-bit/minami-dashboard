@@ -6,20 +6,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ENRICH_MARKER, getEnrichment } from "./bento-enrich";
+import { eventCost } from "./routing"; // single source of truth for model prices
 
 const PROJECTS = path.join(os.homedir(), ".claude", "projects");
 
-const PRICES: Record<string, { in: number; out: number }> = {
-  "claude-haiku-4-5": { in: 1, out: 5 },
-  "claude-sonnet-5": { in: 2, out: 10 },
-  "claude-opus-4-8": { in: 5, out: 25 },
-  "claude-opus-5": { in: 5, out: 25 },
-  "claude-fable-5": { in: 10, out: 50 },
-};
-function priceFor(model?: string) {
-  const k = model ? Object.keys(PRICES).find((x) => model.includes(x)) : undefined;
-  return k ? PRICES[k] : { in: 5, out: 25 };
-}
 // Turn a raw first-prompt into a meaningful title — strip known preambles (Minami's persona prompt,
 // the compaction prompt, local-command dumps) and surface the actual topic.
 function cleanTitle(raw: string): string {
@@ -99,8 +89,7 @@ function summarize(file: string, id: string): SessionMeta {
       if (u) {
         tin += u.input_tokens || 0;
         tout += u.output_tokens || 0;
-        const p = priceFor(m.model);
-        cost += ((u.input_tokens || 0) + (u.cache_read_input_tokens || 0) * 0.1) / 1e6 * p.in + (u.output_tokens || 0) / 1e6 * p.out;
+        cost += eventCost(u.input_tokens || 0, u.output_tokens || 0, u.cache_read_input_tokens || 0, m.model);
       }
       let atxt = "";
       for (const b of m.content || []) {

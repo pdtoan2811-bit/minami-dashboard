@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Minami Dashboard",
-  description: "Token log, tasks, trace-back, analytics & people — for Minami.",
+  title: "Minami Bento — Claude Code mission control",
+  description: "Every Claude Code session on your machine as a live bento tile, plus real-time cross-machine usage & model-routing metrics.",
 };
 
 export const viewport: Viewport = {

@@ -47,7 +47,7 @@ export function UsageHeatmap() {
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1 rounded-lg border border-black/10 p-0.5 dark:border-white/10">
           {RANGES.map((r) => (
-            <button key={r} onClick={() => setRange(r)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${range === r ? "bg-[--sakura] text-white" : "text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"}`} style={{ ["--sakura" as string]: "#e8859b" }}>{r}d</button>
+            <button key={r} onClick={() => setRange(r)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${range === r ? "bg-[var(--sakura)] text-white" : "text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"}`}>{r}d</button>
           ))}
         </div>
         <span className="text-[11px] text-neutral-500">{short(totalTurns)} turns · {short(totalTok)} tok</span>

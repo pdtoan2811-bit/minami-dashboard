@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { MODELS, eventCost, opusEquivCost, tierFromModel } from "@/lib/routing";
+import { sourceMeta } from "@/lib/sources";
 
 const METRICS_URL = (process.env.NEXT_PUBLIC_METRICS_URL || "").replace(/\/$/, "");
 const METRICS_KEY = process.env.NEXT_PUBLIC_METRICS_KEY || "";
@@ -18,8 +19,8 @@ type State = {
 };
 
 const EMPTY: State = { routed: 0, opus: 0, tokIn: 0, tokOut: 0, byTier: {}, feed: [] };
-const SRC = (s: string) => (s === "local-mac" ? "Mac" : s === "minami-cloud" ? "cloud" : s);
-const SRC_TINT = (s: string) => (s === "local-mac" ? "#6c9cf5" : s === "minami-cloud" ? "#b98cff" : "#e8859b");
+const SRC = (s: string) => sourceMeta(s).short;
+const SRC_TINT = (s: string) => sourceMeta(s).tint;
 const short = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
 
 let counter = 0;
@@ -105,7 +106,7 @@ export function RoutingFlow() {
     return (
       <p className="text-sm text-neutral-400">
         No live stream. Set <code className="text-xs">NEXT_PUBLIC_METRICS_URL</code> to stream real turns
-        routed across models from both machines.
+        routed across models from your machines.
       </p>
     );
   }
@@ -171,7 +172,7 @@ export function RoutingFlow() {
             </div>
           </div>
         ))}
-        {st.feed.length === 0 && <p className="text-xs text-neutral-400">Waiting for the next turn from either machine…</p>}
+        {st.feed.length === 0 && <p className="text-xs text-neutral-400">Waiting for the next turn from any machine…</p>}
       </div>
     </div>
   );
@@ -181,7 +182,7 @@ function Metric({ label, value, sub, accent }: { label: string; value: string; s
   return (
     <div className="flex flex-col items-center rounded-xl border border-black/5 py-2 dark:border-white/10">
       <span className="text-[10px] text-neutral-500">{label}</span>
-      <span className={`text-sm font-semibold tabular-nums ${accent ? "text-[--sakura]" : ""}`}>{value}</span>
+      <span className={`text-sm font-semibold tabular-nums ${accent ? "text-[var(--sakura)]" : ""}`}>{value}</span>
       {sub && <span className="mt-0.5 text-[9px] tabular-nums text-neutral-400">{sub}</span>}
     </div>
   );

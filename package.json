@@ -2,6 +2,21 @@
   "name": "minami-dashboard",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
+  "description": "Minami Bento — a local, real-time mission-control for your Claude Code sessions. Every session on your machine becomes a live bento tile, with an optional cross-machine usage dashboard.",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "dashboard",
+    "bento",
+    "developer-tools",
+    "nextjs",
+    "observability"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pdtoan2811-bit/minami-dashboard.git"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

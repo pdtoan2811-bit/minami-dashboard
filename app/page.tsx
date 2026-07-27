@@ -33,21 +33,37 @@ function isTrivial(s: SessionMeta) {
 const goalOf = (s: SessionMeta) => s.goal || "General";
 const titleOf = (s: SessionMeta) => s.task || s.title;
 
-// Project → 3D icon (assets from 3dicons.co, in /public/icons). Fallback: cube.
-const PROJECT_ICON: Record<string, string> = {
-  secondBrain: "bulb", minami: "magic-trick", ownegoCentral: "rocket", ownego: "rocket",
-  dataAnalyticsOwnego: "chart", qikifyDataKnowledge: "notebook", app: "mobile",
-  cvtools: "file-text", CV: "file-text", guides: "explorer", userGuideTools: "explorer",
-  "design-hub": "color-palette", toolkit: "tools", "claude-status-bar-acos": "setting",
-  qdn: "link", qdnNewWebsite: "link", ecomIntel: "money-bag", "QSortby-website": "puzzle",
+// Project → 3D icon (assets from 3dicons.co, in /public/icons). Icons are inferred from keywords in
+// the project (working-directory) name, so this works for anyone's projects with zero config. To pin
+// a specific project to a specific icon, add an exact-name entry to ICON_OVERRIDES.
+const ICON_OVERRIDES: Record<string, string> = {
+  // "my-project": "rocket",
 };
-const iconOf = (p: string) => PROJECT_ICON[p] || "cube";
+const ICON_KEYWORDS: [RegExp, string][] = [
+  [/web|site|landing|www|link|url/, "link"],
+  [/app|mobile|ios|android|flutter/, "mobile"],
+  [/data|analytic|metric|chart|stat|report/, "chart"],
+  [/ai|\bml\b|model|intel|brain|agent|llm/, "bulb"],
+  [/design|\bui\b|\bux\b|figma|brand|theme/, "color-palette"],
+  [/doc|guide|note|wiki|content|blog|readme/, "notebook"],
+  [/tool|kit|util|\bcli\b|script|helper/, "tools"],
+  [/bot|slack|chat|message|mail/, "chat"],
+  [/money|pay|finance|invoice|commerce|shop|store|ecom|cart/, "money-bag"],
+  [/game|play|puzzle|fun/, "puzzle"],
+  [/secur|auth|lock|secret|vault|key/, "lock"],
+  [/config|setting|infra|ops|deploy|server|api/, "setting"],
+  [/rocket|launch|startup|mvp|central|core/, "rocket"],
+];
+function iconOf(project: string): string {
+  if (ICON_OVERRIDES[project]) return ICON_OVERRIDES[project];
+  const key = project.toLowerCase();
+  for (const [re, icon] of ICON_KEYWORDS) if (re.test(key)) return icon;
+  return "cube";
+}
 
-// A 3D icon that, on hover of its parent `.group`, cross-fades from the front render to the
-// angled ("dynamic") render + a slight CSS 3D turn — a lightweight faux-3D rotation (the assets
-// are static renders, not GLB models). Active projects float gently.
-// 3D icon (transparent 3dicons render). Default premium motion: gently TILT, then ROTATE, on loop.
-// Hover faces it front + scales up. Active projects run the cycle a touch faster.
+// A transparent 3D icon (static 3dicons render) with a premium default motion: it gently tilts then
+// rotates on a seamless loop (CSS `spin3d` keyframes in globals.css). Hovering the parent `.group`
+// faces it front and scales it up; active projects run the loop a touch faster.
 function ProjectIcon({ name, big, active }: { name: string; big?: boolean; active?: boolean }) {
   const icon = iconOf(name);
   const s = big ? "h-14 w-14" : "h-9 w-9";
@@ -158,7 +174,7 @@ export default function BentoHome() {
   const maxW = Math.max(1, ...projects.map((p) => p.weight)); // size ratio is vs the busiest project
 
   return (
-    <div className={`flex h-screen w-screen overflow-hidden text-neutral-100 ${isDragging ? "select-none" : ""}`} style={{ background: "radial-gradient(1100px 620px at 25% -12%, #1c1622, #0b0a0d 58%)", ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
+    <div className={`bg-bento flex h-screen w-screen overflow-hidden text-neutral-100 ${isDragging ? "select-none" : ""}`} style={{ ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
       {/* Left: bento */}
       <div className={`flex min-w-0 flex-col w-full md:w-[var(--lw)] ${proj ? "hidden md:flex" : ""} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-6 pb-2 pt-5">
@@ -166,12 +182,12 @@ export default function BentoHome() {
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
           <div className="ml-auto flex items-center gap-2">
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[--sakura]" style={{ ["--sakura" as string]: "#e8859b" }} />
-            <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex">{WINDOWS.map((w) => <button key={w.label} onClick={() => setWinDays(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${winDays === w.days ? "bg-[--sakura] text-white" : "text-neutral-400 hover:text-neutral-200"}`} style={{ ["--sakura" as string]: "#e8859b" }}>{w.label}</button>)}</div>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
+            <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex">{WINDOWS.map((w) => <button key={w.label} onClick={() => setWinDays(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${winDays === w.days ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{w.label}</button>)}</div>
             {!proj && <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex" title="Sort projects">
               <span className="px-1 text-[10px] text-neutral-600">↕</span>
               {([["recent", "Recent"], ["busy", "Busy"], ["name", "A–Z"]] as const).map(([k, label]) => (
-                <button key={k} onClick={() => setSortBy(k)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${sortBy === k ? "bg-[--sakura] text-white" : "text-neutral-400 hover:text-neutral-200"}`} style={{ ["--sakura" as string]: "#e8859b" }}>{label}</button>
+                <button key={k} onClick={() => setSortBy(k)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${sortBy === k ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{label}</button>
               ))}
             </div>}
             <Nav />
@@ -199,9 +215,9 @@ export default function BentoHome() {
                 return (
                   <motion.button layout key={p.name} data-i={i} onMouseEnter={() => setSel(i)} onClick={() => openProject(p)}
                     initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: dim, scale: 1 }} whileHover={{ y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}
-                    style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)`, ["--sakura" as string]: "#e8859b" }}
+                    style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)` }}
                     className={`group relative flex flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left backdrop-blur ${span} ${
-                      project === p.name ? "border-[--sakura] ring-1 ring-[--sakura]" : activeSel ? "border-[--sakura]/70 ring-1 ring-[--sakura] shadow-[0_22px_50px_-22px_rgba(232,133,155,0.6)]" : "border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_14px_34px_-18px_rgba(0,0,0,0.8)] hover:border-white/25"
+                      project === p.name ? "border-[var(--sakura)] ring-1 ring-[var(--sakura)]" : activeSel ? "border-[var(--sakura)]/70 ring-1 ring-[var(--sakura)] shadow-[0_22px_50px_-22px_rgba(232,133,155,0.6)]" : "border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_14px_34px_-18px_rgba(0,0,0,0.8)] hover:border-white/25"
                     }`}>
                     {p.active && <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl" style={{ background: pc + "44" }} />}
                     <div className="relative flex items-start justify-between">
@@ -224,7 +240,7 @@ export default function BentoHome() {
       </div>
 
       {/* draggable divider (persists panel width) */}
-      {proj && <div onMouseDown={() => setDragging(true)} title="Drag to resize" className="hidden w-1.5 shrink-0 cursor-col-resize bg-white/[0.06] transition-colors hover:bg-[--sakura]/60 md:block" style={{ ["--sakura" as string]: "#e8859b" }} />}
+      {proj && <div onMouseDown={() => setDragging(true)} title="Drag to resize" className="hidden w-1.5 shrink-0 cursor-col-resize bg-white/[0.06] transition-colors hover:bg-[var(--sakura)]/60 md:block" />}
 
       {/* Right: chat SIDE PANEL */}
       <div className={`min-h-0 bg-neutral-900/50 backdrop-blur w-full md:w-[var(--rw)] ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
@@ -236,7 +252,7 @@ export default function BentoHome() {
               </button>
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{proj.sessions.length} chats · {short(proj.reqs)} req</span>
               <button onClick={() => setPanes((p) => (p.length < MAX_PANES ? [...p, ""] : p))} disabled={panes.length >= MAX_PANES}
-                className="ml-auto rounded-lg border border-[--sakura]/40 px-2.5 py-1 text-[11px] text-[--sakura] transition-colors hover:bg-[--sakura]/10 disabled:opacity-40" style={{ ["--sakura" as string]: "#e8859b" }}>＋ new chat</button>
+                className="ml-auto rounded-lg border border-[var(--sakura)]/40 px-2.5 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋ new chat</button>
               <button onClick={closePanel} className="rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
             </div>
             <div className="flex min-h-0 flex-1">
@@ -275,7 +291,7 @@ function ChatColumn({ sessionId, sessions, idx, count, showTools, onPick, onClos
   const chats = [...sessions].sort((a, b) => b.lastActivity - a.lastActivity);
 
   return (
-    <div className={`flex min-w-0 flex-1 flex-col ${idx > 0 ? "border-l border-white/10" : ""}`} style={{ ["--sakura" as string]: "#e8859b" } as React.CSSProperties}>
+    <div className={`flex min-w-0 flex-1 flex-col ${idx > 0 ? "border-l border-white/10" : ""}`}>
       <div className="relative flex items-center gap-2 border-b border-white/[0.07] px-4 py-2">
         <ProjectIcon name={proj} />
         <button onClick={() => setMenu((v) => !v)} className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/10">

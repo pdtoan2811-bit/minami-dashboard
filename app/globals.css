@@ -1,7 +1,17 @@
 @import "tailwindcss";
 
+/* ── Theme ──────────────────────────────────────────────────────────────────
+   Change the whole look from here. --sakura is the accent used across the UI
+   (pills, focus rings, active tabs); --bento-bg is the app backdrop. Every
+   component references these via `bg-[var(--sakura)]` / the `.bg-bento` utility, so
+   there are no hard-coded colours to hunt down. */
 :root {
   --sakura: #e8859b;
+  --bento-bg: radial-gradient(1100px 620px at 25% -12%, #1c1622, #0b0a0d 58%);
+}
+
+.bg-bento {
+  background: var(--bento-bg);
 }
 
 html {

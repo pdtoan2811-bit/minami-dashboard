@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy this to your own file (e.g. ~/.minami-panels.json), edit it, and set MINAMI_PANELS_FILE to its absolute path. Every top-level field is optional; omit what you don't use. See lib/panels.ts for the schema.",
+  "analytics": {
+    "activeProjects": 4,
+    "openTasks": 8,
+    "notesTotal": 23,
+    "captureRate7d": 12
+  },
+  "taskLog": [
+    { "id": "1", "title": "Ship the landing page", "project": "Website", "status": "in_progress", "priority": "high" },
+    { "id": "2", "title": "Wire up auth", "project": "App", "status": "done", "priority": "med" }
+  ],
+  "traceBack": [
+    { "id": "t1", "chat": "Debug the blank dashboard", "where": "notes/dashboard.md", "at": "2026-07-24" }
+  ],
+  "people": [
+    { "id": "p1", "name": "Teammate", "relation": "Design", "lastTouch": "2026-07-24" }
+  ]
+}

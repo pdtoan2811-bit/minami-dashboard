@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { eventCost } from "@/lib/routing";
+import { sourceMeta } from "@/lib/sources";
 
 const METRICS_URL = (process.env.NEXT_PUBLIC_METRICS_URL || "").replace(/\/$/, "");
 const METRICS_KEY = process.env.NEXT_PUBLIC_METRICS_KEY || "";
@@ -12,24 +14,8 @@ type Stats = {
   updated: number;
 };
 
-const PRICES: Record<string, { in: number; out: number }> = {
-  "claude-haiku-4-5": { in: 1, out: 5 },
-  "claude-sonnet-5": { in: 2, out: 10 },
-  "claude-opus-4-8": { in: 5, out: 25 },
-  "claude-opus-5": { in: 5, out: 25 },
-  "claude-fable-5": { in: 10, out: 50 },
-};
-function costOf(e: { model?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }) {
-  const key = Object.keys(PRICES).find((k) => (e.model || "").includes(k));
-  const p = key ? PRICES[key] : { in: 5, out: 25 };
-  return ((e.inputTokens || 0) + (e.cacheReadTokens || 0) * 0.1) / 1e6 * p.in + (e.outputTokens || 0) / 1e6 * p.out;
-}
-
-const SOURCE_META: Record<string, { label: string; tint: string }> = {
-  "local-mac": { label: "Local · Mac", tint: "#6c9cf5" },
-  "minami-cloud": { label: "Minami · cloud", tint: "#b98cff" },
-};
-const meta = (s: string) => SOURCE_META[s] || { label: s, tint: "#e8859b" };
+const costOf = (e: { model?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }) =>
+  eventCost(e.inputTokens, e.outputTokens, e.cacheReadTokens, e.model);
 const short = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
 
 export function UsagePanel() {
@@ -83,8 +69,8 @@ export function UsagePanel() {
   if (!METRICS_URL) {
     return (
       <p className="text-sm text-neutral-400">
-        No metrics source connected. Set <code className="text-xs">NEXT_PUBLIC_METRICS_URL</code> to the
-        Tailscale Funnel URL to see live usage from both machines.
+        No metrics source connected. Set <code className="text-xs">NEXT_PUBLIC_METRICS_URL</code> to your
+        metrics API URL to see live usage across your machines.
       </p>
     );
   }
@@ -100,12 +86,12 @@ export function UsagePanel() {
 
       <div className="flex items-center gap-1.5 text-[10px] text-neutral-400">
         <span className={`h-1.5 w-1.5 rounded-full ${live ? "animate-pulse bg-green-500" : "bg-neutral-300"}`} />
-        {live ? "live · both machines" : "connecting…"}
+        {live ? "live · all machines" : "connecting…"}
       </div>
 
       <div className="flex flex-col gap-2">
         {(stats?.bySource || []).map((s) => {
-          const m = meta(s.source);
+          const m = sourceMeta(s.source);
           return (
             <div key={s.source} className="rounded-lg border border-black/5 p-2 dark:border-white/10">
               <div className="flex items-center justify-between">
@@ -124,7 +110,7 @@ export function UsagePanel() {
           );
         })}
         {stats && stats.bySource.length === 0 && (
-          <p className="text-xs text-neutral-400">Connected — waiting for the first turn from either machine…</p>
+          <p className="text-xs text-neutral-400">Connected — waiting for the first turn from any machine…</p>
         )}
       </div>
     </div>
@@ -135,7 +121,7 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
   return (
     <div className="flex flex-col items-center rounded-xl border border-black/5 py-2 dark:border-white/10">
       <span className="text-[10px] text-neutral-500">{label}</span>
-      <span className={`text-sm font-semibold tabular-nums ${accent ? "text-[--sakura]" : ""}`}>{value}</span>
+      <span className={`text-sm font-semibold tabular-nums ${accent ? "text-[var(--sakura)]" : ""}`}>{value}</span>
     </div>
   );
 }

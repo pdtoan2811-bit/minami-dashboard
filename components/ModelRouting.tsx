@@ -4,9 +4,10 @@ export function ModelRouting() {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs leading-relaxed text-neutral-500">
-        Spend the least, keep the output identical. Minami runs on{" "}
-        <span className="font-medium text-neutral-700 dark:text-neutral-300">Opus 4.8 · effort high</span>{" "}
-        and pushes grunt work down to a cheaper tier — the token-heavy part billed cheap, quality unchanged.
+        Spend the least, keep the output identical. Reserve the{" "}
+        <span className="font-medium text-neutral-700 dark:text-neutral-300">top tier</span>{" "}
+        for judgement and push grunt work down to a cheaper model — the token-heavy part billed
+        cheap, quality unchanged. Edit the table in <code className="text-[11px]">lib/routing.ts</code>.
       </p>
 
       <div className="flex flex-col gap-2">
