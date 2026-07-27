@@ -16,15 +16,17 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 
 export default function Page() {
   return (
-    <main className="mx-auto flex max-w-md flex-col gap-4 px-4 pb-16 pt-8">
-      <header className="flex items-center gap-2">
-        <span className="text-2xl">🌸</span>
+    <main className="mx-auto w-full max-w-md px-4 pb-16 pt-8 lg:max-w-5xl xl:max-w-6xl">
+      <header className="mb-4 flex items-center gap-2 lg:mb-6">
+        <span className="text-2xl lg:text-3xl">🌸</span>
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">Minami Dashboard</h1>
+          <h1 className="text-lg font-semibold tracking-tight lg:text-2xl">Minami Dashboard</h1>
           <p className="text-xs text-neutral-500">Holding the thread · live snapshot · 2026-07-27</p>
         </div>
       </header>
 
+      {/* Masonry: 1 column on mobile, 2 on tablet, 3 on desktop. Cards never split across columns. */}
+      <div className="gap-4 [column-fill:_balance] md:columns-2 xl:columns-3 [&>*]:mb-4 [&>*]:break-inside-avoid">
       <Card>
         <CardHeader><Radio className="h-4 w-4 text-[--sakura]" /><CardTitle>Live routing</CardTitle></CardHeader>
         <CardContent><RoutingFlow /></CardContent>
@@ -89,6 +91,7 @@ export default function Page() {
           ))}
         </CardContent>
       </Card>
+      </div>
     </main>
   );
 }
