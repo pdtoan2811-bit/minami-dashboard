@@ -45,6 +45,10 @@ export function useAgent(paneKey: string) {
   const sentOnce = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
   const attachingRef = useRef(false); // this stream was opened by attach() (reconnect), not send()
+  // Timestamp of the last "delta"/"thinking" event actually applied to `turns`. Used to tell a genuinely
+  // live connection (still receiving fresh tokens) apart from one that's stale because the underlying
+  // EventSource silently dropped and reconnected — see the snapshot resync logic below.
+  const lastDeltaAtRef = useRef(0);
 
   const closeStream = useCallback(() => { esRef.current?.close(); esRef.current = null; }, []);
   useEffect(() => closeStream, [closeStream]);
@@ -105,6 +109,23 @@ export function useAgent(paneKey: string) {
   const ensureStream = useCallback((attaching?: boolean) => {
     if (esRef.current) return;
     const es = new EventSource(`/api/agent/stream?key=${encodeURIComponent(paneKey)}${attaching ? "&attach=1" : ""}`);
+    // EventSource silently auto-reconnects at the transport level on a network blip (mobile switching
+    // networks, laptop sleep/wake, a proxy idle-killing the connection) — `onopen` fires again each time
+    // that happens, not just on the very first connect. Left alone, that reconnect is invisible at the
+    // app level: it reuses this stream's ORIGINAL url, which doesn't carry `attach=1` when this stream
+    // was opened by send() — so a session that fully ended while we were disconnected never gets reported
+    // `detached` (the server just parks us in `waiting`, see subscribe() in lib/agent/manager.ts), and
+    // even if it's still alive, the client only resyncs `turns` from the resent `snapshot` when
+    // `attachingRef.current` is true, which a bare reconnect never sets. Both add up to: a dropped
+    // connection leaves the transcript frozen at whatever it was when it dropped until the user manually
+    // reloads the page (which happens to go through the real attach() path). Fix: treat every open PAST
+    // the first as a signal to replace this connection with an explicit attach — same server-side
+    // handling a manual refresh gets, just automatic.
+    let opens = 0;
+    es.onopen = () => {
+      opens++;
+      if (opens > 1) { closeStream(); attachingRef.current = true; ensureStream(true); }
+    };
     es.onmessage = (e) => {
       let ev: any;
       try { ev = JSON.parse(e.data); } catch { return; }
@@ -112,6 +133,7 @@ export function useAgent(paneKey: string) {
         case "init":
           setSessionId(ev.sessionId); sessionIdRef.current = ev.sessionId; break;
         case "delta":
+          lastDeltaAtRef.current = Date.now();
           setTurns((prev) => {
             const next = prev.slice();
             for (let i = next.length - 1; i >= 0; i--) {
@@ -123,6 +145,7 @@ export function useAgent(paneKey: string) {
           });
           break;
         case "thinking":
+          lastDeltaAtRef.current = Date.now();
           setTurns((prev) => {
             const next = prev.slice();
             for (let i = next.length - 1; i >= 0; i--) {
@@ -155,19 +178,28 @@ export function useAgent(paneKey: string) {
           setDetached(false); setLive(true); setBusy(ev.busy);
           // Rebuild the transcript: on-disk history + the in-flight message (partial) still streaming.
           const overlay: AgentTurn[] = ev.busy ? [{ role: "assistant", text: ev.partial || "", tools: [], streaming: true, thinking: ev.partialThinking || "" }] : [];
+          // Captured BEFORE the disk fetch below — see the freshness check in its `.then()`.
+          const resyncStartedAt = Date.now();
           const sid = sessionIdRef.current;
           if (sid) {
             fetch(`/api/bento/session/${sid}`).then((r) => r.json()).then((d) => {
               const seed: AgentTurn[] = Array.isArray(d?.turns) ? d.turns.map((t: AgentTurn) => ({ role: t.role, text: t.text, tools: t.tools || [] })) : [];
-              // Prefer whatever streaming turn is CURRENTLY in state over the captured `overlay` — this
-              // fetch can take a moment, and delta/thinking/tool events for the still-running turn keep
-              // arriving (and get applied to `turns`) while it's in flight. `overlay` is a snapshot of
-              // `ev.partial` from the instant this fetch started; applying it now would roll back
-              // everything that streamed in during the round-trip, visibly "un-streaming" text the user
-              // already saw.
+              // Whether to trust the locally-held streaming turn over `overlay` (this event's `ev.partial`,
+              // captured the instant this resync began) hinges on whether the connection was actually alive
+              // the whole time. Two cases land here: (a) a genuine attach() on a fresh page load, where
+              // `prev` has no streaming turn at all — overlay wins trivially; (b) THIS stream silently
+              // dropped and the browser's EventSource auto-reconnected (see the onopen counter above) — the
+              // locally-held turn is exactly what's missing whatever streamed in during the outage, so
+              // `overlay`/`seed` (the server's current truth) must win, not the stale local copy. A THIRD,
+              // narrower case is why "prefer local" isn't simply removed: a still-live connection can keep
+              // delivering delta/thinking events for the in-flight turn while this fetch is in the air — in
+              // that case the local turn is actually AHEAD of `overlay` and rolling back to it would visibly
+              // "un-stream" text the user already saw. Distinguish the two by whether a delta actually
+              // landed after this resync started (only possible if the connection was live throughout).
               setTurns((prev) => {
                 const liveTurn = prev.find((t) => t.streaming);
-                return [...seed, ...(liveTurn ? [liveTurn] : overlay)];
+                const staleAfterOutage = !liveTurn || lastDeltaAtRef.current <= resyncStartedAt;
+                return [...seed, ...(liveTurn && !staleAfterOutage ? [liveTurn] : overlay)];
               });
             }).catch(() => setTurns(overlay));
           } else setTurns(overlay);
