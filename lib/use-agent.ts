@@ -35,7 +35,13 @@ export function useAgent(paneKey: string) {
   const [error, setError] = useState<string | null>(null);
   const [detached, setDetached] = useState(false); // an attach found no live server session
   const esRef = useRef<EventSource | null>(null);
-  const sentOnce = useRef(false); // pass `resume` only on the first send of a pane
+  // Pass `resume` on send until we've confirmed the server actually has a live session backing this
+  // pane. Sets true only once a `snapshot` is observed (proof a live session exists) and is re-armed to
+  // false on `detached` (proof it doesn't) — NOT unconditionally in attach(), because attach() doesn't
+  // yet know which of those is true. Getting this wrong is how a pane silently starts a brand-new,
+  // context-less session after the server reaps an idle one (see scheduleIdle in lib/agent/manager.ts):
+  // attach() used to mark this true optimistically, so the next send() after a detach omitted `resume`.
+  const sentOnce = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
   const attachingRef = useRef(false); // this stream was opened by attach() (reconnect), not send()
 
@@ -119,12 +125,23 @@ export function useAgent(paneKey: string) {
           });
           break;
         case "snapshot": {
-          // Only meaningful for a reconnect: on a fresh send() we've already staged the local turns, so
-          // the server's snapshot would clobber them. attach() flips this ref on.
+          // The activity state is always safe to adopt — REPLACE semantics, idempotent, never clobbers
+          // anything. This matters even on a fresh send(): the POST (sendMessage) and the GET (this
+          // stream's subscribe) race, and the POST usually wins, broadcasting the turn's opening
+          // activity (e.g. `spawning`) to zero subscribers a few ms before this snapshot arrives as the
+          // only copy of it the client will ever see. Applying it here is what makes that first phase
+          // visible at all instead of silently lost to the race.
+          if (ev.activity) applyActivity(ev.activity);
+          // A snapshot only ever arrives for a key the server confirms is live (see subscribe() in
+          // lib/agent/manager.ts) — so this is the actual proof `resume` can be safely omitted from here
+          // on, whether this snapshot came from a genuine reattach or the fresh-send race above.
+          sentOnce.current = true;
+          // The TURNS reconstruction below is different: it's only meaningful for a reconnect (attach())
+          // — on a fresh send() we've already staged the local turns, so rebuilding from disk here would
+          // clobber them. attach() flips this ref on; send() explicitly flips it off.
           if (!attachingRef.current) break;
           attachingRef.current = false;
           setDetached(false); setLive(true); setBusy(ev.busy);
-          if (ev.activity) applyActivity(ev.activity);
           // Rebuild the transcript: on-disk history + the in-flight message (partial) still streaming.
           const overlay: AgentTurn[] = ev.busy ? [{ role: "assistant", text: ev.partial || "", tools: [], streaming: true, thinking: ev.partialThinking || "" }] : [];
           const sid = sessionIdRef.current;
@@ -138,7 +155,9 @@ export function useAgent(paneKey: string) {
         }
         case "detached":
           // The server has no live session for this key (it ended or was reclaimed) — fall back to disk.
-          attachingRef.current = false;
+          // Re-arm `resume`: the next send() must hand the SDK its session id again so it resumes the
+          // on-disk conversation instead of silently starting a fresh, context-less one.
+          attachingRef.current = false; sentOnce.current = false;
           setDetached(true); setLive(false); closeStream();
           break;
         case "activity":
@@ -197,7 +216,10 @@ export function useAgent(paneKey: string) {
   // live session backs this pane, the server replies `detached` and we quietly fall back to disk.
   const attach = useCallback((resumeId?: string) => {
     if (resumeId && !sessionIdRef.current) { setSessionId(resumeId); sessionIdRef.current = resumeId; }
-    setError(null); setDetached(false); attachingRef.current = true; sentOnce.current = true;
+    // NB: sentOnce is deliberately left untouched here — whether resume can be skipped depends on
+    // whether the server confirms this key is actually live (snapshot) or not (detached), both handled
+    // in ensureStream() above. Setting it true here regardless was the bug.
+    setError(null); setDetached(false); attachingRef.current = true;
     ensureStream(true);
   }, [ensureStream]);
 
@@ -217,13 +239,16 @@ export function useAgent(paneKey: string) {
     applyActivity({ phase: "thinking", label: "thinking…", elapsedMs: 0, tools: [], tasks: [] });
     ensureStream();
     if (!sessionIdRef.current && opts.resume) { setSessionId(opts.resume); sessionIdRef.current = opts.resume; }
-    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: sentOnce.current ? undefined : opts.resume };
-    sentOnce.current = true;
+    const usingResume = !sentOnce.current;
+    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined };
     try {
       const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
+      // Only latch sentOnce once the server actually accepted this send — the snapshot handler above
+      // is the other (more common) place this flips true. On failure, leave it alone so a retry still
+      // offers `resume` instead of quietly falling back to a fresh, context-less session.
       if (d?.error) { setError(d.error); setBusy(false); applyActivity(IDLE_ACTIVITY); }
-      else if (d?.sessionId && !sessionIdRef.current) { setSessionId(d.sessionId); sessionIdRef.current = d.sessionId; }
+      else { sentOnce.current = true; if (d?.sessionId && !sessionIdRef.current) { setSessionId(d.sessionId); sessionIdRef.current = d.sessionId; } }
     } catch (e) { setError(String((e as Error)?.message || e)); setBusy(false); applyActivity(IDLE_ACTIVITY); }
   }, [paneKey, live, ensureStream, applyActivity]);
 

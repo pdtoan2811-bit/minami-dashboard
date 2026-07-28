@@ -38,7 +38,8 @@ single board:
 | **Up to 4 chats · 2×2 grid** | Open several chats of a topic at once, like windows on a foldable. Clicking a tile restores its recent chats (within the date filter); your open/closed layout is remembered per topic; add any chat from a picker. |
 | **New topic + folder picker** | A `＋ New topic` tile starts a fresh chat in any folder you browse to — no existing session required. |
 | **Repo & tech attach bar** | Each topic shows its git repo (link) and the tech it uses (Shopify, ClickHouse, BigQuery, Google Cloud, …) as brand icons, detected from `.git`, `package.json`, and config files. |
-| **Live drive** (Phase 2) | Actually run Claude Code from the panel — send messages, watch tokens stream in, and approve/deny tool calls inline. `Plan`/`Code` toggle (default Code) + approval level (`ask` / `auto-edits`), with a live "what it's doing" hint. Uses your existing Claude login (no API key). |
+| **Live drive** (Phase 2) | Actually run Claude Code from the panel — send messages, watch tokens stream in, and approve/deny tool calls inline. `Plan`/`Code` toggle (default Code) + approval level (`ask` / `auto-edits`), with a live "what it's doing" hint that tells cold-start (`starting session…`) apart from mid-turn thinking, escalates ("still working…") past a minute, and flashes the tab title if you've wandered off. A live checklist tracks the agent's TodoWrite plan as it works, not just the current tool. Uses your existing Claude login (no API key). |
+| **Browser tool** | Every live-driven chat gets a headless, isolated browser (Playwright MCP) so Claude can navigate/click/type/screenshot — built for QA-testing your own apps. Screenshots dock in a live side panel next to the chat and stay in the transcript history. Gated by your normal permission mode, same as any other tool. See [Browser tool](#browser-tool) below. |
 | **Semantic labels** | Sessions are grouped **Project › Goal › Task** and flagged for review by a cheap local Haiku pass (uses your Claude subscription via the `claude` CLI — no API key). Cached to disk; curate by hand or via the `bento-taxonomy` skill. |
 | **Metrics** (`/dashboard`) | Usage heatmap (cohort calendar), live model-routing feed, per-machine usage, routing table + savings. Optional — needs the metrics server below. |
 | **Pluggable panels** | Task log / Trace-back / Analytics / People read from a JSON file you provide (`MINAMI_PANELS_FILE`). Empty and harmless by default. |
@@ -55,7 +56,9 @@ npm install
 npm run dev          # → http://localhost:3000  (your sessions appear as tiles)
 ```
 
-That's the whole thing. No env vars required for the Bento home. For a production build:
+That's the whole thing. No env vars required for the Bento home. `npm install` also downloads a
+headless Chromium for the [browser tool](#browser-tool) (~one-time, a bit slow on the first install) —
+skip it with `MINAMI_DISABLE_BROWSER_TOOL=1` if you don't want it. For a production build:
 
 ```bash
 npm run build && npm start
@@ -77,6 +80,7 @@ All optional. Copy `.env.example` to `.env.local` and fill in what you want.
 | `NEXT_PUBLIC_METRICS_URL` | `/dashboard` | Base URL of the metrics API (see [`server/`](server/README.md)). Unset → metrics cards show "no source". |
 | `NEXT_PUBLIC_METRICS_KEY` | `/dashboard` | Read key for the metrics API (`?k=`). Obscurity only — gate the deploy for real privacy. |
 | `MINAMI_PANELS_FILE` | `/dashboard` | Absolute path to a JSON file backing the Task/People/Trace-back/Analytics cards. See [`panels.example.json`](panels.example.json). Unset → those cards are empty. |
+| `MINAMI_DISABLE_BROWSER_TOOL` | live-drive sessions | Set to `1` to stop giving live-driven chats the [browser tool](#browser-tool). Unset → enabled (it's deferred behind tool search, so a chat that never uses it costs ~nothing). |
 
 ### Theming
 
@@ -133,18 +137,53 @@ file edits · `plan` proposes without applying. `bypassPermissions` is intention
 (`~/.claude`, project `.claude`), your existing allow-rules, `CLAUDE.md`, and MCP servers all apply,
 just like the terminal. It drives the **local** machine, so it only works when you run Bento locally.
 
+### "What's it doing" hints
+
+The activity line under a busy pane (and the composer status line, and the bento tile's dot) tells a
+few situations apart instead of one flat "thinking…":
+
+- **Cold start vs. mid-turn.** The very first message to a session spins up a fresh SDK process
+  (usually 1-2s) — that shows as `starting session…` → `loading context…`, distinct from ordinary
+  between-tool-calls thinking, so a fresh chat doesn't read as "stuck" the way a slow tool call would.
+- **Escalating reassurance.** Past 30s of the same phase it adds a quiet `· still working…`; past 2
+  minutes, `· longer tasks can take a few minutes` — a hint, not a replacement for the specific "what
+  it's doing" label next to it.
+- **Live plan checklist.** Pinned above the composer whenever the agent has an active TodoWrite plan —
+  what's done, what's in progress, what's left — not just the current tool name.
+- **Away-tab notifications.** If a pane finishes a turn, or needs an approval/answer, while you're on
+  another tab or app, the browser tab title flashes and (if you've granted permission, asked on first
+  Send) a native notification fires. Silent while you're actually looking at the tab.
+
+### Browser tool
+
+Every live-driven chat is handed a browser (via the official [`@playwright/mcp`](https://www.npmjs.com/package/@playwright/mcp)
+server, headless + isolated per session — nothing written to disk, nothing shared between chats) so
+Claude can navigate, click, type, and screenshot — built for having it QA-test your own apps rather
+than general web automation. It's just another tool: gated by whatever permission mode the chat is in,
+same Approve/Deny prompt as anything else.
+
+Once a pane's used it, a **live view panel** docks next to that chat and shows the latest screenshot,
+updating the instant a `browser_*` call returns one — swap in, not continuous video (a real CDP
+screencast is a much bigger lift; sub-second-after-every-action is what you actually watch during a
+QA pass anyway). Screenshots also persist in the transcript history (`showTools` on) so you can scroll
+back through what it saw. Toggle the panel from the small browser icon in the chat header; turn the
+tool off entirely with `MINAMI_DISABLE_BROWSER_TOOL=1`.
+
 ## Roadmap
 
 - **Phase 1 — Observe.** ✅ Read-only mirror: live grid, semantic titles, per-session
   tokens/cost/tier, transcript side-panel, cross-machine metrics.
 - **Phase 2 — Drive.** ✅ Send messages, stream replies, approve/deny tools, permission modes,
   resume — a real alternative to CLI windows.
-- **Phase 3 — Share (next).** Per-topic thumbnails, file attachments in chat, and open-source packaging.
+- **Phase 3 — Share (in progress).** ✅ Richer "what's it doing" hints (cold-start vs. thinking,
+  escalating reassurance, live plan checklist, away-tab notifications). ✅ Browser tool (Playwright MCP)
+  with a live screenshot panel for QA-testing your own apps. Next: per-topic thumbnails, file
+  attachments in chat, open-source packaging.
 
 ## Tech
 
 Next.js 15 (App Router, React 19) · Tailwind v4 · framer-motion · highlight.js · lucide-react ·
-`@anthropic-ai/claude-agent-sdk` (live drive).
+`@anthropic-ai/claude-agent-sdk` (live drive) · `@playwright/mcp` (browser tool).
 
 ## License
 

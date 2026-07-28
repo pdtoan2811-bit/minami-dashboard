@@ -347,6 +347,9 @@ function permPreview(tool: string, input: unknown): string {
 }
 
 export default function BentoHome() {
+  // Away-tab notifications: flashes the document title when any pane (see ChatColumn) fires notify()
+  // while this tab isn't visible/focused. Mounted once, here, not per-pane — see lib/use-notify.ts.
+  useTitleFlash("Minami Bento");
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [enriching, setEnriching] = useState(false);
@@ -818,6 +821,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           <span className="min-w-0"><span className="block truncate text-[13px] font-semibold">{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span><span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span></span>
           <span className="text-neutral-500">⌄</span>
         </button>
+        {everUsedBrowser && browserPanelHidden && (
+          <button onClick={() => setBrowserPanelHidden(false)} title="Show browser view" className={`shrink-0 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
+            <Chrome className="h-3.5 w-3.5" />
+          </button>
+        )}
         {count > 1 && <button onClick={onClose} className="ml-auto rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
         {menu && (
           <>
@@ -833,6 +841,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           </>
         )}
       </div>
+      {/* Messages + composer share the row with the browser panel (when active) instead of stacking —
+          "side panel next to the chat", not inline in the transcript or a full takeover. */}
+      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
         {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
@@ -869,6 +881,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
                 const cat = toolCategory(tool.name);
                 const tint = TOOL_TINT[cat];
                 const Icon = TOOL_ICON[cat];
+                // Result content, not just the input — a browser tool's screenshot lives here, and any
+                // tool's text result is now worth showing instead of just what was asked of it.
+                const images = tool.output?.blocks.filter((b): b is Extract<ToolOutputBlock, { type: "image" }> => b.type === "image") || [];
+                const textOut = tool.output?.blocks.find((b): b is Extract<ToolOutputBlock, { type: "text" }> => b.type === "text");
                 return (
                   <details key={tool.id || j} className="mt-2 rounded-lg border-l-2 bg-black/40 px-2.5 py-1.5 text-xs" style={{ borderLeftColor: tint + "80", borderTop: "1px solid rgba(255,255,255,0.06)", borderRight: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     <summary className="flex cursor-pointer select-none items-center gap-1.5 text-neutral-400">
@@ -881,6 +897,19 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
                         : <span className="shrink-0 text-[10px] text-neutral-600">running…</span>}
                     </summary>
                     <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
+                    {textOut && (
+                      <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-black/30 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-neutral-500">{textOut.text}</pre>
+                    )}
+                    {images.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {images.map((img, k) => (
+                          <a key={k} href={`data:${img.mediaType};base64,${img.data}`} target="_blank" rel="noreferrer" title="Open full size">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={`data:${img.mediaType};base64,${img.data}`} alt="" className="h-24 rounded border border-white/10 object-cover" />
+                          </a>
+                        ))}
+                      </div>
+                    )}
                   </details>
                 );
               })}
@@ -917,6 +946,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
       )}
 
       <div className="border-t border-white/10 px-4 py-3">
+        <TodoChecklist todos={todos} />
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           {/* Plan vs Code — default Code. Plan proposes without applying. */}
           <div className="flex items-center rounded-lg border border-white/10 p-0.5" title="Plan proposes changes first; Code executes">
@@ -960,6 +990,16 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
             {agent.busy ? (agent.stopping ? "⋯" : "■") : "↵"}
           </button>
         </div>
+      </div>
+      </div>
+      {showBrowserPanel && (
+        <BrowserPanel
+          shot={browserShot ? { mediaType: browserShot.mediaType, data: browserShot.data } : null}
+          busy={browserBusy}
+          actionLabel={browserActionLabel}
+          onClose={() => setBrowserPanelHidden(true)}
+        />
+      )}
       </div>
       {attachOpen && <FolderPicker pickFiles start={cwd} onClose={() => setAttachOpen(false)}
         onPick={(p) => { setInput((v) => (v ? v.replace(/\s*$/, " ") : "") + p + " "); setAttachOpen(false); }} />}
