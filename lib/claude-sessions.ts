@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { ENRICH_MARKER, getEnrichment } from "./bento-enrich";
 import { eventCost } from "./routing"; // single source of truth for model prices
+import { summarizeToolResult, type ToolOutput } from "./agent/labels";
 
 const PROJECTS = path.join(os.homedir(), ".claude", "projects");
 
@@ -190,7 +191,8 @@ export function listSessions(): SessionMeta[] {
   return out.sort((a, b) => b.lastActivity - a.lastActivity).slice(0, 60);
 }
 
-export type Turn = { role: "user" | "assistant"; text: string; tools: { name: string; input: any }[]; ts: number; model?: string };
+export type ToolCallRecord = { name: string; input: any; id?: string; output?: ToolOutput; ok?: boolean };
+export type Turn = { role: "user" | "assistant"; text: string; tools: ToolCallRecord[]; ts: number; model?: string };
 
 // Parsed transcripts, cached by file mtime — the chat panel polls this every couple seconds, so an
 // unchanged (often huge) transcript must not be re-read or re-parsed each time. Kept on globalThis (dev
@@ -264,6 +266,10 @@ export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[
   // Turns only need the file's tail — parse that, which keeps opening a long chat fast on first view.
   const raw = readTail(found, st.size);
   const turns: Turn[] = [];
+  // tool_use and its tool_result live on two DIFFERENT lines (assistant, then the next user row) — this
+  // maps a call's id to the (still-mutable, already-pushed-into-`turns`) record so the result row can
+  // attach its output/ok onto the turn that started it, same as the live SSE path does with liveTools.
+  const toolIndex = new Map<string, ToolCallRecord>();
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let r: Row;
@@ -271,12 +277,19 @@ export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[
     if (r.type !== "user" && r.type !== "assistant") continue;
     const c = r.message?.content;
     let text = "";
-    const toolz: { name: string; input: any }[] = [];
+    const toolz: ToolCallRecord[] = [];
     if (typeof c === "string") text = c;
     else if (Array.isArray(c)) {
       for (const b of c) {
         if (b?.type === "text") text += (text ? "\n" : "") + b.text;
-        else if (b?.type === "tool_use") toolz.push({ name: b.name, input: b.input });
+        else if (b?.type === "tool_use") {
+          const rec: ToolCallRecord = { name: b.name, input: b.input, id: b.id };
+          toolz.push(rec);
+          if (b.id) toolIndex.set(b.id, rec);
+        } else if (b?.type === "tool_result" && b.tool_use_id) {
+          const rec = toolIndex.get(b.tool_use_id);
+          if (rec) { rec.output = summarizeToolResult(b.content); rec.ok = !b.is_error; }
+        }
       }
     }
     if (text.trim() || toolz.length) {

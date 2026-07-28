@@ -2,17 +2,19 @@
 
 import { Nav } from "@/components/Nav";
 import { useSetting } from "@/lib/use-settings";
-import { useAgent, toolCategory, activityLabel, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory } from "@/lib/use-agent";
+import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type TodoItem } from "@/lib/use-agent";
+import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
 import FolderPicker from "@/components/FolderPicker";
 import AttachBar from "@/components/AttachBar";
 import BrandIcon, { type Icon } from "@/components/BrandIcon";
 import AskCard from "@/components/AskCard";
 import Composer from "@/components/Composer";
+import BrowserPanel from "@/components/BrowserPanel";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, FileText, Globe, HelpCircle, ListChecks, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -20,7 +22,10 @@ type SessionMeta = {
   messages: number; tools: number; toolNames: string[]; lastActivity: number; active: boolean;
   task?: string; goal?: string; lastRole?: string; tail?: string; review?: boolean;
 };
-type Turn = { role: "user" | "assistant"; text: string; tools: { name: string; input: unknown }[]; ts: number; model?: string };
+// Reuses AgentToolCall (not a separate shape) so a disk-loaded tool call and a live-streamed one render
+// through the exact same code — `done`/`ms` just stay unset for disk data, `output` (incl. screenshots)
+// is populated by claude-sessions.ts the same way manager.ts populates it live.
+type Turn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; ts: number; model?: string };
 // Live turns carry per-tool completion state (id/done/ok/ms) that the on-disk transcript doesn't have.
 type RenderTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
 
@@ -54,8 +59,19 @@ function trimInput(input: unknown): unknown {
     return s.length <= 2000 ? input : { _truncated: true, preview: s.slice(0, 2000) };
   } catch { return null; }
 }
+// Screenshots are the whole point of the browser tool, but a handful of them (each tens of KB of
+// base64) would blow sessionStorage's ~5-10MB quota fast — drop images from what's PERSISTED (the
+// live in-memory transcriptCache above keeps full fidelity for the rest of the tab's session; only a
+// hard reload loses the pixels, never the fact that a screenshot happened).
+function trimOutput(tc: AgentToolCall): AgentToolCall["output"] {
+  if (!tc.output) return undefined;
+  const hadImage = tc.output.blocks.some((b) => b.type === "image");
+  const blocks = tc.output.blocks.filter((b) => b.type !== "image");
+  if (!blocks.length && !hadImage) return undefined;
+  return { blocks, truncated: tc.output.truncated || hadImage };
+}
 function toStorable(d: Detail): Detail {
-  return { meta: d.meta, turns: d.turns.slice(-40).map((t) => ({ ...t, tools: t.tools.map((tc) => ({ name: tc.name, input: trimInput(tc.input) })) })) };
+  return { meta: d.meta, turns: d.turns.slice(-40).map((t) => ({ ...t, tools: t.tools.map((tc) => ({ name: tc.name, input: trimInput(tc.input), output: trimOutput(tc) })) })) };
 }
 function loadOrder(): string[] {
   try { const s = sessionStorage.getItem(TS_ORDER_KEY); return s ? (JSON.parse(s) as string[]) : []; } catch { return []; }
@@ -174,7 +190,7 @@ const fmtElapsed = (ms: number) => {
 };
 // Per-phase accent, so the indicator's colour alone tells you thinking vs tool vs blocked-on-you.
 const PHASE_TINT: Record<ActivityPhase, string> = {
-  idle: "#6b7280", thinking: "var(--sakura)", responding: "#6c9cf5", tool: "#f0a868",
+  idle: "#6b7280", spawning: "#f6c667", thinking: "var(--sakura)", responding: "#6c9cf5", tool: "#f0a868",
   awaiting: "#4ade80", retrying: "#ef7c7c", compacting: "#a78bfa",
 };
 // Per-tool-category accent, layered on top of PHASE_TINT: while the phase is `tool`, the indicator
@@ -183,11 +199,11 @@ const PHASE_TINT: Record<ActivityPhase, string> = {
 // the per-call transcript block, AND (since it's the same ActivityLine component) the bento tile's
 // live-activity dot, so "what's this box actually doing" reads the same everywhere it shows up.
 const TOOL_TINT: Record<ToolCategory, string> = {
-  read: "#6c9cf5", write: "#f0a868", exec: "#e8859b", search: "#6cc4a1", web: "#4dd0e1",
+  read: "#6c9cf5", write: "#f0a868", exec: "#e8859b", search: "#6cc4a1", web: "#4dd0e1", browser: "#5ec8f8",
   task: "#b98cff", plan: "#4ade80", ask: "#e8859b", skill: "#f0a868", mcp: "#b98cff", other: "#9ca3af",
 };
 const TOOL_ICON: Record<ToolCategory, LucideIcon> = {
-  read: FileText, write: Pencil, exec: SquareTerminal, search: Search, web: Globe,
+  read: FileText, write: Pencil, exec: SquareTerminal, search: Search, web: Globe, browser: Chrome,
   task: Bot, plan: ListChecks, ask: HelpCircle, skill: Puzzle, mcp: Puzzle, other: Wrench,
 };
 
@@ -204,7 +220,10 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime }: { activity
   // disagree, err toward animating: a silent blank line is the exact failure we're fixing.
   const phase: ActivityPhase = activity.phase === "idle" && busy ? "thinking" : activity.phase;
   if (phase === "idle") return null;
-  const label = activity.label || "working…";
+  // A `spawning` cold-start has no per-step signal from the SDK, just elapsed time — so the hint IS
+  // the label (it narrates a plausible sequence) rather than a secondary aside next to a static string.
+  const hint = escalationHint(phase, elapsed);
+  const label = phase === "spawning" ? (hint || activity.label || "starting session…") : (activity.label || "working…");
   const extras = activity.tools.filter((t) => !t.parentId && t.name !== "Task" && t.name !== "Agent");
   // While a tool is running, color the whole line by the SPECIFIC kind of work — the same "own" tool
   // (or, with none, the running subagent) that the label text itself names — instead of one flat
@@ -224,6 +243,9 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime }: { activity
           tile never feels cluttered. */}
       {Icon && !compact && <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />}
       <span className="activity-label min-w-0 truncate italic" style={{ color: tint }}>{label}</span>
+      {/* For every OTHER phase the hint is an addition, not a replacement — it only shows once a task
+          has clearly run past typical duration, as a reassurance alongside the (more specific) label. */}
+      {hint && phase !== "spawning" && !compact && <span className="shrink-0 italic text-[10px] text-neutral-600">· {hint}</span>}
       {!hideTime && <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-600">{fmtElapsed(elapsed)}</span>}
       {/* Parallel tool calls: the label names one, so chip the rest instead of hiding them — each
           tinted by its own category so read/write/exec/etc. are distinguishable at a glance. */}
@@ -258,6 +280,35 @@ function NoticeStrip({ notices }: { notices: { kind: string; text: string; at: n
           <span className="h-1 w-1 rounded-full" style={{ background: "currentColor" }} />{n.text}
         </span>
       ))}
+    </div>
+  );
+}
+
+// The agent's live plan (TodoWrite), pinned above the composer so it's visible while you wait — not
+// just "what tool is running now" but "what's done and what's left". Derived straight from the latest
+// TodoWrite tool call already sitting in the transcript (see ChatColumn), so it needs no server changes:
+// TodoWrite's `input.todos` is REPLACE-semantics (each call carries the whole current list) same as the
+// rest of this file's live state.
+function TodoChecklist({ todos }: { todos: TodoItem[] }) {
+  if (!todos.length) return null;
+  const done = todos.filter((t) => t.status === "completed").length;
+  return (
+    <div className="mb-2 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+        <ListChecks className="h-3 w-3" strokeWidth={2.5} /><span>plan · {done}/{todos.length}</span>
+      </div>
+      <div className="flex flex-col gap-1">
+        {todos.map((t, i) => (
+          <div key={i} className={`flex items-start gap-1.5 text-xs ${t.status === "completed" ? "text-neutral-600 line-through" : t.status === "in_progress" ? "text-[var(--sakura)]" : "text-neutral-400"}`}>
+            <span className="mt-1 flex h-1.5 w-1.5 shrink-0 items-center justify-center">
+              {t.status === "in_progress"
+                ? <span className="think-dot h-1.5 w-1.5 rounded-full" style={{ background: "var(--sakura)" }} />
+                : <span className={`h-1.5 w-1.5 rounded-full border ${t.status === "completed" ? "border-neutral-600 bg-neutral-600" : "border-neutral-600"}`} />}
+            </span>
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{t.status === "in_progress" && t.activeForm ? t.activeForm : t.content}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -687,6 +738,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const submit = () => {
     const text = input.trim();
     if (!text || agent.busy || !cwd) return;
+    ensureNotifyPermission(); // lazy — a real user gesture, which browsers want for this prompt
     agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
     setInput("");
   };
@@ -696,6 +748,67 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   useEffect(() => {
     const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight;
   }, [visible.length, source[source.length - 1]?.text.length, agent.pending, agent.busy]);
+
+  // The live plan: the latest TodoWrite call's `input.todos`, wherever it landed in the transcript.
+  // Nothing server-side needed — TodoWrite's input already flows through `source` like any other tool.
+  const todos: TodoItem[] = useMemo(() => {
+    for (let i = source.length - 1; i >= 0; i--) {
+      const tools = source[i].tools;
+      for (let j = tools.length - 1; j >= 0; j--) {
+        if (tools[j].name !== "TodoWrite") continue;
+        const list = (tools[j].input as { todos?: unknown })?.todos;
+        if (Array.isArray(list)) return list as TodoItem[];
+      }
+    }
+    return [];
+  }, [source]);
+
+  // The browser tool (Playwright MCP, see manager.ts): find the most recent screenshot anywhere in the
+  // transcript, and whether a browser action is in flight right now (for the "waiting for a
+  // screenshot…" placeholder before the first one lands). Same derive-from-`source` approach as todos —
+  // no extra event plumbing, it just reads the `output` that manager.ts/claude-sessions.ts now capture.
+  const isBrowserTool = (name: string) => toolCategory(name) === "browser";
+  const everUsedBrowser = useMemo(() => source.some((t) => t.tools.some((tc) => isBrowserTool(tc.name))), [source]);
+  const browserShot = useMemo(() => {
+    for (let i = source.length - 1; i >= 0; i--) {
+      const tools = source[i].tools;
+      for (let j = tools.length - 1; j >= 0; j--) {
+        const tool = tools[j];
+        if (!isBrowserTool(tool.name)) continue;
+        const img = tool.output?.blocks.find((b): b is Extract<ToolOutputBlock, { type: "image" }> => b.type === "image");
+        if (img) return { mediaType: img.mediaType, data: img.data, action: activityLabel(tool.name, tool.input) };
+      }
+    }
+    return null;
+  }, [source]);
+  const lastTool = source[source.length - 1]?.tools.at(-1);
+  const browserBusy = !!lastTool && isBrowserTool(lastTool.name) && !lastTool.done;
+  const browserActionLabel = browserBusy ? activityLabel(lastTool!.name, lastTool!.input) : browserShot?.action;
+  const [browserPanelHidden, setBrowserPanelHidden] = useState(false);
+  const showBrowserPanel = everUsedBrowser && !browserPanelHidden;
+
+  // Away-tab notifications: tell the user when a background pane finishes, or needs them, while
+  // they're looking at another tab/app. Each transition (busy→idle, a fresh permission/ask prompt)
+  // fires once, not on every render — the refs below track "have I already notified for this state".
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (wasBusy.current && !agent.busy && !agent.error) notify(`${proj || "Minami"} — done`, "Claude finished the turn");
+    wasBusy.current = agent.busy;
+  }, [agent.busy, agent.error, proj]);
+  const notifiedPendingId = useRef<string | null>(null);
+  useEffect(() => {
+    if (agent.pending && agent.pending.id !== notifiedPendingId.current) {
+      notifiedPendingId.current = agent.pending.id;
+      notify(`${proj || "Minami"} needs approval`, `wants to use ${agent.pending.toolName}`);
+    }
+  }, [agent.pending, proj]);
+  const notifiedAskId = useRef<string | null>(null);
+  useEffect(() => {
+    if (agent.ask && agent.ask.id !== notifiedAskId.current) {
+      notifiedAskId.current = agent.ask.id;
+      notify(`${proj || "Minami"} has a question`, agent.ask.questions[0]?.question || "");
+    }
+  }, [agent.ask, proj]);
 
   return (
     <div className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/40 ${count === 3 && idx === 2 ? "col-span-2" : ""}`}>

@@ -8,6 +8,8 @@
 
 export type ActivityPhase =
   | "idle" // no turn in flight
+  | "spawning" // cold-starting the SDK process for this pane's FIRST message — distinct from
+  // `thinking` so a fresh chat doesn't read as identically "stuck" to a slow mid-turn tool call
   | "thinking" // reasoning, or between tool calls with nothing else to show
   | "responding" // streaming answer text
   | "tool" // one or more tool calls in flight
@@ -19,6 +21,55 @@ export type ActivityPhase =
 export type LiveTool = { id: string; name: string; label: string; parentId?: string | null };
 /** A running subagent (Task tool) or background task. */
 export type LiveTask = { id: string; description: string; agent?: string; lastTool?: string; toolUses?: number };
+
+/** One entry of the agent's TodoWrite plan. Rendered as a live checklist — see TodoChecklist in
+ *  app/page.tsx. Sourced straight from a TodoWrite tool call's `input.todos`, which is already
+ *  REPLACE-semantics (each call carries the whole current list), so the UI just needs the latest one. */
+export type TodoItem = { content: string; status: "pending" | "in_progress" | "completed"; activeForm?: string };
+
+/** A single block of a tool's RESULT (as opposed to its input, which is all the UI showed before).
+ *  Text is length-capped; images carry their base64 payload so screenshots (browser tool, etc.) can
+ *  render inline. Kept intentionally small/serializable — this rides over SSE and into localStorage. */
+export type ToolOutputBlock = { type: "text"; text: string } | { type: "image"; mediaType: string; data: string };
+export type ToolOutput = { blocks: ToolOutputBlock[]; truncated?: boolean };
+
+const OUTPUT_MAX_TEXT = 4000;
+const OUTPUT_MAX_IMAGES = 4;
+
+/** Turn an SDK tool_result's `content` (string, or an array of Anthropic/MCP content blocks) into the
+ *  small serializable shape the UI renders. Defensive about shape: MCP servers speak `{data,mimeType}`,
+ *  the Anthropic API speaks `{source:{data,media_type}}` — accept either. Used both live (manager.ts,
+ *  as results stream in) and on disk (claude-sessions.ts, re-parsing the JSONL), so behavior can't drift
+ *  between "watching it happen" and "reloaded the transcript" — same function, same caps, either path. */
+export function summarizeToolResult(content: unknown): ToolOutput | undefined {
+  if (content == null) return undefined;
+  if (typeof content === "string") {
+    if (!content.trim()) return undefined;
+    const truncated = content.length > OUTPUT_MAX_TEXT;
+    return { blocks: [{ type: "text", text: truncated ? content.slice(0, OUTPUT_MAX_TEXT) : content }], truncated };
+  }
+  if (!Array.isArray(content)) return undefined;
+  const blocks: ToolOutputBlock[] = [];
+  let truncated = false;
+  let images = 0;
+  for (const raw of content) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    if (o.type === "text" && typeof o.text === "string") {
+      const over = o.text.length > OUTPUT_MAX_TEXT;
+      if (over) truncated = true;
+      blocks.push({ type: "text", text: over ? o.text.slice(0, OUTPUT_MAX_TEXT) : o.text });
+    } else if (o.type === "image") {
+      const src = (o.source || o) as Record<string, unknown>;
+      const data = typeof src.data === "string" ? src.data : null;
+      const mediaType = (src.media_type as string) || (o.mimeType as string) || "image/png";
+      if (!data) continue;
+      if (images < OUTPUT_MAX_IMAGES) { blocks.push({ type: "image", mediaType, data }); images++; }
+      else truncated = true;
+    }
+  }
+  return blocks.length ? { blocks, truncated } : undefined;
+}
 
 export type ActivityState = {
   phase: ActivityPhase;
@@ -42,7 +93,11 @@ export const IDLE_ACTIVITY: ActivityState = { phase: "idle", label: "", elapsedM
  * `activityLabel` because that one describes WHAT a call is doing; this one describes WHAT KIND of
  * call it is, which is the axis the UI colors by.
  */
-export type ToolCategory = "read" | "write" | "exec" | "search" | "web" | "task" | "plan" | "ask" | "skill" | "mcp" | "other";
+export type ToolCategory = "read" | "write" | "exec" | "search" | "web" | "browser" | "task" | "plan" | "ask" | "skill" | "mcp" | "other";
+// Any MCP server whose tool names follow the `browser_*` convention (the Playwright MCP server does,
+// see manager.ts) gets its own category rather than falling into the generic "mcp" bucket — screenshots
+// and live navigation read very differently from a generic tool call and deserve their own color/icon.
+const BROWSER_TOOL_RE = /^mcp__[^_]+(?:_[^_]+)*__browser_/;
 export function toolCategory(name: string): ToolCategory {
   switch (name) {
     case "Read": return "read";
@@ -54,7 +109,9 @@ export function toolCategory(name: string): ToolCategory {
     case "TodoWrite": case "ExitPlanMode": return "plan";
     case "AskUserQuestion": return "ask";
     case "Skill": case "ToolSearch": return "skill";
-    default: return name.startsWith("mcp__") ? "mcp" : "other";
+    default:
+      if (BROWSER_TOOL_RE.test(name)) return "browser";
+      return name.startsWith("mcp__") ? "mcp" : "other";
   }
 }
 
@@ -107,8 +164,46 @@ export function activityLabel(name: string, input?: unknown): string {
       return "asking you a question";
     case "ToolSearch":
       return "looking up tools";
-    default:
-      return mcpLabel(name) || `using ${name}`;
+    default: {
+      const browser = browserToolLabel(name, o);
+      return browser || mcpLabel(name) || `using ${name}`;
+    }
+  }
+}
+
+/** Human labels for the Playwright browser tool's `browser_*` actions — same idea as the switch above,
+ *  just keyed off the action suffix since the server prefix (`mcp__playwright__`) varies by MCP config. */
+function browserToolLabel(name: string, o: Record<string, unknown>): string | null {
+  const m = /__browser_(.+)$/.exec(name);
+  if (!m) return null;
+  const action = m[1];
+  const url = () => (o.url ? clip(String(o.url).replace(/^https?:\/\//, ""), 34) : null);
+  const el = () => (o.element ? clip(String(o.element), 30) : null);
+  switch (action) {
+    case "navigate": return url() ? `browsing ${url()}` : "navigating";
+    case "navigate_back": return "going back";
+    case "navigate_forward": return "going forward";
+    case "click": return el() ? `clicking ${el()}` : "clicking";
+    case "hover": return el() ? `hovering ${el()}` : "hovering";
+    case "type": return el() ? `typing into ${el()}` : "typing";
+    case "press_key": case "press_sequentially": return "pressing keys";
+    case "fill_form": return "filling out a form";
+    case "select_option": return el() ? `selecting an option in ${el()}` : "selecting an option";
+    case "take_screenshot": return "taking a screenshot";
+    case "snapshot": return "reading the page";
+    case "find": return "finding an element";
+    case "tabs": return "managing tabs";
+    case "resize": return "resizing the browser";
+    case "close": return "closing the browser";
+    case "drag": return "dragging";
+    case "wait_for": return "waiting on the page";
+    case "evaluate": return "running a script on the page";
+    case "console_messages": return "reading console logs";
+    case "network_requests": return "reading network requests";
+    case "pdf_save": return "saving a PDF";
+    case "start_video": return "recording the browser";
+    case "stop_video": return "stopping the recording";
+    default: return `browser: ${action.replace(/_/g, " ")}`;
   }
 }
 
@@ -134,7 +229,10 @@ export function inputFromPartial(name: string, buf: string): Record<string, stri
     case "WebFetch": return one("url", "url");
     case "Task": case "Agent": return one("description", "description");
     case "Skill": return one("skill", "skill");
-    default: return null;
+    default:
+      if (/__browser_navigate$/.test(name)) return one("url", "url");
+      if (/__browser_(click|hover|select_option)$/.test(name)) return one("element", "element");
+      return null;
   }
 }
 
@@ -158,6 +256,8 @@ export function phaseLabel(phase: ActivityPhase, tools: LiveTool[], tasks: LiveT
   switch (phase) {
     case "idle":
       return "";
+    case "spawning":
+      return "starting session…";
     case "awaiting":
       return "waiting for you";
     case "retrying":
@@ -178,4 +278,27 @@ export function phaseLabel(phase: ActivityPhase, tools: LiveTool[], tasks: LiveT
     default:
       return "working…";
   }
+}
+
+/**
+ * Extra reassurance layered onto the primary label once a phase has run long enough that "is this
+ * stuck?" becomes a fair question — client-only concern (elapsed is a live local tick off the phase
+ * clock), so it's kept separate from phaseLabel() rather than folded into the server's broadcast.
+ *
+ * For `spawning` this drives the whole visible label (there's no real per-step signal for SDK cold
+ * start, just elapsed time, so the copy narrates a plausible sequence instead of showing a static
+ * string for what's usually a 1-2s wait). For every other phase it's an ADDITIONAL aside next to the
+ * existing (more specific) label, only once a task has clearly run past typical duration.
+ */
+export function escalationHint(phase: ActivityPhase, elapsedMs: number): string | null {
+  if (phase === "idle" || phase === "awaiting") return null;
+  const s = elapsedMs / 1000;
+  if (phase === "spawning") {
+    if (s < 1.2) return null;
+    if (s < 3.5) return "loading context…";
+    return "still starting — unusually slow";
+  }
+  if (s < 30) return null;
+  if (s < 120) return "still working…";
+  return "longer tasks can take a few minutes";
 }

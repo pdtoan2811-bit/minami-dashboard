@@ -4,18 +4,18 @@
 // prompts, and — when a turn finishes — reconciles the transcript from the authoritative JSONL file
 // (so Markdown/tools render exactly as elsewhere and any streaming gap is healed).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { IDLE_ACTIVITY, type ActivityState } from "./agent/labels";
+import { IDLE_ACTIVITY, type ActivityState, type ToolOutput } from "./agent/labels";
 
 export type AgentTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
-export type AgentToolCall = { name: string; input: unknown; id?: string; done?: boolean; ok?: boolean; ms?: number };
+export type AgentToolCall = { name: string; input: unknown; id?: string; done?: boolean; ok?: boolean; ms?: number; output?: ToolOutput };
 export type PermissionPrompt = { id: string; toolName: string; input: unknown } | null;
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] };
 export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 export type Notice = { kind: string; text: string; at: number };
 
-export { activityLabel, toolCategory } from "./agent/labels";
-export type { ActivityState, ActivityPhase, ToolCategory } from "./agent/labels";
+export { activityLabel, toolCategory, escalationHint } from "./agent/labels";
+export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem } from "./agent/labels";
 
 export function useAgent(paneKey: string) {
   const [turns, setTurns] = useState<AgentTurn[]>([]);
@@ -163,10 +163,11 @@ export function useAgent(paneKey: string) {
           break;
         case "tool_end":
           // Mark the call finished so the transcript can show ✓/✗ + duration rather than leaving every
-          // tool looking perpetually in-flight.
+          // tool looking perpetually in-flight. `output` (text/images) rides along here — this is what
+          // lets a browser tool's screenshot show up the instant the call returns.
           setTurns((prev) => prev.map((t) => {
             if (!t.tools.some((x) => x.id === ev.id)) return t;
-            return { ...t, tools: t.tools.map((x) => (x.id === ev.id ? { ...x, done: true, ok: ev.ok, ms: ev.ms } : x)) };
+            return { ...t, tools: t.tools.map((x) => (x.id === ev.id ? { ...x, done: true, ok: ev.ok, ms: ev.ms, output: ev.output } : x)) };
           }));
           break;
         case "notice":
