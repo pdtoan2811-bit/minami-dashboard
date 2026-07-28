@@ -11,8 +11,11 @@
  *   READ_KEY       optional key for GET /stats & /stream (?k=...) — obscurity, gate the deploy for real privacy
  *
  * Endpoints:
- *   POST /ingest  { source, session, model, inputTokens, outputTokens, cacheReadTokens?, tool?, ts? }
+ *   POST /ingest  { source, session, cwd?, model, label?, reply?, inputTokens, outputTokens, cacheReadTokens?, tool?, ts? }
  *   GET  /stats   -> aggregated JSON (per source / per model / totals / recent)
+ *   GET  /projects -> latest checkpoint per cwd (the "what are we doing here" cross-device digest —
+ *                     derived from the same event stream, no separate storage; naturally self-pruning
+ *                     since it's always just "most recent event per cwd", not an accumulating log)
  *   GET  /stream  -> SSE, pushes each new event as it lands (true real-time, no polling)
  *   GET  /health  -> { ok: true }
  */
@@ -139,6 +142,30 @@ const server = http.createServer((req, res) => {
   if (READ_KEY && url.searchParams.get("k") !== READ_KEY) return send(res, 401, { error: "unauthorized" });
 
   if (url.pathname === "/stats") return send(res, 200, aggregate());
+
+  // Latest per-project checkpoint — the cross-device "resume point" digest. Walks events once,
+  // keeps only the most recent event per cwd. Events without a cwd (older clients, pre-digest)
+  // are skipped rather than bucketed under "unknown" — a label-less checkpoint isn't useful.
+  if (url.pathname === "/projects") {
+    const byCwd = {};
+    for (const e of readEvents()) {
+      if (!e.cwd) continue;
+      const cur = byCwd[e.cwd];
+      if (!cur || (e.ts || 0) >= (cur.ts || 0)) {
+        byCwd[e.cwd] = {
+          cwd: e.cwd,
+          project: e.cwd.split("/").filter(Boolean).pop() || e.cwd,
+          label: e.label || "",
+          reply: e.reply || "",
+          model: e.model || "",
+          source: e.source || "",
+          ts: e.ts || 0,
+        };
+      }
+    }
+    const projects = Object.values(byCwd).sort((a, b) => b.ts - a.ts);
+    return send(res, 200, { projects, updated: Date.now() });
+  }
 
   if (url.pathname === "/stream") {
     res.writeHead(200, {

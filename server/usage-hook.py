@@ -4,6 +4,14 @@
 Runs at the end of every Claude Code turn on a machine. Reads the transcript's latest usage,
 then POSTs a compact event to the metrics API so the dashboard can show live per-machine usage.
 
+Also carries a cheap "session digest" alongside the usage numbers: cwd + a truncated one-line
+label for the last user prompt AND the last assistant reply this turn. No LLM call — pure
+truncation, same spirit as the existing `label` field. This is the "compact protocol": every
+Stop event already fires once per turn, so riding it means a fresh checkpoint of "what are we
+doing in this project" reaches the metrics API (and therefore the dashboard, and other
+machines) continuously, with zero added hook overhead. The server derives a latest-per-project
+view from this stream (GET /projects) — see metrics-server.js.
+
 Config is read from ~/.minami-metrics.env (KEY=VALUE lines) OR the process env (env wins):
   MINAMI_METRICS_URL     e.g. https://box.<tailnet>.ts.net   (or http://localhost:8787 on the box itself)
   MINAMI_METRICS_TOKEN   ingest bearer token (must match the server's INGEST_TOKEN)
@@ -54,6 +62,18 @@ def main():
 
     model, itok, otok, ctok = "", 0, 0, 0
     last_user = ""
+    last_assistant = ""
+
+    def text_of(content):
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        return ""
+
     try:
         last = None
         with open(transcript, "r", encoding="utf-8") as fh:
@@ -68,19 +88,16 @@ def main():
                 msg = row.get("message") or {}
                 if msg.get("usage"):
                     last = msg
-                # Capture the most recent real user prompt (skip tool-result-only turns) as the label.
-                if row.get("type") == "user" or msg.get("role") == "user":
-                    content = msg.get("content")
-                    txt = ""
-                    if isinstance(content, str):
-                        txt = content
-                    elif isinstance(content, list):
-                        txt = " ".join(
-                            b.get("text", "") for b in content
-                            if isinstance(b, dict) and b.get("type") == "text"
-                        )
-                    if txt.strip():
-                        last_user = txt.strip()
+                role = row.get("type") or msg.get("role")
+                txt = text_of(msg.get("content")).strip()
+                if not txt:
+                    continue
+                # Capture the most recent real user prompt / assistant reply (skip
+                # tool-only turns with no text) as the compacted digest.
+                if role == "user":
+                    last_user = txt
+                elif role == "assistant":
+                    last_assistant = txt
         if last:
             model = last.get("model", "")
             u = last["usage"]
@@ -90,8 +107,10 @@ def main():
     except OSError:
         return
 
-    # A short, single-line "what was this turn" label for the dashboard feed.
+    # Short, single-line "what were we doing" digest for the dashboard feed — no LLM call,
+    # just truncation (the compact protocol: cheap and runs every turn for free).
     label = last_user.split("\n", 1)[0].strip()[:60] if last_user else ""
+    reply = last_assistant.split("\n", 1)[0].strip()[:100] if last_assistant else ""
 
     if itok == 0 and otok == 0 and ctok == 0:
         return
@@ -99,8 +118,10 @@ def main():
     body = json.dumps({
         "source": source,
         "session": payload.get("session_id", ""),
+        "cwd": os.getcwd(),
         "model": model,
         "label": label,
+        "reply": reply,
         "inputTokens": itok,
         "outputTokens": otok,
         "cacheReadTokens": ctok,
