@@ -14,16 +14,29 @@ const PROJECTS = path.join(os.homedir(), ".claude", "projects");
 // Read only the last `maxBytes` of a file (dropping the partial leading line), so opening a huge
 // transcript doesn't mean reading/parsing megabytes we'll throw away — we only render the last turns.
 const TAIL_BYTES = 1_500_000;
+// A single JSONL line can legitimately exceed the tail window (e.g. a tool_result with a big embedded
+// base64 image) — if the window contains no newline at all, there's no way to know where a real line
+// starts, so widen the window and retry rather than silently feeding a truncated, non-newline-aligned
+// blob to the caller (which used to fail JSON.parse on every line and make that whole turn vanish with
+// no indication anything was dropped). Capped so a truly pathological file still can't blow up memory.
+const TAIL_HARD_CAP = 8 * TAIL_BYTES;
 function readTail(file: string, size: number, maxBytes = TAIL_BYTES): string {
   if (size <= maxBytes) return fs.readFileSync(file, "utf8");
-  const fd = fs.openSync(file, "r");
-  try {
-    const buf = Buffer.allocUnsafe(maxBytes);
-    const read = fs.readSync(fd, buf, 0, maxBytes, size - maxBytes);
-    const s = buf.toString("utf8", 0, read);
+  for (let window = maxBytes; ; window *= 4) {
+    const fd = fs.openSync(file, "r");
+    let s: string;
+    try {
+      const start = Math.max(0, size - window);
+      const len = size - start;
+      const buf = Buffer.allocUnsafe(len);
+      const read = fs.readSync(fd, buf, 0, len, start);
+      s = buf.toString("utf8", 0, read);
+    } finally { fs.closeSync(fd); }
     const nl = s.indexOf("\n"); // the first line is probably truncated — drop it
-    return nl >= 0 ? s.slice(nl + 1) : s;
-  } finally { fs.closeSync(fd); }
+    if (nl >= 0) return s.slice(nl + 1);
+    if (window >= TAIL_HARD_CAP || window >= size) return ""; // give up — a single line this huge is
+    // vanishingly unlikely and not worth reading the whole file over; caller treats "" as no new turns.
+  }
 }
 
 // Turn a raw first-prompt into a meaningful title — strip known preambles (Minami's persona prompt,
@@ -73,10 +86,42 @@ export type SessionMeta = {
 
 type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string };
 
-// Metadata cache, keyed by file + mtime. Kept on globalThis so a Next dev hot-reload doesn't wipe it,
-// and mirrored to disk so a fresh server launch doesn't have to re-read+parse every (often huge) JSONL
-// just to build the grid — that cold read was ~9s and blocked the whole UI from rendering.
-const cache: Map<string, { mtime: number; meta: SessionMeta }> = ((globalThis as any).__minamiMetaCache ||= new Map());
+// Generic bounded LRU: reinsert on every touch (hit or write) so recency reflects actual access, not
+// just insertion order, then evict the oldest once over `max`. Used for both the meta cache and the
+// id→path index below — without this, either Map grows for the life of the process, one entry per
+// distinct session file ever seen (weeks/months of usage), a slow but real unbounded-memory leak.
+function touchLRU<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > max) { const k = map.keys().next().value; if (k !== undefined) map.delete(k); }
+}
+
+// Running totals for one transcript file, carried across incremental parses (see summarize() below).
+// toolSet is a plain capped array (not a Set) so it round-trips through JSON for the disk cache as-is.
+type ParseAccum = {
+  title: string; lastPrompt: string; model: string; cwd: string; gitBranch: string;
+  firstUser: string; lastText: string; lastRole: string;
+  tin: number; tout: number; cost: number; messages: number; tools: number;
+  toolSet: string[];
+  lastTs: number;
+  lineLeftover: string; // trailing partial JSON line (no newline yet) carried to the next parse
+  byteLeftoverB64: string; // trailing INCOMPLETE utf-8 byte sequence from the last raw read, base64
+};
+function freshAccum(): ParseAccum {
+  return {
+    title: "", lastPrompt: "", model: "", cwd: "", gitBranch: "", firstUser: "", lastText: "", lastRole: "",
+    tin: 0, tout: 0, cost: 0, messages: 0, tools: 0, toolSet: [], lastTs: 0, lineLeftover: "", byteLeftoverB64: "",
+  };
+}
+
+type CacheEntry = { mtime: number; size: number; accum: ParseAccum; meta: SessionMeta };
+
+// Metadata cache, keyed by file + mtime + size. Kept on globalThis so a Next dev hot-reload doesn't
+// wipe it, and mirrored to disk so a fresh server launch doesn't have to re-read+parse every (often
+// huge) JSONL just to build the grid — that cold read was ~9s and blocked the whole UI from rendering.
+const cache: Map<string, CacheEntry> = ((globalThis as any).__minamiMetaCache ||= new Map());
+const META_CACHE_MAX = 500; // generous vs. the 60-tile grid — bounds memory without evicting anything
+                            // the user is actually likely to look back at soon.
 const CACHE_DIR = path.join(os.homedir(), ".minami-bento");
 const META_CACHE_FILE = path.join(CACHE_DIR, "meta-cache.json");
 let cacheDirty = false;
@@ -85,8 +130,10 @@ function loadDiskCache(): void {
   if (g.__minamiMetaCacheLoaded) return;
   g.__minamiMetaCacheLoaded = true;
   try {
-    const obj = JSON.parse(fs.readFileSync(META_CACHE_FILE, "utf8")) as Record<string, { mtime: number; meta: SessionMeta }>;
-    for (const [f, v] of Object.entries(obj)) if (!cache.has(f)) cache.set(f, v);
+    // Tolerate a pre-upgrade cache file (entries without `size`/`accum`): summarize() below treats a
+    // missing `accum` as "no incremental state" and does one full reparse per file, then upgrades it.
+    const obj = JSON.parse(fs.readFileSync(META_CACHE_FILE, "utf8")) as Record<string, Partial<CacheEntry>>;
+    for (const [f, v] of Object.entries(obj)) if (!cache.has(f) && v && typeof v.mtime === "number") cache.set(f, v as CacheEntry);
   } catch { /* no cache file yet — first run */ }
 }
 function saveDiskCache(): void {
@@ -94,71 +141,147 @@ function saveDiskCache(): void {
   cacheDirty = false;
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const obj: Record<string, { mtime: number; meta: SessionMeta }> = {};
+    const obj: Record<string, CacheEntry> = {};
     for (const [f, v] of cache) obj[f] = v;
-    fs.writeFileSync(META_CACHE_FILE, JSON.stringify(obj));
+    // Atomic write: a torn/partial write (crash, or two processes writing at once — e.g. `next dev` and
+    // `next start` both pointed at the same home dir, which has happened before on this project) would
+    // otherwise leave a file that fails JSON.parse on the next read, silently dropping the whole cache.
+    // write-then-rename means a reader only ever sees a fully-old or fully-new file, never a partial one.
+    const tmp = `${META_CACHE_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(obj));
+    fs.renameSync(tmp, META_CACHE_FILE);
   } catch { /* best effort */ }
 }
 
-function summarize(file: string, id: string, raw?: string): SessionMeta {
-  // Serve an unchanged file from cache — transcripts are polled every couple seconds and reparsing a
-  // multi-MB JSONL each time is the main source of lag. `active` is time-derived, so recompute it.
-  const mtime = fs.statSync(file).mtimeMs;
-  const cached = cache.get(file);
-  if (cached && cached.mtime === mtime) return { ...cached.meta, active: Date.now() - cached.meta.lastActivity < 120000 };
-  let title = "", lastPrompt = "", model = "", cwd = "", gitBranch = "", firstUser = "", lastText = "", lastRole = "";
-  let tin = 0, tout = 0, cost = 0, messages = 0, tools = 0, lastTs = 0;
-  const toolSet = new Set<string>();
-  const data = raw ?? fs.readFileSync(file, "utf8");
-  for (const line of data.split("\n")) {
-    if (!line.trim()) continue;
-    let r: Row;
-    try { r = JSON.parse(line); } catch { continue; }
-    if (r.cwd) cwd = r.cwd;
-    if (r.gitBranch) gitBranch = r.gitBranch;
-    if (r.timestamp) { const ms = Date.parse(r.timestamp); if (ms > lastTs) lastTs = ms; }
-    if (r.type === "custom-title" && r.customTitle) title = r.customTitle;
-    else if (r.type === "last-prompt" && r.lastPrompt) lastPrompt = r.lastPrompt;
-    else if (r.type === "user") {
-      messages++;
-      const c = r.message?.content;
-      let txt = "";
-      if (typeof c === "string") txt = c;
-      else if (Array.isArray(c)) txt = c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join(" ");
-      if (txt.trim() && !firstUser) firstUser = txt.trim();
-      if (txt.trim()) { lastText = txt.trim(); lastRole = "user"; }
-    } else if (r.type === "assistant") {
-      messages++;
-      const m = r.message || {};
-      if (m.model) model = m.model;
-      const u = m.usage;
-      if (u) {
-        tin += u.input_tokens || 0;
-        tout += u.output_tokens || 0;
-        cost += eventCost(u.input_tokens || 0, u.output_tokens || 0, u.cache_read_input_tokens || 0, m.model);
-      }
-      let atxt = "";
-      for (const b of m.content || []) {
-        if (b?.type === "tool_use") { tools++; if (b.name && toolSet.size < 12) toolSet.add(b.name); }
-        else if (b?.type === "text" && b.text) atxt += b.text + " ";
-      }
-      if (atxt.trim()) { lastText = atxt.trim(); lastRole = "assistant"; }
+// Split off a trailing INCOMPLETE utf-8 multi-byte sequence (0-3 bytes) so it can be carried over to
+// the next read instead of being decoded now — otherwise Buffer#toString silently replaces a sequence
+// truncated mid-character with U+FFFD, corrupting whatever text straddled this read's boundary.
+function splitTrailingIncompleteUtf8(buf: Buffer): { complete: Buffer; leftover: Buffer } {
+  if (!buf.length) return { complete: buf, leftover: Buffer.alloc(0) };
+  let i = buf.length - 1;
+  let cont = 0;
+  while (i >= 0 && cont < 3 && (buf[i] & 0b11000000) === 0b10000000) { i--; cont++; } // skip continuation bytes
+  if (i < 0) return { complete: Buffer.alloc(0), leftover: buf }; // pathological: all continuation bytes
+  const lead = buf[i];
+  const seqLen = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+  if (seqLen > buf.length - i) return { complete: buf.subarray(0, i), leftover: buf.subarray(i) };
+  return { complete: buf, leftover: Buffer.alloc(0) };
+}
+
+function readNewBytes(file: string, start: number, end: number): Buffer {
+  if (end <= start) return Buffer.alloc(0);
+  const fd = fs.openSync(file, "r");
+  try {
+    const len = end - start;
+    const buf = Buffer.allocUnsafe(len);
+    const read = fs.readSync(fd, buf, 0, len, start);
+    return buf.subarray(0, read);
+  } finally { fs.closeSync(fd); }
+}
+
+// Fold one JSONL line into the running accumulator — same field logic as the original full-file parse,
+// just writing into `acc` instead of local variables so it can run over a partial (appended-only) chunk.
+function foldLine(acc: ParseAccum, line: string): void {
+  if (!line.trim()) return;
+  let r: Row;
+  try { r = JSON.parse(line); } catch { return; }
+  if (r.cwd) acc.cwd = r.cwd;
+  if (r.gitBranch) acc.gitBranch = r.gitBranch;
+  if (r.timestamp) { const ms = Date.parse(r.timestamp); if (ms > acc.lastTs) acc.lastTs = ms; }
+  if (r.type === "custom-title" && r.customTitle) acc.title = r.customTitle;
+  else if (r.type === "last-prompt" && r.lastPrompt) acc.lastPrompt = r.lastPrompt;
+  else if (r.type === "user") {
+    acc.messages++;
+    const c = r.message?.content;
+    let txt = "";
+    if (typeof c === "string") txt = c;
+    else if (Array.isArray(c)) txt = c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join(" ");
+    if (txt.trim() && !acc.firstUser) acc.firstUser = txt.trim();
+    if (txt.trim()) { acc.lastText = txt.trim(); acc.lastRole = "user"; }
+  } else if (r.type === "assistant") {
+    acc.messages++;
+    const m = r.message || {};
+    if (m.model) acc.model = m.model;
+    const u = m.usage;
+    if (u) {
+      acc.tin += u.input_tokens || 0;
+      acc.tout += u.output_tokens || 0;
+      acc.cost += eventCost(u.input_tokens || 0, u.output_tokens || 0, u.cache_read_input_tokens || 0, m.model);
     }
+    let atxt = "";
+    for (const b of m.content || []) {
+      if (b?.type === "tool_use") { acc.tools++; if (b.name && acc.toolSet.length < 12 && !acc.toolSet.includes(b.name)) acc.toolSet.push(b.name); }
+      else if (b?.type === "text" && b.text) atxt += b.text + " ";
+    }
+    if (atxt.trim()) { acc.lastText = atxt.trim(); acc.lastRole = "assistant"; }
   }
-  const project = cwd ? cwd.split("/").filter(Boolean).pop() || cwd : (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
-  const lastActivity = Math.max(lastTs, mtime);
-  const derived = title || cleanTitle(lastPrompt) || cleanTitle(firstUser) || project;
-  const meta: SessionMeta = {
-    id, project, cwd, gitBranch,
+}
+
+function buildMeta(id: string, file: string, acc: ParseAccum, mtime: number): SessionMeta {
+  const project = acc.cwd ? acc.cwd.split("/").filter(Boolean).pop() || acc.cwd : (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
+  const lastActivity = Math.max(acc.lastTs, mtime);
+  const derived = acc.title || cleanTitle(acc.lastPrompt) || cleanTitle(acc.firstUser) || project;
+  return {
+    id, project, cwd: acc.cwd, gitBranch: acc.gitBranch,
     title: derived.slice(0, 80),
-    lastPrompt: (cleanTitle(lastPrompt) || cleanTitle(firstUser)).slice(0, 140),
-    model, tier: tierOf(model),
-    tokensIn: tin, tokensOut: tout, cost, messages, tools,
-    toolNames: [...toolSet].slice(0, 8),
-    lastRole, tail: lastText.replace(/\s+/g, " ").slice(0, 200),
+    lastPrompt: (cleanTitle(acc.lastPrompt) || cleanTitle(acc.firstUser)).slice(0, 140),
+    model: acc.model, tier: tierOf(acc.model),
+    tokensIn: acc.tin, tokensOut: acc.tout, cost: acc.cost, messages: acc.messages, tools: acc.tools,
+    toolNames: acc.toolSet.slice(0, 8),
+    lastRole: acc.lastRole, tail: acc.lastText.replace(/\s+/g, " ").slice(0, 200),
     lastActivity, active: Date.now() - lastActivity < 120000,
   };
-  cache.set(file, { mtime, meta });
+}
+
+// Summarize a transcript into totals for the grid. INCREMENTAL by design: transcripts are polled every
+// couple of seconds, and an ACTIVELY STREAMING session's mtime changes on almost every poll — the
+// original version did a full fs.readFileSync + re-parse of the WHOLE file on every such change, which
+// for a real 29-61MB transcript meant repeatedly blocking Node's single event loop (every request, every
+// pane, every SSE broadcast) for as long as that session stayed live. Now only the bytes appended since
+// the last parse are read and folded into the running accumulator, so cost is proportional to what
+// changed, not to the file's total size.
+function summarize(file: string, id: string, raw?: string): SessionMeta {
+  const st = fs.statSync(file);
+  const mtime = st.mtimeMs, size = st.size;
+  const cached = cache.get(file);
+  // Unchanged (both mtime AND size match) — cheap path, no file read at all. Checking size too (not
+  // just mtime) guards against coarse filesystem mtime resolution letting a real append through as a
+  // false "unchanged" hit, which would otherwise serve stale tokens/cost indefinitely.
+  if (cached && cached.mtime === mtime && cached.size === size) {
+    touchLRU(cache, file, cached, META_CACHE_MAX);
+    return { ...cached.meta, active: Date.now() - cached.meta.lastActivity < 120000 };
+  }
+
+  // Full reparse when: an explicit `raw` override is given (whole-file content, no prior caller today
+  // but keep the contract), there's no usable prior state (first time, or an old pre-upgrade cache
+  // entry with no `accum`), or the file got SMALLER than what we'd already parsed (rotated/truncated —
+  // our incremental offset would be reading garbage past the new end).
+  const canIncremental = raw === undefined && !!cached && !!cached.accum && cached.size <= size;
+  const acc: ParseAccum = canIncremental && cached ? cached.accum : freshAccum();
+  const readStart = canIncremental && cached ? cached.size : 0;
+
+  if (raw !== undefined) {
+    acc.lineLeftover = "";
+    acc.byteLeftoverB64 = "";
+    for (const line of raw.split("\n")) foldLine(acc, line);
+  } else {
+    const newBuf = readNewBytes(file, readStart, size);
+    const leftoverBytes = acc.byteLeftoverB64 ? Buffer.from(acc.byteLeftoverB64, "base64") : Buffer.alloc(0);
+    const combinedBuf = leftoverBytes.length ? Buffer.concat([leftoverBytes, newBuf]) : newBuf;
+    const { complete, leftover } = splitTrailingIncompleteUtf8(combinedBuf);
+    acc.byteLeftoverB64 = leftover.length ? leftover.toString("base64") : "";
+    const text = acc.lineLeftover + complete.toString("utf8");
+    const parts = text.split("\n");
+    // If this chunk doesn't end in a newline, the last part is an as-yet-incomplete line — hold it for
+    // next time instead of failing to parse it now. If it DOES end in "\n", split() leaves a trailing
+    // "" element to drop.
+    acc.lineLeftover = text.endsWith("\n") ? "" : (parts.pop() || "");
+    if (text.endsWith("\n")) parts.pop();
+    for (const line of parts) foldLine(acc, line);
+  }
+
+  const meta = buildMeta(id, file, acc, mtime);
+  touchLRU(cache, file, { mtime, size, accum: acc, meta }, META_CACHE_MAX);
   cacheDirty = true;
   return meta;
 }
@@ -175,7 +298,7 @@ export function listSessions(): SessionMeta[] {
     for (const f of files) {
       const file = path.join(dir, f);
       const id = f.replace(/\.jsonl$/, "");
-      idIndex.set(id, file); // free id→path index for getSession()'s hot polling path
+      touchLRU(idIndex, id, file, ID_INDEX_MAX); // free id→path index for getSession()'s hot polling path
       try {
         const meta = summarize(file, id); // cache-aware: reads the file only when changed
         if (meta.messages === 0) continue;
@@ -222,19 +345,20 @@ function saveTurnsDiskCache(): void {
     fs.writeFileSync(TURNS_CACHE_FILE, JSON.stringify(obj));
   } catch { /* best effort */ }
 }
-// Map preserves insertion order — delete+reinsert moves an entry to "most recently used" and lets us
-// evict the oldest once we're over the cap, so a long-lived server can't grow this file without bound
-// (a full transcript tail can be hundreds of KB).
+// Delete+reinsert moves an entry to "most recently used" and lets us evict the oldest once we're over
+// the cap, so a long-lived server can't grow this file without bound (a full transcript tail can be
+// hundreds of KB). Thin wrapper over the generic touchLRU above, kept for its existing call sites.
 function touchTurnsLRU(file: string, entry: { mtime: number; turns: Turn[] }): void {
-  turnsCache.delete(file);
-  turnsCache.set(file, entry);
-  while (turnsCache.size > TURNS_CACHE_MAX) { const k = turnsCache.keys().next().value; if (!k) break; turnsCache.delete(k); }
+  touchLRU(turnsCache, file, entry, TURNS_CACHE_MAX);
 }
 
 // id → file path index, built as a side effect of listSessions()'s directory walk (which already scans
 // everything) so getSession()'s hot polling path (every ~2.5s per open chat pane) doesn't have to
-// re-scan all project dirs with fs.existsSync just to find a file it already found last time.
+// re-scan all project dirs with fs.existsSync just to find a file it already found last time. Bounded
+// LRU for the same reason as the meta cache above — otherwise it's one more Map that only ever grows
+// for the life of the process, over every distinct session id ever seen.
 const idIndex: Map<string, string> = ((globalThis as any).__minamiIdIndex ||= new Map());
+const ID_INDEX_MAX = 2000; // tiny entries (id → path string) — generous cap costs almost nothing
 
 export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[] } {
   if (!/^[a-zA-Z0-9._-]+$/.test(id)) return { meta: null, turns: [] };
@@ -249,7 +373,9 @@ export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[
         if (fs.existsSync(file)) { found = file; break; }
       }
     } catch { /* none */ }
-    if (found) idIndex.set(id, found);
+    if (found) touchLRU(idIndex, id, found, ID_INDEX_MAX);
+  } else {
+    touchLRU(idIndex, id, found, ID_INDEX_MAX); // bump recency on every hit too, not just on insert
   }
   if (!found) return { meta: null, turns: [] };
   const st = fs.statSync(found);
@@ -257,7 +383,9 @@ export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[
   // Meta (token/cost totals) needs the whole file and would defeat the point of tailing — but the chat
   // panel renders titles from the sessions list, not from here, and listSessions keeps meta warm. So
   // serve meta from cache only (best-effort) and never full-read a huge file just to attach it.
-  const meta = cache.get(found)?.meta ?? null;
+  const metaEntry = cache.get(found);
+  if (metaEntry) touchLRU(cache, found, metaEntry, META_CACHE_MAX);
+  const meta = metaEntry?.meta ?? null;
   const tc = turnsCache.get(found);
   // Cache hit — bump LRU order in memory only. No disk write here: this is the path every 2.5s poll
   // takes when nothing changed, and rewriting the cache file on every idle tick would just trade one

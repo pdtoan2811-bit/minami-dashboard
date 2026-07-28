@@ -2,7 +2,7 @@
 
 import { Nav } from "@/components/Nav";
 import { useSetting } from "@/lib/use-settings";
-import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type TodoItem } from "@/lib/use-agent";
+import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type TodoItem, type Notice } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
 import FolderPicker from "@/components/FolderPicker";
@@ -215,7 +215,7 @@ const TOOL_ICON: Record<ToolCategory, LucideIcon> = {
  * during a silent 90s Bash the label doesn't change, and without a ticking number the pane is
  * indistinguishable from a hung one.
  */
-function ActivityLine({ activity, elapsed, compact, busy, hideTime }: { activity: ActivityState; elapsed: number; compact?: boolean; busy?: boolean; hideTime?: boolean }) {
+function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: { activity: ActivityState; elapsed: number; compact?: boolean; busy?: boolean; hideTime?: boolean; notices?: Notice[] }) {
   // `busy` without a phase shouldn't happen (the server always sets one), but if the two ever
   // disagree, err toward animating: a silent blank line is the exact failure we're fixing.
   const phase: ActivityPhase = activity.phase === "idle" && busy ? "thinking" : activity.phase;
@@ -265,17 +265,36 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime }: { activity
           {k.agent || k.description}{k.lastTool ? ` · ${k.lastTool}` : ""}{k.toolUses ? ` · ${k.toolUses} tools` : ""}
         </span>
       ))}
+      {/* Subagents that already finished — same compact pill as the running ones above, just dimmed
+          with a ✓/✗/⏹ instead of a live tool. This replaces the old design, where each finished
+          subagent appended its own full-sentence line (NoticeStrip's "task" notices) that stacked up
+          at the bottom of the chat as the turn went on. Full text still available on hover. */}
+      {!compact && (notices || []).filter((n) => n.kind === "task").map((n, i) => {
+        const ok = n.status === "completed";
+        const tint = ok ? TOOL_TINT.task : "#ef7c7c";
+        return (
+          <span key={`${n.at}-${i}`} title={n.text} className="flex items-center gap-1 rounded-full border px-1.5 py-px text-[9px] opacity-70" style={{ borderColor: tint + "45", color: tint }}>
+            <Bot className="h-2.5 w-2.5" strokeWidth={2.5} />
+            {n.agent || "subagent"}
+            <span>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
+          </span>
+        );
+      })}
     </span>
   );
 }
 
-// Retries, auto-compactions and denials: brief, non-fatal, but they explain long silences.
+// Retries, auto-compactions and denials: brief, non-fatal, but they explain long silences. Subagent
+// ("task") notices are deliberately excluded here — they render as compact inline pills inside
+// ActivityLine instead (see the "Subagents that already finished" block above), so a chatty session
+// with several subagents doesn't grow a full-sentence line per one at the bottom of the chat.
 const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af" };
-function NoticeStrip({ notices }: { notices: { kind: string; text: string; at: number }[] }) {
-  if (!notices.length) return null;
+function NoticeStrip({ notices }: { notices: Notice[] }) {
+  const rest = notices.filter((n) => n.kind !== "task");
+  if (!rest.length) return null;
   return (
     <div className="flex flex-col gap-1">
-      {notices.map((n, i) => (
+      {rest.map((n, i) => (
         <span key={`${n.at}-${i}`} className="flex items-center gap-1.5 text-[10px]" style={{ color: NOTICE_TINT[n.kind] || "#9ca3af" }}>
           <span className="h-1 w-1 rounded-full" style={{ background: "currentColor" }} />{n.text}
         </span>
@@ -680,6 +699,24 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   // than streaming only in the exact pane that started it. Blank chats use their pane key until they get
   // an id, at which point the server has aliased the session to `live:<id>` so nothing is orphaned.
   const effectiveKey = sessionId ? "live:" + sessionId : paneKey;
+  // A pane that STARTED blank and just went live needs its in-progress draft carried from the paneKey's
+  // storage slot to the new live:<sessionId> slot BEFORE useSetting's own "load from storage" effect
+  // fires for that new key below — otherwise, if this exact session id happens to already have an old
+  // stored draft from a past visit, that effect would silently overwrite whatever the user is mid-typing
+  // right now with the stale leftover. Guarded to run (a) only once per sessionId and (b) only for a pane
+  // that was actually new at mount — a pane opened directly on an EXISTING session must never do this,
+  // or it would clobber that session's real saved draft with irrelevant paneKey-slot leftovers.
+  const wasNewAtMountRef = useRef(!sessionId); // captured once at mount, same test as `isNew` below
+  const migratedDraftForRef = useRef<string | null>(null);
+  if (wasNewAtMountRef.current && sessionId && migratedDraftForRef.current !== sessionId) {
+    migratedDraftForRef.current = sessionId;
+    try {
+      const cur = localStorage.getItem("bento:draft:" + paneKey);
+      if (cur) localStorage.setItem("bento:draft:live:" + sessionId, cur); // only if there's actually
+      // something in-progress to carry over — an empty draft (the common case: already sent, box
+      // cleared) must never stomp a real pre-existing draft under the session's own key.
+    } catch { /* ignore */ }
+  }
   // Draft text survives closing/reopening a topic or switching panes — it's persisted (like `perm`
   // below) instead of plain useState, which used to reset to "" every time ChatColumn unmounted.
   // Keyed by the same effectiveKey as the agent so the draft follows a session, not a pane slot.
@@ -745,8 +782,19 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
     setInput("");
   };
-  const setPlan = (on: boolean) => { setPlanning(on); agent.changeMode(on ? "plan" : perm); };
-  const setPermLevel = (m: Exclude<AgentMode, "plan">) => { setPerm(m); if (!planning) agent.changeMode(m); };
+  // Both toggles flip local UI state immediately (optimistic — feels instant), then revert it if the
+  // server-side changeMode() call turns out to have failed, so a network blip can't leave the toggle
+  // showing a mode (e.g. "bypass") that the live session never actually switched to.
+  const setPlan = (on: boolean) => {
+    const prev = planning;
+    setPlanning(on);
+    agent.changeMode(on ? "plan" : perm).then((ok) => { if (!ok) setPlanning(prev); });
+  };
+  const setPermLevel = (m: Exclude<AgentMode, "plan">) => {
+    const prev = perm;
+    setPerm(m);
+    if (!planning) agent.changeMode(m).then((ok) => { if (!ok) setPerm(prev); });
+  };
   // Jump straight to the last message; keep pinned as tokens stream in.
   useEffect(() => {
     const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight;
@@ -853,7 +901,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
             <p className="mt-1 text-xs">Type below to start a live Claude Code session in <code className="text-[11px] text-neutral-400">{cwd || proj}</code>.</p>
           </div>
         ) : visible.length === 0 ? (
-          agent.busy ? <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} /> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
+          agent.busy ? <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} /> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
         ) : (
         <>
         {hiddenCount > 0 && (
@@ -874,7 +922,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
               {t.streaming && i === visible.length - 1 && (
                 <div className={`flex flex-col gap-1.5 ${t.text ? "mt-2" : ""}`}>
                   <NoticeStrip notices={agent.notices} />
-                  <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
+                  <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} />
                 </div>
               )}
               {showTools && t.tools.map((tool, j) => {
@@ -922,7 +970,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         {agent.busy && !(visible[visible.length - 1]?.streaming) && (
           <div className="flex flex-col gap-1.5">
             <NoticeStrip notices={agent.notices} />
-            <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
+            <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} />
           </div>
         )}
         </>

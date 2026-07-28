@@ -12,7 +12,8 @@ export type PermissionPrompt = { id: string; toolName: string; input: unknown } 
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] };
 export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
-export type Notice = { kind: string; text: string; at: number };
+// `agent`/`status` only ride along on kind "task" — see manager.ts's AgentEvent for why.
+export type Notice = { kind: string; text: string; at: number; agent?: string; status?: "completed" | "failed" | "stopped" };
 
 export { activityLabel, toolCategory, escalationHint } from "./agent/labels";
 export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem } from "./agent/labels";
@@ -190,7 +191,7 @@ export function useAgent(paneKey: string) {
           }));
           break;
         case "notice":
-          setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now() }]);
+          setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now(), agent: ev.agent, status: ev.status }]);
           break;
         case "permission":
           setPending({ id: ev.id, toolName: ev.toolName, input: ev.input }); break;
@@ -223,6 +224,21 @@ export function useAgent(paneKey: string) {
     ensureStream(true);
   }, [ensureStream]);
 
+  // A failed send() below stages an empty `{streaming: true}` assistant bubble optimistically before
+  // the request even goes out — without this, a failure leaves that placeholder in the transcript
+  // forever (it renders as nothing, since there's no text) until the NEXT successful turn's `result`
+  // event happens to call reconcile() and overwrite `turns` wholesale. Marking it done immediately
+  // means a failed send doesn't leave a dangling ghost turn for however long the user waits before
+  // trying again.
+  const unstickTrailingTurn = useCallback(() => {
+    setTurns((prev) => {
+      if (!prev.length) return prev;
+      const last = prev[prev.length - 1];
+      if (!last.streaming) return prev;
+      return [...prev.slice(0, -1), { ...last, streaming: false }];
+    });
+  }, []);
+
   // Send a user message. `seed` = the existing (file) transcript to preserve when going live;
   // `resume` = the Claude session id to continue on the pane's first send.
   const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[] }) => {
@@ -247,26 +263,48 @@ export function useAgent(paneKey: string) {
       // Only latch sentOnce once the server actually accepted this send — the snapshot handler above
       // is the other (more common) place this flips true. On failure, leave it alone so a retry still
       // offers `resume` instead of quietly falling back to a fresh, context-less session.
-      if (d?.error) { setError(d.error); setBusy(false); applyActivity(IDLE_ACTIVITY); }
+      if (d?.error) { setError(d.error); setBusy(false); applyActivity(IDLE_ACTIVITY); unstickTrailingTurn(); }
       else { sentOnce.current = true; if (d?.sessionId && !sessionIdRef.current) { setSessionId(d.sessionId); sessionIdRef.current = d.sessionId; } }
-    } catch (e) { setError(String((e as Error)?.message || e)); setBusy(false); applyActivity(IDLE_ACTIVITY); }
-  }, [paneKey, live, ensureStream, applyActivity]);
+    } catch (e) {
+      setError(String((e as Error)?.message || e)); setBusy(false); applyActivity(IDLE_ACTIVITY); unstickTrailingTurn();
+    }
+  }, [paneKey, live, ensureStream, applyActivity, unstickTrailingTurn]);
 
   const respond = useCallback(async (decision: "allow" | "deny") => {
     const p = pending; if (!p) return;
-    setPending(null);
-    try { await fetch("/api/agent/permission", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: p.id, decision }) }); } catch { /* ignore */ }
+    // Clear only once the server actually has the decision — not optimistically before the fetch. If
+    // the POST fails (network blip), the prompt stays up (with an error shown) so the user can retry;
+    // otherwise the UI would show no prompt at all while the server-side session is still blocked
+    // waiting for one, stuck until a full reload.
+    try {
+      const r = await fetch("/api/agent/permission", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: p.id, decision }) });
+      const d = await r.json().catch(() => null);
+      if (!d?.ok) throw new Error("the server didn't confirm this decision");
+      setPending(null);
+    } catch (e) { setError(`Couldn't send that decision — try again (${String((e as Error)?.message || e)})`); }
   }, [pending, paneKey]);
 
   const answerAsk = useCallback(async (answers: Record<string, string | string[]>) => {
     const a = ask; if (!a) return;
-    setAsk(null);
-    try { await fetch("/api/agent/answer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: a.id, answers }) }); } catch { /* ignore */ }
+    // Same reasoning as respond() above — don't clear the prompt until the server confirms it landed.
+    try {
+      const r = await fetch("/api/agent/answer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: a.id, answers }) });
+      const d = await r.json().catch(() => null);
+      if (!d?.ok) throw new Error("the server didn't confirm this answer");
+      setAsk(null);
+    } catch (e) { setError(`Couldn't send that answer — try again (${String((e as Error)?.message || e)})`); }
   }, [ask, paneKey]);
 
-  const changeMode = useCallback(async (mode: AgentMode) => {
-    if (!live) return;
-    try { await fetch("/api/agent/mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, mode }) }); } catch { /* ignore */ }
+  // Returns whether the server actually applied the mode change, so the caller (the Plan/Code and
+  // approval-level toggles in app/page.tsx) can revert its own optimistic UI state on failure instead
+  // of silently diverging from what the live session is really running under.
+  const changeMode = useCallback(async (mode: AgentMode): Promise<boolean> => {
+    if (!live) return true; // no live session yet — the chosen mode just applies whenever one starts
+    try {
+      const r = await fetch("/api/agent/mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, mode }) });
+      const d = await r.json().catch(() => null);
+      return !!d?.ok;
+    } catch { return false; }
   }, [live, paneKey]);
 
   // Interrupt the in-flight turn (Stop button). `stopping` flips back to false once the server

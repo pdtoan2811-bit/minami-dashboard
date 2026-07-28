@@ -9,8 +9,10 @@
 // The SDK uses the machine's existing Claude Code login (no API key) and persists every session to
 // ~/.claude/projects/<enc-cwd>/<id>.jsonl exactly like the CLI, so the rest of Bento keeps working.
 //
-// Safety: only "default" | "acceptEdits" | "plan" permission modes are ever passed to the SDK.
-// "bypassPermissions" is intentionally impossible to select — see safeMode().
+// Safety: safeMode() clamps any unrecognized string to "default" before it reaches the SDK.
+// "bypassPermissions" IS a real, user-selectable mode (the composer's "bypass" toggle, see
+// app/page.tsx's MODE_HINT/perm state) — auto-approves every tool, no canUseTool prompt at all.
+// It's opt-in and labeled with a warning in the UI, never the shipped default.
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
 
@@ -27,7 +29,8 @@ const MCP_SERVERS: NonNullable<Options["mcpServers"]> | undefined = BROWSER_TOOL
   : undefined;
 
 // "bypassPermissions" auto-approves every tool with no prompt — powerful but dangerous. It's opt-in
-// (the user has to pick it), never the shipped default. Everything else is clamped to "default".
+// (the user has to pick it via the composer's "bypass" toggle), never the shipped default. Any string
+// outside this list (typos, stale client state) is clamped to "default" by safeMode() below.
 export type AllowedMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 const ALLOWED: AllowedMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
 export const safeMode = (m?: string): AllowedMode => (ALLOWED.includes(m as AllowedMode) ? (m as AllowedMode) : "default");
@@ -43,7 +46,10 @@ export type AgentEvent =
   | { t: "tool"; name: string; input: unknown; id?: string } // a tool call started (live feedback)
   | { t: "tool_end"; id: string; name: string; ok: boolean; ms: number; output?: ToolOutput } // its result came back
   | { t: "activity"; activity: ActivityState } // REPLACE semantics: the whole live-activity state
-  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted"; text: string } // non-fatal, worth showing
+  // non-fatal, worth showing. `agent`/`status` are only set for kind "task" — the UI renders those as
+  // compact inline pills (see SubagentStrip in app/page.tsx) rather than the generic text line, so it
+  // needs the subagent's type and outcome as separate fields instead of parsing the prose in `text`.
+  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
   | { t: "permission"; id: string; toolName: string; input: unknown } // waiting on the user
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
   | { t: "result"; subtype: string; costUsd?: number } // turn finished
@@ -216,9 +222,19 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     } finally {
       s.busy = false;
       s.closed = true;
+      if (s.idleTimer) { clearTimeout(s.idleTimer); s.idleTimer = null; }
       resetActivity(s, "idle");
       broadcast(s, { t: "activity", activity: activityOf(s) });
       broadcast(s, { t: "busy", busy: false });
+      // The query has ended for good here (crashed, closed, or the SDK's stream naturally finished) —
+      // remove BOTH registry aliases now rather than relying solely on scheduleIdle, which only ever
+      // gets armed after a `result` message (see handleMessage's "result" case). A session that throws
+      // before its first turn ever completes (bad cwd, auth failure) never produces a `result`, so
+      // without this it — and its `live:<sessionId>` alias, if `init` already fired — would sit in the
+      // global `store` forever, growing it a little more on every such early failure. Identity-checked
+      // (`=== s`) so this can't delete a NEWER session that's since been created under the same key.
+      if (store.get(s.key) === s) store.delete(s.key);
+      if (s.sessionId && store.get(SID_KEY + s.sessionId) === s) store.delete(SID_KEY + s.sessionId);
     }
   })();
 
@@ -420,7 +436,7 @@ function handleSystem(s: Session, m: any) {
       const t = s.liveTasks.get(m.task_id);
       s.liveTasks.delete(m.task_id);
       if (!m.skip_transcript && t) {
-        broadcast(s, { t: "notice", kind: "task", text: `subagent ${m.status}: ${m.summary || t.description}` });
+        broadcast(s, { t: "notice", kind: "task", text: `subagent ${m.status}: ${m.summary || t.description}`, agent: t.agent, status: m.status });
       }
       settle(s);
       break;
@@ -497,15 +513,31 @@ export function answer(key: string, id: string, answers: Record<string, string |
 export async function stop(key: string): Promise<boolean> {
   const s = store.get(key);
   if (!s || s.closed) return false;
+  // Snapshot which prompts were ALREADY pending before we await interrupt() — a new turn can raise its
+  // own permission/AskUserQuestion prompt (added to this same `pending` map) while interrupt() is still
+  // resolving, if the user sends a fast follow-up message right after clicking Stop. Without this
+  // snapshot, denying "whatever's in `pending` now" after the await would deny that brand-new turn's
+  // prompt with a stale "Stopped by user" message it never asked for.
+  const toDeny = [...s.pending.entries()];
   try { await s.q?.interrupt?.(); } catch { /* best effort — the turn may already be finishing */ }
-  for (const [, p] of s.pending) p.resolve({ behavior: "deny", message: "Stopped by user." });
-  s.pending.clear();
+  for (const [id, p] of toDeny) {
+    if (s.pending.get(id) === p) { p.resolve({ behavior: "deny", message: "Stopped by user." }); s.pending.delete(id); }
+  }
   return true;
 }
 
 export function setMode(key: string, mode?: string): void {
-  const s = store.get(key);
-  try { s?.q?.setPermissionMode?.(safeMode(mode)); } catch { /* not initialized yet */ }
+  try {
+    const s = store.get(key);
+    const p = s?.q?.setPermissionMode?.(safeMode(mode));
+    // setPermissionMode() returns a promise; this call is intentionally fire-and-forget (the route
+    // just wants the mode applied, not to block on it), but an un-awaited promise that later rejects
+    // (e.g. the mode toggle is flipped right as the session ends) becomes an UNHANDLED REJECTION with
+    // nowhere to be caught — and with no global handler, Node's default is to crash the whole process,
+    // killing every open pane over one stale mode change. Attaching a no-op .catch() here keeps it
+    // fire-and-forget while ensuring it can never do that.
+    if (p && typeof (p as Promise<unknown>).then === "function") (p as Promise<unknown>).catch(() => { /* session likely gone — nothing to do */ });
+  } catch { /* not initialized yet */ }
 }
 
 // Subscribe an SSE client. `exists` tells the route whether a live session backs this key at all (so a

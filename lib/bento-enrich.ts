@@ -39,7 +39,18 @@ function readCache(): Record<string, Entry> {
   try { return JSON.parse(fs.readFileSync(CACHE, "utf8")); } catch { return {}; }
 }
 function writeCache(c: Record<string, Entry>) {
-  try { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(CACHE, JSON.stringify(c)); } catch { /* disk */ }
+  try {
+    fs.mkdirSync(DIR, { recursive: true });
+    // Atomic write: a torn/partial write (crash mid-write, or two processes writing at once — e.g.
+    // `next dev` and `next start` both pointed at this same home dir, which has happened before on
+    // this project) would otherwise leave a file that fails JSON.parse on the next readCache(), which
+    // silently returns {} — and the next enrich() call would then WRITE that empty object back,
+    // permanently wiping every hand-curated goal/task label for every session. write-then-rename means
+    // a reader only ever sees a fully-old or fully-new file, never a partial one.
+    const tmp = `${CACHE}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(c));
+    fs.renameSync(tmp, CACHE);
+  } catch { /* disk */ }
 }
 export function getEnrichment(): Record<string, Entry> { return readCache(); }
 
@@ -83,23 +94,31 @@ export async function enrich(digests: Digest[]): Promise<Record<string, Entry>> 
 
   try {
     fs.mkdirSync(DIR, { recursive: true });
-    let text = await runHaiku(prompt);
+    let text = await runHaiku(prompt); // <-- up to 90s away; `cache` above can go stale during this gap
     try { text = JSON.parse(text).result || text; } catch { /* raw */ }
     const m = text.match(/\[[\s\S]*\]/);
     if (m) {
       const arr = JSON.parse(m[0]) as any[];
+      // Re-read from disk right before merging/writing, instead of merging onto the `cache` snapshot
+      // read at the top of this function (before the long Haiku await). That snapshot can be stale by
+      // now — another process, or another concurrent enrich() call, may have written newer curated
+      // labels while this one was waiting on Haiku — and writing it back verbatim would silently
+      // clobber them. This can't fully eliminate the race (no cross-process lock), but it shrinks the
+      // vulnerable window from "the whole Haiku call" down to just this read-then-write.
+      const latest = readCache();
       for (const it of arr) {
         const d = todo.find((x) => x.id === it?.id);
         if (d && it?.task) {
-          cache[it.id] = {
+          latest[it.id] = {
             messages: d.messages,
-            goal: String(it.goal || cache[it.id]?.goal || "General").slice(0, 40),
+            goal: String(it.goal || latest[it.id]?.goal || "General").slice(0, 40),
             task: String(it.task).slice(0, 70),
             review: !!it.review,
           };
         }
       }
-      writeCache(cache);
+      writeCache(latest);
+      return latest;
     }
   } catch { /* summarizer unavailable — callers fall back to heuristic titles */ }
   return cache;

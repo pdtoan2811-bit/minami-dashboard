@@ -8,6 +8,14 @@ export const runtime = "nodejs";
 // GET /api/fs/list?path=<abs> → list sub-directories, for the "start a chat in a folder" picker.
 // Local-only (reads the machine's filesystem). Defaults to the home directory. Also flags whether the
 // folder is a git repo / has a package.json, so the picker can hint which folders are real projects.
+//
+// Deliberately UNCONFINED: `path` accepts any absolute path on the machine, and this dashboard is meant
+// to be reachable from other devices on Thomas's own network (e.g. his phone, per the project's own
+// "mobile-first" design goal) — adding a loopback/host check here would break that intended use case.
+// The actual safety boundary is "don't expose this server beyond a network you trust" (same assumption
+// `agent/send`'s unconfined `cwd` and the live-drive agent itself already make — it can read/write
+// anywhere the process can). If this server is ever bound to a public/untrusted network, that decision
+// needs its own gate (auth, or a real path allow-list) — not something to bolt on here silently.
 export async function GET(req: Request) {
   const u = new URL(req.url);
   const qp = u.searchParams.get("path");
