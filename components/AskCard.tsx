@@ -15,6 +15,10 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
 
   const n = questions.length;
   const q = questions[qi];
+  // Defense in depth alongside the `key={agent.ask.id}` at the call site (app/page.tsx): if `qi` is ever
+  // out of range for `questions` (stale index against a newly-swapped prompt), fail quiet instead of
+  // throwing on `q.multiSelect` below and crashing the whole page (no error boundary exists upstream).
+  if (!q) return null;
   const multi = !!q.multiSelect;
   const isLast = qi === n - 1;
 

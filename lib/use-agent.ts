@@ -69,12 +69,22 @@ export function useAgent(paneKey: string) {
     return () => clearInterval(h);
   }, [ticking]);
 
+  // Bumped every time send() optimistically appends a new turn. reconcile() below captures this value
+  // before its async fetch and checks it again after — if a NEW send() happened in the meantime (the
+  // user fired off a follow-up message while the previous turn's disk-reconcile fetch was still in
+  // flight), that fetch's result is almost certainly stale (the file write for the earlier turn may not
+  // have landed yet either) and would wholesale-clobber the just-appended optimistic turns, making the
+  // new message flicker/vanish from view even though it was actually delivered to the server.
+  const turnsGenRef = useRef(0);
+
   // Reload the authoritative transcript from disk after a turn completes.
   const reconcile = useCallback(async () => {
     const id = sessionIdRef.current;
     if (!id) return;
+    const gen = turnsGenRef.current;
     try {
       const d = await fetch(`/api/bento/session/${id}`).then((r) => r.json());
+      if (gen !== turnsGenRef.current) return; // superseded by a newer send() — let its own flow win
       if (Array.isArray(d?.turns)) {
         setTurns((prev) => {
           const fresh: AgentTurn[] = d.turns.map((t: AgentTurn) => ({ role: t.role, text: t.text, tools: t.tools || [] }));
@@ -149,7 +159,16 @@ export function useAgent(paneKey: string) {
           if (sid) {
             fetch(`/api/bento/session/${sid}`).then((r) => r.json()).then((d) => {
               const seed: AgentTurn[] = Array.isArray(d?.turns) ? d.turns.map((t: AgentTurn) => ({ role: t.role, text: t.text, tools: t.tools || [] })) : [];
-              setTurns([...seed, ...overlay]);
+              // Prefer whatever streaming turn is CURRENTLY in state over the captured `overlay` — this
+              // fetch can take a moment, and delta/thinking/tool events for the still-running turn keep
+              // arriving (and get applied to `turns`) while it's in flight. `overlay` is a snapshot of
+              // `ev.partial` from the instant this fetch started; applying it now would roll back
+              // everything that streamed in during the round-trip, visibly "un-streaming" text the user
+              // already saw.
+              setTurns((prev) => {
+                const liveTurn = prev.find((t) => t.streaming);
+                return [...seed, ...(liveTurn ? [liveTurn] : overlay)];
+              });
             }).catch(() => setTurns(overlay));
           } else setTurns(overlay);
           break;
@@ -205,7 +224,13 @@ export function useAgent(paneKey: string) {
           reconcile();
           break;
         case "error":
-          setError(String(ev.message || "error")); setBusy(false); setStopping(false); applyActivity(IDLE_ACTIVITY); break;
+          // The server side of this session is gone for good once it emits "error" (see manager.ts's
+          // consumer-loop catch) — any permission/ask prompt still shown here will never be answerable
+          // (its POST would 404 against a session the server already deleted), so clear it instead of
+          // leaving a dialog stuck on screen forever with no working button.
+          setError(String(ev.message || "error")); setBusy(false); setStopping(false); applyActivity(IDLE_ACTIVITY);
+          setPending(null); setAsk(null);
+          break;
       }
     };
     es.onerror = () => { /* EventSource auto-reconnects */ };
@@ -245,6 +270,7 @@ export function useAgent(paneKey: string) {
     const clean = text.trim();
     if (!clean || !opts.cwd) return;
     setError(null); setDetached(false); attachingRef.current = false;
+    turnsGenRef.current++; // invalidate any in-flight reconcile() from a previous turn — see its comment
     setTurns((prev) => {
       const base = live ? prev : (opts.seed || []);
       return [...base, { role: "user", text: clean, tools: [] }, { role: "assistant", text: "", tools: [], streaming: true }];

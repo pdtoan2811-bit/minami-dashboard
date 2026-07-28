@@ -17,10 +17,15 @@ export function UsageHeatmap() {
 
   useEffect(() => {
     if (!METRICS_URL) return;
+    // Without this flag, rapidly switching ranges (e.g. 7d then 30d) can let the 7d response resolve
+    // AFTER the 30d one and silently overwrite it with stale data — same pattern already used in
+    // UsagePanel/RoutingFlow for this exact reason.
+    let cancelled = false;
     const tz = new Date().getTimezoneOffset();
     const k = METRICS_KEY ? `&k=${encodeURIComponent(METRICS_KEY)}` : "";
     fetch(`${METRICS_URL}/timeseries?days=${range}&tz=${tz}${k}`)
-      .then((r) => r.json()).then((d) => setDays(d.days || [])).catch(() => {});
+      .then((r) => r.json()).then((d) => { if (!cancelled) setDays(d.days || []); }).catch(() => {});
+    return () => { cancelled = true; };
   }, [range]);
 
   const { weeks, max, totalTok, totalTurns } = useMemo(() => {

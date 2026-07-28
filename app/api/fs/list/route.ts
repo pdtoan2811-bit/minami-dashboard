@@ -22,7 +22,14 @@ export async function GET(req: Request) {
   const withFiles = u.searchParams.get("files") === "1";
   const dir = qp && path.isAbsolute(qp) ? qp : os.homedir();
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const all = fs.readdirSync(dir, { withFileTypes: true });
+    // Cap the number of entries that get the (synchronous, 2-stat-per-entry) git/package.json probe
+    // below. Unlike the confined `path` param above, this IS worth bounding — this server is single-
+    // threaded and shared by every open pane, and nothing stops a user from navigating into a directory
+    // with thousands of entries (a package-manager cache, Downloads, a large media folder) and stalling
+    // every other request for the length of the scan. Mirrors the existing cap in bento/attach-batch.
+    const truncated = all.length > 2000;
+    const entries = truncated ? all.slice(0, 2000) : all;
     const dirs = entries
       .filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules")
       .map((e) => {
@@ -37,7 +44,7 @@ export async function GET(req: Request) {
       ? entries.filter((e) => e.isFile() && !e.name.startsWith(".")).map((e) => ({ name: e.name, path: path.join(dir, e.name) })).sort((a, b) => a.name.localeCompare(b.name))
       : [];
     const parent = path.dirname(dir);
-    return Response.json({ path: dir, parent: parent === dir ? null : parent, home: os.homedir(), dirs, files });
+    return Response.json({ path: dir, parent: parent === dir ? null : parent, home: os.homedir(), dirs, files, truncated });
   } catch (e) {
     return Response.json({ path: dir, parent: null, home: os.homedir(), dirs: [], files: [], error: String((e as Error)?.message || e) }, { status: 200 });
   }

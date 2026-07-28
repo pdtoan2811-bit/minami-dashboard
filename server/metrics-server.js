@@ -32,6 +32,15 @@ const READ_KEY = process.env.READ_KEY || "";
 
 fs.mkdirSync(DIR, { recursive: true });
 
+// Unlike the Next app (which got a global instrumentation.ts handler in the last stability pass), this
+// standalone script had NO process-level safety net at all — any uncaught throw takes the whole process
+// down. systemd restarts it (Restart=always), but every connected dashboard's SSE stream drops and any
+// in-flight /ingest from another machine is lost. Log-and-continue for rejections (nothing here holds
+// state that a stray rejection would leave corrupted); exit on a genuine uncaught exception so systemd
+// gets a clean restart rather than continuing in a possibly-inconsistent state.
+process.on("unhandledRejection", (e) => { console.error("[metrics] unhandled rejection:", e); });
+process.on("uncaughtException", (e) => { console.error("[metrics] uncaught exception:", e); process.exit(1); });
+
 // Prices per MTok — mirror lib/routing.ts. Cache reads are billed at 0.1x input.
 const PRICES = {
   "claude-haiku-4-5": { in: 1, out: 5 },
@@ -129,6 +138,11 @@ const server = http.createServer((req, res) => {
     req.on("end", () => {
       let e;
       try { e = JSON.parse(body); } catch { return send(res, 400, { error: "bad json" }); }
+      // JSON.parse("null") succeeds (returns null, no exception) — the catch above never fires for it,
+      // and `e.ts = ...` on null/undefined throws a TypeError with nothing catching it, killing the
+      // whole process (confirmed: this file had no uncaughtException handler before the fix above).
+      // A concrete trigger: any client bug that serializes a null payload to /ingest.
+      if (!e || typeof e !== "object") return send(res, 400, { error: "bad json" });
       e.ts = e.ts || Date.now();
       e.source = String(e.source || "unknown").slice(0, 40);
       try { fs.appendFileSync(EVENTS, JSON.stringify(e) + "\n"); } catch { /* disk */ }

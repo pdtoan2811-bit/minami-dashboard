@@ -2,6 +2,7 @@
 // Server-only: read Claude Code session transcripts (~/.claude/projects/<enc-cwd>/<id>.jsonl) and
 // summarize them for the Bento mirror. Zero deps — Phase 1 observes real terminal/CLI sessions
 // read-only. (Driving sessions = Phase 2 via @anthropic-ai/claude-agent-sdk.)
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -114,7 +115,23 @@ function freshAccum(): ParseAccum {
   };
 }
 
-type CacheEntry = { mtime: number; size: number; accum: ParseAccum; meta: SessionMeta };
+type CacheEntry = { mtime: number; size: number; head: string; accum: ParseAccum; meta: SessionMeta };
+
+// Fingerprint of a file's first `len` bytes — cheap (len is capped small) and used ONLY to tell "this
+// file was purely appended to" apart from "this file was truncated and rewritten, but happens to have
+// ended up the same size or bigger" (mtime+size alone can't distinguish those). A real append can never
+// change bytes that already existed, so the fingerprint of a stable prefix is invariant across appends
+// and changes the instant something rewrites that prefix.
+function headFingerprint(file: string, len: number): string {
+  if (len <= 0) return "";
+  const fd = fs.openSync(file, "r");
+  try {
+    const buf = Buffer.allocUnsafe(len);
+    const read = fs.readSync(fd, buf, 0, len, 0);
+    return crypto.createHash("sha1").update(buf.subarray(0, read)).digest("hex");
+  } finally { fs.closeSync(fd); }
+}
+const HEAD_FINGERPRINT_BYTES = 4096;
 
 // Metadata cache, keyed by file + mtime + size. Kept on globalThis so a Next dev hot-reload doesn't
 // wipe it, and mirrored to disk so a fresh server launch doesn't have to re-read+parse every (often
@@ -254,9 +271,15 @@ function summarize(file: string, id: string, raw?: string): SessionMeta {
 
   // Full reparse when: an explicit `raw` override is given (whole-file content, no prior caller today
   // but keep the contract), there's no usable prior state (first time, or an old pre-upgrade cache
-  // entry with no `accum`), or the file got SMALLER than what we'd already parsed (rotated/truncated —
-  // our incremental offset would be reading garbage past the new end).
-  const canIncremental = raw === undefined && !!cached && !!cached.accum && cached.size <= size;
+  // entry with no `accum`), the file got SMALLER than what we'd already parsed (rotated/truncated — our
+  // incremental offset would be reading garbage past the new end), OR the file's head no longer matches
+  // what we fingerprinted last time. That last check catches a same-or-larger-size TRUNCATE+REWRITE
+  // (mtime/size alone can look exactly like a pure append when the rewrite happens to land on an equal
+  // or bigger size) — without it, readNewBytes() would read an arbitrary slice of unrelated new content
+  // as if it were an appended suffix, foldLine() would silently fold garbage into `acc` forever (it's
+  // never reset on this path), and the session's totals/title would be permanently wrong with no error.
+  const headOk = !!cached && (cached.size === 0 || cached.head === headFingerprint(file, Math.min(cached.size, HEAD_FINGERPRINT_BYTES)));
+  const canIncremental = raw === undefined && !!cached && !!cached.accum && cached.size <= size && headOk;
   const acc: ParseAccum = canIncremental && cached ? cached.accum : freshAccum();
   const readStart = canIncremental && cached ? cached.size : 0;
 
@@ -281,16 +304,33 @@ function summarize(file: string, id: string, raw?: string): SessionMeta {
   }
 
   const meta = buildMeta(id, file, acc, mtime);
-  touchLRU(cache, file, { mtime, size, accum: acc, meta }, META_CACHE_MAX);
+  // Fingerprint AFTER parsing, over the file as it stands now — a pure append never touches these bytes,
+  // so this stays stable across future polls and only changes if something rewrites the file's start.
+  const head = headFingerprint(file, Math.min(size, HEAD_FINGERPRINT_BYTES));
+  touchLRU(cache, file, { mtime, size, head, accum: acc, meta }, META_CACHE_MAX);
   cacheDirty = true;
   return meta;
 }
+
+// Generous headroom over the eventual top-60 cut below — some candidates in the window get dropped
+// (0 messages, the enrichment summarizer's own scratch sessions) so the window needs slack, but it must
+// stay a small FIXED number regardless of how many transcripts pile up on disk over time (see below).
+const CANDIDATE_WINDOW = 150;
 
 export function listSessions(): SessionMeta[] {
   loadDiskCache(); // hydrate the mtime→meta cache from disk so a cold launch skips re-reading everything
   let dirs: string[];
   try { dirs = fs.readdirSync(PROJECTS); } catch { return []; }
-  const out: SessionMeta[] = [];
+  // Stat-only pass first — cheap (no file content read) — so we can pick the ~150 most recently active
+  // transcripts BEFORE calling summarize() on any of them. This machine already has 375 real session
+  // files and climbing; summarize()-ing every single one on every poll (the old behavior) means one
+  // sweep touches more distinct files than META_CACHE_MAX (500) holds once the total count crosses that
+  // line, which silently evicts — and therefore forces a full, expensive re-parse of — files from the
+  // very same sweep that just cached them. That's the "every poll blocks the event loop" failure mode
+  // commit 6505ed2 fixed, reintroduced via cache thrash instead of a busted incremental parser. mtime is
+  // a safe proxy for recency here (any activity, including an in-progress stream, touches it), so this
+  // can't wrongly drop a genuinely active session outside the window.
+  const candidates: { file: string; id: string; mtime: number }[] = [];
   for (const d of dirs) {
     const dir = path.join(PROJECTS, d);
     let files: string[];
@@ -299,13 +339,20 @@ export function listSessions(): SessionMeta[] {
       const file = path.join(dir, f);
       const id = f.replace(/\.jsonl$/, "");
       touchLRU(idIndex, id, file, ID_INDEX_MAX); // free id→path index for getSession()'s hot polling path
-      try {
-        const meta = summarize(file, id); // cache-aware: reads the file only when changed
-        if (meta.messages === 0) continue;
-        if (meta.cwd.includes(ENRICH_MARKER)) continue; // hide the summarizer's own sessions
-        out.push(meta);
-      } catch { /* skip unreadable */ }
+      try { candidates.push({ file, id, mtime: fs.statSync(file).mtimeMs }); } catch { /* gone mid-scan */ }
     }
+  }
+  candidates.sort((a, b) => b.mtime - a.mtime);
+  const windowed = candidates.length > CANDIDATE_WINDOW ? candidates.slice(0, CANDIDATE_WINDOW) : candidates;
+
+  const out: SessionMeta[] = [];
+  for (const { file, id } of windowed) {
+    try {
+      const meta = summarize(file, id); // cache-aware: reads the file only when changed
+      if (meta.messages === 0) continue;
+      if (meta.cwd.includes(ENRICH_MARKER)) continue; // hide the summarizer's own sessions
+      out.push(meta);
+    } catch { /* skip unreadable */ }
   }
   saveDiskCache(); // persist any newly-parsed files so the next launch is warm
   // Merge the semantic layer (meaningful task title + topic) from the enrichment cache.

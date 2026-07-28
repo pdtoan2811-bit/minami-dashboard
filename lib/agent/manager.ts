@@ -152,7 +152,25 @@ function resetActivity(s: Session, phase: ActivityPhase) {
 // Close a session that's been idle with no listeners for a while, so we don't leak CLI processes.
 function scheduleIdle(s: Session) {
   if (s.idleTimer) clearTimeout(s.idleTimer);
-  s.idleTimer = setTimeout(() => { if (!s.busy && s.subs.size === 0) closeSession(s.key); }, 10 * 60 * 1000);
+  s.idleTimer = setTimeout(() => {
+    if (s.subs.size !== 0) return; // someone (re)subscribed before the timer fired — nothing to do here;
+    // subscribe() already cleared idleTimer on attach, and unsubscribe() will re-arm it later.
+    if (s.pending.size) {
+      // A permission/AskUserQuestion prompt was raised while this pane had no listeners (e.g. the tab
+      // was closed mid-approval) and nobody's left to decide it. Left alone, canUseTool's promise never
+      // resolves, which pins `busy` true forever — no `result` message can ever arrive to re-trigger
+      // this same cleanup — so the session (and its SDK subprocess) would leak in the registry
+      // permanently instead of being reaped like every other idle session. Auto-deny so the SDK call
+      // unblocks and the turn runs to a natural (denied) conclusion instead.
+      for (const [id, p] of s.pending) { p.resolve({ behavior: "deny", message: "No client connected — auto-denied after idle timeout." }); s.pending.delete(id); }
+    }
+    if (!s.busy) closeSession(s.key);
+    // Still busy (e.g. the denial above hasn't produced a `result` yet, or a turn is genuinely still
+    // running unattended) — check again rather than letting this session go unmonitored forever; the
+    // "result" handler also re-arms this once the turn actually finishes, so this is just the backstop
+    // for whatever falls through that path.
+    else scheduleIdle(s);
+  }, 10 * 60 * 1000);
 }
 
 // The streaming input: yields queued user messages, then parks until send() wakes it.
@@ -223,6 +241,15 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       s.busy = false;
       s.closed = true;
       if (s.idleTimer) { clearTimeout(s.idleTimer); s.idleTimer = null; }
+      // A permission/AskUserQuestion prompt still parked here has no one left to resolve it — the
+      // query iterator has ended for good (crash, close, natural completion), so no future decide()/
+      // answer() call will ever reach this session again (it's about to be deleted from `store` below).
+      // Without this, the browser's dialog for that prompt is stuck forever with no working button: its
+      // Allow/Deny POST does `store.get(key)` → undefined → returns false → the client only shows an
+      // error, never clears `pending`/`ask` (see the "error" case in lib/use-agent.ts). Denying here
+      // mirrors closeSession()'s own handling of a session closed while a prompt is outstanding.
+      for (const [, p] of s.pending) p.resolve({ behavior: "deny", message: "Session ended." });
+      s.pending.clear();
       resetActivity(s, "idle");
       broadcast(s, { t: "activity", activity: activityOf(s) });
       broadcast(s, { t: "busy", busy: false });
@@ -519,7 +546,16 @@ export async function stop(key: string): Promise<boolean> {
   // snapshot, denying "whatever's in `pending` now" after the await would deny that brand-new turn's
   // prompt with a stale "Stopped by user" message it never asked for.
   const toDeny = [...s.pending.entries()];
-  try { await s.q?.interrupt?.(); } catch { /* best effort — the turn may already be finishing */ }
+  // Bounded: interrupt() is the SDK's own promise, and there's no guarantee it always settles (a wedged
+  // subprocess pipe, e.g.) — the Stop button is the one manual escape hatch out of a stuck turn, so it
+  // must never itself hang forever waiting on the very thing it's trying to unstick. On timeout we still
+  // fall through and deny whatever's pending, same as the success path.
+  await Promise.race([
+    // Promise.resolve(...) wraps the case where interrupt itself is missing (undefined) so `.catch` is
+    // always safe to call — `s.q?.interrupt?.()` alone would be `undefined.catch(...)` in that case.
+    Promise.resolve(s.q?.interrupt?.()).catch(() => { /* best effort — the turn may already be finishing */ }),
+    new Promise((resolve) => setTimeout(resolve, 8000)),
+  ]);
   for (const [id, p] of toDeny) {
     if (s.pending.get(id) === p) { p.resolve({ behavior: "deny", message: "Stopped by user." }); s.pending.delete(id); }
   }
@@ -607,7 +643,10 @@ export function closeSession(key: string): void {
   for (const [, p] of s.pending) p.resolve({ behavior: "deny", message: "Session closed." });
   s.pending.clear();
   if (s.waiter) { const w = s.waiter; s.waiter = null; w(); }
-  try { s.q?.close?.(); } catch { /* already gone */ }
+  // close() may return a promise; guard against a later rejection going unhandled (harmless today since
+  // instrumentation.ts's global handler catches it, but this keeps the same fire-and-forget-safely
+  // pattern used by setMode() above instead of relying on that as the only backstop).
+  try { Promise.resolve(s.q?.close?.()).catch(() => { /* already gone */ }); } catch { /* already gone */ }
   if (s.idleTimer) clearTimeout(s.idleTimer);
   // Remove BOTH the pane-key entry and the sessionId alias so neither leaks a closed session.
   store.delete(key);

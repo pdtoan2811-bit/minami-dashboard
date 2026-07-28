@@ -31,7 +31,10 @@ type RenderTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCa
 
 // A pane = one chat column. `key` is a stable id (survives refresh, so it can reattach to its live
 // server session); `sid` is the Claude session id it's showing ("" for a brand-new blank chat).
-type Pane = { key: string; sid: string };
+// `switchGen` bumps only when the USER explicitly picks a different existing session for this pane (the
+// chat-switcher dropdown) — see its use as part of ChatColumn's React `key` below for why this can't
+// just be `sid` itself.
+type Pane = { key: string; sid: string; switchGen?: number };
 let paneSeq = 0;
 const mkPane = (sid = ""): Pane => ({ key: `pane-${Date.now().toString(36)}-${paneSeq++}-${Math.random().toString(36).slice(2, 7)}`, sid });
 const asPanes = (v: unknown): Pane[] => Array.isArray(v)
@@ -234,52 +237,63 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: {
   const tint = activeCat ? TOOL_TINT[activeCat] : PHASE_TINT[phase];
   const Icon = activeCat ? TOOL_ICON[activeCat] : null;
   const frozen = phase === "awaiting"; // nothing is moving — don't pretend otherwise
+  const finished = compact ? [] : (notices || []).filter((n) => n.kind === "task");
   return (
-    <span className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${compact ? "flex-nowrap text-[10px]" : "flex-wrap text-xs"} text-neutral-400 ${frozen ? "activity-idle" : ""}`}>
-      <span className="flex shrink-0 items-center gap-0.5">
-        {[0, 1, 2].map((i) => <span key={i} className={`think-dot ${compact ? "h-1 w-1" : "h-1.5 w-1.5"} rounded-full`} style={{ background: tint, animationDelay: `${i * 0.15}s` }} />)}
+    <span className={`flex min-w-0 flex-col gap-y-1 ${compact ? "text-[10px]" : "text-xs"}`}>
+      <span className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${compact ? "flex-nowrap" : "flex-wrap"} text-neutral-400 ${frozen ? "activity-idle" : ""}`}>
+        <span className="flex shrink-0 items-center gap-0.5">
+          {[0, 1, 2].map((i) => <span key={i} className={`think-dot ${compact ? "h-1 w-1" : "h-1.5 w-1.5"} rounded-full`} style={{ background: tint, animationDelay: `${i * 0.15}s` }} />)}
+        </span>
+        {/* A small glyph naming the kind of work, chat-panel only — the tile stays dot+text so a tiny
+            tile never feels cluttered. */}
+        {Icon && !compact && <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />}
+        <span className="activity-label min-w-0 truncate italic" style={{ color: tint }}>{label}</span>
+        {/* For every OTHER phase the hint is an addition, not a replacement — it only shows once a task
+            has clearly run past typical duration, as a reassurance alongside the (more specific) label. */}
+        {hint && phase !== "spawning" && !compact && <span className="shrink-0 italic text-[10px] text-neutral-600">· {hint}</span>}
+        {!hideTime && <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-600">{fmtElapsed(elapsed)}</span>}
+        {/* Parallel tool calls: the label names one, so chip the rest instead of hiding them — each
+            tinted by its own category so read/write/exec/etc. are distinguishable at a glance. */}
+        {!compact && extras.length > 1 && (
+          <span className="flex flex-wrap gap-1">
+            {extras.slice(0, 4).map((t) => {
+              const c = toolCategory(t.name);
+              return <span key={t.id} className="rounded border px-1 py-px font-mono text-[9px]" style={{ borderColor: TOOL_TINT[c] + "45", color: TOOL_TINT[c] }}>{t.name}</span>;
+            })}
+            {extras.length > 4 && <span className="text-[9px] text-neutral-600">+{extras.length - 4}</span>}
+          </span>
+        )}
+        {/* Running subagents, with the inner tool they're on — otherwise a 3-minute Task is opaque. */}
+        {!compact && activity.tasks.map((k) => (
+          <span key={k.id} className="flex items-center gap-1 rounded-full border px-1.5 py-px text-[9px]" style={{ borderColor: TOOL_TINT.task + "45", color: TOOL_TINT.task }}>
+            <Bot className="h-2.5 w-2.5" strokeWidth={2.5} />
+            {k.agent || k.description}{k.lastTool ? ` · ${k.lastTool}` : ""}{k.toolUses ? ` · ${k.toolUses} tools` : ""}
+          </span>
+        ))}
       </span>
-      {/* A small glyph naming the kind of work, chat-panel only — the tile stays dot+text so a tiny
-          tile never feels cluttered. */}
-      {Icon && !compact && <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />}
-      <span className="activity-label min-w-0 truncate italic" style={{ color: tint }}>{label}</span>
-      {/* For every OTHER phase the hint is an addition, not a replacement — it only shows once a task
-          has clearly run past typical duration, as a reassurance alongside the (more specific) label. */}
-      {hint && phase !== "spawning" && !compact && <span className="shrink-0 italic text-[10px] text-neutral-600">· {hint}</span>}
-      {!hideTime && <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-600">{fmtElapsed(elapsed)}</span>}
-      {/* Parallel tool calls: the label names one, so chip the rest instead of hiding them — each
-          tinted by its own category so read/write/exec/etc. are distinguishable at a glance. */}
-      {!compact && extras.length > 1 && (
+      {/* Subagents that already finished — pulled onto their own row, dimmed with a ✓/✗/⏹ instead of a
+          live tool. Used to live crammed onto the status line above, jockeying for space with the
+          dots/label/timer/extras/running-tasks — with several subagents (a common pattern in this repo:
+          parallel investigations) that line filled up and wrapped into a jumble. A dedicated row below
+          keeps the live status line readable regardless of how many subagents finished this turn. This
+          in turn replaced an even older design, where each finished subagent appended its own
+          full-sentence line (NoticeStrip's "task" notices) that stacked up at the bottom of the chat as
+          the turn went on. Full text still available on hover. */}
+      {finished.length > 0 && (
         <span className="flex flex-wrap gap-1">
-          {extras.slice(0, 4).map((t) => {
-            const c = toolCategory(t.name);
-            return <span key={t.id} className="rounded border px-1 py-px font-mono text-[9px]" style={{ borderColor: TOOL_TINT[c] + "45", color: TOOL_TINT[c] }}>{t.name}</span>;
+          {finished.map((n, i) => {
+            const ok = n.status === "completed";
+            const nTint = ok ? TOOL_TINT.task : "#ef7c7c";
+            return (
+              <span key={`${n.at}-${i}`} title={n.text} className="flex items-center gap-1 rounded-full border px-1.5 py-px text-[9px] opacity-70" style={{ borderColor: nTint + "45", color: nTint }}>
+                <Bot className="h-2.5 w-2.5" strokeWidth={2.5} />
+                {n.agent || "subagent"}
+                <span>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
+              </span>
+            );
           })}
-          {extras.length > 4 && <span className="text-[9px] text-neutral-600">+{extras.length - 4}</span>}
         </span>
       )}
-      {/* Running subagents, with the inner tool they're on — otherwise a 3-minute Task is opaque. */}
-      {!compact && activity.tasks.map((k) => (
-        <span key={k.id} className="flex items-center gap-1 rounded-full border px-1.5 py-px text-[9px]" style={{ borderColor: TOOL_TINT.task + "45", color: TOOL_TINT.task }}>
-          <Bot className="h-2.5 w-2.5" strokeWidth={2.5} />
-          {k.agent || k.description}{k.lastTool ? ` · ${k.lastTool}` : ""}{k.toolUses ? ` · ${k.toolUses} tools` : ""}
-        </span>
-      ))}
-      {/* Subagents that already finished — same compact pill as the running ones above, just dimmed
-          with a ✓/✗/⏹ instead of a live tool. This replaces the old design, where each finished
-          subagent appended its own full-sentence line (NoticeStrip's "task" notices) that stacked up
-          at the bottom of the chat as the turn went on. Full text still available on hover. */}
-      {!compact && (notices || []).filter((n) => n.kind === "task").map((n, i) => {
-        const ok = n.status === "completed";
-        const tint = ok ? TOOL_TINT.task : "#ef7c7c";
-        return (
-          <span key={`${n.at}-${i}`} title={n.text} className="flex items-center gap-1 rounded-full border px-1.5 py-px text-[9px] opacity-70" style={{ borderColor: tint + "45", color: tint }}>
-            <Bot className="h-2.5 w-2.5" strokeWidth={2.5} />
-            {n.agent || "subagent"}
-            <span>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
-          </span>
-        );
-      })}
     </span>
   );
 }
@@ -673,8 +687,12 @@ export default function BentoHome() {
             {/* Up to 4 chats in a 2×2 grid — like managing windows on a foldable. */}
             <div className="grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
               {panes.map((pane, idx) => (
-                <ChatColumn key={pane.key} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools}
-                  onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid } : x)))}
+                // Keyed by pane.key PLUS switchGen (not sessionId): the "own live turn just got a real
+                // session id" transition (onLive below) must NOT remount — that would tear down the
+                // in-flight EventSource/turns mid-stream for no reason. An explicit user pick of a
+                // DIFFERENT existing session (onPick below) SHOULD remount — see onPick's comment.
+                <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools}
+                  onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
                   onClose={() => setPanes((p) => p.filter((_, j) => j !== idx))} />
               ))}
@@ -978,7 +996,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
       </div>
 
       {/* Claude's AskUserQuestion — a real choice UI. */}
-      {agent.ask && <AskCard questions={agent.ask.questions} onAnswer={agent.answerAsk} />}
+      {agent.ask && (
+        // Keyed by the prompt's own id so a SECOND AskUserQuestion arriving before the first is answered
+        // (Claude can issue parallel tool calls) remounts AskCard instead of reusing its internal `qi`
+        // question-index state against a `questions` array that may now be shorter — without this,
+        // `questions[qi]` can go out of bounds and crash the render (no error boundary catches it).
+        <AskCard key={agent.ask.id} questions={agent.ask.questions} onAnswer={agent.answerAsk} />
+      )}
 
       {/* Tool-permission prompt (default mode) — Claude is paused until the user decides. */}
       {agent.pending && (
