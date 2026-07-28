@@ -3,7 +3,7 @@
 // task title + a high-level topic (for hierarchy grouping), using Haiku via the local `claude`
 // CLI (the user's subscription — no API key needed). Results are cached to disk and only
 // recomputed when a session grows materially, so tokens are spent once per session.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +16,24 @@ export const ENRICH_MARKER = ".minami-bento"; // sessions spawned by the summari
 // the project that groups related sessions; `task` is the specific session. Curate this file by hand
 // or via the `bento-taxonomy` skill — it's the source of truth and only auto-filled when missing.
 export type Entry = { messages: number; goal: string; task: string; review: boolean };
-export type Digest = { id: string; project: string; title: string; lastPrompt: string; toolNames: string[]; messages: number; lastRole: string; tail: string };
+export type Digest = { id: string; project: string; title: string; lastPrompt: string; toolNames: string[]; messages: number; lastRole: string; tail: string; active?: boolean };
+
+// Run Haiku via the local `claude` CLI WITHOUT blocking the Node event loop. spawnSync used to freeze
+// the entire server (every request — including transcript loads) for the whole call; this returns a
+// promise so the server keeps serving while the label is computed.
+function runHaiku(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn("claude", ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "json"], { cwd: DIR }); }
+    catch { resolve(""); return; }
+    let out = "", done = false;
+    const finish = (v: string) => { if (!done) { done = true; clearTimeout(to); resolve(v); } };
+    const to = setTimeout(() => { try { child.kill(); } catch { /* gone */ } finish(out); }, 90000);
+    child.stdout?.on("data", (d) => { out += d; if (out.length > 8 * 1024 * 1024) finish(out); });
+    child.on("error", () => finish(""));
+    child.on("close", () => finish(out));
+  });
+}
 
 function readCache(): Record<string, Entry> {
   try { return JSON.parse(fs.readFileSync(CACHE, "utf8")); } catch { return {}; }
@@ -28,12 +45,15 @@ export function getEnrichment(): Record<string, Entry> { return readCache(); }
 
 function needs(d: Digest, cache: Record<string, Entry>): boolean {
   const e = cache[d.id];
-  return !e || !e.goal || e.review === undefined || Math.abs(e.messages - d.messages) > 8;
+  if (!e || !e.goal || e.review === undefined) return true; // never labelled → do it once
+  // Re-label only a SETTLED session that grew a LOT. Never re-run on an active session every few
+  // messages — that was a constant Haiku spend and a repeated server stall on every live turn.
+  return !d.active && Math.abs(e.messages - d.messages) > 30;
 }
 
 // Summarize un-enriched sessions in one Haiku call, into Project > Goal > Task. Goals are reused
 // within a project for consistency. Only fills MISSING entries — curated edits are never clobbered.
-export function enrich(digests: Digest[]): Record<string, Entry> {
+export async function enrich(digests: Digest[]): Promise<Record<string, Entry>> {
   const cache = readCache();
   const todo = digests.filter((d) => needs(d, cache)).slice(0, 16);
   if (!todo.length) return cache;
@@ -63,10 +83,7 @@ export function enrich(digests: Digest[]): Record<string, Entry> {
 
   try {
     fs.mkdirSync(DIR, { recursive: true });
-    const res = spawnSync("claude", ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "json"], {
-      cwd: DIR, encoding: "utf8", timeout: 90000, maxBuffer: 8 * 1024 * 1024,
-    });
-    let text = res.stdout || "";
+    let text = await runHaiku(prompt);
     try { text = JSON.parse(text).result || text; } catch { /* raw */ }
     const m = text.match(/\[[\s\S]*\]/);
     if (m) {

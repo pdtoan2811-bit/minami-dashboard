@@ -5,7 +5,7 @@
 // the Claude Code terminal output.
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
-import { useState, type ReactNode } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 
 /* ---------------- inline ---------------- */
 // Order matters: code first (so its contents aren't re-parsed), then links, bold, italic, strike.
@@ -17,7 +17,7 @@ function inline(text: string, keyBase = ""): ReactNode[] {
     if (m.index > last) nodes.push(text.slice(last, m.index));
     const tok = m[0];
     const key = `${keyBase}i${k++}`;
-    if (tok.startsWith("`")) nodes.push(<code key={key} className="rounded bg-white/10 px-1 py-[1px] font-mono text-[0.85em] text-[#e8b3c0]">{tok.slice(1, -1)}</code>);
+    if (tok.startsWith("`")) nodes.push(<code key={key} className="rounded bg-white/10 px-1 py-[1px] font-mono text-[0.88em] text-[#e8b3c0]">{tok.slice(1, -1)}</code>);
     else if (tok.startsWith("[")) {
       const mm = tok.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/)!;
       nodes.push(<a key={key} href={mm[2]} target="_blank" rel="noreferrer" className="text-[var(--sakura)] underline decoration-[var(--sakura)]/40 underline-offset-2 hover:decoration-[var(--sakura)]">{mm[1]}</a>);
@@ -33,9 +33,11 @@ function inline(text: string, keyBase = ""): ReactNode[] {
 /* ---------------- code block ---------------- */
 function CodeBlock({ lang, code }: { lang?: string; code: string }) {
   const [copied, setCopied] = useState(false);
-  let html = "";
-  try { html = lang && hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value; }
-  catch { html = code.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string)); }
+  // Highlighting is expensive; memoize so a re-render (poll, sibling streaming) doesn't re-run it.
+  const html = useMemo(() => {
+    try { return lang && hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value; }
+    catch { return code.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string)); }
+  }, [code, lang]);
   const copy = () => { navigator.clipboard?.writeText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }).catch(() => {}); };
   return (
     <div className="group/code my-1 overflow-hidden rounded-xl border border-white/10 bg-[#0d1117]">
@@ -43,7 +45,7 @@ function CodeBlock({ lang, code }: { lang?: string; code: string }) {
         <span className="font-mono text-[10px] uppercase tracking-wider text-neutral-500">{lang || "code"}</span>
         <button onClick={copy} className="rounded px-1.5 py-0.5 text-[10px] text-neutral-500 opacity-0 transition-all hover:bg-white/10 hover:text-neutral-300 group-hover/code:opacity-100">{copied ? "copied" : "copy"}</button>
       </div>
-      <pre className="hljs overflow-x-auto bg-transparent p-3 text-[12.5px] leading-relaxed"><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
+      <pre className="hljs overflow-x-auto bg-transparent p-3 text-[13px] leading-[1.62]"><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
     </div>
   );
 }
@@ -77,7 +79,7 @@ function renderProse(src: string, keyBase: string): ReactNode {
   const flushList = () => {
     if (!list) return;
     const L = list; list = null;
-    const cls = "my-1 ml-4 space-y-0.5 " + (L.ordered ? "list-decimal" : "list-disc") + " marker:text-neutral-600";
+    const cls = "my-1.5 ml-4 space-y-1 " + (L.ordered ? "list-decimal" : "list-disc") + " marker:text-neutral-600";
     out.push(
       <ul key={`${keyBase}l${out.length}`} className={L.ordered ? cls.replace("list-disc", "") : cls} style={L.ordered ? { listStyleType: "decimal" } : undefined}>
         {L.items.map((it, i) => it.task
@@ -114,15 +116,15 @@ function renderProse(src: string, keyBase: string): ReactNode {
     if (bq) { out.push(<blockquote key={`${keyBase}q${out.length}`} className="my-1 border-l-2 border-[var(--sakura)]/50 pl-3 text-neutral-300">{inline(bq[1], `${keyBase}q${out.length}`)}</blockquote>); continue; }
     const h = t.match(/^(#{1,4})\s+(.*)/);
     if (h) { const size = h[1].length <= 1 ? "text-[15px]" : "text-[13px]"; out.push(<p key={`${keyBase}hd${out.length}`} className={`pt-0.5 font-semibold text-white ${size}`}>{inline(h[2], `${keyBase}hd${out.length}`)}</p>); continue; }
-    out.push(<p key={`${keyBase}p${out.length}`} className="leading-relaxed [overflow-wrap:anywhere]">{inline(t, `${keyBase}p${out.length}`)}</p>);
+    out.push(<p key={`${keyBase}p${out.length}`} className="leading-[1.72] [overflow-wrap:anywhere]">{inline(t, `${keyBase}p${out.length}`)}</p>);
   }
   flushList();
-  return <div className="space-y-1.5">{out}</div>;
+  return <div className="space-y-2">{out}</div>;
 }
 
-export default function Markdown({ text }: { text: string }) {
+function Markdown({ text }: { text: string }) {
   // Split on fenced code first so prose parsing never touches code contents.
-  const blocks = text.split(/(```[\s\S]*?```)/g).filter(Boolean);
+  const blocks = useMemo(() => text.split(/(```[\s\S]*?```)/g).filter(Boolean), [text]);
   return (
     <div className="space-y-2">
       {blocks.map((b, i) => {
@@ -136,3 +138,7 @@ export default function Markdown({ text }: { text: string }) {
     </div>
   );
 }
+
+// Messages are immutable once rendered (only the streaming one changes), so memo on `text` stops every
+// other bubble from re-rendering on each poll or streamed token — the biggest win for long transcripts.
+export default memo(Markdown);

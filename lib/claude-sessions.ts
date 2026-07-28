@@ -10,6 +10,21 @@ import { eventCost } from "./routing"; // single source of truth for model price
 
 const PROJECTS = path.join(os.homedir(), ".claude", "projects");
 
+// Read only the last `maxBytes` of a file (dropping the partial leading line), so opening a huge
+// transcript doesn't mean reading/parsing megabytes we'll throw away — we only render the last turns.
+const TAIL_BYTES = 1_500_000;
+function readTail(file: string, size: number, maxBytes = TAIL_BYTES): string {
+  if (size <= maxBytes) return fs.readFileSync(file, "utf8");
+  const fd = fs.openSync(file, "r");
+  try {
+    const buf = Buffer.allocUnsafe(maxBytes);
+    const read = fs.readSync(fd, buf, 0, maxBytes, size - maxBytes);
+    const s = buf.toString("utf8", 0, read);
+    const nl = s.indexOf("\n"); // the first line is probably truncated — drop it
+    return nl >= 0 ? s.slice(nl + 1) : s;
+  } finally { fs.closeSync(fd); }
+}
+
 // Turn a raw first-prompt into a meaningful title — strip known preambles (Minami's persona prompt,
 // the compaction prompt, local-command dumps) and surface the actual topic.
 function cleanTitle(raw: string): string {
@@ -57,14 +72,44 @@ export type SessionMeta = {
 
 type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string };
 
-const cache = new Map<string, { mtime: number; meta: SessionMeta }>();
+// Metadata cache, keyed by file + mtime. Kept on globalThis so a Next dev hot-reload doesn't wipe it,
+// and mirrored to disk so a fresh server launch doesn't have to re-read+parse every (often huge) JSONL
+// just to build the grid — that cold read was ~9s and blocked the whole UI from rendering.
+const cache: Map<string, { mtime: number; meta: SessionMeta }> = ((globalThis as any).__minamiMetaCache ||= new Map());
+const CACHE_DIR = path.join(os.homedir(), ".minami-bento");
+const META_CACHE_FILE = path.join(CACHE_DIR, "meta-cache.json");
+let cacheDirty = false;
+function loadDiskCache(): void {
+  const g = globalThis as any;
+  if (g.__minamiMetaCacheLoaded) return;
+  g.__minamiMetaCacheLoaded = true;
+  try {
+    const obj = JSON.parse(fs.readFileSync(META_CACHE_FILE, "utf8")) as Record<string, { mtime: number; meta: SessionMeta }>;
+    for (const [f, v] of Object.entries(obj)) if (!cache.has(f)) cache.set(f, v);
+  } catch { /* no cache file yet — first run */ }
+}
+function saveDiskCache(): void {
+  if (!cacheDirty) return;
+  cacheDirty = false;
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    const obj: Record<string, { mtime: number; meta: SessionMeta }> = {};
+    for (const [f, v] of cache) obj[f] = v;
+    fs.writeFileSync(META_CACHE_FILE, JSON.stringify(obj));
+  } catch { /* best effort */ }
+}
 
-function summarize(file: string, id: string): SessionMeta {
+function summarize(file: string, id: string, raw?: string): SessionMeta {
+  // Serve an unchanged file from cache — transcripts are polled every couple seconds and reparsing a
+  // multi-MB JSONL each time is the main source of lag. `active` is time-derived, so recompute it.
+  const mtime = fs.statSync(file).mtimeMs;
+  const cached = cache.get(file);
+  if (cached && cached.mtime === mtime) return { ...cached.meta, active: Date.now() - cached.meta.lastActivity < 120000 };
   let title = "", lastPrompt = "", model = "", cwd = "", gitBranch = "", firstUser = "", lastText = "", lastRole = "";
   let tin = 0, tout = 0, cost = 0, messages = 0, tools = 0, lastTs = 0;
   const toolSet = new Set<string>();
-  const raw = fs.readFileSync(file, "utf8");
-  for (const line of raw.split("\n")) {
+  const data = raw ?? fs.readFileSync(file, "utf8");
+  for (const line of data.split("\n")) {
     if (!line.trim()) continue;
     let r: Row;
     try { r = JSON.parse(line); } catch { continue; }
@@ -100,9 +145,9 @@ function summarize(file: string, id: string): SessionMeta {
     }
   }
   const project = cwd ? cwd.split("/").filter(Boolean).pop() || cwd : (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
-  const lastActivity = Math.max(lastTs, fs.statSync(file).mtimeMs);
+  const lastActivity = Math.max(lastTs, mtime);
   const derived = title || cleanTitle(lastPrompt) || cleanTitle(firstUser) || project;
-  return {
+  const meta: SessionMeta = {
     id, project, cwd, gitBranch,
     title: derived.slice(0, 80),
     lastPrompt: (cleanTitle(lastPrompt) || cleanTitle(firstUser)).slice(0, 140),
@@ -112,9 +157,13 @@ function summarize(file: string, id: string): SessionMeta {
     lastRole, tail: lastText.replace(/\s+/g, " ").slice(0, 200),
     lastActivity, active: Date.now() - lastActivity < 120000,
   };
+  cache.set(file, { mtime, meta });
+  cacheDirty = true;
+  return meta;
 }
 
 export function listSessions(): SessionMeta[] {
+  loadDiskCache(); // hydrate the mtime→meta cache from disk so a cold launch skips re-reading everything
   let dirs: string[];
   try { dirs = fs.readdirSync(PROJECTS); } catch { return []; }
   const out: SessionMeta[] = [];
@@ -124,18 +173,17 @@ export function listSessions(): SessionMeta[] {
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
     for (const f of files) {
       const file = path.join(dir, f);
+      const id = f.replace(/\.jsonl$/, "");
+      idIndex.set(id, file); // free id→path index for getSession()'s hot polling path
       try {
-        const mtime = fs.statSync(file).mtimeMs;
-        const c = cache.get(file);
-        if (c && c.mtime === mtime) { out.push(c.meta); continue; }
-        const meta = summarize(file, f.replace(/\.jsonl$/, ""));
+        const meta = summarize(file, id); // cache-aware: reads the file only when changed
         if (meta.messages === 0) continue;
         if (meta.cwd.includes(ENRICH_MARKER)) continue; // hide the summarizer's own sessions
-        cache.set(file, { mtime, meta });
         out.push(meta);
       } catch { /* skip unreadable */ }
     }
   }
+  saveDiskCache(); // persist any newly-parsed files so the next launch is warm
   // Merge the semantic layer (meaningful task title + topic) from the enrichment cache.
   const enr = getEnrichment();
   for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; m.review = e.review; } }
@@ -144,19 +192,79 @@ export function listSessions(): SessionMeta[] {
 
 export type Turn = { role: "user" | "assistant"; text: string; tools: { name: string; input: any }[]; ts: number; model?: string };
 
+// Parsed transcripts, cached by file mtime — the chat panel polls this every couple seconds, so an
+// unchanged (often huge) transcript must not be re-read or re-parsed each time. Kept on globalThis (dev
+// hot-reload survives) AND mirrored to disk (a `bin/serve.sh` restart survives) — same pattern as the
+// meta cache above. Before this, a restart meant every open transcript re-tailed + re-parsed from
+// scratch, which is exactly what "loading transcript takes forever after a reload" was.
+const turnsCache: Map<string, { mtime: number; turns: Turn[] }> = ((globalThis as any).__minamiTurnsCache ||= new Map());
+const TURNS_CACHE_FILE = path.join(CACHE_DIR, "turns-cache.json");
+const TURNS_CACHE_MAX = 60; // matches the 60-tile cap listSessions() returns — no point caching more
+let turnsCacheDirty = false;
+function loadTurnsDiskCache(): void {
+  const g = globalThis as any;
+  if (g.__minamiTurnsCacheLoaded) return;
+  g.__minamiTurnsCacheLoaded = true;
+  try {
+    const obj = JSON.parse(fs.readFileSync(TURNS_CACHE_FILE, "utf8")) as Record<string, { mtime: number; turns: Turn[] }>;
+    for (const [f, v] of Object.entries(obj)) if (!turnsCache.has(f)) turnsCache.set(f, v);
+  } catch { /* no cache file yet — first run */ }
+}
+function saveTurnsDiskCache(): void {
+  if (!turnsCacheDirty) return;
+  turnsCacheDirty = false;
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    const obj: Record<string, { mtime: number; turns: Turn[] }> = {};
+    for (const [f, v] of turnsCache) obj[f] = v;
+    fs.writeFileSync(TURNS_CACHE_FILE, JSON.stringify(obj));
+  } catch { /* best effort */ }
+}
+// Map preserves insertion order — delete+reinsert moves an entry to "most recently used" and lets us
+// evict the oldest once we're over the cap, so a long-lived server can't grow this file without bound
+// (a full transcript tail can be hundreds of KB).
+function touchTurnsLRU(file: string, entry: { mtime: number; turns: Turn[] }): void {
+  turnsCache.delete(file);
+  turnsCache.set(file, entry);
+  while (turnsCache.size > TURNS_CACHE_MAX) { const k = turnsCache.keys().next().value; if (!k) break; turnsCache.delete(k); }
+}
+
+// id → file path index, built as a side effect of listSessions()'s directory walk (which already scans
+// everything) so getSession()'s hot polling path (every ~2.5s per open chat pane) doesn't have to
+// re-scan all project dirs with fs.existsSync just to find a file it already found last time.
+const idIndex: Map<string, string> = ((globalThis as any).__minamiIdIndex ||= new Map());
+
 export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[] } {
   if (!/^[a-zA-Z0-9._-]+$/.test(id)) return { meta: null, turns: [] };
-  let found = "";
-  try {
-    for (const d of fs.readdirSync(PROJECTS)) {
-      const file = path.join(PROJECTS, d, id + ".jsonl");
-      if (fs.existsSync(file)) { found = file; break; }
-    }
-  } catch { /* none */ }
+  loadDiskCache();
+  loadTurnsDiskCache();
+  let found = idIndex.get(id) || "";
+  if (found && !fs.existsSync(found)) found = ""; // stale (file moved/deleted) — fall back to a real scan
+  if (!found) {
+    try {
+      for (const d of fs.readdirSync(PROJECTS)) {
+        const file = path.join(PROJECTS, d, id + ".jsonl");
+        if (fs.existsSync(file)) { found = file; break; }
+      }
+    } catch { /* none */ }
+    if (found) idIndex.set(id, found);
+  }
   if (!found) return { meta: null, turns: [] };
-  const meta = summarize(found, id);
+  const st = fs.statSync(found);
+  const mtime = st.mtimeMs;
+  // Meta (token/cost totals) needs the whole file and would defeat the point of tailing — but the chat
+  // panel renders titles from the sessions list, not from here, and listSessions keeps meta warm. So
+  // serve meta from cache only (best-effort) and never full-read a huge file just to attach it.
+  const meta = cache.get(found)?.meta ?? null;
+  const tc = turnsCache.get(found);
+  // Cache hit — bump LRU order in memory only. No disk write here: this is the path every 2.5s poll
+  // takes when nothing changed, and rewriting the cache file on every idle tick would just trade one
+  // kind of thrashing for another.
+  if (tc && tc.mtime === mtime) { touchTurnsLRU(found, tc); return { meta, turns: tc.turns }; }
+  // Turns only need the file's tail — parse that, which keeps opening a long chat fast on first view.
+  const raw = readTail(found, st.size);
   const turns: Turn[] = [];
-  for (const line of fs.readFileSync(found, "utf8").split("\n")) {
+  for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let r: Row;
     try { r = JSON.parse(line); } catch { continue; }
@@ -175,5 +283,9 @@ export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[
       turns.push({ role: r.type, text: text.trim(), tools: toolz, ts: Date.parse(r.timestamp || "") || 0, model: r.message?.model });
     }
   }
-  return { meta, turns: turns.slice(-120) };
+  const sliced = turns.slice(-120);
+  touchTurnsLRU(found, { mtime, turns: sliced });
+  turnsCacheDirty = true;
+  saveTurnsDiskCache(); // only fires on an actual reparse (mtime changed), so this stays cheap
+  return { meta, turns: sliced };
 }

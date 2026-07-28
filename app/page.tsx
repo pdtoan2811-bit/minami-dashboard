@@ -2,15 +2,17 @@
 
 import { Nav } from "@/components/Nav";
 import { useSetting } from "@/lib/use-settings";
-import { useAgent, type AgentMode } from "@/lib/use-agent";
+import { useAgent, toolCategory, activityLabel, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory } from "@/lib/use-agent";
 import Markdown from "@/components/Markdown";
 import FolderPicker from "@/components/FolderPicker";
 import AttachBar from "@/components/AttachBar";
 import BrandIcon, { type Icon } from "@/components/BrandIcon";
 import AskCard from "@/components/AskCard";
+import Composer from "@/components/Composer";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bot, FileText, Globe, HelpCircle, ListChecks, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -19,7 +21,76 @@ type SessionMeta = {
   task?: string; goal?: string; lastRole?: string; tail?: string; review?: boolean;
 };
 type Turn = { role: "user" | "assistant"; text: string; tools: { name: string; input: unknown }[]; ts: number; model?: string };
-type RenderTurn = { role: "user" | "assistant"; text: string; tools: { name: string; input: unknown }[]; streaming?: boolean };
+// Live turns carry per-tool completion state (id/done/ok/ms) that the on-disk transcript doesn't have.
+type RenderTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
+
+// A pane = one chat column. `key` is a stable id (survives refresh, so it can reattach to its live
+// server session); `sid` is the Claude session id it's showing ("" for a brand-new blank chat).
+type Pane = { key: string; sid: string };
+let paneSeq = 0;
+const mkPane = (sid = ""): Pane => ({ key: `pane-${Date.now().toString(36)}-${paneSeq++}-${Math.random().toString(36).slice(2, 7)}`, sid });
+const asPanes = (v: unknown): Pane[] => Array.isArray(v)
+  ? v.map((x) => (typeof x === "string" ? mkPane(x) : (x && typeof x === "object" && "key" in (x as object) ? (x as Pane) : mkPane())))
+  : [];
+
+// Client-side transcript cache. Switching between projects remounts the chat columns; without this,
+// each switch re-fetches and flashes "Loading transcript…" again. It's ALSO mirrored to sessionStorage
+// so a hard reload (which re-executes this module from scratch, wiping the plain in-memory Map) still
+// paints instantly from what was cached a moment ago, instead of a cold fetch+parse for every open pane.
+// sessionStorage (not localStorage) deliberately — this cache is scoped to "this tab's lifetime": it
+// should survive a reload but not linger forever across days like a stale localStorage entry would.
+type Detail = { meta: SessionMeta | null; turns: Turn[] };
+const TS_PREFIX = "bento:t:";
+const TS_ORDER_KEY = "bento:t:__order";
+const TS_MAX = 24;
+const transcriptCache = new Map<string, Detail>();
+
+// Trim what actually gets persisted (the in-memory copy stays full-fidelity for normal in-tab reuse).
+// Tool inputs can carry a whole file's contents (Write/Edit) — cap those, and cap history depth, so a
+// handful of verbose sessions can't blow sessionStorage's ~5-10MB quota.
+function trimInput(input: unknown): unknown {
+  try {
+    const s = JSON.stringify(input);
+    return s.length <= 2000 ? input : { _truncated: true, preview: s.slice(0, 2000) };
+  } catch { return null; }
+}
+function toStorable(d: Detail): Detail {
+  return { meta: d.meta, turns: d.turns.slice(-40).map((t) => ({ ...t, tools: t.tools.map((tc) => ({ name: tc.name, input: trimInput(tc.input) })) })) };
+}
+function loadOrder(): string[] {
+  try { const s = sessionStorage.getItem(TS_ORDER_KEY); return s ? (JSON.parse(s) as string[]) : []; } catch { return []; }
+}
+function persistTranscript(id: string, d: Detail) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(TS_PREFIX + id, JSON.stringify(toStorable(d)));
+    sessionStorage.setItem(TS_ORDER_KEY, JSON.stringify([...transcriptCache.keys()]));
+  } catch {
+    // Quota exceeded — drop the oldest half of what's persisted and retry once; if it still fails,
+    // this tab just keeps serving from the in-memory cache (worst case reverts to a cold reload).
+    try {
+      const order = [...transcriptCache.keys()];
+      for (const old of order.slice(0, Math.ceil(order.length / 2))) sessionStorage.removeItem(TS_PREFIX + old);
+      sessionStorage.setItem(TS_PREFIX + id, JSON.stringify(toStorable(d)));
+      sessionStorage.setItem(TS_ORDER_KEY, JSON.stringify([...transcriptCache.keys()]));
+    } catch { /* give up silently */ }
+  }
+}
+const cacheTranscript = (id: string, d: Detail) => {
+  transcriptCache.set(id, d);
+  if (transcriptCache.size > TS_MAX) {
+    const k = transcriptCache.keys().next().value;
+    if (k) { transcriptCache.delete(k); if (typeof window !== "undefined") { try { sessionStorage.removeItem(TS_PREFIX + k); } catch { /* ignore */ } } }
+  }
+  persistTranscript(id, d);
+};
+// Hydrate once, on first module evaluation in the browser (i.e. right as the (re)loaded page boots) —
+// seeds the in-memory cache so the very first render after a reload already has data to paint.
+if (typeof window !== "undefined") {
+  for (const id of loadOrder()) {
+    try { const raw = sessionStorage.getItem(TS_PREFIX + id); if (raw) transcriptCache.set(id, JSON.parse(raw) as Detail); } catch { /* corrupt entry — skip it */ }
+  }
+}
 
 const TIER_TINT: Record<string, string> = { Haiku: "#6cc4a1", Sonnet: "#e8859b", Opus: "#b98cff", Fable: "#f0a868" };
 const PALETTE = ["#e8859b", "#b98cff", "#6cc4a1", "#6c9cf5", "#f0a868", "#e86c8b"];
@@ -48,7 +119,7 @@ const ICON_OVERRIDES: Record<string, string> = {
 const ICON_KEYWORDS: [RegExp, string][] = [
   [/web|site|landing|www|link|url/, "link"],
   [/app|mobile|ios|android|flutter/, "mobile"],
-  [/data|analytic|metric|chart|stat|report/, "chart"],
+  [/data|analytic|metric|chart|stat|report|dashboard|bento|monitor|observab|telemetry/, "chart"],
   [/ai|\bml\b|model|intel|brain|agent|llm/, "bulb"],
   [/design|\bui\b|\bux\b|figma|brand|theme/, "color-palette"],
   [/doc|guide|note|wiki|content|blog|readme/, "notebook"],
@@ -78,8 +149,8 @@ function ProjectIcon({ name, big, active }: { name: string; big?: boolean; activ
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={`/icons/${icon}.webp`} alt="" draggable={false}
-        className="h-full w-full object-contain [transform-style:preserve-3d] drop-shadow-[0_10px_16px_rgba(0,0,0,0.5)]"
-        style={{ animation: `spin3d ${active ? 4.5 : 6.8}s ease-in-out infinite` }}
+        className="motion-icon h-full w-full object-contain [transform-style:preserve-3d] drop-shadow-[0_10px_16px_rgba(0,0,0,0.5)]"
+        style={active ? { animation: "spin3d 4.5s ease-in-out infinite" } : undefined}
       />
     </div>
   );
@@ -97,15 +168,119 @@ const MODE_HINT: Record<AgentMode, string> = {
   plan: "Plan only — propose changes without applying them",
   bypassPermissions: "⚠ Auto-approve EVERY tool with no prompt — including destructive ones",
 };
-// Inline "thinking" indicator: three bouncing dots + a live hint of what Claude is doing.
-function ThinkingLine({ label }: { label: string }) {
+const fmtElapsed = (ms: number) => {
+  const s = Math.floor(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+};
+// Per-phase accent, so the indicator's colour alone tells you thinking vs tool vs blocked-on-you.
+const PHASE_TINT: Record<ActivityPhase, string> = {
+  idle: "#6b7280", thinking: "var(--sakura)", responding: "#6c9cf5", tool: "#f0a868",
+  awaiting: "#4ade80", retrying: "#ef7c7c", compacting: "#a78bfa",
+};
+// Per-tool-category accent, layered on top of PHASE_TINT: while the phase is `tool`, the indicator
+// takes the color of the SPECIFIC kind of work — reading vs writing vs running a command vs a
+// subagent — instead of one flat orange for every tool. Same map drives the chat panel's tool chips,
+// the per-call transcript block, AND (since it's the same ActivityLine component) the bento tile's
+// live-activity dot, so "what's this box actually doing" reads the same everywhere it shows up.
+const TOOL_TINT: Record<ToolCategory, string> = {
+  read: "#6c9cf5", write: "#f0a868", exec: "#e8859b", search: "#6cc4a1", web: "#4dd0e1",
+  task: "#b98cff", plan: "#4ade80", ask: "#e8859b", skill: "#f0a868", mcp: "#b98cff", other: "#9ca3af",
+};
+const TOOL_ICON: Record<ToolCategory, LucideIcon> = {
+  read: FileText, write: Pencil, exec: SquareTerminal, search: Search, web: Globe,
+  task: Bot, plan: ListChecks, ask: HelpCircle, skill: Puzzle, mcp: Puzzle, other: Wrench,
+};
+
+/**
+ * The live activity indicator: bouncing dots + what Claude is doing + how long it's been doing it.
+ *
+ * Everything shown here comes from the server-derived ActivityState, so it stays truthful across
+ * parallel tool calls, subagents, retries and refreshes. The elapsed counter is the important part —
+ * during a silent 90s Bash the label doesn't change, and without a ticking number the pane is
+ * indistinguishable from a hung one.
+ */
+function ActivityLine({ activity, elapsed, compact, busy, hideTime }: { activity: ActivityState; elapsed: number; compact?: boolean; busy?: boolean; hideTime?: boolean }) {
+  // `busy` without a phase shouldn't happen (the server always sets one), but if the two ever
+  // disagree, err toward animating: a silent blank line is the exact failure we're fixing.
+  const phase: ActivityPhase = activity.phase === "idle" && busy ? "thinking" : activity.phase;
+  if (phase === "idle") return null;
+  const label = activity.label || "working…";
+  const extras = activity.tools.filter((t) => !t.parentId && t.name !== "Task" && t.name !== "Agent");
+  // While a tool is running, color the whole line by the SPECIFIC kind of work — the same "own" tool
+  // (or, with none, the running subagent) that the label text itself names — instead of one flat
+  // "tool" orange for reads, writes, exec and everything else alike.
+  const activeCat: ToolCategory | null = phase === "tool"
+    ? (extras.length ? toolCategory(extras[extras.length - 1].name) : (activity.tasks.length ? "task" : null))
+    : null;
+  const tint = activeCat ? TOOL_TINT[activeCat] : PHASE_TINT[phase];
+  const Icon = activeCat ? TOOL_ICON[activeCat] : null;
+  const frozen = phase === "awaiting"; // nothing is moving — don't pretend otherwise
   return (
-    <span className="flex items-center gap-2 text-xs text-neutral-400">
-      <span className="flex gap-0.5">
-        {[0, 1, 2].map((i) => <span key={i} className="think-dot h-1.5 w-1.5 rounded-full" style={{ background: "var(--sakura)", animationDelay: `${i * 0.15}s` }} />)}
+    <span className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${compact ? "flex-nowrap text-[10px]" : "flex-wrap text-xs"} text-neutral-400 ${frozen ? "activity-idle" : ""}`}>
+      <span className="flex shrink-0 items-center gap-0.5">
+        {[0, 1, 2].map((i) => <span key={i} className={`think-dot ${compact ? "h-1 w-1" : "h-1.5 w-1.5"} rounded-full`} style={{ background: tint, animationDelay: `${i * 0.15}s` }} />)}
       </span>
-      <span className="italic">{label}</span>
+      {/* A small glyph naming the kind of work, chat-panel only — the tile stays dot+text so a tiny
+          tile never feels cluttered. */}
+      {Icon && !compact && <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />}
+      <span className="activity-label min-w-0 truncate italic" style={{ color: tint }}>{label}</span>
+      {!hideTime && <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-600">{fmtElapsed(elapsed)}</span>}
+      {/* Parallel tool calls: the label names one, so chip the rest instead of hiding them — each
+          tinted by its own category so read/write/exec/etc. are distinguishable at a glance. */}
+      {!compact && extras.length > 1 && (
+        <span className="flex flex-wrap gap-1">
+          {extras.slice(0, 4).map((t) => {
+            const c = toolCategory(t.name);
+            return <span key={t.id} className="rounded border px-1 py-px font-mono text-[9px]" style={{ borderColor: TOOL_TINT[c] + "45", color: TOOL_TINT[c] }}>{t.name}</span>;
+          })}
+          {extras.length > 4 && <span className="text-[9px] text-neutral-600">+{extras.length - 4}</span>}
+        </span>
+      )}
+      {/* Running subagents, with the inner tool they're on — otherwise a 3-minute Task is opaque. */}
+      {!compact && activity.tasks.map((k) => (
+        <span key={k.id} className="flex items-center gap-1 rounded-full border px-1.5 py-px text-[9px]" style={{ borderColor: TOOL_TINT.task + "45", color: TOOL_TINT.task }}>
+          <Bot className="h-2.5 w-2.5" strokeWidth={2.5} />
+          {k.agent || k.description}{k.lastTool ? ` · ${k.lastTool}` : ""}{k.toolUses ? ` · ${k.toolUses} tools` : ""}
+        </span>
+      ))}
     </span>
+  );
+}
+
+// Retries, auto-compactions and denials: brief, non-fatal, but they explain long silences.
+const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af" };
+function NoticeStrip({ notices }: { notices: { kind: string; text: string; at: number }[] }) {
+  if (!notices.length) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      {notices.map((n, i) => (
+        <span key={`${n.at}-${i}`} className="flex items-center gap-1.5 text-[10px]" style={{ color: NOTICE_TINT[n.kind] || "#9ca3af" }}>
+          <span className="h-1 w-1 rounded-full" style={{ background: "currentColor" }} />{n.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// Claude's reasoning summary. While it's the only thing on screen (a long think before any answer)
+// it stays open so you can watch the work happen; once the answer starts it folds away.
+function ThoughtBlock({ text, live }: { text: string; live: boolean }) {
+  const body = "border-l-2 pl-3 text-[13px] italic leading-relaxed text-neutral-500 [overflow-wrap:anywhere]";
+  if (live) {
+    return (
+      <div className={`mb-2 border-[var(--sakura)]/30 ${body}`}>
+        {text}
+        <span className="ml-0.5 inline-block h-3 w-[2px] animate-pulse align-middle" style={{ background: "var(--sakura)" }} />
+      </div>
+    );
+  }
+  return (
+    <details className="group/think mb-2">
+      <summary className="cursor-pointer select-none text-[11px] text-neutral-600 transition-colors hover:text-neutral-400">
+        <span className="mr-1 inline-block transition-transform group-open/think:rotate-90">›</span>thought process
+      </summary>
+      <div className={`mt-1 border-white/10 ${body}`}>{text}</div>
+    </details>
   );
 }
 
@@ -131,9 +306,12 @@ export default function BentoHome() {
   const [sortBy, setSortBy] = useState<"recent" | "busy" | "name">("recent");
   const [sel, setSel] = useState(0);
   const [project, setProject] = useState<string | null>(null);
-  const [panes, setPanes] = useState<string[]>([]);
+  const [panes, setPanes] = useState<Pane[]>([]);
   const [addMenu, setAddMenu] = useState(false); // "add a chat to the mix" picker
-  const [openPanesMap, setOpenPanesMap] = useSetting<Record<string, string[]>>("openPanes", {}); // remembered per topic
+  const [openPanesMap, setOpenPanesMap] = useSetting<Record<string, Pane[]>>("openPanes", {}); // remembered per topic
+  // The currently-open panel, persisted so a page refresh reopens it exactly (with its panes).
+  const [openPanel, setOpenPanel] = useSetting<{ name: string; cwd: string; topic: boolean; panes: Pane[] } | null>("openPanel", null);
+  const restoredRef = useRef(false);
   const [newTopic, setNewTopic] = useState<Project | null>(null); // ad-hoc topic opened via the folder picker
   const [picker, setPicker] = useState(false); // folder picker modal open
   const [techIcons, setTechIcons] = useState<Record<string, Icon>>({}); // brand icon SVGs
@@ -143,12 +321,31 @@ export default function BentoHome() {
   const [isDragging, setDragging] = useState(false);
   const enrichLock = useRef(false);
   const rounds = useRef(0);
+  const sessionsSig = useRef("");
 
   const loadSessions = useCallback(
-    () => fetch("/api/bento/sessions").then((r) => r.json()).then((d) => { setSessions(d.sessions || []); setLoaded(true); }).catch(() => setLoaded(true)),
+    () => fetch("/api/bento/sessions").then((r) => r.json()).then((d) => {
+      // Skip the state update (and the whole grid re-render) when nothing changed since the last poll.
+      const sig = JSON.stringify(d.sessions || []);
+      if (sig !== sessionsSig.current) { sessionsSig.current = sig; setSessions(d.sessions || []); }
+      setLoaded(true);
+    }).catch(() => setLoaded(true)),
     [],
   );
   useEffect(() => { let a = true; const t = () => { if (a) loadSessions(); }; t(); const iv = setInterval(t, 5000); return () => { a = false; clearInterval(iv); }; }, [loadSessions]);
+  // Live activity per session (what each running dashboard-driven session is doing right now) — polled
+  // fast so a tile can show "thinking… / running: … / reading X" live while a box works.
+  const [liveAct, setLiveAct] = useState<Record<string, { phase: string; label: string; busy: boolean; cwd: string }>>({});
+  const liveActSig = useRef("");
+  useEffect(() => {
+    let a = true;
+    const t = () => fetch("/api/agent/live").then((r) => r.json()).then((d) => {
+      if (!a) return;
+      const sig = JSON.stringify(d.activity || {});
+      if (sig !== liveActSig.current) { liveActSig.current = sig; setLiveAct(d.activity || {}); }
+    }).catch(() => {});
+    t(); const iv = setInterval(t, 1500); return () => { a = false; clearInterval(iv); };
+  }, []);
   useEffect(() => {
     if (!loaded || enrichLock.current || rounds.current >= 6) return;
     if (!sessions.some((s) => !s.task && !isTrivial(s))) return;
@@ -185,19 +382,51 @@ export default function BentoHome() {
     // Default: open the recent combination (up to 4 sessions active within the date filter). If the
     // user has customized which chats are open for this topic before, restore that instead.
     const recent = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity).slice(0, MAX_PANES).map((s) => s.id);
-    const remembered = (openPanesMap[p.name] || []).filter((id) => id === "" || p.sessions.some((s) => s.id === id));
-    const initial = remembered.length ? remembered.slice(0, MAX_PANES) : (recent.length ? recent : [""]);
+    // Keep every remembered pane (blank or an existing session). We deliberately don't drop panes whose
+    // session isn't in the current window/list — that used to silently discard a brand-new running chat
+    // on a project switch. A pane reattaches by session id, so a running one resumes streaming.
+    const remembered = asPanes(openPanesMap[p.name]);
+    const initial = remembered.length ? remembered.slice(0, MAX_PANES) : (recent.length ? recent.map((sid) => mkPane(sid)) : [mkPane()]);
     setNewTopic(null); setProject(p.name); setPanes(initial); setAddMenu(false);
   }, [openPanesMap]);
+  // Prefetch a project's likely-open transcripts on hover so clicking it paints instantly (the fetch +
+  // parse already happened). Each session is fetched once — the cache guard makes repeat hovers free.
+  const prefetchProject = useCallback((p: Project) => {
+    const ids = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity).slice(0, MAX_PANES).map((s) => s.id);
+    for (const id of ids) {
+      if (!id || transcriptCache.has(id)) continue;
+      fetch(`/api/bento/session/${id}`).then((r) => r.json()).then((d) => { if (d?.turns) cacheTranscript(id, d); }).catch(() => {});
+    }
+  }, []);
   const startTopic = (cwd: string, label?: string) => {
     const name = label || cwd.split("/").filter(Boolean).pop() || cwd;
     setPicker(false); setProject(null); setAddMenu(false);
     setNewTopic({ name, sessions: [], cwd, reqs: 0, tokens: 0, last: Date.now(), active: false, review: false, goals: [], latest: "", weight: 0 });
-    setPanes([""]); // one fresh blank chat in the chosen folder (or home, for a folderless CLI)
+    setPanes([mkPane()]); // one fresh blank chat in the chosen folder (or home, for a folderless CLI)
   };
-  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); };
-  // Remember the open set per topic so re-opening restores the same window layout.
-  useEffect(() => { if (project) setOpenPanesMap({ ...openPanesMap, [project]: panes }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [panes, project]);
+  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); };
+  // Remember the open panel + its layout so a refresh (or re-opening the topic) restores it exactly.
+  useEffect(() => {
+    const name = project || newTopic?.name || null;
+    if (!name) return;
+    const cwd = newTopic ? newTopic.cwd : (projects.find((p) => p.name === name)?.cwd || "");
+    // Functional update: merge into the LATEST map, never a stale closure — otherwise a project switch
+    // right after adding a pane would overwrite the just-persisted panes of the project we left.
+    setOpenPanesMap((prev) => ({ ...prev, [name]: panes }));
+    setOpenPanel({ name, cwd, topic: !!newTopic, panes });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panes, project, newTopic]);
+  // On first load, reopen whatever panel was open before a refresh (its ChatColumns then reattach to
+  // any still-running session). Runs once, after the persisted value has hydrated from localStorage.
+  useEffect(() => {
+    if (restoredRef.current || !openPanel) return;
+    restoredRef.current = true;
+    const op = openPanel;
+    if (op.topic) setNewTopic({ name: op.name, cwd: op.cwd, sessions: [], reqs: 0, tokens: 0, last: Date.now(), active: false, review: false, goals: [], latest: "", weight: 0 });
+    else setProject(op.name);
+    if (op.panes?.length) setPanes(asPanes(op.panes));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPanel]);
 
   // Brand/tech icons for the tiles: load the SVG set once, and batch-fetch each project's tech.
   useEffect(() => { loadTechIcons().then(setTechIcons); }, []);
@@ -268,7 +497,7 @@ export default function BentoHome() {
             </div>
           )
           : (
-            <div className={`grid auto-rows-[8.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
+            <div className={`grid auto-rows-[10.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
               {projects.map((p, i) => {
                 const r = p.weight / maxW;
                 const big = r >= 0.6, wide = !big && r >= 0.28;
@@ -282,8 +511,11 @@ export default function BentoHome() {
                   : age < 3 * 86400e3 ? { label: "active", tint: "#6c9cf5", pulse: false } : null;
                 const bright = activeSel || project === p.name || p.active || (p.review && age < 7 * 86400e3);
                 const dim = bright ? 1 : age < 86400e3 ? 0.9 : age < 3 * 86400e3 ? 0.72 : age < 7 * 86400e3 ? 0.56 : 0.42;
+                // What this project is doing right now, if any live dashboard run is in its folder. Match
+                // by cwd (not the session list) so a brand-new/trivial running session still shows.
+                const la = Object.values(liveAct).find((x) => x.busy && x.cwd === p.cwd);
                 return (
-                  <motion.button layout key={p.name} data-i={i} onMouseEnter={() => setSel(i)} onClick={() => openProject(p)}
+                  <motion.button layout key={p.name} data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => openProject(p)}
                     initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: dim, scale: 1 }} whileHover={{ y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}
                     style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)` }}
                     className={`group relative flex flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left backdrop-blur ${span} ${
@@ -295,17 +527,22 @@ export default function BentoHome() {
                       {status && <span className="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium" style={{ borderColor: status.tint + "55", color: status.tint, background: status.tint + "1e" }}>{status.pulse && <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: status.tint }} />}{status.label}</span>}
                     </div>
                     <p className={`relative mt-1.5 font-semibold tracking-tight ${big ? "text-xl" : "text-sm"}`}>{p.name}</p>
-                    {big && <p className="relative mt-0.5 line-clamp-1 text-xs text-neutral-400">↳ {p.latest}</p>}
-                    {(() => { const techs = attachMap[p.name]?.tech || []; const n = big ? 6 : 3; return techs.length > 0 && (
+                    {/* Live activity — the SAME hint (phase-tinted dots + tool/file label) as the chat panel. */}
+                    {la
+                      ? <div className="relative mt-0.5 min-w-0"><ActivityLine compact hideTime busy activity={{ phase: la.phase as ActivityPhase, label: la.label, elapsedMs: 0, tools: [], tasks: [] }} elapsed={0} /></div>
+                      : big && <p className="relative mt-0.5 line-clamp-1 text-xs text-neutral-400">↳ {p.latest}</p>}
+                    {/* Tech icons on every tile. Small tiles show a compact row; the tile height (auto-rows)
+                        was raised so this never clips the stats. */}
+                    {(() => { const techs = attachMap[p.name]?.tech || []; const n = big ? 6 : 4; return techs.length > 0 && (
                       <div className="relative mt-1.5 flex items-center gap-1.5">
-                        {techs.slice(0, n).map((s) => <BrandIcon key={s} slug={s} icons={techIcons} size={big ? 28 : 22} />)}
+                        {techs.slice(0, n).map((s) => <BrandIcon key={s} slug={s} icons={techIcons} size={big ? 28 : 20} />)}
                         {techs.length > n && <span className="text-[10px] text-neutral-500">+{techs.length - n}</span>}
                       </div>
                     ); })()}
-                    <div className="relative mt-auto flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-                      <span className={`font-semibold tabular-nums ${big ? "text-2xl" : "text-base"}`}>{short(p.reqs)}<span className="ml-1 text-[10px] font-normal text-neutral-500">req</span></span>
-                      <span className="text-[11px] tabular-nums text-neutral-500">{short(p.tokens)} tok</span>
-                      <span className="text-[11px] text-neutral-600">{p.sessions.length} chats</span>
+                    <div className="relative mt-auto flex flex-nowrap items-baseline gap-x-3 overflow-hidden">
+                      <span className={`shrink-0 font-semibold tabular-nums ${big ? "text-2xl" : "text-base"}`}>{short(p.reqs)}<span className="ml-1 text-[10px] font-normal text-neutral-500">req</span></span>
+                      <span className="shrink-0 text-[11px] tabular-nums text-neutral-500">{short(p.tokens)} tok</span>
+                      <span className="shrink-0 truncate text-[11px] text-neutral-600">{p.sessions.length} chats</span>
                     </div>
                   </motion.button>
                 );
@@ -329,22 +566,27 @@ export default function BentoHome() {
         {proj && (
           <>
             <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2.5">
-              <button onClick={closePanel} className="group flex items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
-                <ProjectIcon name={proj.name} /><span className="font-semibold">{proj.name}</span>
-              </button>
-              <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>
+              {/* Title, repo link (full + clickable) and tech icons — one scrollable row so a long repo
+                  path stays complete without ever pushing the count / add-chat / esc controls off-screen. */}
+              <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <button onClick={closePanel} className="group flex shrink-0 items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
+                  <ProjectIcon name={proj.name} /><span className="font-semibold">{proj.name}</span>
+                </button>
+                <AttachBar inline cwd={proj.cwd} project={proj.name} />
+              </div>
+              <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>
               {/* Add a chat to the mix: a blank one, or any of the topic's other sessions. */}
-              <div className="relative ml-auto">
+              <div className="relative shrink-0">
                 <button onClick={() => setAddMenu((v) => !v)} disabled={panes.length >= MAX_PANES}
                   className="rounded-lg border border-[var(--sakura)]/40 px-2.5 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋ add chat</button>
                 {addMenu && (
                   <>
                     <div className="fixed inset-0 z-10" onClick={() => setAddMenu(false)} />
                     <div className="absolute right-0 top-full z-20 mt-1 max-h-96 w-72 overflow-y-auto rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
-                      <button onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, ""] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"><span className="text-[var(--sakura)]">＋</span> New blank chat</button>
-                      {proj.sessions.some((s) => !panes.includes(s.id)) && <div className="my-1 border-t border-white/10" />}
-                      {[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.includes(s.id)).map((s) => (
-                        <button key={s.id} onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, s.id] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/10">
+                      <button onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane()] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"><span className="text-[var(--sakura)]">＋</span> New blank chat</button>
+                      {proj.sessions.some((s) => !panes.some((pn) => pn.sid === s.id)) && <div className="my-1 border-t border-white/10" />}
+                      {[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id)).map((s) => (
+                        <button key={s.id} onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane(s.id)] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/10">
                           <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: s.active ? "#4ade80" : TIER_TINT[s.tier] }} />
                           <span className="min-w-0 flex-1"><span className="block truncate text-xs">{titleOf(s)}</span><span className="block truncate text-[10px] text-neutral-500">{goalOf(s)} · {ago(s.lastActivity)}</span></span>
                         </button>
@@ -353,14 +595,14 @@ export default function BentoHome() {
                   </>
                 )}
               </div>
-              <button onClick={closePanel} className="rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
+              <button onClick={closePanel} className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
             </div>
-            <AttachBar cwd={proj.cwd} project={proj.name} />
             {/* Up to 4 chats in a 2×2 grid — like managing windows on a foldable. */}
             <div className="grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
-              {panes.map((id, idx) => (
-                <ChatColumn key={id || `new-${idx}`} sessionId={id} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools}
-                  onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? nid : x)))}
+              {panes.map((pane, idx) => (
+                <ChatColumn key={pane.key} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools}
+                  onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid } : x)))}
+                  onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
                   onClose={() => setPanes((p) => p.filter((_, j) => j !== idx))} />
               ))}
             </div>
@@ -373,26 +615,58 @@ export default function BentoHome() {
   );
 }
 
-function ChatColumn({ sessionId, sessions, cwd: cwdProp, idx, count, showTools, onPick, onClose }: {
-  sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; onPick: (id: string) => void; onClose: () => void;
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, onPick, onLive, onClose }: {
+  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
 }) {
-  const [detail, setDetail] = useState<{ meta: SessionMeta | null; turns: Turn[] } | null>(null);
+  // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
+  const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
   const [menu, setMenu] = useState(false);
-  const [input, setInput] = useState("");
+  // Key the agent by the SESSION (once it has an id), not the pane. That's what lets ANY pane showing a
+  // running session stream it live — and lets a pane reattach after a project switch / refresh — rather
+  // than streaming only in the exact pane that started it. Blank chats use their pane key until they get
+  // an id, at which point the server has aliased the session to `live:<id>` so nothing is orphaned.
+  const effectiveKey = sessionId ? "live:" + sessionId : paneKey;
+  // Draft text survives closing/reopening a topic or switching panes — it's persisted (like `perm`
+  // below) instead of plain useState, which used to reset to "" every time ChatColumn unmounted.
+  // Keyed by the same effectiveKey as the agent so the draft follows a session, not a pane slot.
+  const [input, setInput] = useSetting<string>("draft:" + effectiveKey, "");
   const [attachOpen, setAttachOpen] = useState(false); // file-attach picker
   const [planning, setPlanning] = useState(false); // Plan vs Code — default Code
   // Approval level in Code mode; persisted so your last choice (incl. bypass) becomes the default.
   const [perm, setPerm] = useSetting<Exclude<AgentMode, "plan">>("permMode", "default");
   const scrollRef = useRef<HTMLDivElement>(null);
-  const paneKey = useRef("pane-" + Math.random().toString(36).slice(2)).current;
-  const agent = useAgent(paneKey);
+  const agent = useAgent(effectiveKey);
   const isNew = !sessionId;
+  // On mount for an existing session, attach: if it's live on the server (whoever started it) we stream
+  // it; if not, the server replies `detached` and we fall back to the on-disk view. Runs once per mount,
+  // so a project switch / refresh reattaches to a still-running session and resumes its stream.
+  const attachedRef = useRef(false);
+  useEffect(() => {
+    if (attachedRef.current) return;
+    attachedRef.current = true;
+    if (sessionId) agent.attach(sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // When a blank chat goes live and gets a real session id, tell the parent so the pane (and its
+  // persisted layout) tracks it — the next refresh then reopens the real session, not a blank.
+  useEffect(() => { if (agent.sessionId && agent.sessionId !== sessionId) onLive(agent.sessionId); }, [agent.sessionId, sessionId, onLive]);
   // Poll the on-disk transcript for history — but stop once this pane is driving the session live
-  // (then the live turns are authoritative and the poll would just fight the stream).
+  // (then the live turns are authoritative and the poll would just fight the stream). Skip the state
+  // update when nothing changed, so an idle chat doesn't re-render every 2.5s.
+  const sigRef = useRef("");
   useEffect(() => {
     if (isNew || agent.live) return;
     let a = true;
-    const load = () => fetch(`/api/bento/session/${sessionId}`).then((r) => r.json()).then((d) => { if (a) setDetail(d); }).catch(() => {});
+    // Paint the cached copy immediately on (re)mount / session switch, then refresh in the background.
+    const cached = transcriptCache.get(sessionId);
+    if (cached) { setDetail(cached); sigRef.current = `${cached.turns.length}:${cached.turns.at(-1)?.text.length || 0}`; }
+    else { setDetail(null); sigRef.current = ""; }
+    const load = () => fetch(`/api/bento/session/${sessionId}`).then((r) => r.json()).then((d) => {
+      if (!a || !d) return;
+      const sig = `${d.turns?.length || 0}:${d.turns?.at(-1)?.text?.length || 0}`;
+      if (sig === sigRef.current) return;
+      sigRef.current = sig; cacheTranscript(sessionId, d); setDetail(d);
+    }).catch(() => {});
     load(); const iv = setInterval(load, 2500); return () => { a = false; clearInterval(iv); };
   }, [sessionId, isNew, agent.live]);
   const cur = sessions.find((s) => s.id === sessionId);
@@ -401,7 +675,12 @@ function ChatColumn({ sessionId, sessions, cwd: cwdProp, idx, count, showTools, 
   const fileTurns = detail?.turns || [];
   // Unified render model: on-disk history until this pane goes live, then the streamed turns.
   const source: RenderTurn[] = agent.live ? agent.turns : fileTurns;
-  const visible = showTools ? source : source.filter((t) => t.text.trim() || t.streaming);
+  const allVisible = showTools ? source : source.filter((t) => t.text.trim() || t.streaming);
+  // Lazy render: only the most recent `limit` messages (older revealed on demand). Rendering a long
+  // transcript's worth of Markdown up front is a big cost; the tail is what the user actually reads.
+  const [limit, setLimit] = useState(40);
+  const hiddenCount = Math.max(0, allVisible.length - limit);
+  const visible = hiddenCount ? allVisible.slice(-limit) : allVisible;
   const chats = [...sessions].sort((a, b) => b.lastActivity - a.lastActivity);
 
   const effectiveMode: AgentMode = planning ? "plan" : perm; // Plan overrides the approval level
@@ -449,26 +728,63 @@ function ChatColumn({ sessionId, sessions, cwd: cwdProp, idx, count, showTools, 
             <p className="mt-1 text-xs">Type below to start a live Claude Code session in <code className="text-[11px] text-neutral-400">{cwd || proj}</code>.</p>
           </div>
         ) : visible.length === 0 ? (
-          agent.busy ? <p className="text-sm text-neutral-500">Working…</p> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
-        ) : visible.map((t, i) => (
+          agent.busy ? <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} /> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
+        ) : (
+        <>
+        {hiddenCount > 0 && (
+          <button onClick={() => setLimit((n) => n + 60)} className="mx-auto block rounded-full border border-white/10 px-3 py-1 text-[11px] text-neutral-400 transition-colors hover:border-white/25 hover:text-neutral-200">
+            Show {Math.min(hiddenCount, 60)} earlier {hiddenCount === 1 ? "message" : "messages"}
+          </button>
+        )}
+        {visible.map((t, i) => (
           <div key={i} className={`flex flex-col ${t.role === "user" ? "items-end" : "items-start"}`}>
-            <span className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-neutral-600">{t.role === "user" ? "You" : "Claude"}</span>
+            <span className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">{t.role === "user" ? "You" : "Claude"}</span>
             <div className={t.role === "user"
-              ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[14px] leading-relaxed text-neutral-100 [overflow-wrap:anywhere]"
-              : "w-full text-[14px] leading-[1.72] text-neutral-100/90 [overflow-wrap:anywhere]"}>
+              ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[15px] leading-[1.65] text-neutral-100 [overflow-wrap:anywhere]"
+              : "w-full text-[15px] leading-[1.75] text-neutral-100/95 [overflow-wrap:anywhere]"}>
+              {t.role === "assistant" && t.thinking && <ThoughtBlock text={t.thinking} live={!!t.streaming && !t.text} />}
               {t.text && <Markdown text={t.text} />}
-              {t.streaming && (t.text
-                ? <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse align-middle" style={{ background: "var(--sakura)" }} />
-                : <ThinkingLine label={agent.activity?.label || (t.tools.length ? `using ${t.tools[t.tools.length - 1].name}` : "thinking")} />)}
-              {showTools && t.tools.map((tool, j) => (
-                <details key={j} className="mt-2 rounded-lg border border-white/[0.06] bg-black/40 px-2.5 py-1.5 text-xs">
-                  <summary className="cursor-pointer select-none text-neutral-400"><span className="mr-1.5 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-neutral-300">tool</span>{tool.name}</summary>
-                  <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
-                </details>
-              ))}
+              {/* Stays visible for the WHOLE turn. It used to collapse to a 2px caret as soon as any
+                  text existed, so a long tool run after the first paragraph looked like a dead pane. */}
+              {t.streaming && i === visible.length - 1 && (
+                <div className={`flex flex-col gap-1.5 ${t.text ? "mt-2" : ""}`}>
+                  <NoticeStrip notices={agent.notices} />
+                  <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
+                </div>
+              )}
+              {showTools && t.tools.map((tool, j) => {
+                const cat = toolCategory(tool.name);
+                const tint = TOOL_TINT[cat];
+                const Icon = TOOL_ICON[cat];
+                return (
+                  <details key={tool.id || j} className="mt-2 rounded-lg border-l-2 bg-black/40 px-2.5 py-1.5 text-xs" style={{ borderLeftColor: tint + "80", borderTop: "1px solid rgba(255,255,255,0.06)", borderRight: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                    <summary className="flex cursor-pointer select-none items-center gap-1.5 text-neutral-400">
+                      <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />
+                      <span className="rounded px-1.5 py-0.5 text-[10px] font-medium" style={{ background: tint + "1e", color: tint }}>{tool.name}</span>
+                      <span className="min-w-0 flex-1 truncate text-neutral-500">{activityLabel(tool.name, tool.input)}</span>
+                      {/* Per-call outcome: without it every tool in the transcript looks in-flight. */}
+                      {tool.done
+                        ? <span className="shrink-0 text-[10px]" style={{ color: tool.ok ? "#4ade80" : "#ef7c7c" }}>{tool.ok ? "✓" : "✗"}{tool.ms != null ? ` ${fmtElapsed(tool.ms)}` : ""}</span>
+                        : <span className="shrink-0 text-[10px] text-neutral-600">running…</span>}
+                    </summary>
+                    <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
+                  </details>
+                );
+              })}
             </div>
           </div>
         ))}
+        {/* Safety net: a turn is in flight but no visible turn is carrying the indicator (reattach
+            mid-turn before the snapshot lands, or the streaming turn scrolled out of the window).
+            The rule is that a busy pane ALWAYS animates somewhere. */}
+        {agent.busy && !(visible[visible.length - 1]?.streaming) && (
+          <div className="flex flex-col gap-1.5">
+            <NoticeStrip notices={agent.notices} />
+            <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
+          </div>
+        )}
+        </>
+        )}
       </div>
 
       {/* Claude's AskUserQuestion — a real choice UI. */}
@@ -511,21 +827,25 @@ function ChatColumn({ sessionId, sessions, cwd: cwdProp, idx, count, showTools, 
             })}
           </div>
           <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">
-            {agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
-              : agent.busy ? <><span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full" style={{ background: "var(--sakura)" }} /><span className="truncate">{agent.activity ? agent.activity.label : planning ? "planning…" : "working…"}</span></>
+            {agent.stopping ? <span className="flex items-center gap-1 text-red-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />stopping…</span>
+              : agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
+              : agent.busy || agent.activity.phase !== "idle" ? <ActivityLine compact busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
               : agent.live ? <><span className="h-1.5 w-1.5 rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</> : "ready"}
           </span>
         </div>
         <div className={`flex items-end gap-2 rounded-xl border bg-white/[0.03] px-3 py-2 transition-colors ${agent.busy ? "border-white/10 opacity-70" : "border-white/15 focus-within:border-[var(--sakura)]/60"}`}>
           <button onClick={() => setAttachOpen(true)} disabled={!cwd} title="Attach a file (inserts its path for Claude to read)"
             className="shrink-0 self-end rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
-          <textarea
-            value={input} onChange={(e) => setInput(e.target.value)} rows={1}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
-            placeholder={agent.busy ? "Claude is working…" : `Message Claude in ${proj}…`}
-            className="max-h-32 min-h-[20px] flex-1 resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-neutral-600" />
-          <button onClick={submit} disabled={!input.trim() || agent.busy || !cwd}
-            className="shrink-0 rounded-lg bg-[var(--sakura)] px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30">↵</button>
+          <Composer
+            value={input} onChange={setInput} onSubmit={submit}
+            placeholder={agent.busy ? "Claude is working…" : `Message Claude in ${proj}…`} />
+          {/* Same slot, two jobs: send when idle, Stop when a turn is in flight (incl. while it's
+              paused on a permission/AskUserQuestion prompt — busy stays true through that too). */}
+          <button onClick={agent.busy ? agent.stop : submit} disabled={agent.busy ? agent.stopping : (!input.trim() || !cwd)}
+            title={agent.busy ? "Stop this turn" : "Send"}
+            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition-opacity ${agent.busy ? "bg-red-500/90 text-white enabled:hover:opacity-90 disabled:opacity-50" : "bg-[var(--sakura)] text-white enabled:hover:opacity-90 disabled:opacity-30"}`}>
+            {agent.busy ? (agent.stopping ? "⋯" : "■") : "↵"}
+          </button>
         </div>
       </div>
       {attachOpen && <FolderPicker pickFiles start={cwd} onClose={() => setAttachOpen(false)}

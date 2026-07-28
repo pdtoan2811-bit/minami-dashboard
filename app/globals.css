@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* ── Typography ──────────────────────────────────────────────────────────────
+   A refined UI font stack (San Francisco on Apple, Segoe/Inter/Roboto elsewhere)
+   plus emoji fallbacks so 🌸 & co. render. Set as Tailwind's --font-sans so every
+   `font-sans` and the default body text picks it up. */
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, "Inter",
+    "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+}
+
 /* ── Theme ──────────────────────────────────────────────────────────────────
    Change the whole look from here. --sakura is the accent used across the UI
    (pills, focus rings, active tabs); --bento-bg is the app backdrop. Every
@@ -16,10 +25,27 @@
 
 html {
   color-scheme: light dark;
+  -webkit-text-size-adjust: 100%;
+  /* Crisp, evenly-weighted text on the dark UI: grayscale-antialias (subpixel looks heavy on dark),
+     enable kerning/ligatures, size the outline optically, and never synthesize a faux bold/italic. */
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-synthesis: none;
+  font-optical-sizing: auto;
+  font-feature-settings: "kern", "liga", "calt";
 }
 
 body {
   -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
+  line-height: 1.55;
+}
+
+/* Tabular figures for all metrics/counters so digits don't jitter as they update. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "kern";
 }
 
 @keyframes slidein {
@@ -63,6 +89,25 @@ body {
   40% { transform: translateY(-3px); opacity: 1; }
 }
 .think-dot { animation: thinkingBounce 1.1s ease-in-out infinite; }
+
+/* The activity label itself breathes, so the pane reads as alive even when the label is unchanged
+   for a long stretch (a 2-minute Bash) and the dots alone look decorative. */
+@keyframes activityShimmer {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.activity-label { animation: activityShimmer 2.4s ease-in-out infinite; }
+
+/* Blocked on the user: stop animating. A pulsing indicator next to "waiting for your approval"
+   implies work is happening when in fact nothing moves until they click. */
+.activity-idle .think-dot,
+.activity-idle .activity-label { animation: none; opacity: 1; }
+
+/* Idle icons are static; they tumble only while their card is hovered. Active boxes get an always-on
+   spin via an inline style (see ProjectIcon). This keeps compositing cheap when nothing's interacting. */
+.group:hover .motion-icon {
+  animation: spin3d 6.8s ease-in-out infinite;
+}
 
 /* continuous, seamless 3D tumble for the icons (0% == 100% → no snap) */
 @keyframes spin3d {

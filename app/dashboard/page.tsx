@@ -4,8 +4,9 @@ import { ModelRouting } from "@/components/ModelRouting";
 import { RoutingFlow } from "@/components/RoutingFlow";
 import { UsagePanel } from "@/components/UsagePanel";
 import { UsageHeatmap } from "@/components/UsageHeatmap";
+import { AccountsPanel } from "@/components/AccountsPanel";
 import { getPanels } from "@/lib/panels";
-import { Activity, CalendarDays, GitBranch, ListTodo, Radio, Route, Users, Zap } from "lucide-react";
+import { Activity, CalendarDays, GitBranch, KeyRound, ListTodo, Radio, Route, Users, Zap } from "lucide-react";
 
 export const dynamic = "force-dynamic"; // panels are read from disk at request time
 export const runtime = "nodejs";
@@ -64,6 +65,11 @@ export default function Page() {
       <Card>
         <CardHeader><Zap className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Usage · both machines</CardTitle></CardHeader>
         <CardContent><UsagePanel /></CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><KeyRound className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Accounts · token-slayer</CardTitle></CardHeader>
+        <CardContent><AccountsPanel /></CardContent>
       </Card>
 
       <Card>

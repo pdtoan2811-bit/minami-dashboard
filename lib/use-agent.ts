@@ -4,44 +4,63 @@
 // prompts, and — when a turn finishes — reconciles the transcript from the authoritative JSONL file
 // (so Markdown/tools render exactly as elsewhere and any streaming gap is healed).
 import { useCallback, useEffect, useRef, useState } from "react";
+import { IDLE_ACTIVITY, type ActivityState } from "./agent/labels";
 
-export type AgentTurn = { role: "user" | "assistant"; text: string; tools: { name: string; input: unknown }[]; streaming?: boolean };
+export type AgentTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
+export type AgentToolCall = { name: string; input: unknown; id?: string; done?: boolean; ok?: boolean; ms?: number };
 export type PermissionPrompt = { id: string; toolName: string; input: unknown } | null;
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] };
 export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
-export type Activity = { name: string; label: string } | null;
+export type Notice = { kind: string; text: string; at: number };
 
-const base = (p: string) => String(p).split("/").filter(Boolean).pop() || String(p);
-// A short human label for "what Claude is doing right now", from a tool call.
-export function activityLabel(name: string, input: unknown): string {
-  const o = (input || {}) as Record<string, unknown>;
-  if (name === "Bash") return o.command ? `run: ${String(o.command).replace(/\s+/g, " ").slice(0, 48)}` : "running a command";
-  if ((name === "Edit" || name === "Write" || name === "NotebookEdit") && o.file_path) return `editing ${base(String(o.file_path))}`;
-  if (name === "Read" && o.file_path) return `reading ${base(String(o.file_path))}`;
-  if (name === "Grep") return `searching “${String(o.pattern || "").slice(0, 30)}”`;
-  if (name === "Glob") return `globbing ${String(o.pattern || "")}`;
-  if (name === "WebFetch" || name === "WebSearch") return `browsing the web`;
-  if (name === "TodoWrite") return "updating the plan";
-  if (name === "Task") return "running a subagent";
-  return `using ${name}`;
-}
+export { activityLabel, toolCategory } from "./agent/labels";
+export type { ActivityState, ActivityPhase, ToolCategory } from "./agent/labels";
 
 export function useAgent(paneKey: string) {
   const [turns, setTurns] = useState<AgentTurn[]>([]);
   const [live, setLive] = useState(false); // has this pane started driving a session?
   const [busy, setBusy] = useState(false); // a turn is in flight
+  const [stopping, setStopping] = useState(false); // Stop was clicked; waiting for the turn to actually end
   const [pending, setPending] = useState<PermissionPrompt>(null);
   const [ask, setAsk] = useState<AskPrompt>(null); // Claude's AskUserQuestion prompt
-  const [activity, setActivity] = useState<Activity>(null); // what Claude is doing right now
+  // What Claude is doing right now. Derived on the SERVER (see lib/agent/labels.ts) and delivered with
+  // replace semantics, so a dropped event self-heals and a refresh mid-tool-call resumes correctly.
+  const [activity, setActivity] = useState<ActivityState>(IDLE_ACTIVITY);
+  const [notices, setNotices] = useState<Notice[]>([]); // retries, compactions, denials — non-fatal
+  // Wall-clock start of the current phase, translated out of the server's elapsedMs so our own ticking
+  // timer never depends on the two clocks agreeing.
+  const [phaseStart, setPhaseStart] = useState<number>(() => Date.now());
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detached, setDetached] = useState(false); // an attach found no live server session
   const esRef = useRef<EventSource | null>(null);
   const sentOnce = useRef(false); // pass `resume` only on the first send of a pane
   const sessionIdRef = useRef<string | null>(null);
+  const attachingRef = useRef(false); // this stream was opened by attach() (reconnect), not send()
 
   const closeStream = useCallback(() => { esRef.current?.close(); esRef.current = null; }, []);
   useEffect(() => closeStream, [closeStream]);
+
+  // Adopt a server activity state. The phase clock only restarts when the phase/label actually
+  // changes, so a burst of text deltas doesn't reset the visible "12s" counter.
+  const applyActivity = useCallback((a: ActivityState) => {
+    setActivity((prev) => {
+      if (prev.phase !== a.phase || prev.label !== a.label) setPhaseStart(Date.now() - (a.elapsedMs || 0));
+      return a;
+    });
+  }, []);
+
+  // One shared 1s tick drives the elapsed counter. It runs only while a phase is actually active, so
+  // an idle pane does no work — but while Claude is busy the UI is guaranteed to repaint every second
+  // even during a long silent tool call, which is what makes the indicator feel alive.
+  const [, forceTick] = useState(0);
+  const ticking = activity.phase !== "idle";
+  useEffect(() => {
+    if (!ticking) return;
+    const h = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(h);
+  }, [ticking]);
 
   // Reload the authoritative transcript from disk after a turn completes.
   const reconcile = useCallback(async () => {
@@ -50,14 +69,25 @@ export function useAgent(paneKey: string) {
     try {
       const d = await fetch(`/api/bento/session/${id}`).then((r) => r.json());
       if (Array.isArray(d?.turns)) {
-        setTurns(d.turns.map((t: AgentTurn) => ({ role: t.role, text: t.text, tools: t.tools || [] })));
+        setTurns((prev) => {
+          const fresh: AgentTurn[] = d.turns.map((t: AgentTurn) => ({ role: t.role, text: t.text, tools: t.tools || [] }));
+          // The JSONL has no reasoning, so carry the streamed thinking onto the turns it belongs to
+          // (aligned from the end) — otherwise it would vanish the moment a turn finished.
+          for (let i = 1; i <= Math.min(fresh.length, prev.length); i++) {
+            const f = fresh[fresh.length - i], p = prev[prev.length - i];
+            if (f.role === "assistant" && p?.role === "assistant" && p.thinking) f.thinking = p.thinking;
+          }
+          return fresh;
+        });
       }
     } catch { /* keep the streamed version */ }
   }, []);
 
-  const ensureStream = useCallback(() => {
+  // `attaching` marks a reconnect (page refresh) rather than a fresh send, so the server knows a
+  // missing session is worth reporting as `detached` instead of a race with the send that's coming.
+  const ensureStream = useCallback((attaching?: boolean) => {
     if (esRef.current) return;
-    const es = new EventSource(`/api/agent/stream?key=${encodeURIComponent(paneKey)}`);
+    const es = new EventSource(`/api/agent/stream?key=${encodeURIComponent(paneKey)}${attaching ? "&attach=1" : ""}`);
     es.onmessage = (e) => {
       let ev: any;
       try { ev = JSON.parse(e.data); } catch { return; }
@@ -68,61 +98,133 @@ export function useAgent(paneKey: string) {
           setTurns((prev) => {
             const next = prev.slice();
             for (let i = next.length - 1; i >= 0; i--) {
-              if (next[i].role === "assistant" && next[i].streaming) { next[i] = { ...next[i], text: next[i].text + ev.text }; break; }
+              if (next[i].role === "assistant" && next[i].streaming) { next[i] = { ...next[i], text: next[i].text + ev.text }; return next; }
+            }
+            // No open streaming turn (e.g. we just reattached between messages) — start one.
+            next.push({ role: "assistant", text: ev.text, tools: [], streaming: true });
+            return next;
+          });
+          break;
+        case "thinking":
+          setTurns((prev) => {
+            const next = prev.slice();
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].role === "assistant" && next[i].streaming) {
+                next[i] = { ...next[i], thinking: (next[i].thinking || "") + ev.text };
+                return next;
+              }
+            }
+            next.push({ role: "assistant", text: "", tools: [], streaming: true, thinking: ev.text });
+            return next;
+          });
+          break;
+        case "snapshot": {
+          // Only meaningful for a reconnect: on a fresh send() we've already staged the local turns, so
+          // the server's snapshot would clobber them. attach() flips this ref on.
+          if (!attachingRef.current) break;
+          attachingRef.current = false;
+          setDetached(false); setLive(true); setBusy(ev.busy);
+          if (ev.activity) applyActivity(ev.activity);
+          // Rebuild the transcript: on-disk history + the in-flight message (partial) still streaming.
+          const overlay: AgentTurn[] = ev.busy ? [{ role: "assistant", text: ev.partial || "", tools: [], streaming: true, thinking: ev.partialThinking || "" }] : [];
+          const sid = sessionIdRef.current;
+          if (sid) {
+            fetch(`/api/bento/session/${sid}`).then((r) => r.json()).then((d) => {
+              const seed: AgentTurn[] = Array.isArray(d?.turns) ? d.turns.map((t: AgentTurn) => ({ role: t.role, text: t.text, tools: t.tools || [] })) : [];
+              setTurns([...seed, ...overlay]);
+            }).catch(() => setTurns(overlay));
+          } else setTurns(overlay);
+          break;
+        }
+        case "detached":
+          // The server has no live session for this key (it ended or was reclaimed) — fall back to disk.
+          attachingRef.current = false;
+          setDetached(true); setLive(false); closeStream();
+          break;
+        case "activity":
+          applyActivity(ev.activity); break;
+        case "tool":
+          setTurns((prev) => {
+            const next = prev.slice();
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].role === "assistant" && next[i].streaming) {
+                // content_block_start already registered this id server-side; the assistant message
+                // then re-broadcasts it with real arguments. Update in place instead of duplicating.
+                const tools = next[i].tools.slice();
+                const at = ev.id ? tools.findIndex((t) => t.id === ev.id) : -1;
+                if (at >= 0) tools[at] = { ...tools[at], name: ev.name, input: ev.input };
+                else tools.push({ name: ev.name, input: ev.input, id: ev.id });
+                next[i] = { ...next[i], tools };
+                break;
+              }
             }
             return next;
           });
           break;
-        case "tool":
-          setActivity({ name: ev.name, label: activityLabel(ev.name, ev.input) });
-          setTurns((prev) => {
-            const next = prev.slice();
-            for (let i = next.length - 1; i >= 0; i--) {
-              if (next[i].role === "assistant" && next[i].streaming) { next[i] = { ...next[i], tools: [...next[i].tools, { name: ev.name, input: ev.input }] }; break; }
-            }
-            return next;
-          });
+        case "tool_end":
+          // Mark the call finished so the transcript can show ✓/✗ + duration rather than leaving every
+          // tool looking perpetually in-flight.
+          setTurns((prev) => prev.map((t) => {
+            if (!t.tools.some((x) => x.id === ev.id)) return t;
+            return { ...t, tools: t.tools.map((x) => (x.id === ev.id ? { ...x, done: true, ok: ev.ok, ms: ev.ms } : x)) };
+          }));
+          break;
+        case "notice":
+          setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now() }]);
           break;
         case "permission":
           setPending({ id: ev.id, toolName: ev.toolName, input: ev.input }); break;
         case "ask":
           setAsk({ id: ev.id, questions: ev.questions || [] }); break;
         case "busy":
-          setBusy(ev.busy); break;
+          setBusy(ev.busy); if (!ev.busy) setStopping(false); break;
         case "result":
-          setBusy(false); setPending(null); setAsk(null); setActivity(null);
+          setBusy(false); setStopping(false); setPending(null); setAsk(null); applyActivity(IDLE_ACTIVITY);
           setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)));
           reconcile();
           break;
         case "error":
-          setError(String(ev.message || "error")); setBusy(false); setActivity(null); break;
+          setError(String(ev.message || "error")); setBusy(false); setStopping(false); applyActivity(IDLE_ACTIVITY); break;
       }
     };
     es.onerror = () => { /* EventSource auto-reconnects */ };
     esRef.current = es;
-  }, [paneKey, reconcile]);
+  }, [paneKey, reconcile, closeStream, applyActivity]);
+
+  // Reattach to a still-running server session after a page refresh: open the stream and let the
+  // server's snapshot rebuild the transcript (history + in-flight message + any pending prompt). If no
+  // live session backs this pane, the server replies `detached` and we quietly fall back to disk.
+  const attach = useCallback((resumeId?: string) => {
+    if (resumeId && !sessionIdRef.current) { setSessionId(resumeId); sessionIdRef.current = resumeId; }
+    setError(null); setDetached(false); attachingRef.current = true; sentOnce.current = true;
+    ensureStream(true);
+  }, [ensureStream]);
 
   // Send a user message. `seed` = the existing (file) transcript to preserve when going live;
   // `resume` = the Claude session id to continue on the pane's first send.
   const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[] }) => {
     const clean = text.trim();
     if (!clean || !opts.cwd) return;
-    setError(null);
+    setError(null); setDetached(false); attachingRef.current = false;
     setTurns((prev) => {
       const base = live ? prev : (opts.seed || []);
       return [...base, { role: "user", text: clean, tools: [] }, { role: "assistant", text: "", tools: [], streaming: true }];
     });
-    setLive(true); setBusy(true); ensureStream();
+    // Start the indicator optimistically on the click, not on the server's first event — the POST +
+// SSE round-trip is otherwise a visible dead beat right after hitting send.
+    setLive(true); setBusy(true);
+    applyActivity({ phase: "thinking", label: "thinking…", elapsedMs: 0, tools: [], tasks: [] });
+    ensureStream();
     if (!sessionIdRef.current && opts.resume) { setSessionId(opts.resume); sessionIdRef.current = opts.resume; }
     const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: sentOnce.current ? undefined : opts.resume };
     sentOnce.current = true;
     try {
       const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
-      if (d?.error) { setError(d.error); setBusy(false); }
+      if (d?.error) { setError(d.error); setBusy(false); applyActivity(IDLE_ACTIVITY); }
       else if (d?.sessionId && !sessionIdRef.current) { setSessionId(d.sessionId); sessionIdRef.current = d.sessionId; }
-    } catch (e) { setError(String((e as Error)?.message || e)); setBusy(false); }
-  }, [paneKey, live, ensureStream]);
+    } catch (e) { setError(String((e as Error)?.message || e)); setBusy(false); applyActivity(IDLE_ACTIVITY); }
+  }, [paneKey, live, ensureStream, applyActivity]);
 
   const respond = useCallback(async (decision: "allow" | "deny") => {
     const p = pending; if (!p) return;
@@ -141,5 +243,20 @@ export function useAgent(paneKey: string) {
     try { await fetch("/api/agent/mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, mode }) }); } catch { /* ignore */ }
   }, [live, paneKey]);
 
-  return { turns, live, busy, pending, ask, activity, sessionId, error, send, respond, answerAsk, changeMode };
+  // Interrupt the in-flight turn (Stop button). `stopping` flips back to false once the server
+  // confirms via a `busy:false` / `result` / `error` event — not optimistically here — so the button
+  // stays disabled for the (usually sub-second) gap rather than flickering back to "stop" too early.
+  const stop = useCallback(async () => {
+    if (!live || !busy || stopping) return;
+    setStopping(true);
+    try {
+      const r = await fetch("/api/agent/stop", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey }) });
+      const d = await r.json();
+      if (!d?.ok) setStopping(false);
+    } catch { setStopping(false); }
+  }, [live, busy, stopping, paneKey]);
+
+  // `elapsed` recomputes on every 1s tick above, so the caller gets a live-counting number for free.
+  const elapsed = activity.phase === "idle" ? 0 : Math.max(0, Date.now() - phaseStart);
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, error, detached, send, attach, respond, answerAsk, changeMode, stop };
 }
