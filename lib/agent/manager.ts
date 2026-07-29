@@ -15,6 +15,7 @@
 // It's opt-in and labeled with a warning in the UI, never the shipped default.
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
+import { DASHBOARD_MODEL } from "../model-pins";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
 // effort"). Opus 5 is the current top-tier model (see the claude-api skill's model table); "default
@@ -24,7 +25,10 @@ import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type 
 // it). Opus 5's 1M-token context window is already its default at standard pricing, no beta flag or
 // extra option needed. Both overridable per-deploy without a code change — set
 // MINAMI_DASHBOARD_EFFORT to pin an effort level again if ever wanted.
-const DEFAULT_MODEL = process.env.MINAMI_DASHBOARD_MODEL || "claude-opus-5";
+// Sourced from lib/model-pins.ts rather than repeated here, so this session model and the model the
+// dashboard *alerts on* can never disagree — a drift warning that itself reads a stale copy of the
+// pin would be worse than no warning. Still overridable via MINAMI_DASHBOARD_MODEL (see that file).
+const DEFAULT_MODEL = DASHBOARD_MODEL;
 const DEFAULT_EFFORT = process.env.MINAMI_DASHBOARD_EFFORT as EffortLevel | undefined;
 
 // Auto-compact trigger threshold, as a percent of the context window — mirrors the same
@@ -34,16 +38,34 @@ const DEFAULT_EFFORT = process.env.MINAMI_DASHBOARD_EFFORT as EffortLevel | unde
 const AUTOCOMPACT_PCT = process.env.MINAMI_DASHBOARD_AUTOCOMPACT_PCT || "60";
 
 // The browser tool (Playwright MCP), given to every session unless explicitly disabled. MCP tools are
-// deferred behind tool search by default (see `alwaysLoad` below), so a chat that never touches the
-// browser pays ~nothing extra for this being registered — the subprocess only spawns once Claude
-// actually reaches for a browser_* tool. `--isolated` keeps the browser profile in memory (fresh per
-// session, nothing written to disk); `--headless` because what's watched is the dashboard's live
-// screenshot panel, not an actual OS window. Runs via `npx` so it resolves the locally-installed
-// `@playwright/mcp` (already in package.json) without a registry round-trip.
+// deferred behind tool search by default, so a chat that never touches the browser pays ~nothing extra
+// for this being registered — the subprocess only spawns once Claude actually reaches for a browser_*
+// tool. `--isolated` keeps the browser profile in memory (fresh per session, nothing written to disk);
+// `--headless` because what's watched is the dashboard's browser panel, not an actual OS window. Runs
+// via `npx` so it resolves the locally-installed `@playwright/mcp` (already in package.json) without a
+// registry round-trip.
+//
+// `--caps=devtools` adds the video/highlight/annotate tools on top of the 24 core ones — without it,
+// `browser_start_video` simply does not exist and the panel's Record button has nothing to call. Video
+// is the analogue of Claude Code's `gif_creator` (which it ships with click indicators and action
+// labels baked in), and a recording of a flow is a far better QA artifact than a pile of stills.
+//
+// Not set here, deliberately: `--output-dir`. Playwright already writes screenshots, `page-*.yml`
+// snapshots and `console-*.log` into `<cwd>/.playwright-mcp/` (git-ignored), which the panel reads
+// through /api/agent/browser/file. Overriding it would only move the files somewhere the client can't
+// guess from `cwd`.
 const BROWSER_TOOL_ENABLED = process.env.MINAMI_DISABLE_BROWSER_TOOL !== "1";
 const MCP_SERVERS: NonNullable<Options["mcpServers"]> | undefined = BROWSER_TOOL_ENABLED
-  ? { playwright: { command: "npx", args: ["@playwright/mcp", "--isolated", "--headless", "--viewport-size=1280x800"] } }
+  ? { playwright: { command: "npx", args: ["@playwright/mcp", "--isolated", "--headless", "--viewport-size=1280x800", "--caps=devtools"] } }
   : undefined;
+
+// The browser is headless, so the ONLY way a human sees what it's doing is a screenshot landing in the
+// panel. Left to itself Claude prefers `browser_snapshot` (an accessibility tree — cheaper in tokens
+// and better for deciding what to click), which is correct for the model and useless for the watcher:
+// the panel sits blank while the browser is genuinely busy on a page. One line of nudge fixes that.
+// Only appended when the browser tool is actually registered, so a MINAMI_DISABLE_BROWSER_TOOL=1
+// session doesn't get instructions about a tool it can't see.
+const BROWSER_PROMPT = `When you use the browser tools, take a screenshot after navigating and after any action that changes what's on screen. The browser is headless and a human is watching those screenshots in a live panel — an accessibility snapshot is invisible to them.`;
 
 // "bypassPermissions" auto-approves every tool with no prompt — powerful but dangerous. It's opt-in
 // (the user has to pick it via the composer's "bypass" toggle), never the shipped default. Any string
@@ -66,7 +88,10 @@ export type AgentEvent =
   // non-fatal, worth showing. `agent`/`status` are only set for kind "task" — the UI renders those as
   // compact inline pills (see SubagentStrip in app/page.tsx) rather than the generic text line, so it
   // needs the subagent's type and outcome as separate fields instead of parsing the prose in `text`.
-  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
+  // "restarting" is the deploy path telling every open pane that the server is about to be swapped for
+  // a new build — see drainForRestart() below. It's the one notice the user gets BEFORE the disruption
+  // rather than after, which is the whole point: an unexplained dead turn reads as a bug.
+  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
   | { t: "permission"; id: string; toolName: string; input: unknown } // waiting on the user
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
   | { t: "result"; subtype: string; costUsd?: number } // turn finished
@@ -166,6 +191,13 @@ function resetActivity(s: Session, phase: ActivityPhase) {
   s.phaseSince = Date.now();
 }
 
+// How long a session may sit with NO connected client before it's reaped. This used to be a flat 10
+// minutes, which quietly broke the phone view: backgrounding a mobile tab tears down the SSE stream,
+// so "no listeners" is a routine, temporary state there — not evidence the user is gone. Ten minutes
+// of looking away was enough to lose the warm subprocess and come back to a `detached` pane. The
+// window is now long enough to cover a normal context-switch and overridable per-deploy.
+const IDLE_REAP_MS = Math.max(60_000, Number(process.env.MINAMI_IDLE_REAP_MS) || 30 * 60 * 1000);
+
 // Close a session that's been idle with no listeners for a while, so we don't leak CLI processes.
 function scheduleIdle(s: Session) {
   if (s.idleTimer) clearTimeout(s.idleTimer);
@@ -187,7 +219,7 @@ function scheduleIdle(s: Session) {
     // "result" handler also re-arms this once the turn actually finishes, so this is just the backstop
     // for whatever falls through that path.
     else scheduleIdle(s);
-  }, 10 * 60 * 1000);
+  }, IDLE_REAP_MS);
 }
 
 // The streaming input: yields queued user messages, then parks until send() wakes it.
@@ -251,7 +283,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // spread it explicitly so this override adds to, rather than replaces, everything the
       // subprocess already needs (PATH, HOME, ANTHROPIC_API_KEY, token-slayer's active credential).
       env: { ...process.env, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: AUTOCOMPACT_PCT },
-      ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS } : {}),
+      ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS, systemPrompt: { type: "preset", preset: "claude_code", append: BROWSER_PROMPT } } : {}),
       ...(resume ? { resume } : {}),
     } as any,
   });
@@ -659,6 +691,68 @@ export function liveActivity(): Record<string, { phase: ActivityPhase; label: st
     out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd };
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Restart safety.
+//
+// Every live session lives INSIDE this Next.js server process (`store` above), and each session's SDK
+// subprocess is a CHILD of it. So `bin/serve.sh` swapping in a new build — `lsof -ti tcp:3000 | xargs
+// kill` — takes down every chat mid-turn, along with its MCP servers. That is the single biggest
+// source of "my request got interrupted and I never touched anything": the trigger is usually a
+// DIFFERENT pane finishing an edit and redeploying, so it feels random to whoever's typing.
+//
+// The durable fix is to stop hosting sessions in the process we redeploy (a standalone agent host,
+// tracked separately). Until then these two exports let the deploy script look before it leaps:
+// liveStats() so it can refuse to kill a busy turn, drainForRestart() so it warns the panes it is
+// about to disconnect and gives in-flight turns a chance to land first.
+// ---------------------------------------------------------------------------
+
+export type LiveSessionInfo = { key: string; cwd: string; busy: boolean; phase: ActivityPhase; label: string; sessionId: string | null };
+export type LiveStats = { sessions: number; busy: number; details: LiveSessionInfo[] };
+
+// Dedup by identity: `store` holds each session under BOTH its pane key and `live:<sessionId>`, so a
+// naive walk double-counts every session that has reached `init` and would report twice the real load.
+function eachSession(): Session[] {
+  const seen = new Set<Session>();
+  const out: Session[] = [];
+  for (const s of store.values()) {
+    if (seen.has(s) || s.closed) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+export function liveStats(): LiveStats {
+  const details = eachSession().map((s) => {
+    const a = activityOf(s);
+    return { key: s.key, cwd: s.cwd, busy: s.busy, phase: a.phase, label: a.label, sessionId: s.sessionId };
+  });
+  return { sessions: details.length, busy: details.filter((d) => d.busy).length, details };
+}
+
+// Tell every open pane the server is going down, then wait (bounded) for in-flight turns to finish.
+// Deliberately does NOT close anything: the caller is about to kill the whole process anyway, and a
+// session that finishes inside the window gets to write its final result to the JSONL — which is what
+// the client reconciles against when it reattaches to the new build. Returns whether it went quiet.
+export async function drainForRestart(timeoutMs = 60_000): Promise<{ drained: boolean; stillBusy: number; waitedMs: number }> {
+  const startedAt = Date.now();
+  for (const s of eachSession()) {
+    broadcast(s, {
+      t: "notice",
+      kind: "restarting",
+      text: "the dashboard server is restarting to apply a new build — this pane will reconnect on its own",
+    });
+  }
+  // Poll rather than hook every completion path: `result`, an error, and a crashed subprocess all clear
+  // `busy` through different code paths, and a 250ms poll is both simpler and impossible to leak.
+  while (Date.now() - startedAt < timeoutMs) {
+    const busy = eachSession().filter((s) => s.busy).length;
+    if (!busy) return { drained: true, stillBusy: 0, waitedMs: Date.now() - startedAt };
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return { drained: false, stillBusy: eachSession().filter((s) => s.busy).length, waitedMs: Date.now() - startedAt };
 }
 
 export function closeSession(key: string): void {

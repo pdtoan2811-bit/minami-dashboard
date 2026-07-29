@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { checkModelPins } from "@/lib/model-pins";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,7 +49,12 @@ function liveIdentity(): { email: string | null; orgUuid: string | null; display
 }
 
 // GET /api/accounts → the account pool + live usage, straight from `token-slayer status --json`,
-// plus a `live` block carrying the real authenticated identity (see liveIdentity above).
+// plus a `live` block carrying the real authenticated identity (see liveIdentity above) and the
+// model-pin drift check.
+//
+// Both drift signals ride this one route on purpose: the alert component polls it every 30s, and
+// "which account am I burning" and "which model am I burning it on" are the same question asked
+// twice. Splitting them into two routes would double the poll for no gain.
 export async function GET() {
   const { ok, stdout, stderr } = await run(["status", "--json"]);
   if (!ok) return Response.json({ error: stderr || "token-slayer status failed" }, { status: 502 });
@@ -65,6 +71,8 @@ export async function GET() {
         // The CLI's own banner disagreeing with reality — worth surfacing separately, because it
         // means "just switch back" may report success without actually changing anything.
         claimsMismatch: live.email != null && typeof doc?.active === "string" && doc.active !== live.email,
+        // What each spawner will run on its NEXT turn, and whether any has fallen off the pin.
+        models: checkModelPins(),
       },
     });
   } catch {

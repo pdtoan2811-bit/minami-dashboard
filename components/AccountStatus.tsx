@@ -35,15 +35,57 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+type SpawnerPin = {
+  name: string;
+  model: string | null;
+  source: string;
+  drifted: boolean;
+};
+
+type ModelPins = {
+  pinned: string;
+  spawners: SpawnerPin[];
+  drifted: boolean;
+};
+
 type Live = {
   email: string | null;
   displayName: string | null;
   preferred: string;
   offPreferred: boolean;
   claimsMismatch: boolean;
+  // Optional: a dashboard build older than the model-pin check won't send this. Treated as
+  // "nothing to report" rather than "no drift" — absent evidence isn't evidence.
+  models?: ModelPins;
 };
 
 type Level = "ok" | "warn" | "critical";
+
+// An "episode" is one continuous run of the same problem. Identifying it as a string lets collapse,
+// re-expand, and recovery all key off one value instead of three booleans that drift out of sync —
+// and lets a *different* problem (fell onto another fallback account, a second spawner drifted)
+// re-expand a card you'd already collapsed, which is the behaviour you want: new information.
+//
+// Empty string means healthy. Everything downstream derives from that.
+const episodeKey = (l: Live): string => {
+  const account = l.offPreferred ? `acct:${l.email}` : "";
+  const models = (l.models?.spawners ?? [])
+    .filter((s) => s.drifted)
+    .map((s) => `${s.name}=${s.model}`)
+    .join(",");
+  return [account, models ? `model:${models}` : ""].filter(Boolean).join("|");
+};
+
+const driftedSpawners = (l: Live | null): SpawnerPin[] =>
+  (l?.models?.spawners ?? []).filter((s) => s.drifted);
+
+// The episode record we remember between polls: its identity, plus enough detail to word the
+// recovery card in terms of what was actually wrong ("was pdtoan2811" vs "back on the model pin").
+const episodeOf = (l: Live) => ({
+  key: episodeKey(l),
+  account: l.offPreferred ? l.email : null,
+  models: driftedSpawners(l).length > 0,
+});
 
 const POLL_MS = 30_000;
 // How long the green recovery card stays up before retiring itself. Counts down only while the tab
@@ -107,24 +149,30 @@ export function AccountStatus() {
   // A switch-back that reported success but left us on the same account. Promotes the level to
   // `critical`, because it means the usual one-click remedy is not going to save you.
   const [switchStuck, setSwitchStuck] = useState(false);
-  // Collapsed = card hidden, chip still showing. Keyed by the offending email so collapsing a
-  // pdtoan2811 episode doesn't pre-suppress a different account later.
+  // Collapsed = card hidden, chip still showing. Keyed by the *episode*, so collapsing a
+  // pdtoan2811 episode doesn't pre-suppress a different account — or a model drift — later.
   const [collapsedFor, setCollapsedFor] = useState<string | null>(null);
   // Set on the unhealthy → healthy transition. Drives the green card.
-  const [recovered, setRecovered] = useState<{ from: string } | null>(null);
+  const [recovered, setRecovered] = useState<{ account: string | null; models: boolean } | null>(null);
   const [tabVisible, setTabVisible] = useState(true);
 
   // null = we haven't observed a poll yet this mount. Distinguishing "unknown" from "was healthy"
-  // matters: on a fresh page load the first poll already reports offPreferred, and treating that as
+  // matters: on a fresh page load the first poll already reports the problem, and treating that as
   // a healthy→unhealthy *transition* would wipe the stored collapse on every navigation (and could
   // fire a bogus recovery). Transitions are only real when we actually saw the previous state.
-  const prevOff = useRef<boolean | null>(null);
+  const prevEpisode = useRef<{ key: string; account: string | null; models: boolean } | null>(null);
   const prevLevel = useRef<Level>("ok");
-  const prevEmail = useRef<string | null>(null);
 
-  const level: Level = !live || !live.offPreferred
+  const key = live ? episodeKey(live) : "";
+  const accountDrift = !!live?.offPreferred;
+  const modelDrift = driftedSpawners(live).length > 0;
+
+  // Account drift outranks model drift for severity: the credential failure modes (a switch that
+  // silently no-ops, a banner that lies) are the ones with no one-click fix. A model that fell off
+  // the pin is always fixable — you edit a file — so it stays at `warn` however long it persists.
+  const level: Level = !live || key === ""
     ? "ok"
-    : live.claimsMismatch || switchStuck
+    : accountDrift && (live.claimsMismatch || switchStuck)
       ? "critical"
       : "warn";
 
@@ -136,30 +184,26 @@ export function AccountStatus() {
         if (!d?.live) return; // route errored (token-slayer missing on this host) — stay silent
         setLive(d.live);
 
-        // Recovered: we were off the preferred account and now we're back on it. Announce
-        // unconditionally — a dismissal applies to the problem, never to its resolution.
-        if (!d.live.offPreferred && prevOff.current === true) {
-          setRecovered({ from: prevEmail.current ?? "a fallback account" });
-          setSwitchStuck(false);
-          setCollapsedFor(null);
+        const k = episodeKey(d.live);
+        const prev = prevEpisode.current;
+
+        // Only act on an observed *change*. On first poll (prev === null) we may simply be loading a
+        // page mid-episode that the user already collapsed — which must stay collapsed.
+        if (prev && k !== prev.key) {
           try { sessionStorage.removeItem(SS_KEY); } catch { /* private mode */ }
-        }
-        // A brand-new episode (healthy → unhealthy) always re-expands, and clears any stale green.
-        // Requires an observed `false` — on first poll (null) we may simply be loading a page during
-        // an episode the user already collapsed, which must stay collapsed.
-        if (d.live.offPreferred && prevOff.current === false) {
           setCollapsedFor(null);
-          setRecovered(null);
           setSwitchStuck(false);
-          try { sessionStorage.removeItem(SS_KEY); } catch { /* private mode */ }
-        }
-        // Fell from one fallback onto a *different* one — also a new episode.
-        if (d.live.offPreferred && prevEmail.current && d.live.email !== prevEmail.current) {
-          setCollapsedFor(null);
+          if (k === "") {
+            // Recovered. Announce unconditionally — a dismissal applies to the problem, never to
+            // its resolution. Report what actually got fixed, not a generic all-clear.
+            setRecovered({ account: prev.account, models: prev.models });
+          } else {
+            // A different problem than the one being shown: re-expand, drop any stale green.
+            setRecovered(null);
+          }
         }
 
-        prevOff.current = d.live.offPreferred;
-        prevEmail.current = d.live.email;
+        prevEpisode.current = episodeOf(d.live);
       })
       .catch(() => { /* offline / route down — nothing useful to say */ });
   }, []);
@@ -229,14 +273,16 @@ export function AccountStatus() {
       await new Promise((res) => setTimeout(res, 800));
       const verify = await fetch("/api/accounts").then((x) => x.json()).catch(() => null);
       if (verify?.live) {
-        const wasOff = prevOff.current;
+        const prev = prevEpisode.current;
         setLive(verify.live);
-        if (!verify.live.offPreferred && wasOff === true) {
-          setRecovered({ from: prevEmail.current ?? "a fallback account" });
+        const k = episodeKey(verify.live);
+        // Only a full all-clear counts as recovery. Switching the account back while a spawner is
+        // still off the model pin leaves the card up, correctly showing what's left.
+        if (prev && k !== prev.key) {
           setSwitchStuck(false);
+          if (k === "") setRecovered({ account: prev.account, models: prev.models });
         }
-        prevOff.current = verify.live.offPreferred;
-        prevEmail.current = verify.live.email;
+        prevEpisode.current = episodeOf(verify.live);
         if (verify.live.offPreferred) {
           setSwitchStuck(true);
           setNote("switch reported success but the account didn't change — the credential is probably dead");
@@ -250,10 +296,10 @@ export function AccountStatus() {
   }, [live]);
 
   const collapse = useCallback(() => {
-    if (!live?.email) return;
-    setCollapsedFor(live.email);
-    try { sessionStorage.setItem(SS_KEY, live.email); } catch { /* private mode */ }
-  }, [live]);
+    if (!key) return;
+    setCollapsedFor(key);
+    try { sessionStorage.setItem(SS_KEY, key); } catch { /* private mode */ }
+  }, [key]);
 
   const expand = useCallback(() => {
     setCollapsedFor(null);
@@ -266,7 +312,12 @@ export function AccountStatus() {
   if (!unhealthy && !recovered) return null;            // healthy at rest — no permanent green nag
 
   const s = STYLE[unhealthy ? level : "ok"];
-  const collapsed = unhealthy && collapsedFor === live.email;
+  const collapsed = unhealthy && collapsedFor === key;
+  const drifted = driftedSpawners(live);
+  // What the chip says. Account drift names the account you're wrongly burning; a model-only
+  // episode has no wrong account to name, so it says what IS wrong instead of a green-looking
+  // "oedevai2" that would read as all-clear.
+  const chipLabel = accountDrift ? shortName(live.email ?? "unknown") : "model pin";
 
   const motion = (
     <style>{`
@@ -289,15 +340,23 @@ export function AccountStatus() {
         <button
           onClick={expand}
           aria-expanded={false}
-          aria-label={`${level === "critical" ? "Critical" : "Warning"}: running on ${live.email}, not ${live.preferred}. Show details.`}
-          title={`Running on ${live.email} — click for details`}
+          aria-label={`${level === "critical" ? "Critical" : "Warning"}: ${
+            accountDrift ? `running on ${live.email}, not ${live.preferred}` : ""
+          }${accountDrift && modelDrift ? "; " : ""}${
+            modelDrift ? `${drifted.length} spawner${drifted.length === 1 ? "" : "s"} off the ${live.models?.pinned} pin` : ""
+          }. Show details.`}
+          title={
+            accountDrift
+              ? `Running on ${live.email} — click for details`
+              : `Off the ${live.models?.pinned} model pin — click for details`
+          }
           className={`ms-in flex items-center gap-1.5 rounded-full border py-1 pl-2 pr-2.5 text-[11px] font-medium shadow-lg backdrop-blur transition-colors ${s.chip}`}
         >
           <span aria-hidden className="relative flex h-2 w-2">
             <span className={`absolute inline-flex h-full w-full rounded-full ${s.dot} ${level === "critical" ? "ms-pulse" : ""}`} />
           </span>
           <span aria-hidden>{s.glyph}</span>
-          <span className="tabular-nums">{shortName(live.email ?? "unknown")}</span>
+          <span className="tabular-nums">{chipLabel}</span>
         </button>
       </div>
     );
@@ -321,24 +380,56 @@ export function AccountStatus() {
         <div className="min-w-0 flex-1">
           <p className={`text-xs font-semibold ${s.title}`}>
             {isRecovery
-              ? "Back on your main account"
+              ? recovered?.account
+                ? "Back on your main account"
+                : "Back on the model pin"
               : level === "critical"
                 ? "Stuck on the fallback account"
-                : "Running on the fallback account"}
+                : accountDrift
+                  ? "Running on the fallback account"
+                  : "Off the model pin"}
           </p>
 
+          {/* Recovery names what was actually fixed — a generic all-clear after a model-only
+              episode would wrongly imply the account had been wrong too. */}
           {isRecovery ? (
             <p className={`mt-1 text-[11px] leading-relaxed ${s.body}`}>
-              Claude Code is authenticated as{" "}
-              <span className="font-medium tabular-nums">{live.preferred}</span> again
-              {recovered?.from ? <> — was <span className="tabular-nums">{recovered.from}</span></> : null}.
+              {recovered?.account ? (
+                <>
+                  Claude Code is authenticated as{" "}
+                  <span className="font-medium tabular-nums">{live.preferred}</span> again — was{" "}
+                  <span className="tabular-nums">{recovered.account}</span>.{" "}
+                </>
+              ) : null}
+              {recovered?.models ? (
+                <>
+                  Every spawner is back on{" "}
+                  <span className="font-medium tabular-nums">{live.models?.pinned}</span>.
+                </>
+              ) : null}
             </p>
-          ) : (
+          ) : accountDrift ? (
             <p className={`mt-1 text-[11px] leading-relaxed ${s.body}`}>
               Claude Code is authenticated as{" "}
               <span className="font-medium tabular-nums">{live.email}</span>, not{" "}
               <span className="font-medium tabular-nums">{live.preferred}</span>.
             </p>
+          ) : null}
+
+          {/* Model drift. Names the file to edit rather than offering a button: unlike an account
+              switch there is no safe one-click fix — the pin lives in source, and silently
+              rewriting a repo from a status widget is not a thing this should do. */}
+          {!isRecovery && modelDrift && (
+            <div className={`mt-1 space-y-0.5 text-[11px] leading-relaxed ${s.body}`}>
+              {drifted.map((sp) => (
+                <p key={sp.name}>
+                  <span className="font-medium">{sp.name}</span> spawns on{" "}
+                  <span className="font-medium tabular-nums">{sp.model}</span>, not{" "}
+                  <span className="font-medium tabular-nums">{live.models?.pinned}</span>
+                  <span className="opacity-70"> — {sp.source}</span>
+                </p>
+              ))}
+            </div>
           )}
 
           {!isRecovery && live.claimsMismatch && (
@@ -364,13 +455,17 @@ export function AccountStatus() {
               </button>
             ) : (
               <>
-                <button
-                  onClick={switchBack}
-                  disabled={switching}
-                  className={`rounded-md px-2 py-1 text-[11px] font-medium text-white transition disabled:opacity-50 ${s.action}`}
-                >
-                  {switching ? "switching…" : `switch to ${shortName(live.preferred)}`}
-                </button>
+                {/* Only offered for account drift — it's the one problem here with a real one-click
+                    remedy. On a model-only episode the button would do nothing relevant. */}
+                {accountDrift && (
+                  <button
+                    onClick={switchBack}
+                    disabled={switching}
+                    className={`rounded-md px-2 py-1 text-[11px] font-medium text-white transition disabled:opacity-50 ${s.action}`}
+                  >
+                    {switching ? "switching…" : `switch to ${shortName(live.preferred)}`}
+                  </button>
+                )}
                 <button
                   onClick={collapse}
                   aria-expanded

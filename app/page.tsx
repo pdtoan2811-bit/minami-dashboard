@@ -11,6 +11,8 @@ import BrandIcon, { type Icon } from "@/components/BrandIcon";
 import AskCard from "@/components/AskCard";
 import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
+import BrowserLightbox from "@/components/BrowserLightbox";
+import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -302,7 +304,10 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: {
 // ("task") notices are deliberately excluded here — they render as compact inline pills inside
 // ActivityLine instead (see the "Subagents that already finished" block above), so a chatty session
 // with several subagents doesn't grow a full-sentence line per one at the bottom of the chat.
-const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af" };
+// `restarting` shares the amber warning language used by the account alert: it's the one notice that
+// arrives BEFORE the disruption (the deploy script warning panes it's about to swap the server out from
+// under them), so it has to read as "act now", not as after-the-fact grey chatter like `aborted`.
+const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af", restarting: "#f0a868" };
 function NoticeStrip({ notices }: { notices: Notice[] }) {
   const rest = notices.filter((n) => n.kind !== "task");
   if (!rest.length) return null;
@@ -832,29 +837,64 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     return [];
   }, [source]);
 
-  // The browser tool (Playwright MCP, see manager.ts): find the most recent screenshot anywhere in the
-  // transcript, and whether a browser action is in flight right now (for the "waiting for a
-  // screenshot…" placeholder before the first one lands). Same derive-from-`source` approach as todos —
-  // no extra event plumbing, it just reads the `output` that manager.ts/claude-sessions.ts now capture.
-  const isBrowserTool = (name: string) => toolCategory(name) === "browser";
-  const everUsedBrowser = useMemo(() => source.some((t) => t.tools.some((tc) => isBrowserTool(tc.name))), [source]);
-  const browserShot = useMemo(() => {
-    for (let i = source.length - 1; i >= 0; i--) {
-      const tools = source[i].tools;
-      for (let j = tools.length - 1; j >= 0; j--) {
-        const tool = tools[j];
-        if (!isBrowserTool(tool.name)) continue;
-        const img = tool.output?.blocks.find((b): b is Extract<ToolOutputBlock, { type: "image" }> => b.type === "image");
-        if (img) return { mediaType: img.mediaType, data: img.data, action: activityLabel(tool.name, tool.input) };
-      }
-    }
-    return null;
-  }, [source]);
+  // The browser tool (Playwright MCP, see manager.ts). Everything the panel shows — URL, title,
+  // console counts, network rows, the screenshot filmstrip, the action log — is folded out of the tool
+  // results already streaming in, by lib/browser-view.ts. No extra event plumbing, and the docked
+  // panel, the lightbox and the pop-out window all read the same derivation so they can't disagree.
+  const browser = useMemo(() => deriveBrowserState(source), [source]);
   const lastTool = source[source.length - 1]?.tools.at(-1);
   const browserBusy = !!lastTool && isBrowserTool(lastTool.name) && !lastTool.done;
-  const browserActionLabel = browserBusy ? activityLabel(lastTool!.name, lastTool!.input) : browserShot?.action;
+  const browserActionLabel = browserBusy ? activityLabel(lastTool!.name, lastTool!.input) : browser.shots.at(-1)?.action;
   const [browserPanelHidden, setBrowserPanelHidden] = useState(false);
-  const showBrowserPanel = everUsedBrowser && !browserPanelHidden;
+  // Layout is a per-user preference, not per-pane state: 300px side-by-side (the old hardcoded width)
+  // is unusable in a 3- or 4-pane grid, so both the split and the side/stacked choice persist.
+  const [browserStacked, setBrowserStacked] = useSetting("browserStacked", false);
+  const [browserW, setBrowserW] = useSetting("browserWidth", 42);
+  const [browserDrag, setBrowserDrag] = useState(false);
+  const paneRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!browserDrag) return;
+    // Measured against the PANE, not the window — each chat column is its own grid cell, so a
+    // window-relative calculation (the way the bento's own divider works) would be wrong here.
+    const move = (e: MouseEvent) => {
+      const r = paneRef.current?.getBoundingClientRect();
+      if (!r || r.width < 80) return;
+      setBrowserW(Math.min(75, Math.max(22, Math.round(((r.right - e.clientX) / r.width) * 100))));
+    };
+    const up = () => setBrowserDrag(false);
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserDrag]);
+  // null = closed. Index into browser.shots.
+  const [lightbox, setLightbox] = useState<number | null>(null);
+  const showBrowserPanel = browser.everUsed && !browserPanelHidden;
+  // Toolbar controls can't touch the browser directly (there's no server-side handle on it — see
+  // browser-view.ts), so they ask the agent, exactly the way Claude Code models navigation as a tool
+  // call. Sending while a turn is in flight would be dropped, hence the `busy` guard at the call site.
+  // Session-scoped browser allowlist, Bento's version of Claude Code's "Allow all actions on {host} for
+  // this session". The SDK has no domain-rule concept, so this is enforced here: while a host is
+  // allowed, matching browser prompts auto-approve. Deliberately component state — it dies with the
+  // pane, and is never persisted, so a permission grant can't outlive the thing you granted it for.
+  const [browserAllowHost, setBrowserAllowHost] = useState<string | null>(null);
+  const autoAllowedId = useRef<string | null>(null);
+  useEffect(() => {
+    const p = agent.pending;
+    if (!p || !browserAllowHost || autoAllowedId.current === p.id) return;
+    if (!isBrowserTool(p.toolName)) return;
+    // A prompt with no URL of its own acts on the page the browser is already showing, so fall back to
+    // the current page's host — otherwise every click after the initial navigate would still prompt.
+    const host = hostOf((p.input as { url?: string })?.url) || hostOf(browser.url);
+    if (host !== browserAllowHost) return;
+    autoAllowedId.current = p.id;
+    agent.respond("allow");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent.pending, browserAllowHost, browser.url]);
+
+  const askBrowser = (text: string) => {
+    if (!cwd || agent.busy) return;
+    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+  };
 
   // Away-tab notifications: tell the user when a background pane finishes, or needs them, while
   // they're looking at another tab/app. Each transition (busy→idle, a fresh permission/ask prompt)
@@ -880,16 +920,19 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   }, [agent.ask, proj]);
 
   return (
-    <div className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/40 ${count === 3 && idx === 2 ? "col-span-2" : ""}`}>
+    <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/40 ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 ? "col-span-2" : ""}`}>
       <div className="relative flex items-center gap-2 border-b border-white/[0.07] px-4 py-2">
         <ProjectIcon name={proj} />
         <button onClick={() => setMenu((v) => !v)} className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/10">
           <span className="min-w-0"><span className="block truncate text-[13px] font-semibold">{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span><span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span></span>
           <span className="text-neutral-500">⌄</span>
         </button>
-        {everUsedBrowser && browserPanelHidden && (
-          <button onClick={() => setBrowserPanelHidden(false)} title="Show browser view" className={`shrink-0 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
+        {browser.everUsed && browserPanelHidden && (
+          <button onClick={() => setBrowserPanelHidden(false)} title="Show browser view"
+            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
             <Chrome className="h-3.5 w-3.5" />
+            {/* A hidden panel shouldn't hide a broken page — surface the error count on the reopen button. */}
+            {browser.consoleErrors > 0 && <span className="text-[9px] tabular-nums text-[#ef7c7c]">{browser.consoleErrors}</span>}
           </button>
         )}
         {count > 1 && <button onClick={onClose} className="ml-auto rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
@@ -962,18 +1005,35 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
                         ? <span className="shrink-0 text-[10px]" style={{ color: tool.ok ? "#4ade80" : "#ef7c7c" }}>{tool.ok ? "✓" : "✗"}{tool.ms != null ? ` ${fmtElapsed(tool.ms)}` : ""}</span>
                         : <span className="shrink-0 text-[10px] text-neutral-600">running…</span>}
                     </summary>
+                    {/* Browser calls get Claude Code's compact one-field summary instead of a wall of
+                        input JSON (`Claude in Chrome[navigate] example.com`). The JSON is still one
+                        click away — this row is inside a <details> — but the default view stays
+                        scannable across a 30-action QA pass. */}
+                    {cat === "browser" && browserArg(tool.name, tool.input) && (
+                      <p className="mt-1.5 font-mono text-[11px] text-neutral-400">
+                        <span className="text-neutral-500">{browserVerb(tool.name)}</span> {browserArg(tool.name, tool.input)}
+                      </p>
+                    )}
                     <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
                     {textOut && (
                       <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-black/30 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-neutral-500">{textOut.text}</pre>
                     )}
                     {images.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {images.map((img, k) => (
-                          <a key={k} href={`data:${img.mediaType};base64,${img.data}`} target="_blank" rel="noreferrer" title="Open full size">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={`data:${img.mediaType};base64,${img.data}`} alt="" className="h-24 rounded border border-white/10 object-cover" />
-                          </a>
-                        ))}
+                        {images.map((img, k) => {
+                          // These used to be <a href="data:…" target="_blank">, which Chrome silently
+                          // refuses to navigate to (top-level data: URLs blocked since v60) — the link
+                          // never worked. Route them into the same lightbox as the panel instead,
+                          // matching them up by identity so it opens on the right frame.
+                          const at = browser.shots.findIndex((s) => s.id === `${tool.id || ""}:${k}` || (!!img.data && s.data === img.data));
+                          return (
+                            <button key={k} onClick={() => setLightbox(at >= 0 ? at : browser.shots.length - 1)}
+                              disabled={!browser.shots.length} title="Open full size">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={`data:${img.mediaType};base64,${img.data}`} alt="" className="h-24 rounded border border-white/10 object-cover transition-opacity hover:opacity-80" />
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </details>
@@ -1004,18 +1064,43 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         <AskCard key={agent.ask.id} questions={agent.ask.questions} onAnswer={agent.answerAsk} />
       )}
 
-      {/* Tool-permission prompt (default mode) — Claude is paused until the user decides. */}
-      {agent.pending && (
+      {/* Tool-permission prompt (default mode) — Claude is paused until the user decides.
+          Browser calls get the Claude Code treatment: a plain-English verb phrase plus the host, e.g.
+          "Claude wants to fill in a form on localhost:3000", with a session-scoped "allow everything on
+          this host" escape hatch. Approving one click at a time is unusable for a QA pass, and a raw
+          `mcp__playwright__browser_click` + JSON blob tells you nothing about WHERE it's clicking. */}
+      {agent.pending && (() => {
+        const pendingHost = isBrowserTool(agent.pending.toolName)
+          ? hostOf((agent.pending.input as { url?: string })?.url) || hostOf(browser.url)
+          : null;
+        return (
         <div className="mx-4 mb-2 rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
-          <p className="text-xs text-neutral-200">Claude wants to use <span className="font-semibold text-[var(--sakura)]">{agent.pending.toolName}</span></p>
+          {pendingHost ? (
+            <p className="text-xs text-neutral-200">
+              Claude wants to <span className="font-semibold text-[var(--sakura)]">{browserVerb(agent.pending.toolName)}</span>
+              {" on "}<span className="font-mono text-[11px] font-semibold text-neutral-100">{pendingHost}</span>
+            </p>
+          ) : (
+            <p className="text-xs text-neutral-200">Claude wants to use <span className="font-semibold text-[var(--sakura)]">{agent.pending.toolName}</span></p>
+          )}
           <pre className="mt-1.5 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-black/40 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-neutral-400">{permPreview(agent.pending.toolName, agent.pending.input)}</pre>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button onClick={() => agent.respond("allow")} className="rounded-lg bg-[var(--sakura)] px-3 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90">Approve</button>
+            {pendingHost && (
+              <button onClick={() => { setBrowserAllowHost(pendingHost); agent.respond("allow"); }}
+                title={`Auto-approve every browser action on ${pendingHost} until this pane is closed`}
+                className="rounded-lg border border-[var(--sakura)]/50 px-3 py-1 text-xs text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10">
+                Allow all on {pendingHost}
+              </button>
+            )}
             <button onClick={() => agent.respond("deny")} className="rounded-lg border border-white/15 px-3 py-1 text-xs text-neutral-300 transition-colors hover:bg-white/10">Deny</button>
-            <span className="ml-auto text-[10px] text-neutral-500">acceptEdits mode auto-approves file edits</span>
+            <span className="ml-auto text-[10px] text-neutral-500">
+              {browserAllowHost ? `auto-allowing browser actions on ${browserAllowHost}` : "acceptEdits mode auto-approves file edits"}
+            </span>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       <div className="border-t border-white/10 px-4 py-3">
         <TodoChecklist todos={todos} />
@@ -1064,15 +1149,43 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         </div>
       </div>
       </div>
-      {showBrowserPanel && (
-        <BrowserPanel
-          shot={browserShot ? { mediaType: browserShot.mediaType, data: browserShot.data } : null}
-          busy={browserBusy}
-          actionLabel={browserActionLabel}
-          onClose={() => setBrowserPanelHidden(true)}
-        />
+      {showBrowserPanel && !browserStacked && (
+        <>
+        <div onMouseDown={() => setBrowserDrag(true)} title="Drag to resize"
+          className="group relative w-1 shrink-0 cursor-col-resize bg-white/[0.07] transition-colors hover:bg-[#5ec8f8]/40">
+          <span className="absolute inset-y-0 -left-1 -right-1" />
+        </div>
+        <div className="flex min-h-0 shrink-0 flex-col" style={{ width: `${browserW}%` }}>
+          <BrowserPanel
+            state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
+            live={!!cwd && !agent.busy} stacked={false}
+            onOpenShot={setLightbox} onAsk={askBrowser}
+            onClose={() => setBrowserPanelHidden(true)}
+            onToggleLayout={() => setBrowserStacked(true)}
+            onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
+          />
+        </div>
+        </>
       )}
       </div>
+      {showBrowserPanel && browserStacked && (
+        <div className="flex min-h-0 shrink-0 flex-col" style={{ flexBasis: "45%" }}>
+          <BrowserPanel
+            state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
+            live={!!cwd && !agent.busy} stacked
+            onOpenShot={setLightbox} onAsk={askBrowser}
+            onClose={() => setBrowserPanelHidden(true)}
+            onToggleLayout={() => setBrowserStacked(false)}
+            onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
+          />
+        </div>
+      )}
+      {lightbox !== null && browser.shots.length > 0 && (
+        <BrowserLightbox
+          shots={browser.shots} index={Math.min(lightbox, browser.shots.length - 1)} cwd={cwd}
+          onIndex={setLightbox} onClose={() => setLightbox(null)}
+        />
+      )}
       {attachOpen && <FolderPicker pickFiles start={cwd} onClose={() => setAttachOpen(false)}
         onPick={(p) => { setInput((v) => (v ? v.replace(/\s*$/, " ") : "") + p + " "); setAttachOpen(false); }} />}
     </div>

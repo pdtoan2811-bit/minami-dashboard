@@ -269,6 +269,27 @@ export function useAgent(paneKey: string) {
     esRef.current = es;
   }, [paneKey, reconcile, closeStream, applyActivity]);
 
+  // Heal the stream when a backgrounded tab comes back. Mobile browsers freeze (and often outright
+  // close) an EventSource while the tab is in the background, and coming back doesn't reliably fire the
+  // reconnect path in ensureStream()'s onopen counter — so the pane sits frozen on whatever it last
+  // saw, sometimes mid-sentence, until a manual reload. Checking readyState is the point: a stream the
+  // browser is already re-dialling (CONNECTING) heals itself and must be left alone; only a CLOSED one
+  // needs replacing. Paired with the longer server-side reap window (IDLE_REAP_MS in
+  // lib/agent/manager.ts), this is what lets the phone view survive being put in a pocket.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!live || detached) return; // never went live, or the session is legitimately gone
+      const es = esRef.current;
+      if (es && es.readyState !== EventSource.CLOSED) return; // open, or already reconnecting
+      closeStream();
+      attachingRef.current = true; // full resync, same path a manual refresh takes
+      ensureStream(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [live, detached, closeStream, ensureStream]);
+
   // Reattach to a still-running server session after a page refresh: open the stream and let the
   // server's snapshot rebuild the transcript (history + in-flight message + any pending prompt). If no
   // live session backs this pane, the server replies `detached` and we quietly fall back to disk.
