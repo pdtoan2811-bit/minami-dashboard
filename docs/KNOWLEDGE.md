@@ -44,6 +44,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Metrics collector | `server/metrics-server.js` | **shipped** | systemd on Hetzner |
 | Account bridge | `app/api/accounts` | **shipped** | reads ground-truth identity |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
+| KB standalone server | `public/kb/serve.mjs` | **shipped** | `npm run kb` → :4400, zero deps |
 | Runbook | — | **not written** | the one real gap |
 
 ---
@@ -215,6 +216,37 @@ The `/architecture` graph is **hand-maintained data, extracted from source**. St
 
 ---
 
+## 7b. The knowledge base itself
+
+Four parts: the hub (`public/kb/index.html`), the visual explainer
+(`public/kb/architecture.html`), this record, and the module map data. Ported from
+`~/dataAnalyticsOwnego` (`toolkit/hub` + `queries/QUERIES.md` + the `query-docs` skill).
+
+**Two ways to read it**, and the difference matters:
+
+| | URL | Needs the app? |
+|---|---|---|
+| Served by Next | `localhost:3000/kb` | yes |
+| Standalone | `localhost:4400` (`npm run kb`, or double-click `Open Knowledge Base.command`) | no |
+
+The standalone server exists because `bin/serve.sh` tears :3000 down on every deploy and refuses to
+restart while a turn is in flight — so the docs would be unreachable exactly when something is
+broken, which is when you most want them. Zero dependencies, resolves its own root from
+`import.meta.url`, walks the port up on `EADDRINUSE`.
+
+The hub calls `/api/state` to learn which mode it's in. Only the standalone server answers; from
+Next it 404s, and that failure *is* the signal that relative links already resolve. When standalone,
+cards marked `needsApp` get rewritten to the app's real origin, or greyed out with "needs the app
+running" if :3000 isn't listening.
+
+> 🐛 **The KB server quietly stole the dashboard's port.** It read `process.env.PORT`, which is
+> already spoken for here — `bin/serve.sh` sets it, and it's often exported in the shell. It bound
+> `127.0.0.1:3000` *alongside* the dashboard's IPv6 wildcard (macOS permits that pairing rather than
+> raising `EADDRINUSE`), so requests to `localhost:3000` split between two servers at random. Now
+> reads **`KB_PORT`** only, and refuses to start if that equals the app's port.
+
+---
+
 ## 8. Deployment
 
 `bin/serve.sh` builds then swaps a **production** server on `:3000`, killing only the process bound
@@ -254,6 +286,10 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **KB runs standalone** — `public/kb/serve.mjs` (`npm run kb`, or the double-click
+  `Open Knowledge Base.command`) serves the knowledge base on :4400 independently of the dashboard,
+  so it stays readable while :3000 is down. Uses `KB_PORT`, never `PORT` — see the 🐛 in §7b.
+  *Reported by user: "I want a way to open that KB on localhost — as an independent app."*
 - **Knowledge base created** — `public/kb/` hub, this record, and the `minami-kb` skill that keeps it
   in sync. Format borrowed from `~/dataAnalyticsOwnego`'s `QUERIES.md` + `toolkit/hub`.
 - **`/architecture` module map shipped** — React Flow, edges extracted from source.

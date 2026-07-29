@@ -106,7 +106,8 @@
       <h1>Minami Bento — Knowledge Base</h1>
       <p class="sub">Everything written down about this project: how it works, why it's shaped that
       way, and what broke to make it that shape.</p>
-      <p class="kit" id="kit">local mission-control for Claude Code sessions</p>
+      <p class="kit"><span id="kit">local mission-control for Claude Code sessions</span>
+        <span id="mode" style="margin-left:10px;opacity:.75"></span></p>
     </div>
     <button class="themeBtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
   </header>
@@ -144,10 +145,12 @@ var CARDS = [
     makes:"How the three pipelines work, why the parser is incremental, and the eight incidents that shaped the code. Ten sections, five interactive diagrams.",
     href:"./architecture.html", status:"ok", pill:"interactive" },
 
+  // `needsApp` = this one lives in the Next app, so it only resolves while the dashboard is up.
+  // resolveApp() below rewrites the href and the status dot once /api/state answers.
   { group:"primary", icon:"⬡", title:"Module map",
     tag:"live in the app",
     makes:"Every file and the edges between them, extracted from source. Solid lines are imports, dashed are runtime fetch/SSE. Click a node to isolate what touches it.",
-    href:"/architecture", status:"ok", pill:"React Flow" },
+    href:"/architecture", status:"ok", pill:"React Flow", needsApp:true },
 
   { group:"primary", icon:"▤", title:"The living record",
     tag:"docs/KNOWLEDGE.md",
@@ -176,6 +179,7 @@ function card(c){
   var a = document.createElement("a");
   a.className = "card" + (c.soon ? " soon" : "");
   a.href = c.href;
+  if (c.needsApp) a.dataset.needsApp = "1";
   if (/^https?:/.test(c.href)) { a.target = "_blank"; a.rel = "noopener"; }
   a.innerHTML =
     '<div class="cicon">' + c.icon + '</div>' +
@@ -192,6 +196,33 @@ CARDS.forEach(function(c){
   var host = document.getElementById(c.group);
   if (host) host.appendChild(card(c));
 });
+
+// Two ways to reach this page: served by the standalone KB server (public/kb/serve.mjs, its own
+// port) or by the Next app at /kb. Only the standalone server answers /api/state — from Next that
+// request 404s, which is the signal that relative app links already resolve and nothing needs
+// rewriting. So a failed fetch here is a normal outcome, not an error worth surfacing.
+(function resolveApp(){
+  fetch("/api/state", { cache: "no-store" })
+    .then(function(r){ return r.ok ? r.json() : Promise.reject(); })
+    .then(function(s){
+      document.getElementById("mode").textContent =
+        "standalone on :" + s.kbPort + " · dashboard " + (s.app.running ? "up" : "down");
+      Array.prototype.forEach.call(document.querySelectorAll('[data-needs-app]'), function(a){
+        var dot = a.querySelector(".dot"), pill = a.querySelector(".pl");
+        if (s.app.running) {
+          // Point at the app's real origin — a relative /architecture would hit THIS server.
+          a.href = s.app.url + a.getAttribute("href");
+          a.target = "_blank"; a.rel = "noopener";
+        } else {
+          a.classList.add("soon");
+          dot.className = "dot warn";
+          pill.textContent = "needs the app running";
+          a.removeAttribute("href");
+        }
+      });
+    })
+    .catch(function(){ /* served by Next — relative links are already correct */ });
+})();
 
 // Theme: follow the OS by default, but remember an explicit choice. Stored per-origin, so opening
 // the file straight from disk and opening it through the dev server keep separate preferences —
