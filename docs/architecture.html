@@ -1,0 +1,895 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How Minami Bento works: transcripts, live sessions, and two machines</title>
+
+<style>
+:root{
+  --ground:#f1f3f7; --surface:#fff; --surface2:#e8ebf1; --sunken:#dfe3ec;
+  --text:#161a22; --text2:#4e5665; --text3:#828b9c; --rule:#d6dbe4;
+  --disk:#c47f18; --cache:#6d5ae0; --metric:#1f8a5c; --agent:#0f7f9c; --ui:#c4486a;
+  --accent:var(--agent);
+  --shadow:0 1px 2px rgba(20,26,40,.06),0 8px 24px -12px rgba(20,26,40,.18);
+  --display:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --maxw:70ch;
+}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){
+  --ground:#0e1016; --surface:#161a22; --surface2:#1d222d; --sunken:#11141b;
+  --text:#eef1f7; --text2:#a3abbb; --text3:#6b7386; --rule:#262c39;
+  --disk:#e8ad4a; --cache:#9a8bf5; --metric:#4cbf8b; --agent:#3fbcd9; --ui:#ee7d9c;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+}}
+:root[data-theme=dark]{
+  --ground:#0e1016; --surface:#161a22; --surface2:#1d222d; --sunken:#11141b;
+  --text:#eef1f7; --text2:#a3abbb; --text3:#6b7386; --rule:#262c39;
+  --disk:#e8ad4a; --cache:#9a8bf5; --metric:#4cbf8b; --agent:#3fbcd9; --ui:#ee7d9c;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--text);font-family:var(--body);line-height:1.65;
+  -webkit-font-smoothing:antialiased;margin:0}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px 96px;display:grid;
+  grid-template-columns:minmax(0,1fr);gap:0}
+@media(min-width:1080px){.wrap{grid-template-columns:190px minmax(0,1fr);gap:48px}}
+.rail{display:none}
+@media(min-width:1080px){.rail{display:block;position:sticky;top:0;align-self:start;
+  padding:96px 0 0;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em}}
+.rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.rail a{display:flex;gap:9px;align-items:baseline;color:var(--text3);text-decoration:none;
+  padding:5px 8px;border-radius:6px;border-left:2px solid transparent;transition:.18s}
+.rail a:hover{color:var(--text);background:var(--surface2)}
+.rail a.on{color:var(--text);border-left-color:var(--dot,var(--accent));background:var(--surface2)}
+.rail .n{color:var(--dot,var(--text3));font-variant-numeric:tabular-nums}
+.col{min-width:0}
+.prose{max-width:var(--maxw)}
+h1{font-family:var(--display);font-size:clamp(38px,6vw,62px);line-height:1.03;margin:0 0 18px;
+  letter-spacing:-.022em;text-wrap:balance;font-weight:600}
+h2{font-family:var(--display);font-size:clamp(25px,3.2vw,34px);line-height:1.15;margin:0 0 6px;
+  letter-spacing:-.015em;text-wrap:balance;font-weight:600}
+h3{font-size:16.5px;margin:32px 0 8px;letter-spacing:-.005em;font-weight:650}
+p{margin:0 0 17px;color:var(--text2);font-size:16.5px}
+.prose p strong,li strong{color:var(--text);font-weight:620}
+a{color:var(--accent)}
+code{font-family:var(--mono);font-size:.88em;background:var(--surface2);padding:1px 5px;
+  border-radius:4px;color:var(--text)}
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.7;background:var(--surface);
+  border:1px solid var(--rule);border-radius:10px;padding:14px 16px;overflow-x:auto;
+  margin:0 0 18px;max-width:var(--maxw);color:var(--text2)}
+pre b{color:var(--accent);font-weight:600}
+pre i{color:var(--text3);font-style:normal}
+pre u{text-decoration:none;background:color-mix(in oklab,var(--ui) 22%,transparent);
+  border-radius:3px;padding:0 2px}
+.sql-note{font-family:var(--mono);font-size:11px;color:var(--text3);margin:-10px 0 20px;
+  max-width:var(--maxw)}
+header.hero{padding:88px 0 40px;max-width:76ch}
+.kicker,.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--st,var(--text3));margin:0 0 12px;font-weight:600}
+.lede{font-size:20px;line-height:1.5;color:var(--text2);max-width:66ch}
+section{padding:52px 0 8px;scroll-margin-top:20px}
+.note{border:1px solid var(--rule);border-left:3px solid var(--tone,var(--accent));
+  border-radius:0 10px 10px 0;padding:14px 16px;margin:22px 0;max-width:var(--maxw);
+  background:var(--surface)}
+.note p{margin:0;font-size:15px}
+.note .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--tone,var(--accent));font-weight:600;margin:0 0 5px}
+.bug{--tone:var(--ui)} .warn{--tone:var(--disk)} .good{--tone:var(--metric)}
+/* Full-bleed panels deliberately extend back under the rail column. The rail is position:sticky,
+   which paints above static content — so without an explicit stacking order the rail's link text
+   renders ON TOP of a panel scrolling past it. Give the panel the higher layer: a full-bleed
+   diagram covers the nav while it passes, and the nav reappears in the prose gaps between them. */
+.bleed{margin:26px 0 8px;position:relative;z-index:1}
+@media(min-width:1080px){.bleed{width:min(1180px,calc(100vw - 48px));margin-left:calc(-190px - 48px)}}
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:14px;
+  box-shadow:var(--shadow);overflow:hidden}
+.phead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  padding:11px 16px;border-bottom:1px solid var(--rule);background:var(--surface2)}
+.ptitle{font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;color:var(--text2);font-weight:600}
+.ctrl{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+button{font-family:var(--mono);font-size:11px;letter-spacing:.03em;padding:5px 10px;border-radius:7px;
+  border:1px solid var(--rule);background:var(--surface);color:var(--text2);cursor:pointer;transition:.16s}
+button:hover{color:var(--text);border-color:var(--text3)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.pbody{padding:16px}
+.scroll{overflow-x:auto}
+svg{display:block;max-width:100%;height:auto;margin:0 auto}
+.steps{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;color:var(--text3)}
+.dotrow{display:flex;gap:5px}
+.dotrow i{width:7px;height:7px;border-radius:50%;background:var(--rule);display:block;transition:.18s}
+.dotrow i.on{background:var(--accent);transform:scale(1.25)}
+.narr{font-size:14px;color:var(--text2);margin:12px 0 0;min-height:44px;max-width:82ch}
+.narr b{color:var(--text);font-weight:620}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;
+  color:var(--text3);padding:11px 16px;border-top:1px solid var(--rule);background:var(--surface2)}
+.legend span{display:flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:3px;display:block}
+table{border-collapse:collapse;width:100%;font-size:14px;margin:0 0 18px}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--text3);text-align:left;padding:8px 12px;border-bottom:1px solid var(--rule);font-weight:600}
+td{padding:9px 12px;border-bottom:1px solid var(--rule);color:var(--text2);vertical-align:top}
+td strong{color:var(--text);font-weight:620}
+.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono)}
+footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--rule);max-width:var(--maxw);
+  font-size:14px;color:var(--text3)}
+footer code{font-size:.9em}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+</style>
+
+<div class="wrap">
+<nav class="rail" aria-label="Sections"><ol id="rail"></ol></nav>
+<div class="col">
+
+<header class="hero">
+  <p class="kicker">Minami Bento · architecture</p>
+  <h1>Every Claude Code session on your machine, as a live tile</h1>
+  <p class="lede">Minami Bento reads transcripts Claude Code was already writing, drives new sessions
+  through the Agent SDK, and folds in usage from a second machine — three independent pipelines that
+  meet in one browser tab. This is what each one does, and why the non-obvious parts are shaped the
+  way they are.</p>
+</header>
+
+<!-- ═══════════════════════════════ 01 ═══════════════════════════════ -->
+<section id="map">
+  <p class="eyebrow" style="--st:var(--agent)">01 · the map</p>
+  <h2>Three pipelines, one tab</h2>
+  <div class="prose">
+    <p>Nothing here is a single flow. Three separate pipelines run at once, and most confusion about
+    the codebase comes from reading one and assuming it explains another.</p>
+    <p>The <strong>live drive</strong> (top row) is the one that feels like a chat: your browser posts
+    a message, a server-side registry hands it to the Agent SDK, and the SDK spawns the real
+    <code>claude</code> CLI. The <strong>read-back</strong> (middle row, flowing right to left) is
+    what fills the grid: that same CLI appends to a JSONL transcript on disk, and a parser turns those
+    files into tiles. The two meet in your browser but never talk to each other directly — <em>disk is
+    the only thing they share</em>. The <strong>metrics</strong> pipeline (bottom) is fully
+    independent and runs on every machine you use, not just this one.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">system.map</span>
+      <div class="ctrl">
+        <button id="flowMode" type="button">Show file paths</button>
+        <button id="flowPlay" type="button" aria-pressed="false">▶ Play flow</button>
+      </div>
+    </div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-flow" viewBox="0 0 1000 400" role="img"
+        aria-label="Three pipelines. Top row left to right: browser pane, the send API route, the session manager, and the Agent SDK running the claude CLI. The CLI writes a JSONL transcript, which flows right to left along the middle row through the parser and the bento API back into the browser grid. The bottom row is a separate metrics pipeline: a Stop hook on each machine posts to a metrics server, which serves aggregate endpoints to the dashboard."></svg>
+    </div></div>
+    <div class="legend">
+      <span><i style="background:var(--ui)"></i>browser</span>
+      <span><i style="background:var(--agent)"></i>live session</span>
+      <span><i style="background:var(--disk)"></i>disk</span>
+      <span><i style="background:var(--cache)"></i>parse &amp; cache</span>
+      <span><i style="background:var(--metric)"></i>metrics</span>
+    </div>
+  </div></div>
+
+  <div class="note warn"><p class="lbl">The boundary that decides everything</p>
+  <p>The grid and the live panes both need <code>~/.claude/projects</code> and a local
+  <code>claude</code> login. That makes the home page <strong>local-only</strong> — deployed to
+  Vercel it renders, but finds zero sessions. Only <code>/dashboard</code> is remote-safe, because
+  it reads a network API instead of a home directory.</p></div>
+</section>
+
+<!-- ═══════════════════════════════ 02 ═══════════════════════════════ -->
+<section id="transcripts">
+  <p class="eyebrow" style="--st:var(--disk)">02 · the substrate</p>
+  <h2>The data was already there</h2>
+  <div class="prose">
+    <p>Bento does not instrument Claude Code. It reads what Claude Code already writes: one
+    append-only JSONL file per session, under a directory named after the working directory with
+    slashes turned into dashes.</p>
+    <pre><i>~/.claude/projects/-Users-thomas-minami-dashboard/</i>
+  <b>cd27fae5-2d99-4ad0-bd16-e23f9f0d3e7c.jsonl</b>   <i>← one session</i>
+  4f1a....jsonl
+  <i>...375 more on this machine, some 29–61 MB</i></pre>
+    <p class="sql-note">The slug is the absolute cwd with <code>/</code> → <code>-</code>. That is
+    also why memory never transfers between machines: a different home directory is a different slug.</p>
+    <p>This choice is the reason the whole product is possible in a weekend, and also the reason for
+    every hard problem in the next three sections. Reading someone else's append-only log is cheap
+    the first time and expensive if you keep re-reading it.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead"><span class="ptitle">listSessions.pipeline</span></div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-pipe" viewBox="0 0 1000 300" role="img"
+        aria-label="Pipeline from disk to grid tile. All transcript files are stat-ed cheaply and sorted by modification time, then capped to the 150 most recent candidates. Each candidate goes through a three-way branch: unchanged files return from cache, appended files are parsed incrementally, and rewritten files are fully re-parsed. Results become session metadata, capped at the 60 most recent, and are merged with semantic labels before reaching the grid."></svg>
+    </div></div>
+  </div></div>
+
+  <div class="note good"><p class="lbl">Why stat first</p>
+  <p><code>fs.statSync</code> on 375 files costs microseconds. Opening them costs seconds. The
+  candidate window exists so <code>summarize()</code> is never <em>called</em> on a file that
+  couldn't possibly be relevant — filtering before the expensive step, not inside it.</p></div>
+</section>
+
+<!-- ═══════════════════════════════ 03 ═══════════════════════════════ -->
+<section id="incremental">
+  <p class="eyebrow" style="--st:var(--disk)">03 · the parser</p>
+  <h2>Read only what's new</h2>
+  <div class="prose">
+    <p>The first version of the parser read the whole file whenever its modification time changed.
+    That sounds harmless until you notice what an <em>active</em> session does: it appends on nearly
+    every turn, so its mtime changes on nearly every 5-second poll. On a 29 MB transcript, that meant
+    re-reading and re-parsing 29 MB every few seconds — on Node's single event loop, which every
+    other request and every open pane was also waiting on.</p>
+    <p>The fix is to treat the file as what it is: an append log. Keep a running fold state per file,
+    and on each poll read only the bytes past where you stopped.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">incremental.read</span>
+      <div class="ctrl">
+        <div class="steps"><span id="pStepLbl">step 1 / 4</span><span class="dotrow" id="pDots"></span></div>
+        <button id="pPrev" type="button">‹ back</button>
+        <button id="pNext" type="button">next ›</button>
+      </div>
+    </div>
+    <div class="pbody">
+      <div class="scroll">
+        <svg id="viz-parse" viewBox="0 0 1000 250" role="img"
+          aria-label="Four polls against a growing transcript file, showing which byte range is read each time: a full cold read, an incremental tail read after the file grows, a zero-byte cache hit when nothing changed, and a full re-parse when the file's head fingerprint changes."></svg>
+      </div>
+      <p class="narr" id="pNarr"></p>
+    </div>
+  </div></div>
+
+  <div class="prose">
+    <p>The cache key is not just the modification time. It is <code>(mtime, size)</code> <em>plus</em>
+    a SHA-1 of the first 4 KB. That third element exists for one specific failure: a file that gets
+    truncated and rewritten to a coincidentally equal-or-larger size. Under mtime-and-size alone that
+    is indistinguishable from an append, so the parser would fold entirely unrelated bytes into the
+    accumulator and produce a permanently wrong total with no error anywhere.</p>
+  </div>
+
+  <div class="note bug"><p class="lbl">The byte that isn't a character</p>
+  <p>Reading an arbitrary byte range can land mid-way through a multi-byte UTF-8 character.
+  <code>Buffer#toString</code> quietly replaces the fragment with <code>U+FFFD</code> — corrupting a
+  line that was perfectly valid on disk. <code>splitTrailingIncompleteUtf8()</code> holds the
+  trailing fragment back and prepends it to the next read.</p></div>
+</section>
+
+<!-- ═══════════════════════════════ 04 ═══════════════════════════════ -->
+<section id="caches">
+  <p class="eyebrow" style="--st:var(--cache)">04 · the caches</p>
+  <h2>Three caches, three different bounds</h2>
+  <div class="prose">
+    <p>Every cache here is bounded, and each bound was chosen for a different reason. An unbounded
+    <code>Map</code> keyed by session id is a real leak — one entry per session ever seen, growing
+    for the life of the process.</p>
+  </div>
+
+  <table>
+    <thead><tr><th>Cache</th><th class="num">Bound</th><th>Keyed by</th><th>Why this bound</th></tr></thead>
+    <tbody>
+      <tr><td><strong>meta cache</strong><br><code>~/.minami-bento/meta-cache.json</code></td>
+        <td class="num">500</td><td>mtime · size · head SHA-1</td>
+        <td>Mirrored to disk so a cold launch reads the cache instead of re-parsing every file — the
+        measured difference was <strong>9.3 s → 8 ms</strong>.</td></tr>
+      <tr><td><strong>turns cache</strong></td><td class="num">60</td><td>file mtime</td>
+        <td>Holds parsed turns for an <em>open</em> pane. Small because only a few panes are ever open.</td></tr>
+      <tr><td><strong>id → path index</strong></td><td class="num">2000</td><td>session id</td>
+        <td>Pure lookup table, cheap per entry, so it can afford to be large.</td></tr>
+      <tr><td><strong>candidate window</strong></td><td class="num">150</td><td>mtime rank</td>
+        <td>Not a cache — a pre-filter. See the trap below.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note bug"><p class="lbl">Cache thrash: the bug that hid inside the fix</p>
+  <p>With 375 transcripts and a 500-entry cache, summarizing <em>every</em> file on every sweep pushes
+  past the bound mid-sweep — so the sweep evicts and force-reparses large files <strong>that the same
+  sweep just cached</strong>. The event loop blocks again, with a perfectly correct parser and a
+  perfectly correct cache. Capping candidates to the 150 most recent is what actually closed it.</p></div>
+
+  <div class="prose">
+    <p>Both disk-mirrored caches write to a temp file and <code>rename</code> into place. A torn write
+    leaves JSON that fails to parse, which returns <code>{}</code> — and for the enrichment cache the
+    next write would then persist that empty object, permanently erasing every hand-curated label.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ 05 ═══════════════════════════════ -->
+<section id="turn">
+  <p class="eyebrow" style="--st:var(--agent)">05 · the live turn</p>
+  <h2>One message, end to end</h2>
+  <div class="prose">
+    <p>A live pane is not a transcript viewer. It holds a long-lived <code>query()</code> from the
+    Agent SDK in streaming-input mode, so the same session takes message after message — exactly like
+    the CLI. The browser and that session communicate over two channels at once: a POST to send, and
+    an <code>EventSource</code> to receive.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead"><span class="ptitle">turn.sequence</span></div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-turn" viewBox="0 0 1000 430" role="img"
+        aria-label="Sequence diagram across four lanes: browser, API route, session manager, and Agent SDK. The browser opens an SSE stream and posts a message; the manager creates a session and starts an SDK query; the SDK streams partial messages back which the manager translates into events; a tool call pauses on a permission prompt until the browser answers; the turn ends with a result event and an idle timer is armed."></svg>
+    </div></div>
+  </div></div>
+
+  <h3>Two keys, one session</h3>
+  <div class="prose">
+    <p>Every session sits in the registry under <em>two</em> keys: the pane that started it, and —
+    once the SDK reports its real id — <code>live:&lt;sessionId&gt;</code>. That second key is what
+    lets a different pane, or the same pane after a refresh, find a session that is already running
+    instead of starting a cold duplicate.</p>
+    <pre><i>// manager.ts — the registry lives on globalThis so a dev hot-reload</i>
+<i>// doesn't orphan running sessions and leak their subprocesses.</i>
+const store = ((globalThis as any).__minamiAgentStore ||= new Map());
+store.set(key, s);                    <i>// pane-1785…-3-a7f</i>
+store.set(<b>SID_KEY + m.session_id</b>, s);  <i>// live:cd27fae5-…</i></pre>
+  </div>
+
+  <div class="note warn"><p class="lbl">Both keys, or a leak</p>
+  <p>Anything that removes a session has to remove <em>both</em> aliases, and identity-check
+  (<code>store.get(s.key) === s</code>) before deleting — otherwise cleanup for a dead session can
+  delete a newer one that has since claimed the same pane key.</p></div>
+</section>
+
+<!-- ═══════════════════════════════ 06 ═══════════════════════════════ -->
+<section id="activity">
+  <p class="eyebrow" style="--st:var(--agent)">06 · the label</p>
+  <h2>Saying what it's doing, honestly</h2>
+  <div class="prose">
+    <p>"Working…" is a useless label. The server tracks a real phase per session and derives a
+    specific line — <em>reading package.json</em>, <em>waiting on approval · run: npm test</em> — from
+    what is actually in flight.</p>
+    <p>This is computed <strong>server-side on purpose</strong>. It survives a browser refresh by
+    riding the reconnect snapshot, and it makes it impossible for the inline transcript indicator and
+    the composer status line to disagree, because there is only one source.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">activity.phase</span>
+      <div class="ctrl"><button id="fsmMode" type="button">Show what triggers each</button></div>
+    </div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-fsm" viewBox="0 0 1000 320" role="img"
+        aria-label="State machine of the eight activity phases: idle, spawning, thinking, responding, tool, awaiting, retrying and compacting, with the transitions between them."></svg>
+    </div></div>
+  </div></div>
+
+  <div class="prose">
+    <p>Two details do most of the work. <strong>Tool labels refine while the arguments are still
+    streaming</strong> — partial JSON is parsed on each delta, so a fast tool shows its real target
+    for essentially its whole life instead of flashing a generic placeholder. And
+    <code>settle()</code> recomputes the phase from what remains in flight <em>after</em> a tool
+    result lands, rather than leaving the finished tool's label on screen.</p>
+    <pre><i>// the stale-label bug: without settle(), a finished tool keeps animating</i>
+function settle(s) {
+  if (s.pending.size) return touch(s, <b>"awaiting"</b>);        <i>// a human is blocking</i>
+  if (s.liveTools.size || s.liveTasks.size) return touch(s, <b>"tool"</b>);
+  touch(s, s.busy ? <b>"thinking"</b> : <b>"idle"</b>);
+}</pre>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ 07 ═══════════════════════════════ -->
+<section id="reconnect">
+  <p class="eyebrow" style="--st:var(--agent)">07 · the dropped connection</p>
+  <h2>Surviving a refresh, and a tunnel</h2>
+  <div class="prose">
+    <p>This is a mobile-first dashboard, so connections drop constantly — switching networks, a
+    laptop sleeping, a proxy killing an idle stream. <code>EventSource</code> reconnects at the
+    transport level silently, which is the problem: the socket comes back, but everything that
+    streamed during the gap is simply missing, and nothing above the transport knows.</p>
+    <p>The fix is to notice. Any <code>onopen</code> past the first is treated as a reconnect: tear
+    the stream down and reopen it as an explicit re-attach, which is the same path a manual refresh
+    takes. The server answers a re-attach with a snapshot — in-flight text, busy state, live activity,
+    and any permission prompt still waiting on an answer.</p>
+  </div>
+
+  <div class="note bug"><p class="lbl">Which copy is right?</p>
+  <p>After a resync you hold two versions of the turn: what the browser has, and what the server just
+  sent. Prefer local blindly and you lose everything that arrived during the outage. Prefer the server
+  blindly and you roll back text the user already watched appear. The tiebreak is timing — did a
+  delta land <em>after</em> the resync started? — not a guess about which source is fresher.</p></div>
+
+  <div class="prose">
+    <p>The same "don't trust it, verify" instinct shows up in the permission lifecycle. A prompt is a
+    promise parked in a map, and a promise nobody resolves pins the session <code>busy</code> forever
+    — no <code>result</code> will ever arrive to trigger cleanup, so the session and its subprocess
+    leak permanently. Three separate paths therefore auto-deny an orphaned prompt: the idle reaper,
+    the consumer loop's <code>finally</code>, and <code>closeSession()</code>.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ 08 ═══════════════════════════════ -->
+<section id="metrics">
+  <p class="eyebrow" style="--st:var(--metric)">08 · the second machine</p>
+  <h2>Two machines, one number</h2>
+  <div class="prose">
+    <p>Work happens on the laptop and on a Hetzner box that runs the Minami bot. Counting usage on
+    only one of them is worse than not counting: it looks precise and is wrong.</p>
+    <p>The collector is deliberately boring — a zero-dependency Node server appending one JSON line
+    per turn. It binds to loopback only and is published through a Tailscale Funnel, which gives real
+    HTTPS on a <code>*.ts.net</code> name with no domain to buy and no inbound port to open.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">metrics.topology</span>
+      <div class="ctrl"><button id="mPlay" type="button" aria-pressed="false">▶ Play flow</button></div>
+    </div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-metrics" viewBox="0 0 1000 340" role="img"
+        aria-label="Two machines, a laptop and a Hetzner box, each running a Claude Code Stop hook that posts usage to a metrics server on the Hetzner box. The server appends to an events log and exposes stats, projects, timeseries and a live stream endpoint through a Tailscale Funnel to the dashboard in a browser."></svg>
+    </div></div>
+    <div class="legend">
+      <span><i style="background:var(--metric)"></i>metrics service</span>
+      <span><i style="background:var(--agent)"></i>machines emitting</span>
+      <span><i style="background:var(--ui)"></i>browser</span>
+    </div>
+  </div></div>
+
+  <div class="note warn"><p class="lbl">The read key is obscurity, not auth</p>
+  <p><code>INGEST_TOKEN</code> genuinely gates writes. <code>READ_KEY</code> travels as
+  <code>NEXT_PUBLIC_*</code>, which means it is compiled into the browser bundle and visible to anyone
+  who loads the page. Real privacy has to come from gating the deploy itself.</p></div>
+</section>
+
+<!-- ═══════════════════════════════ 09 ═══════════════════════════════ -->
+<section id="accounts">
+  <p class="eyebrow" style="--st:var(--ui)">09 · whose account is this</p>
+  <h2>Don't trust the banner</h2>
+  <div class="prose">
+    <p>Claude Max accounts are pooled and swapped by a separate CLI, <code>token-slayer</code>. When
+    the active account's credential dies, it silently fails over to whichever slot is ready — and
+    nothing anywhere says so. You keep working, and hours of usage land on the wrong weekly limit.</p>
+    <p>The obvious implementation is to read the CLI's own status output. That implementation is
+    wrong. Its <code>active</code> field only echoes a label written on the last switch <em>attempt</em>;
+    it is not evidence the switch took.</p>
+    <pre><i>// verified 2026-07-29: these two disagreed, and the CLI was the liar</i>
+state.json      active_slot = <u>oedevai2@gmail.com</u>     <i>← a label</i>
+~/.claude.json  oauthAccount.emailAddress = <b>pdtoan2811@gmail.com</b>  <i>← the truth</i></pre>
+    <p class="sql-note">Claude Code writes <code>oauthAccount</code> from the credential it actually
+    authenticated with, so it cannot drift the same way.</p>
+    <p>So <code>/api/accounts</code> layers a <code>live</code> block on top of the CLI output, read
+    from that file, and the alert triggers on <em>that</em>. It also reports
+    <code>claimsMismatch</code> — the CLI disagreeing with reality is itself worth surfacing, because
+    it means a "switch back" may report success without changing anything. Which is why the alert
+    re-reads identity after switching rather than believing the output.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ 10 ═══════════════════════════════ -->
+<section id="hardening">
+  <p class="eyebrow" style="--st:var(--ui)">10 · the scar tissue</p>
+  <h2>What broke, and what fixed it</h2>
+  <div class="prose">
+    <p>Most of the non-obvious code in this repo is not cleverness. It is a specific incident that
+    happened once. Kept together, the list is the honest shape of the project.</p>
+  </div>
+
+  <table>
+    <thead><tr><th>What broke</th><th>Why</th><th>The fix</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Every pane froze while one session streamed</strong></td>
+        <td>Full re-read + re-parse of a 29 MB transcript on every mtime change, blocking the event loop</td>
+        <td>Incremental fold over appended bytes only</td></tr>
+      <tr><td><strong>It froze again, with a correct parser</strong></td>
+        <td>375 files vs a 500-entry cache — each sweep evicted what it had just cached</td>
+        <td>Stat-only pre-filter to the 150 most recent</td></tr>
+      <tr><td><strong>Curated labels vanished</strong></td>
+        <td>Torn cache write → unparsable JSON → <code>{}</code> → written back as empty</td>
+        <td>Atomic temp-file + rename, re-read before merge</td></tr>
+      <tr><td><strong>The whole server died</strong></td>
+        <td>An un-awaited SDK promise rejected with no handler; Node's default is to exit</td>
+        <td>Process-level handlers in <code>instrumentation.ts</code></td></tr>
+      <tr><td><strong>The metrics collector died</strong></td>
+        <td><code>JSON.parse("null")</code> doesn't throw — the next line did</td>
+        <td>Null-check plus the same process-level net</td></tr>
+      <tr><td><strong>A dialog with no working button</strong></td>
+        <td>Session ended holding an unresolved permission promise</td>
+        <td>Auto-deny on every terminal path</td></tr>
+      <tr><td><strong>Stop denied the wrong turn</strong></td>
+        <td>A fast follow-up's prompt landed in <code>pending</code> mid-<code>interrupt()</code></td>
+        <td>Snapshot pending entries before awaiting</td></tr>
+      <tr><td><strong>Silently billing the wrong account</strong></td>
+        <td>Trusting a CLI's own status label as evidence</td>
+        <td>Read the credential Claude Code actually used</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note good"><p class="lbl">The pattern</p>
+  <p>Six of these eight are the same mistake in different clothes: <strong>trusting a signal that
+  looks authoritative but is only a claim</strong> — an mtime, a status label, a reported success, a
+  connection that reopened. The recurring fix is to find the thing that cannot lie and check that
+  instead.</p></div>
+
+  <footer>
+    <p>Generated from the source at <code>~/minami-dashboard</code>. The live surfaces are
+    <code>/</code> (local only), <code>/dashboard</code>, and <code>/settings</code>; rebuild and
+    hot-swap with <code>bash bin/serve.sh</code>. Companion notes live in the vault under
+    <code>10-19 Projects/minami-dashboard.md</code>.</p>
+  </footer>
+</section>
+
+</div>
+</div>
+
+<script>
+(function(){
+"use strict";
+var SVGNS="http://www.w3.org/2000/svg";
+var reduce=matchMedia("(prefers-reduced-motion:reduce)").matches;
+
+/* CSS custom properties do NOT resolve in SVG presentation attributes -- they must be set as
+   CSS properties instead, or every shape silently paints black. */
+function el(t,a){var n=document.createElementNS(SVGNS,t);for(var k in a){var v=a[k];
+  if(typeof v==="string"&&v.indexOf("var(")>-1){n.style.setProperty(k,v);}else{n.setAttribute(k,v);}}
+  return n;}
+function txt(x,y,s,o){o=o||{};var n=el("text",{x:x,y:y,fill:o.fill||"var(--text)",
+  "font-family":o.mono===false?"var(--body)":"var(--mono)","font-size":o.size||12,
+  "text-anchor":o.anchor||"start","font-weight":o.weight||400,"letter-spacing":o.ls||0});
+  n.textContent=s;return n;}
+function rr(x,y,w,h,r,a){var o={x:x,y:y,width:w,height:h,rx:r};for(var k in a)o[k]=a[k];
+  return el("rect",o);}
+function clear(n){while(n.firstChild)n.removeChild(n.firstChild);}
+
+/* ── 01 · system map ─────────────────────────────────────────────── */
+var flow=document.getElementById("viz-flow");
+var BW=180,BH=58;
+var NODES=[
+ {id:"pane", x:30, y:26, t:"chat pane",       s:"app/page.tsx",            f:"components/",         c:"ui"},
+ {id:"send", x:265,y:26, t:"POST /agent/send",s:"+ SSE /agent/stream",     f:"app/api/agent/",      c:"agent"},
+ {id:"mgr",  x:500,y:26, t:"manager.ts",      s:"session registry",        f:"lib/agent/",          c:"agent"},
+ {id:"sdk",  x:735,y:26, t:"Agent SDK",       s:"spawns claude CLI",       f:"@anthropic-ai/",      c:"agent"},
+ {id:"jsonl",x:735,y:150,t:"*.jsonl",         s:"append-only transcript",  f:"~/.claude/projects/", c:"disk"},
+ {id:"pars", x:500,y:150,t:"summarize()",     s:"incremental + cached",    f:"lib/claude-sessions", c:"cache"},
+ {id:"bapi", x:265,y:150,t:"GET /bento/*",    s:"sessions · session/[id]", f:"app/api/bento/",      c:"cache"},
+ {id:"grid", x:30, y:150,t:"bento grid",      s:"tiles · 5s poll",         f:"app/page.tsx",        c:"ui"},
+ {id:"hook", x:30, y:274,t:"Stop hook ×N",    s:"every machine",           f:"server/usage-hook.py",c:"agent"},
+ {id:"msrv", x:265,y:274,t:"metrics server",  s:"events.jsonl",            f:"server/metrics-*.js", c:"metric"},
+ {id:"mep",  x:500,y:274,t:"/stats /projects",s:"/stream /timeseries",     f:"Tailscale Funnel",    c:"metric"},
+ {id:"dash", x:735,y:274,t:"/dashboard",      s:"cards",                   f:"app/dashboard/",      c:"ui"}
+];
+var EDGES=[["pane","send"],["send","mgr"],["mgr","sdk"],["sdk","jsonl"],
+           ["jsonl","pars"],["pars","bapi"],["bapi","grid"],
+           ["hook","msrv"],["msrv","mep"],["mep","dash"]];
+function nb(id){for(var i=0;i<NODES.length;i++)if(NODES[i].id===id)return NODES[i];}
+function epath(a,b){
+  if(a.x===b.x){ /* vertical */
+    var x=a.x+BW/2,y1=a.y+BH,y2=b.y;
+    return "M"+x+","+y1+" L"+x+","+y2;
+  }
+  var right=b.x>a.x;
+  var x1=right?a.x+BW:a.x, x2=right?b.x:b.x+BW;
+  var y1=a.y+BH/2, y2=b.y+BH/2, mx=(x1+x2)/2;
+  return "M"+x1+","+y1+" C"+mx+","+y1+" "+mx+","+y2+" "+x2+","+y2;
+}
+var flowMode=0,flowAnim=null;
+function drawFlow(){
+  clear(flow);
+  EDGES.forEach(function(e){
+    var a=nb(e[0]),b=nb(e[1]);
+    flow.appendChild(el("path",{d:epath(a,b),fill:"none",stroke:"var(--rule)","stroke-width":1.6}));
+  });
+  NODES.forEach(function(n){
+    flow.appendChild(rr(n.x,n.y,BW,BH,9,{fill:"var(--surface)",stroke:"var(--rule)","stroke-width":1}));
+    flow.appendChild(rr(n.x,n.y,4,BH,2,{fill:"var(--"+n.c+")"}));
+    flow.appendChild(txt(n.x+16,n.y+24,n.t,{size:12.5,weight:600}));
+    flow.appendChild(txt(n.x+16,n.y+42,flowMode?n.f:n.s,{size:10.5,fill:"var(--text3)"}));
+  });
+  [[30,"live drive — browser to a running claude"],
+   [150,"read back — transcript to tile"],
+   [274,"metrics — independent, every machine"]].forEach(function(r,i){
+    var y=[26,150,274][i];
+    flow.appendChild(txt(30,y-8,r[1],{size:9.5,fill:"var(--text3)",ls:".1em"}));
+  });
+}
+drawFlow();
+document.getElementById("flowMode").onclick=function(){
+  flowMode=1-flowMode; this.textContent=flowMode?"Show roles":"Show file paths"; drawFlow();};
+document.getElementById("flowPlay").onclick=function(){
+  var on=this.getAttribute("aria-pressed")==="true";
+  this.setAttribute("aria-pressed",String(!on));
+  this.textContent=on?"▶ Play flow":"■ Stop";
+  if(on){ if(flowAnim)cancelAnimationFrame(flowAnim); flowAnim=null;
+    Array.prototype.forEach.call(flow.querySelectorAll(".pkt"),function(p){p.remove()}); return; }
+  var t0=null;
+  var pkts=EDGES.map(function(e,i){
+    var a=nb(e[0]),b=nb(e[1]);
+    var pp=el("path",{d:epath(a,b),fill:"none",stroke:"none"}); flow.appendChild(pp);
+    var c=el("circle",{r:3.6,fill:"var(--"+b.c+")","class":"pkt"}); flow.appendChild(c);
+    return {p:pp,c:c,off:i*0.11};
+  });
+  function frame(ts){
+    if(!t0)t0=ts; var e=(ts-t0)/2600;
+    pkts.forEach(function(k){
+      var u=(e-k.off)%1; if(u<0)u+=1;
+      var L=k.p.getTotalLength(), pt=k.p.getPointAtLength(u*L);
+      k.c.setAttribute("cx",pt.x); k.c.setAttribute("cy",pt.y);
+      k.c.setAttribute("opacity",u<.06||u>.94?0:.95);
+    });
+    flowAnim=requestAnimationFrame(frame);
+  }
+  if(!reduce)flowAnim=requestAnimationFrame(frame);
+};
+
+/* ── 02 · listSessions pipeline ──────────────────────────────────── */
+(function(){
+  var s=document.getElementById("viz-pipe"); if(!s)return;
+  function box(x,y,w,h,t,sub,c,dash){
+    s.appendChild(rr(x,y,w,h,9,{fill:"var(--surface)",stroke:"var(--"+(c||"rule")+")",
+      "stroke-width":1.2,"stroke-dasharray":dash||"none"}));
+    s.appendChild(txt(x+w/2,y+(sub?24:h/2+4),t,{size:12,weight:600,anchor:"middle"}));
+    if(sub)s.appendChild(txt(x+w/2,y+41,sub,{size:10,fill:"var(--text3)",anchor:"middle"}));
+  }
+  function arrow(x1,y1,x2,y2){
+    s.appendChild(el("path",{d:"M"+x1+","+y1+" L"+x2+","+y2,stroke:"var(--rule)","stroke-width":1.6,fill:"none"}));
+    var ang=Math.atan2(y2-y1,x2-x1);
+    s.appendChild(el("path",{d:"M"+x2+","+y2+" L"+(x2-8*Math.cos(ang-0.4))+","+(y2-8*Math.sin(ang-0.4))+
+      " L"+(x2-8*Math.cos(ang+0.4))+","+(y2-8*Math.sin(ang+0.4))+" Z",fill:"var(--rule)"}));
+  }
+  box(24,110,150,56,"375 .jsonl files","statSync only","disk");
+  arrow(174,138,214,138);
+  box(214,110,150,56,"sort by mtime","cap to 150","disk");
+  arrow(364,138,404,138);
+  /* three-way branch */
+  s.appendChild(txt(479,30,"summarize()  —  three-way branch",{size:10.5,fill:"var(--text3)",anchor:"middle",ls:".08em"}));
+  box(404,48,150,50,"cache hit","0 bytes read","metric");
+  box(404,124,150,50,"appended","read tail only","cache");
+  box(404,200,150,50,"rewritten","full re-parse","ui");
+  arrow(404,138,404,73); arrow(404,138,404,149); arrow(404,138,404,225);
+  s.appendChild(el("path",{d:"M394,138 L404,138",stroke:"var(--rule)","stroke-width":1.6}));
+  arrow(554,73,606,120); arrow(554,149,606,138); arrow(554,225,606,156);
+  box(606,110,150,56,"SessionMeta","cap to 60","cache");
+  arrow(756,138,796,138);
+  box(796,110,150,56,"grid tile","+ semantic label","ui");
+})();
+
+/* ── 03 · incremental read (step theatre) ────────────────────────── */
+var pv=document.getElementById("viz-parse"), pStep=0;
+var PN=[
+ "<b>Poll 1 — cold.</b> Nothing cached, so the whole file is read once and folded into an accumulator. This is the only time the full cost is paid.",
+ "<b>Poll 2 — the session appended.</b> mtime and size both changed, but the first 4 KB still hash the same, so this is a genuine append: read <b>only the new bytes</b> and fold them onto the existing state.",
+ "<b>Poll 3 — nothing changed.</b> mtime and size match the cache entry. Return immediately. <b>Zero bytes read</b>, no parsing, no event-loop time — this is the common case for the other 149 candidates.",
+ "<b>Poll 4 — the head fingerprint changed.</b> The file was truncated and rewritten. mtime-and-size alone would call this an append and fold unrelated bytes in forever. The SHA-1 of the head catches it, and the accumulator is thrown away."
+];
+function drawParse(){
+  clear(pv);
+  var x=60,y=76,W=880,H=52;
+  var widths=[520,700,700,430];
+  var reads=[[0,520],[520,700],[0,0],[0,430]];
+  var w=widths[pStep], r=reads[pStep];
+  pv.appendChild(txt(60,44,"transcript on disk",{size:10.5,fill:"var(--text3)",ls:".08em"}));
+  /* file body */
+  pv.appendChild(rr(x,y,w,H,6,{fill:"var(--surface2)",stroke:"var(--rule)","stroke-width":1}));
+  /* head fingerprint region */
+  pv.appendChild(rr(x,y,46,H,6,{fill:"none",stroke:"var(--cache)","stroke-width":1.4,"stroke-dasharray":"3 3"}));
+  pv.appendChild(txt(x+23,y+H+16,"head",{size:9,fill:"var(--cache)",anchor:"middle"}));
+  /* read window */
+  if(r[1]>r[0]){
+    pv.appendChild(rr(x+r[0],y,r[1]-r[0],H,6,{fill:"var(--"+(pStep===3?"ui":pStep===0?"disk":"agent")+")",opacity:.22}));
+    pv.appendChild(rr(x+r[0],y,r[1]-r[0],H,6,{fill:"none",stroke:"var(--"+(pStep===3?"ui":pStep===0?"disk":"agent")+")","stroke-width":1.6}));
+    pv.appendChild(txt(x+(r[0]+r[1])/2,y+H/2+5,
+      pStep===0?"full read":pStep===1?"read only this":"full re-parse",
+      {size:11,weight:600,anchor:"middle",fill:"var(--text)"}));
+  }else{
+    pv.appendChild(txt(x+w/2,y+H/2+5,"nothing read",{size:11,weight:600,anchor:"middle",fill:"var(--metric)"}));
+  }
+  /* previous high-water mark */
+  if(pStep===1){
+    pv.appendChild(el("path",{d:"M"+(x+520)+","+(y-10)+" L"+(x+520)+","+(y+H+10),
+      stroke:"var(--text3)","stroke-width":1,"stroke-dasharray":"3 3"}));
+    pv.appendChild(txt(x+520,y-16,"where we stopped last time",{size:9.5,fill:"var(--text3)",anchor:"middle"}));
+  }
+  /* cache key row */
+  var keys=[["mtime","no entry","changed","same","changed"],["size","no entry","larger","same","smaller"],
+            ["head sha","no entry","same","same","different"]];
+  var ky=190;
+  pv.appendChild(txt(60,ky-14,"cache key",{size:10.5,fill:"var(--text3)",ls:".08em"}));
+  keys.forEach(function(row,i){
+    var yy=ky+i*18;
+    pv.appendChild(txt(60,yy,row[0],{size:10.5,fill:"var(--text3)"}));
+    var val=row[pStep+1];
+    var bad=(pStep===3&&i===2)||(pStep===3&&i===1);
+    pv.appendChild(txt(160,yy,val,{size:10.5,weight:600,
+      fill:val==="same"?"var(--metric)":bad?"var(--ui)":"var(--text2)"}));
+  });
+  /* verdict */
+  var verdicts=["cold — parse everything","append — incremental fold","hit — return cached meta","rewrite — discard and reparse"];
+  pv.appendChild(txt(940,ky+18,verdicts[pStep],{size:12,weight:600,anchor:"end",
+    fill:"var(--"+(pStep===2?"metric":pStep===3?"ui":"agent")+")"}));
+  document.getElementById("pStepLbl").textContent="step "+(pStep+1)+" / 4";
+  document.getElementById("pNarr").innerHTML=PN[pStep];
+  var d=document.getElementById("pDots"); clear(d);
+  for(var i=0;i<4;i++){var b=document.createElement("i"); if(i===pStep)b.className="on"; d.appendChild(b);}
+}
+drawParse();
+document.getElementById("pNext").onclick=function(){pStep=(pStep+1)%4;drawParse();};
+document.getElementById("pPrev").onclick=function(){pStep=(pStep+3)%4;drawParse();};
+
+/* ── 05 · turn sequence ──────────────────────────────────────────── */
+(function(){
+  var s=document.getElementById("viz-turn"); if(!s)return;
+  var lanes=[{x:110,t:"browser",c:"ui"},{x:370,t:"api route",c:"agent"},
+             {x:630,t:"manager.ts",c:"agent"},{x:890,t:"Agent SDK",c:"agent"}];
+  lanes.forEach(function(l){
+    s.appendChild(rr(l.x-72,20,144,30,8,{fill:"var(--surface2)",stroke:"var(--"+l.c+")","stroke-width":1.2}));
+    s.appendChild(txt(l.x,40,l.t,{size:11.5,weight:600,anchor:"middle"}));
+    s.appendChild(el("path",{d:"M"+l.x+",56 L"+l.x+",410",stroke:"var(--rule)","stroke-width":1,"stroke-dasharray":"2 4"}));
+  });
+  var steps=[
+    [0,1,"open SSE stream","subscribe(key)"],
+    [0,1,"POST message","{key, cwd, message}"],
+    [1,2,"sendMessage()","queue + wake generator"],
+    [2,3,"query({prompt, options})","spawns claude"],
+    [3,2,"stream_event deltas","token by token"],
+    [2,0,"delta · thinking · tool","over SSE"],
+    [3,2,"canUseTool(name, input)","BLOCKS here"],
+    [2,0,"permission prompt","phase → awaiting"],
+    [0,2,"POST /agent/permission","decide() resolves"],
+    [3,2,"result","turn done"],
+    [2,0,"result · busy:false","scheduleIdle()"]
+  ];
+  steps.forEach(function(st,i){
+    var y=86+i*29;
+    var a=lanes[st[0]].x, b=lanes[st[1]].x, dir=b>a?1:-1;
+    var x1=a+dir*10, x2=b-dir*10;
+    var blocking=st[2].indexOf("canUseTool")===0;
+    s.appendChild(el("path",{d:"M"+x1+","+y+" L"+x2+","+y,
+      stroke:"var(--"+(blocking?"ui":"rule")+")","stroke-width":blocking?1.8:1.4}));
+    s.appendChild(el("path",{d:"M"+x2+","+y+" L"+(x2-dir*7)+","+(y-4)+" L"+(x2-dir*7)+","+(y+4)+" Z",
+      fill:"var(--"+(blocking?"ui":"rule")+")"}));
+    s.appendChild(txt((a+b)/2,y-6,st[2],{size:10.5,weight:600,anchor:"middle",
+      fill:blocking?"var(--ui)":"var(--text)"}));
+    s.appendChild(txt((a+b)/2,y+12,st[3],{size:9.5,anchor:"middle",fill:"var(--text3)"}));
+    s.appendChild(txt(28,y+4,String(i+1).length<2?"0"+(i+1):String(i+1),{size:9.5,fill:"var(--text3)"}));
+  });
+})();
+
+/* ── 06 · activity phase FSM ─────────────────────────────────────── */
+var fsm=document.getElementById("viz-fsm"), fsmMode=0;
+var PH=[
+ {id:"idle",     x:60, y:130,t:"idle",      w:"nothing running"},
+ {id:"spawning", x:230,y:40, t:"spawning",  w:"first send — cold SDK start"},
+ {id:"thinking", x:230,y:200,t:"thinking",  w:"turn started, no text yet"},
+ {id:"responding",x:430,y:200,t:"responding",w:"text_delta arriving"},
+ {id:"tool",     x:430,y:40, t:"tool",      w:"content_block_start: tool_use"},
+ {id:"awaiting", x:640,y:40, t:"awaiting",  w:"canUseTool blocked on a human"},
+ {id:"retrying", x:640,y:140,t:"retrying",  w:"system: api_retry"},
+ {id:"compacting",x:640,y:238,t:"compacting",w:"system: compact_boundary"}
+];
+var TR=[["idle","spawning"],["idle","thinking"],["spawning","thinking"],["thinking","responding"],
+        ["thinking","tool"],["responding","tool"],["tool","awaiting"],["awaiting","tool"],
+        ["tool","responding"],["thinking","retrying"],["thinking","compacting"],
+        ["responding","idle"],["tool","idle"]];
+function ph(id){for(var i=0;i<PH.length;i++)if(PH[i].id===id)return PH[i];}
+function drawFsm(){
+  clear(fsm);
+  var W=124,H=44;
+  /* Clip an edge to the RECTANGLE border rather than a fixed radial padding: a constant pad is
+     either shorter than half the box width (so the line starts inside the box) or longer than half
+     its height (so a vertical edge becomes a floating stub). Solve for the smaller of the two
+     axis intersections instead, then back off a few px so the arrowhead doesn't touch the border. */
+  function clip(cx,cy,ux,uy,gap){
+    var tx=ux!==0?(W/2)/Math.abs(ux):Infinity, ty=uy!==0?(H/2)/Math.abs(uy):Infinity;
+    var t=Math.min(tx,ty)+(gap||0);
+    return [cx+ux*t, cy+uy*t];
+  }
+  /* Bidirectional pairs (tool ⇄ awaiting) would draw straight over each other -- nudge each along
+     the perpendicular so both directions stay legible. */
+  function twin(a,b){
+    for(var i=0;i<TR.length;i++) if(TR[i][0]===b&&TR[i][1]===a) return true;
+    return false;
+  }
+  TR.forEach(function(t){
+    var a=ph(t[0]),b=ph(t[1]);
+    var x1=a.x+W/2,y1=a.y+H/2,x2=b.x+W/2,y2=b.y+H/2;
+    var dx=x2-x1,dy=y2-y1,L=Math.sqrt(dx*dx+dy*dy),ux=dx/L,uy=dy/L;
+    var off=twin(t[0],t[1])?5:0, px=-uy*off, py=ux*off;
+    var p1=clip(x1,y1,ux,uy,3), p2=clip(x2,y2,-ux,-uy,3);
+    var X1=p1[0]+px,Y1=p1[1]+py,X2=p2[0]+px,Y2=p2[1]+py;
+    fsm.appendChild(el("path",{d:"M"+X1+","+Y1+" L"+X2+","+Y2,
+      stroke:"var(--rule)","stroke-width":1.3,fill:"none"}));
+    var ang=Math.atan2(Y2-Y1,X2-X1);
+    fsm.appendChild(el("path",{d:"M"+X2+","+Y2+
+      " L"+(X2-7*Math.cos(ang-0.42))+","+(Y2-7*Math.sin(ang-0.42))+
+      " L"+(X2-7*Math.cos(ang+0.42))+","+(Y2-7*Math.sin(ang+0.42))+" Z",fill:"var(--rule)"}));
+  });
+  PH.forEach(function(n){
+    var acc=n.id==="awaiting"?"ui":n.id==="idle"?"text3":"agent";
+    fsm.appendChild(rr(n.x,n.y,W,H,10,{fill:"var(--surface)",stroke:"var(--"+acc+")","stroke-width":1.4}));
+    fsm.appendChild(txt(n.x+W/2,n.y+(fsmMode?19:27),n.t,{size:12,weight:600,anchor:"middle"}));
+    if(fsmMode)fsm.appendChild(txt(n.x+W/2,n.y+34,n.w,{size:8.5,fill:"var(--text3)",anchor:"middle"}));
+  });
+  fsm.appendChild(txt(60,300,fsmMode?"labels below each state are what puts it there"
+    :"every arrow is a real transition in handleMessage()",{size:10,fill:"var(--text3)"}));
+}
+drawFsm();
+document.getElementById("fsmMode").onclick=function(){
+  fsmMode=1-fsmMode; this.textContent=fsmMode?"Show phases only":"Show what triggers each"; drawFsm();};
+
+/* ── 08 · metrics topology ───────────────────────────────────────── */
+var mv=document.getElementById("viz-metrics"), mAnim=null;
+var MN=[
+ {id:"mac", x:40, y:40, w:210,h:66,t:"laptop",       s:"Stop hook → curl",       c:"agent"},
+ {id:"box", x:40, y:180,w:210,h:66,t:"Hetzner box",  s:"Stop hook → curl",       c:"agent"},
+ {id:"srv", x:350,y:106,w:220,h:78,t:"metrics-server.js",s:"127.0.0.1:8787 · zero-dep",c:"metric"},
+ {id:"log", x:350,y:232,w:220,h:60,t:"events.jsonl", s:"one line per turn",      c:"metric"},
+ {id:"fun", x:660,y:106,w:200,h:78,t:"Tailscale Funnel",s:"*.ts.net HTTPS",      c:"metric"},
+ {id:"brw", x:660,y:232,w:200,h:60,t:"/dashboard",   s:"SSE + polling",          c:"ui"}
+];
+var ME=[["mac","srv"],["box","srv"],["srv","log"],["srv","fun"],["fun","brw"]];
+function mn(id){for(var i=0;i<MN.length;i++)if(MN[i].id===id)return MN[i];}
+function mpath(a,b){
+  var x1=a.x+a.w,y1=a.y+a.h/2,x2=b.x,y2=b.y+b.h/2;
+  if(b.x<a.x+a.w&&b.x>=a.x){ x1=a.x+a.w/2;y1=a.y+a.h;x2=b.x+b.w/2;y2=b.y; return "M"+x1+","+y1+" L"+x2+","+y2; }
+  var mx=(x1+x2)/2;
+  return "M"+x1+","+y1+" C"+mx+","+y1+" "+mx+","+y2+" "+x2+","+y2;
+}
+(function(){
+  ME.forEach(function(e){
+    var a=mn(e[0]),b=mn(e[1]);
+    mv.appendChild(el("path",{d:mpath(a,b),fill:"none",stroke:"var(--rule)","stroke-width":1.6}));
+  });
+  MN.forEach(function(n){
+    mv.appendChild(rr(n.x,n.y,n.w,n.h,10,{fill:"var(--surface)",stroke:"var(--rule)","stroke-width":1}));
+    mv.appendChild(rr(n.x,n.y,4,n.h,2,{fill:"var(--"+n.c+")"}));
+    mv.appendChild(txt(n.x+16,n.y+27,n.t,{size:12.5,weight:600}));
+    mv.appendChild(txt(n.x+16,n.y+45,n.s,{size:10.5,fill:"var(--text3)"}));
+  });
+  mv.appendChild(txt(350,318,"INGEST_TOKEN gates writes · READ_KEY is only obscurity",
+    {size:10,fill:"var(--text3)"}));
+})();
+document.getElementById("mPlay").onclick=function(){
+  var on=this.getAttribute("aria-pressed")==="true";
+  this.setAttribute("aria-pressed",String(!on));
+  this.textContent=on?"▶ Play flow":"■ Stop";
+  if(on){ if(mAnim)cancelAnimationFrame(mAnim); mAnim=null;
+    Array.prototype.forEach.call(mv.querySelectorAll(".pkt"),function(p){p.remove()}); return; }
+  var t0=null;
+  var pk=ME.map(function(e,i){
+    var a=mn(e[0]),b=mn(e[1]);
+    var pp=el("path",{d:mpath(a,b),fill:"none",stroke:"none"}); mv.appendChild(pp);
+    var c=el("circle",{r:4,fill:"var(--"+b.c+")","class":"pkt"}); mv.appendChild(c);
+    return {p:pp,c:c,off:i*0.17};
+  });
+  function fr(ts){
+    if(!t0)t0=ts; var e=(ts-t0)/2800;
+    pk.forEach(function(k){
+      var u=(e-k.off)%1; if(u<0)u+=1;
+      var L=k.p.getTotalLength(), pt=k.p.getPointAtLength(u*L);
+      k.c.setAttribute("cx",pt.x); k.c.setAttribute("cy",pt.y);
+      k.c.setAttribute("opacity",u<.06||u>.94?0:.95);
+    });
+    mAnim=requestAnimationFrame(fr);
+  }
+  if(!reduce)mAnim=requestAnimationFrame(fr);
+};
+
+/* ── rail + scroll-spy ───────────────────────────────────────────── */
+var items=[["map","the map","agent"],["transcripts","the substrate","disk"],
+ ["incremental","the parser","disk"],["caches","the caches","cache"],
+ ["turn","the live turn","agent"],["activity","the label","agent"],
+ ["reconnect","dropped conn.","agent"],["metrics","second machine","metric"],
+ ["accounts","whose account","ui"],["hardening","scar tissue","ui"]];
+var rail=document.getElementById("rail");
+items.forEach(function(it,i){
+  var li=document.createElement("li");
+  var a=document.createElement("a");
+  a.href="#"+it[0]; a.id="r-"+it[0];
+  a.style.setProperty("--dot","var(--"+it[2]+")");
+  a.innerHTML='<span class="n">'+String(i+1).padStart(2,"0")+'</span><span>'+it[1]+'</span>';
+  li.appendChild(a); rail.appendChild(li);
+});
+var secs=items.map(function(i){return document.getElementById(i[0]);});
+var io=new IntersectionObserver(function(es){
+  es.forEach(function(e){
+    var a=document.getElementById("r-"+e.target.id);
+    if(!a)return;
+    if(e.isIntersecting){
+      Array.prototype.forEach.call(document.querySelectorAll(".rail a"),function(x){x.classList.remove("on")});
+      a.classList.add("on");
+    }
+  });
+},{rootMargin:"-20% 0px -70% 0px"});
+secs.forEach(function(s){if(s)io.observe(s);});
+})();
+</script>
