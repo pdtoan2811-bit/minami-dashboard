@@ -276,14 +276,27 @@ compressed into 5.5 GB, **6.0 of 7.2 GB swap in use**, and `kernel_task` at 20% 
 and swap I/O. That is what makes the machine hot — not dashboard CPU, which is negligible
 (`next-server` ~3%, polled endpoints 10–20 ms, idle page **0 long tasks / 0% main thread**).
 
-`use-agent.ts` now releases a pane's stream after **10 minutes hidden**, which hands the session to the
-existing reaper rather than inventing a second eviction path. Deliberately long: a warm pane means
-switching away and back is free, and re-attaching costs a cold start — this targets only the tab
-genuinely left in the background. It never releases mid-turn or over an unanswered prompt (a parked
-permission promise is auto-denied when the session is reaped, so releasing would answer for the user);
-it re-checks every 60 s instead, so a long unattended turn is still released once it lands. Coming back
-re-attaches down the same path a refresh takes: session alive → snapshot; reaped → `detached`, falling
-back to disk with `resume` re-armed.
+**The trigger is inactivity, not hiding.** Hiding was only the obvious case: a pane sitting *visible and
+untouched* pins ~400 MB exactly as hard, and measurably did — with two agents on the box, one idle
+session held 388 MB while the machine sat at **71 MB free**. `use-agent.ts` unpins after
+**5 minutes idle**, or **1 minute** when the tab is also hidden (nobody can be reading it).
+
+What makes the short fuse safe is that **unpinning is nearly free**. It only drops the SSE subscriber;
+the session stays warm until the server's own 30-minute reaper decides otherwise, so returning inside
+that window costs one reconnect and nothing else. Only a pane left for `UNPIN_IDLE + IDLE_REAP` actually
+pays a cold start — which is precisely the trade `IDLE_REAP_MS` already encodes for every session the
+dashboard isn't watching. Any `pointerdown`/`keydown` re-attaches immediately and restarts the clock, so
+a pane resyncs the moment you touch it.
+
+It never releases mid-turn or over an unanswered prompt (a parked permission promise is auto-denied when
+the session is reaped, so releasing would answer for the user); the next tick re-checks, so a long
+unattended turn is still released once it lands. Coming back re-attaches down the same path a refresh
+takes: session alive → snapshot; reaped → `detached`, falling back to disk with `resume` re-armed.
+
+One **structural** note: this is a single 30 s interval reading state through refs, deliberately not a
+chain of per-transition `setTimeout`s. The first version was the latter and lost its pending timer
+whenever the effect re-registered — a bug that presented as "the release never fires", which is
+indistinguishable from a logic error until you instrument it.
 
 > ⚠️ **Verify this by watching the subprocess, not by reasoning — and watch long enough.** A first
 > attempt looked like a total failure (subprocess still alive 30 s after release) and was nearly
@@ -1362,6 +1375,14 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **Idle panes now unpin their session, visible or not** (§3) — third perf pass. Measured first: with
+  the animation and hidden-tab fixes in, the client is already at **60 fps, 0 long tasks, 0% main
+  thread, 30 MB heap** with 4 panes open, endpoints answer in 1-10 ms, 108 req/min costs ~0.4% of a
+  core, and first load is TTFB 2 ms / FCP 124 ms. None of that was worth touching. The one bad number
+  was **71 MB free RAM**, with a single *visible but idle* pane holding 388 MB. Unpin now triggers on
+  inactivity (5 min, or 1 min when also hidden) rather than on hiding, and any pointer/key event
+  re-attaches. Verified end-to-end: 364 MB returned with the tab still visible and untouched.
+  *Requested by user: "optimize the app to get even more performance optimized".*
 - **Deploy and server logs moved out of `/tmp` to `~/.minami/`** (§8) — macOS clears `/tmp` on boot. A
   reboot at 21:57 took `minami-deploy.log` and `minami-prod.log` with it, while `~/.minami/events.jsonl`
   survived the same instant. A deploy is the one operation whose requester is dead before the outcome
