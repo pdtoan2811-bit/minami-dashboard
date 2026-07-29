@@ -48,7 +48,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | can create folders; cwd validated — see §5d |
 | Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
 | Shell (bento · rail · composer) | `app/page.tsx` + `components/BentoRail.tsx` | **shipped** | grid collapses to a rail — see §5e |
-| Flow view | `components/FlowView.tsx` + `lib/flow-model.ts` | **shipped** | per-topic ⚙; plan as a graph you can pause and steer — see §5f |
+| Flow view | `components/FlowPanel.tsx` + `lib/flow-model.ts` | **shipped** | per-topic ⚙; plan as a graph you can pause and steer — see §5f |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
 | KB standalone server | `public/kb/serve.mjs` | **shipped** | `npm run kb` → :4400, zero deps |
 | Runbook | `public/kb/operations.html` | **shipped** | deploy · identity · symptom table |
@@ -899,18 +899,44 @@ it that tints markdown syntax without touching metrics (that constraint is why b
 
 ---
 
-## 5f. Flow view — `components/FlowView.tsx`, `lib/flow-model.ts`, `lib/view-prefs.ts`
+## 5f. Flow — `components/FlowPanel.tsx`, `lib/flow-model.ts`
 
-A second way to watch a topic, chosen per project from a ⚙ on its bento tile and remembered on disk
-(`~/.minami-bento/views.json`). Chat renders the transcript; **Flow renders the plan as a graph you can
-stop.** It is not an archive view — the reason it exists is that you can catch a bad step *mid-flight*.
+The plan you're already looking at, opened up: the same TodoWrite/TaskCreate steps the chat shows as a
+checklist, expanded so each one carries the work it did, with a brake that can stop the next tool call.
+It exists to catch a bad step *mid-flight*, which is the one thing the transcript cannot help with.
 
-### It is a body swap, not a second route
-`view` changes only what `ChatColumn` renders between its header and its composer. Session menu,
-Composer, Plan/Code, the approval pills and the browser panel are shared by construction. That is
-deliberate: a separate `/flow` route would mean a second copy of the send / steer / stop wiring, and
-therefore a second place for the permission model to be subtly wrong. A Flow topic opens with the bento
-railed and one pane, because a step graph in a quarter-pane is a picture of a graph.
+### v1 was wrong about the noun, and everything else followed
+
+v1 was a React Flow canvas behind a per-project **view mode**, picked from a hover-revealed ⚙ on a bento
+tile and persisted server-side. Three complaints came back — the button was unfindable, the steps were
+"an awful long list", and it needed the bento's expand-and-push motion — and all three were the same
+mistake:
+
+- **A flow is a property of a TURN, not a project.** Asking "is this a flow project?" from the grid,
+  before opening anything, is a question nobody has. The control wasn't hard to find because it was
+  small; it was hard to find because nobody goes looking there. It now opens from the plan strip in the
+  chat — the thing the flow is *about*, at the moment you're curious.
+- **It replaced the transcript.** Flow-or-chat is a false choice; the answer to "what did it just do"
+  usually needs both. The panel now expands in place above the composer and the transcript stays.
+- **A canvas cannot do the interaction that was wanted.** "Expand a step and push the others away" is
+  layout, and React Flow nodes are absolutely positioned — v1's own comment admitted it had to fan
+  children to the RIGHT because a parent's height "would push the whole spine apart". In DOM the push is
+  free (measured: opening a group displaces its siblings by 226px), grouping is markup rather than a
+  layout algorithm, and the minimap/zoom question disappears with the canvas. A minimap is for exploring
+  an unknown topology; a plan is a list, and it has none.
+
+**Grouping is by status, and that is the whole readability fix.** Twelve equal rows is a wall. Grouped
+into `running` (open) · `up next` · `done` (both one line), a twelve-step plan is three lines plus the
+thing you actually came to see — which is the reviewer's real question. Inside a step the tool calls are
+grouped by what they DID — changed · ran · read — rather than by tool name, for the same reason.
+
+### It is a disclosure, not a route
+The panel is component state inside `ChatColumn`, so it dies with the pane and there is no stored "which
+view is this project in" to drift out of sync with anything. `lib/view-prefs.ts` and `/api/bento/view`
+were deleted with the mode they served. Session menu, Composer, Plan/Code, the approval pills and the
+browser panel are untouched and shared by construction — a separate `/flow` route would mean a second
+copy of the send / steer / stop wiring, and therefore a second place for the permission model to be
+subtly wrong.
 
 ### The brake is `canUseTool`, and that is the only place it could be
 `setHold()` flips `s.hold`; the gate then refuses to auto-approve and parks the call, reusing the
@@ -1579,6 +1605,15 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Flow rebuilt as a disclosure in the chat, not a view mode** (§5f) — the React Flow canvas, the
+  per-project view preference, the ⚙ picker on the tile, `lib/view-prefs.ts` and `/api/bento/view` are
+  all gone. The plan strip above the composer is now the way in, steps group by status
+  (running / up next / done) instead of drawing a twelve-node spine, tool calls group by what they did,
+  and expanding pushes siblings the way the bento does — measured at 226px. No minimap, because there
+  is no topology to explore.
+  *Reported by user: "React flow show was awful … remove the map on the corner … hard to find the
+  button … I believe I make a mistake when ideating the flow view … better way to group them steps
+  semantically … people would love to click somewhere on each chat to see the flow".*
 - **Autopilot has a face** (§5e) — a tile in the bento grid showing whether it's on, what it's doing,
   the last thing it did in plain words, and anything blocked; the switch is on the tile, and the full
   log of automated merges and deploys is one click away. `status()` gained `deploying` and
