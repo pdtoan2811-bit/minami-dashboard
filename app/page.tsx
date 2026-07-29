@@ -624,15 +624,28 @@ export default function BentoHome() {
                 const pc = accent(p.name);
                 const activeSel = i === sel && !proj;
                 const age = Date.now() - p.last;
-                const status = p.active ? { label: "live", tint: "#4ade80", pulse: true }
-                  : p.review ? { label: "review", tint: "#f0a868", pulse: true }
+                // What this project is doing right now, if any live dashboard run is in its folder. Match
+                // by cwd (not the session list) so a brand-new/trivial running session still shows.
+                // Hoisted above `status` because it is now what decides whether anything animates.
+                const la = Object.values(liveAct).find((x) => x.busy && x.cwd === p.cwd);
+                // Animate ONLY while something is genuinely running — `la`, a turn in flight right now.
+                //
+                // It used to be `p.active` ("touched in the last 2 minutes") and `p.review` (a standing
+                // state that can persist for days). Both kept a pulse going with nothing happening, so
+                // the page never reached zero animations. That matters far more than it sounds:
+                // measured, the cost of animation is a fixed per-frame tax for running a frame loop at
+                // all, NOT a per-element cost — 0 elements = 1.3% CPU, 1 element = 12.6%, 41 = 17.1%.
+                // One permanently pulsing dot therefore costs essentially the same as forty, and a
+                // single "review" badge on a project last touched a week ago was enough to hold the
+                // whole tab at ~12.6% forever.
+                //
+                // A pulse should mean "this is happening now". A standing state gets a static dot.
+                const status = p.active ? { label: "live", tint: "#4ade80", pulse: !!la }
+                  : p.review ? { label: "review", tint: "#f0a868", pulse: false }
                   : age < 12 * 3600e3 ? { label: "recent", tint: "#e8859b", pulse: false }
                   : age < 3 * 86400e3 ? { label: "active", tint: "#6c9cf5", pulse: false } : null;
                 const bright = activeSel || project === p.name || p.active || (p.review && age < 7 * 86400e3);
                 const dim = bright ? 1 : age < 86400e3 ? 0.9 : age < 3 * 86400e3 ? 0.72 : age < 7 * 86400e3 ? 0.56 : 0.42;
-                // What this project is doing right now, if any live dashboard run is in its folder. Match
-                // by cwd (not the session list) so a brand-new/trivial running session still shows.
-                const la = Object.values(liveAct).find((x) => x.busy && x.cwd === p.cwd);
                 return (
                   <motion.button layout key={p.name} data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => openProject(p)}
                     initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: dim, scale: 1 }} whileHover={{ y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}
@@ -650,7 +663,9 @@ export default function BentoHome() {
                     }`}>
                     {p.active && <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl" style={{ background: pc + "44" }} />}
                     <div className="relative flex items-start justify-between">
-                      <ProjectIcon name={p.name} icon={topicIcons[p.name]} big={big} active={p.active} />
+                      {/* Same rule: tumble only while a turn is actually in flight, not for the two
+                          minutes after one finished. See the note on `status` above. */}
+                      <ProjectIcon name={p.name} icon={topicIcons[p.name]} big={big} active={!!la} />
                       {status && <span className="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium" style={{ borderColor: status.tint + "55", color: status.tint, background: status.tint + "1e" }}>{status.pulse && <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: status.tint }} />}{status.label}</span>}
                     </div>
                     <p className={`relative mt-1.5 font-semibold tracking-tight ${big ? "text-xl" : "text-sm"}`}>{p.name}</p>

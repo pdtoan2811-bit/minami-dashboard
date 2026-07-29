@@ -1269,6 +1269,43 @@ This app is open all day. Anything it does *per frame*, it does forever.
   switch — idle GPU goes to 0.0%. One-shot entrance animations are made instant rather than removed,
   so elements that animate *in* don't get stranded at `opacity: 0`.
 
+### The cost of animation is a FIXED per-frame tax, not a per-element one
+
+The second audit measured the shape of the cost directly, on the shipped build, by varying only the
+number of animated elements on one page:
+
+| Animated elements | GPU | Renderer | Total |
+|---|---|---|---|
+| **0** | 0.6% | 0.7% | **1.3%** |
+| 1 | 8.8% | 3.8% | **12.6%** |
+| 4 | 9.2% | 4.1% | **13.3%** |
+| 41 | 10.1% | 7.0% | **17.1%** |
+
+**0 → 1 costs 11.3 points. 1 → 41 costs 4.5 more.** You are paying for the existence of a 60fps frame
+loop, not for what is in it. Three consequences, all counter-intuitive enough to be worth stating:
+
+- **Optimising an individual animation is close to worthless.** `will-change` was measured twice and
+  did nothing — on `spin3d` (33.8% → 33.2%) and on the pulse dots (9.2% → 8.8%). Both inside noise.
+- **Reducing the NUMBER of animated elements is close to worthless.** One dot costs what four do.
+- **The only move that pays is going to zero.** Anything that animates permanently costs the same as
+  everything animating permanently.
+
+> 🐛 **One "review" badge held the whole tab at ~12.6% CPU forever.** The tile's status dot pulsed when
+> `p.active` (touched in the last 2 minutes) *or* `p.review` — and `review` is a standing state that
+> persists for days. So on a board with any project awaiting review, the page never reached zero
+> animations, and never dropped to the 1.3% floor. `spin3d` had the same bug via `active={p.active}`,
+> tumbling for two minutes after a turn ended. Both now key off `la` / `busy` — a turn actually in
+> flight, a signal the code already computed one line below. **A pulse should mean "this is happening
+> now"; a standing state gets a static dot.**
+
+### Also measured, and NOT the problem
+Ruled out by experiment, so nobody re-investigates them:
+- **Server cost per pane is negligible.** `next-server` went 2.48% → 3.17% for four extra panes —
+  **0.17% per pane** — while absorbing ~190 requests/min per tab. The incremental parser and its
+  caches are doing their job; polling frequency is not worth tuning.
+- **React re-rendering from polls is ~2 points.** Silencing *every* poll endpoint moved the renderer
+  only 14.5% → 12.6%. The renderer's idle cost is animation frame work, not reconciliation.
+
 ### Measured and rejected
 **Layer promotion (`will-change: transform` + `backface-visibility: hidden`) on the icons does
 nothing here** — 33.8% → 33.2% for a fixed 12-icon workload, inside noise. The residual `spin3d` cost
@@ -1297,6 +1334,15 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **Idle animation cost cut to the floor: a pulse now means "happening now"** (§12) — second perf
+  audit. Measured that animation cost is a **fixed per-frame tax**, not per-element: 0 animated
+  elements = 1.3% CPU, 1 = 12.6%, 41 = 17.1%. So one permanently pulsing dot costs what forty do — and
+  the tile's `review` badge (a standing state, not an event) plus `spin3d`'s 2-minute `p.active` window
+  meant the page never reached zero animations. Both now key off a turn actually in flight. Verified:
+  zero animations at idle where there were always ≥1 before. Also ruled out by experiment — server cost
+  is 0.17%/pane across ~190 req/min, and React re-render from polls is ~2 points; `will-change` does
+  nothing (tested twice). *Requested by user: "audit for more optimization … with surgeon knife and
+  clear approaches and hypothesis".*
 - **The dashboard was burning ~31% of a CPU core while idle** (§12) — reported as "lag and heat".
   Not the polling, parser or SDK (`next-server` measured 1.5%): it was `backdrop-filter` re-blurring a
   whole tile / the 768×800 chat panel every frame because a 1.5px indicator dot was animating inside

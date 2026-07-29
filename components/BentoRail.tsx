@@ -117,7 +117,11 @@ export default function BentoRail({ projects, current, accent, fmtNum, busyCwds,
                   open ? "" : "justify-center"} ${
                   on ? "border-[var(--sakura)] ring-1 ring-[var(--sakura)]" : "border-white/10 hover:border-white/30"}`}>
                 {busy && <span className="pointer-events-none absolute inset-0 animate-pulse rounded-xl ring-1" style={{ ["--tw-ring-color" as string]: pc + "88" }} />}
-                <ProjectIcon name={p.name} icon={icons[p.name]} size={icon} active={p.active} />
+                {/* `busy`, not `p.active`: the ring above already uses it, and `p.active` only means
+                    "touched in the last 2 minutes". Animation cost here is a fixed per-frame tax, so
+                    one icon still tumbling after a turn ended holds the whole tab's frame loop open —
+                    see the note in app/page.tsx. */}
+                <ProjectIcon name={p.name} icon={icons[p.name]} size={icon} active={busy} />
                 {/* Rendered always, revealed on expand: mounting it on hover would reflow the row and
                     make the names arrive a frame late, which reads as jank rather than as a panel. */}
                 <span className={`min-w-0 flex-1 text-left transition-opacity duration-150 ${open ? "opacity-100 delay-75" : "pointer-events-none opacity-0"}`}>
