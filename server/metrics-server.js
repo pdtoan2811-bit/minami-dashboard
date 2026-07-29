@@ -6,6 +6,10 @@
  *
  * Env (see ~/.minami-metrics.env, git-ignored):
  *   PORT           default 8787
+ *   BIND           interface to listen on, default 127.0.0.1 (loopback only).
+ *                  Tailscale Funnel proxies to 127.0.0.1:8787, so loopback is all that is ever
+ *                  needed. Do NOT set 0.0.0.0 — that publishes the API to the raw internet on a
+ *                  box with no firewall, leaving READ_KEY/INGEST_TOKEN as the only wall.
  *   METRICS_DIR    where events.jsonl lives (default ~/.minami-metrics)
  *   INGEST_TOKEN   REQUIRED bearer token for POST /ingest (write auth — real)
  *   READ_KEY       optional key for GET /stats & /stream (?k=...) — obscurity, gate the deploy for real privacy
@@ -25,6 +29,7 @@ const path = require("path");
 const os = require("os");
 
 const PORT = Number(process.env.PORT || 8787);
+const BIND = process.env.BIND || "127.0.0.1";
 const DIR = process.env.METRICS_DIR || path.join(os.homedir(), ".minami-metrics");
 const EVENTS = path.join(DIR, "events.jsonl");
 const INGEST_TOKEN = process.env.INGEST_TOKEN || "";
@@ -221,4 +226,4 @@ const server = http.createServer((req, res) => {
   send(res, 404, { error: "not found" });
 });
 
-server.listen(PORT, () => console.log(`minami-metrics listening on :${PORT} (dir=${DIR})`));
+server.listen(PORT, BIND, () => console.log(`minami-metrics listening on ${BIND}:${PORT} (dir=${DIR})`));
