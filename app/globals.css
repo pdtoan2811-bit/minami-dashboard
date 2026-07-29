@@ -229,6 +229,36 @@ body {
   }
 }
 
+/* React Flow's stylesheet ships light-mode controls — a white brick of buttons sitting on a very dark
+   canvas. Restyled once, globally, because BOTH canvases (the Flow view and /architecture's module
+   map) import that same stylesheet, and the two are supposed to read as one system.
+
+   Every selector here is deliberately doubled up (`.react-flow__controls .react-flow__controls-button`
+   rather than the bare class). @xyflow's CSS is imported from inside the components, so Next emits it
+   AFTER this file — at equal specificity the library wins, and a single-class rule here silently does
+   nothing. Measured: the buttons stayed rgb(254,254,254). */
+.react-flow__controls {
+  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.9);
+  border: 1px solid #262c39;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.react-flow__controls .react-flow__controls-button {
+  background: #11141b;
+  border-bottom: 1px solid #262c39;
+  fill: #8b94a5;
+}
+.react-flow__controls .react-flow__controls-button:hover {
+  background: #1d222d;
+  fill: #e5e7eb;
+}
+.react-flow .react-flow__attribution {
+  background: transparent;
+}
+.react-flow .react-flow__attribution a {
+  color: #4e5665;
+}
+
 /* continuous, seamless 3D tumble for the icons (0% == 100% → no snap) */
 @keyframes spin3d {
   0%   { transform: rotateY(-18deg) rotateX(6deg) rotateZ(-2deg); }

@@ -121,6 +121,13 @@ export const NODES: ModuleNode[] = [
   { id: "r/autopilot", label: "/api/autopilot", sub: "the switch + what the runner sees", layer: "route", row: 12 },
   { id: "x/autopilotcfg", label: "~/.minami/autopilot.json", sub: "its switch — on disk, because a\ntimer in the server reads it", layer: "runtime", row: 6 },
   { id: "x/events", label: "~/.minami/events.jsonl", sub: "alert log · deploy.sh + task.mjs write", layer: "runtime", row: 5 },
+
+  // ── Flow view: the step graph + its brake (KNOWLEDGE.md §5f) ────────────
+  { id: "c/FlowView", label: "FlowView", sub: "step graph · hold/steer/abort\n(React Flow)", layer: "component", row: 21, pipeline: "live" },
+  { id: "l/flowmodel", label: "flow-model.ts", sub: "transcript → step graph\n(TodoWrite + TaskCreate)", layer: "core", row: 16, pipeline: "live" },
+  { id: "l/viewprefs", label: "view-prefs.ts", sub: "per-topic chat|flow choice", layer: "core", row: 17 },
+  { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
+  { id: "r/view", label: "/api/bento/view", sub: "reads/writes the view choice", layer: "route", row: 14 },
 ];
 
 export const EDGES: ModuleEdge[] = [
@@ -235,4 +242,15 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/sessions", to: "x/bentocache", kind: "http" },
   { from: "l/enrich", to: "x/bentocache", kind: "http" },
   { from: "r/accounts", to: "x/slayer", kind: "http", label: "execFile" },
+
+  // Flow view. The brake is drawn as a full round trip on purpose: the button is in the component,
+  // but the only place it can be ENFORCED is canUseTool inside the manager — see KNOWLEDGE.md §5f.
+  { from: "app/page", to: "c/FlowView", kind: "import" },
+  { from: "app/page", to: "l/viewprefs", kind: "import" },
+  { from: "c/FlowView", to: "l/flowmodel", kind: "import" },
+  { from: "c/FlowView", to: "r/hold", kind: "http", label: "arm/release" },
+  { from: "app/page", to: "r/view", kind: "http", label: "per-topic view" },
+  { from: "r/hold", to: "l/manager", kind: "import" },
+  { from: "r/view", to: "l/viewprefs", kind: "import" },
+  { from: "l/viewprefs", to: "x/bentocache", kind: "http", label: "views.json" },
 ];

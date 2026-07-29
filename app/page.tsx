@@ -16,11 +16,13 @@ import AskCard from "@/components/AskCard";
 import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
 import BrowserLightbox from "@/components/BrowserLightbox";
+import { FlowView } from "@/components/FlowView";
+import type { BentoView } from "@/lib/view-prefs";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, Settings2, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -359,6 +361,19 @@ export default function BentoHome() {
   const [picker, setPicker] = useState(false); // folder picker modal open
   const [techIcons, setTechIcons] = useState<Record<string, Icon>>({}); // brand icon SVGs
   const [attachMap, setAttachMap] = useState<Record<string, { tech: string[]; icon?: string }>>({}); // per-project tech + topic icon
+  // Which view each topic opens in. Server-persisted (lib/view-prefs.ts) rather than a useSetting,
+  // because it describes the PROJECT — a topic you want to supervise step-by-step should still be
+  // supervised step-by-step from another browser, and after a redeploy.
+  const [views, setViews] = useState<Record<string, BentoView>>({});
+  const [gearFor, setGearFor] = useState<string | null>(null); // which tile's ⚙ menu is open
+  useEffect(() => { fetch("/api/bento/view").then((r) => r.json()).then((d) => { if (d?.views) setViews(d.views); }).catch(() => {}); }, []);
+  // Optimistic: the click paints immediately and the write is best-effort (see setViewPref). A view
+  // preference failing to persist is worth zero interruption — the choice still applies right now.
+  const chooseView = useCallback((project: string, view: BentoView) => {
+    setViews((prev) => ({ ...prev, [project]: view }));
+    setGearFor(null);
+    fetch("/api/bento/view", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project, view }) }).catch(() => {});
+  }, []);
   const [showTools] = useSetting<boolean>("showToolLogs", false);
   const [panelW, setPanelW] = useSetting<number>("panelWidth", 60); // chat panel width %, persisted
   // Past a threshold the bento stops shrinking and becomes a rail (see components/BentoRail.tsx). It's
@@ -450,8 +465,12 @@ export default function BentoHome() {
     const allBlank = remembered.length > 0 && remembered.every((x) => !x.sid);
     const usable = allBlank && recent.length ? [] : remembered;
     const initial = usable.length ? usable.slice(0, MAX_PANES) : (recent.length ? recent.map((sid) => mkPane(sid)) : [mkPane()]);
+    // Flow needs the room: a step graph in a quarter-pane is a picture of a graph, not something you
+    // can review. So a Flow topic opens full-bleed — bento railed, one pane — which is the same
+    // layout the divider already produces, not a second window mode to maintain.
+    if (views[p.name] === "flow") { setRail(true); setNewTopic(null); setProject(p.name); setPanes(initial.slice(0, 1)); setAddMenu(false); return; }
     setNewTopic(null); setProject(p.name); setPanes(initial); setAddMenu(false);
-  }, [openPanesMap]);
+  }, [openPanesMap, views, setRail]);
   // Prefetch a project's likely-open transcripts on hover so clicking it paints instantly (the fetch +
   // parse already happened). Each session is fetched once — the cache guard makes repeat hovers free.
   const prefetchProject = useCallback((p: Project) => {
@@ -670,9 +689,15 @@ export default function BentoHome() {
                   : age < 3 * 86400e3 ? { label: "active", tint: "#6c9cf5", pulse: false } : null;
                 const bright = activeSel || project === p.name || p.active || (p.review && age < 7 * 86400e3);
                 const dim = bright ? 1 : age < 86400e3 ? 0.9 : age < 3 * 86400e3 ? 0.72 : age < 7 * 86400e3 ? 0.56 : 0.42;
+                const view: BentoView = views[p.name] === "flow" ? "flow" : "chat";
                 return (
-                  <motion.button layout key={p.name} data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => openProject(p)}
-                    initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: dim, scale: 1 }} whileHover={{ y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}
+                  // The ⚙ has to be a SIBLING of the tile, not a child: the tile is itself a <button>,
+                  // and a nested button is invalid HTML that React will happily render and the browser
+                  // will then handle unpredictably (the inner click also fires the outer one). Hence
+                  // this wrapper — it owns the grid span and the layout animation; the tile fills it.
+                  <motion.div layout key={p.name} className={`relative ${span}`}
+                    initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: dim, scale: 1 }} whileHover={{ y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
+                  <button data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => openProject(p)}
                     style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)` }}
                     // NO backdrop-blur here — it was measured as the single biggest CPU cost in the app.
                     // A `backdrop-filter` must re-blur everything beneath it whenever anything inside its
@@ -682,7 +707,7 @@ export default function BentoHome() {
                     // Measured on an idle headless tab: 30.6% GPU with the blur, 4.6% without — same
                     // animations. And it bought nothing: behind a tile is a flat body colour and a very
                     // smooth radial gradient, and blurring a low-frequency image returns the same image.
-                    className={`group relative flex flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left ${span} ${
+                    className={`group relative flex h-full w-full flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left ${
                       project === p.name ? "border-[var(--sakura)] ring-1 ring-[var(--sakura)]" : activeSel ? "border-[var(--sakura)]/70 ring-1 ring-[var(--sakura)] shadow-[0_22px_50px_-22px_rgba(232,133,155,0.6)]" : "border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_14px_34px_-18px_rgba(0,0,0,0.8)] hover:border-white/25"
                     }`}>
                     {p.active && <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl" style={{ background: pc + "44" }} />}
@@ -710,7 +735,41 @@ export default function BentoHome() {
                       <span className="shrink-0 text-[11px] tabular-nums text-neutral-500">{short(p.tokens)} tok</span>
                       <span className="shrink-0 truncate text-[11px] text-neutral-600">{p.sessions.length} chats</span>
                     </div>
-                  </motion.button>
+                  </button>
+                  {/* Settings. Hidden until hover (or while its own menu is open) so 20 gears don't
+                      compete with the content of 20 tiles — the grid is a glance surface first. A
+                      topic set to Flow keeps a visible marker, because "this one opens differently"
+                      is exactly the kind of thing you want to know before clicking, not after. */}
+                  <button onClick={(e) => { e.stopPropagation(); setGearFor((c) => (c === p.name ? null : p.name)); }}
+                    title={`View: ${view === "flow" ? "Flow — step-by-step review" : "Chat — the transcript"}`}
+                    aria-label={`Settings for ${p.name}`}
+                    // Bottom-right, not top-right: the status badge (live / review / recent) already
+                    // owns that corner on every tile, and the two would sit on top of each other.
+                    // Bottom-right is empty on every size — the stats row is left-aligned.
+                    className={`absolute bottom-3 right-3 z-10 rounded-lg border p-1 transition-opacity ${
+                      view === "flow" ? "border-[#c47f18]/50 text-[#c47f18] opacity-100" : "border-white/15 text-neutral-500 opacity-0 hover:text-neutral-200 focus:opacity-100 group-hover:opacity-100"
+                    } ${gearFor === p.name ? "opacity-100" : ""} hover:border-white/35`}>
+                    {view === "flow" ? <Workflow className="h-3 w-3" /> : <Settings2 className="h-3 w-3" />}
+                  </button>
+                  {gearFor === p.name && (
+                    <>
+                      <div className="fixed inset-0 z-20" onClick={() => setGearFor(null)} />
+                      <div className="absolute bottom-11 right-2 z-30 w-56 rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
+                        <p className="px-2 pb-1 pt-1.5 font-mono text-[9px] uppercase tracking-[.14em] text-neutral-600">view</p>
+                        {([["chat", "Chat", "The transcript, as it streams."], ["flow", "Flow", "Step graph — review and steer each step mid-flight."]] as const).map(([id, label, hint]) => (
+                          <button key={id} onClick={() => chooseView(p.name, id)}
+                            className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/10 ${view === id ? "bg-white/5" : ""}`}>
+                            <span className="mt-0.5 w-3 shrink-0 text-[10px] text-[var(--sakura)]">{view === id ? "✓" : ""}</span>
+                            <span className="min-w-0">
+                              <span className="block text-xs font-medium">{label}</span>
+                              <span className="block text-[10px] leading-snug text-neutral-500">{hint}</span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  </motion.div>
                 );
               })}
               {/* Blank tile: start a brand-new topic/chat in any folder. */}
@@ -779,6 +838,7 @@ export default function BentoHome() {
                 // in-flight EventSource/turns mid-stream for no reason. An explicit user pick of a
                 // DIFFERENT existing session (onPick below) SHOULD remount — see onPick's comment.
                 <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools} agentsHere={cwdAgentCount[proj.cwd] || 0}
+                  view={views[proj.name] === "flow" ? "flow" : "chat"}
                   openSids={panes.map((p) => p.sid).filter(Boolean)}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
@@ -924,8 +984,13 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, l
   );
 });
 
-function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, openSids, onPick, onLive, onClose }: {
-  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
+// `view` swaps the pane's BODY (transcript ↔ step graph) and nothing else. Everything around it —
+// the session menu, the composer, Plan/Code, the approval pills, the browser panel — is shared by
+// construction, so the two views can't drift on the things that actually execute code. That is also
+// why Flow isn't its own route: a second copy of the send/steer/stop wiring is a second place for the
+// permission model to be subtly wrong.
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, view = "chat", openSids, onPick, onLive, onClose }: {
+  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; view?: BentoView; openSids: string[]; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
 }) {
   // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
@@ -1292,6 +1357,14 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           "side panel next to the chat", not inline in the transcript or a full takeover. */}
       <div className="flex min-h-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {view === "flow" ? (
+        <FlowView
+          // The SAME `source` the transcript renders — live turns while this pane drives the session,
+          // the on-disk ones otherwise. Two views over one array, so they cannot show different runs.
+          turns={source} busy={agent.busy} hold={agent.hold} pending={agent.pending} stopping={agent.stopping}
+          onSetHold={agent.setHold} onRespond={agent.respond} onStop={agent.stop}
+        />
+      ) : (
       <div ref={scrollRef}
         // Passive by default in React 19; this only reads geometry, so it never blocks the scroll.
         onScroll={(e) => { const on = atBottom(e.currentTarget); if (on !== pinnedRef.current) setPinned(on); }}
@@ -1376,6 +1449,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         </>
         )}
       </div>
+      )}
 
       {/* Claude's AskUserQuestion — a real choice UI. */}
       {agent.ask && (
@@ -1391,7 +1465,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           "Claude wants to fill in a form on localhost:3000", with a session-scoped "allow everything on
           this host" escape hatch. Approving one click at a time is unusable for a QA pass, and a raw
           `mcp__playwright__browser_click` + JSON blob tells you nothing about WHERE it's clicking. */}
-      {agent.pending && (() => {
+      {/* A HELD prompt in Flow view is already answerable in the canvas's review drawer, alongside the
+          step that raised it — which is the whole point of holding it. Rendering this card too would
+          put two Approve buttons for one decision on screen. Every other prompt still lands here, so
+          a Flow pane in `default` mode is no less answerable than a Chat one. */}
+      {agent.pending && !(view === "flow" && agent.pending.held) && (() => {
         const pendingHost = isBrowserTool(agent.pending.toolName)
           ? hostOf((agent.pending.input as { url?: string })?.url) || hostOf(browser.url)
           : null;
@@ -1428,7 +1506,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           arrived while they were up there — without it, "stop following" is a trap you have to scroll
           out of by hand. Sits above the composer rather than floating over the transcript, so it can't
           cover the text you scrolled up to read. */}
-      {!pinned && (
+      {!pinned && view !== "flow" && (
         <button onClick={jumpToLatest}
           className="mx-auto -mb-1 flex translate-y-0 items-center gap-1.5 rounded-full border border-white/15 bg-neutral-900/90 px-3 py-1 text-[11px] text-neutral-300 shadow-lg backdrop-blur transition-[transform,background-color] hover:-translate-y-0.5 hover:bg-neutral-800/90">
           <span className="text-[9px]">▼</span>
@@ -1437,7 +1515,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
       )}
 
       <div className="border-t border-white/10 px-4 py-3">
-        <TodoChecklist todos={todos} />
+        {/* The graph already IS the plan, drawn larger and with each item's work under it — a second
+            copy of the same checklist above the composer is noise in Flow view. */}
+        {view !== "flow" && <TodoChecklist todos={todos} />}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           {/* Plan vs Code — default Code. Plan proposes without applying. */}
           <div className="flex items-center rounded-lg border border-white/10 p-0.5" title="Plan proposes changes first; Code executes">

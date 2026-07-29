@@ -8,7 +8,9 @@ import { IDLE_ACTIVITY, type ActivityState, type ToolOutput } from "./agent/labe
 
 export type AgentTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
 export type AgentToolCall = { name: string; input: unknown; id?: string; done?: boolean; ok?: boolean; ms?: number; output?: ToolOutput };
-export type PermissionPrompt = { id: string; toolName: string; input: unknown } | null;
+// `held` marks a prompt raised by the Flow view's brake rather than by the permission mode — the pane
+// renders it as "paused for review" (with the countdown `expiresAt` drives) instead of "needs approval".
+export type PermissionPrompt = { id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } | null;
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] };
 export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
@@ -25,6 +27,15 @@ export function useAgent(paneKey: string) {
   const [stopping, setStopping] = useState(false); // Stop was clicked; waiting for the turn to actually end
   const [pending, setPending] = useState<PermissionPrompt>(null);
   const [ask, setAsk] = useState<AskPrompt>(null); // Claude's AskUserQuestion prompt
+  // The Flow view's brake. Server-owned (see setHold in lib/agent/manager.ts) and delivered with
+  // REPLACE semantics like `activity`, so this never derives a supervision state the gate disagrees
+  // with — the gate is what actually decides whether a tool runs.
+  const [hold, setHoldState] = useState(false);
+  // Read by send() so the brake rides in with the message. A ref, not a dep: listing `hold` on send()
+  // would give it a new identity on every toggle, and every effect that depends on send() would tear
+  // down and re-run — the same stale-closure/lost-state trap useSetting's setter comments describe.
+  const holdRef = useRef(false);
+  holdRef.current = hold;
   // What Claude is doing right now. Derived on the SERVER (see lib/agent/labels.ts) and delivered with
   // replace semantics, so a dropped event self-heals and a refresh mid-tool-call resumes correctly.
   const [activity, setActivity] = useState<ActivityState>(IDLE_ACTIVITY);
@@ -166,6 +177,9 @@ export function useAgent(paneKey: string) {
           // only copy of it the client will ever see. Applying it here is what makes that first phase
           // visible at all instead of silently lost to the race.
           if (ev.activity) applyActivity(ev.activity);
+          // Always adopted, for the same reason as `activity`: it's the server's truth, replace
+          // semantics, and a pane that refreshed while a hold was armed must come back holding.
+          setHoldState(!!ev.hold);
           // A snapshot only ever arrives for a key the server confirms is live (see subscribe() in
           // lib/agent/manager.ts) — so this is the actual proof `resume` can be safely omitted from here
           // on, whether this snapshot came from a genuine reattach or the fresh-send race above.
@@ -210,6 +224,9 @@ export function useAgent(paneKey: string) {
           // Re-arm `resume`: the next send() must hand the SDK its session id again so it resumes the
           // on-disk conversation instead of silently starting a fresh, context-less one.
           attachingRef.current = false; sentOnce.current = false;
+          // The brake lived on the (now gone) server session — keeping it lit here would claim a
+          // supervision state nothing is enforcing, and the next send would start unheld regardless.
+          setHoldState(false);
           setDetached(true); setLive(false); closeStream();
           break;
         case "activity":
@@ -245,7 +262,9 @@ export function useAgent(paneKey: string) {
           setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now(), agent: ev.agent, status: ev.status }]);
           break;
         case "permission":
-          setPending({ id: ev.id, toolName: ev.toolName, input: ev.input }); break;
+          setPending({ id: ev.id, toolName: ev.toolName, input: ev.input, held: ev.held, expiresAt: ev.expiresAt }); break;
+        case "hold":
+          setHoldState(!!ev.hold); break;
         case "ask":
           setAsk({ id: ev.id, questions: ev.questions || [] }); break;
         case "busy":
@@ -261,7 +280,7 @@ export function useAgent(paneKey: string) {
           // (its POST would 404 against a session the server already deleted), so clear it instead of
           // leaving a dialog stuck on screen forever with no working button.
           setError(String(ev.message || "error")); setBusy(false); setStopping(false); applyActivity(IDLE_ACTIVITY);
-          setPending(null); setAsk(null);
+          setPending(null); setAsk(null); setHoldState(false);
           break;
       }
     };
@@ -409,7 +428,7 @@ export function useAgent(paneKey: string) {
     const adoptedHere = !sessionIdRef.current && !!opts.resume;
     if (adoptedHere) { setSessionId(opts.resume!); sessionIdRef.current = opts.resume!; }
     const usingResume = !sentOnce.current;
-    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined };
+    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined, hold: holdRef.current };
     try {
       const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
@@ -430,14 +449,17 @@ export function useAgent(paneKey: string) {
     }
   }, [paneKey, live, ensureStream, applyActivity, unstickTrailingTurn]);
 
-  const respond = useCallback(async (decision: "allow" | "deny") => {
+  // `message` is only meaningful on a denial, and it is the steering channel: the text is handed back
+  // to Claude as the tool result, so a correction written against a held step is read and acted on
+  // WITHIN the same turn instead of arriving as a follow-up after the step already ran.
+  const respond = useCallback(async (decision: "allow" | "deny", message?: string) => {
     const p = pending; if (!p) return;
     // Clear only once the server actually has the decision — not optimistically before the fetch. If
     // the POST fails (network blip), the prompt stays up (with an error shown) so the user can retry;
     // otherwise the UI would show no prompt at all while the server-side session is still blocked
     // waiting for one, stuck until a full reload.
     try {
-      const r = await fetch("/api/agent/permission", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: p.id, decision }) });
+      const r = await fetch("/api/agent/permission", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: p.id, decision, message }) });
       const d = await r.json().catch(() => null);
       if (!d?.ok) throw new Error("the server didn't confirm this decision");
       setPending(null);
@@ -467,6 +489,22 @@ export function useAgent(paneKey: string) {
     } catch { return false; }
   }, [live, paneKey]);
 
+  // Arm/release the brake. Optimistic so the toggle feels instant, reverted if no live session took
+  // it — a lit brake that the gate isn't honouring is the one state this must never show.
+  const setHold = useCallback(async (on: boolean): Promise<boolean> => {
+    setHoldState(on);
+    // Nothing live to arm yet. Keep the intent locally — send() carries it in with the first message,
+    // which is the only point at which it can be applied before the session's first tool call. Without
+    // this the natural order (arm the brake, THEN ask for something) silently did nothing.
+    if (!live) return true;
+    try {
+      const r = await fetch("/api/agent/hold", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, hold: on }) });
+      const d = await r.json().catch(() => null);
+      if (!d?.ok) { setHoldState(!on); return false; }
+      return true;
+    } catch { setHoldState(!on); return false; }
+  }, [paneKey, live]);
+
   // Interrupt the in-flight turn (Stop button). `stopping` flips back to false once the server
   // confirms via a `busy:false` / `result` / `error` event — not optimistically here — so the button
   // stays disabled for the (usually sub-second) gap rather than flickering back to "stop" too early.
@@ -482,5 +520,5 @@ export function useAgent(paneKey: string) {
 
   // `elapsed` recomputes on every 1s tick above, so the caller gets a live-counting number for free.
   const elapsed = activity.phase === "idle" ? 0 : Math.max(0, Date.now() - phaseStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, error, detached, send, attach, respond, answerAsk, changeMode, stop };
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, error, detached, hold, send, attach, respond, answerAsk, changeMode, setHold, stop };
 }

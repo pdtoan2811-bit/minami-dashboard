@@ -48,6 +48,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | can create folders; cwd validated — see §5d |
 | Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
 | Shell (bento · rail · composer) | `app/page.tsx` + `components/BentoRail.tsx` | **shipped** | grid collapses to a rail — see §5e |
+| Flow view | `components/FlowView.tsx` + `lib/flow-model.ts` | **shipped** | per-topic ⚙; plan as a graph you can pause and steer — see §5f |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
 | KB standalone server | `public/kb/serve.mjs` | **shipped** | `npm run kb` → :4400, zero deps |
 | Runbook | `public/kb/operations.html` | **shipped** | deploy · identity · symptom table |
@@ -858,6 +859,89 @@ it that tints markdown syntax without touching metrics (that constraint is why b
 > a child of the production `next-server`, so it inherits `NODE_ENV=production` — and `next dev` under
 > that mis-compiles `globals.css` ("Module parse failed: Unexpected character '@'") and 500s every
 > route. Run `NODE_ENV=development npm run dev:iterate`.
+
+---
+
+## 5f. Flow view — `components/FlowView.tsx`, `lib/flow-model.ts`, `lib/view-prefs.ts`
+
+A second way to watch a topic, chosen per project from a ⚙ on its bento tile and remembered on disk
+(`~/.minami-bento/views.json`). Chat renders the transcript; **Flow renders the plan as a graph you can
+stop.** It is not an archive view — the reason it exists is that you can catch a bad step *mid-flight*.
+
+### It is a body swap, not a second route
+`view` changes only what `ChatColumn` renders between its header and its composer. Session menu,
+Composer, Plan/Code, the approval pills and the browser panel are shared by construction. That is
+deliberate: a separate `/flow` route would mean a second copy of the send / steer / stop wiring, and
+therefore a second place for the permission model to be subtly wrong. A Flow topic opens with the bento
+railed and one pane, because a step graph in a quarter-pane is a picture of a graph.
+
+### The brake is `canUseTool`, and that is the only place it could be
+`setHold()` flips `s.hold`; the gate then refuses to auto-approve and parks the call, reusing the
+permission machinery that already existed (`{t:"permission"}`, `phase=awaiting`, `decide()`).
+
+**Steering is a denial with a reason.** `decide(key, id, "deny", note)` hands the note back as the tool
+result, so a correction typed against a held step is read and acted on *inside the same turn*, with the
+turn's context intact — not as a follow-up after the bad step already ran. Verified end to end: held
+`touch gate-test.txt` → steered → Claude re-issued `touch steered.txt` in the same turn, and
+`gate-test.txt` was never created.
+
+Releasing the brake does **not** retroactively approve what is already parked. "Resume the session" and
+"run this specific step" are different decisions.
+
+> 🐛 **The brake did nothing, because the gate was never called.** First end-to-end test: hold armed,
+> the pane showing "release", and three `Bash` calls ran straight through. Cause was already written
+> down in this repo — *"a session born in bypass never calls it at all"* (the comment inside
+> `canUseTool`). Handing the SDK `permissionMode: "bypassPermissions"` at spawn makes the CLI resolve
+> every tool itself; our hook is dead code for that session's entire life.
+>
+> Fix: `spawnMode()` — tell the SDK `default` (the most restrictive mode, so it asks about everything)
+> and let `canUseTool` apply the real mode from `s.mode`. `plan` is passed through untouched, because
+> it changes model *behaviour*, not just permissions. This widens nothing, and it also repairs a
+> pre-existing bug nobody had connected: the composer's approval pills could never tighten a running
+> bypass session either, for exactly the same reason.
+
+> ⚠ **A parked call pins `busy` true, and `busy` is what `bin/deploy.sh` waits on box-wide.** So an
+> unattended hold starves every deploy on the machine — the deadlock the `minami-flow` skill documents,
+> reached by a new road. Hence `HOLD_TIMEOUT_MS` (10 min, `MINAMI_HOLD_TIMEOUT_MS`), shown as a live
+> countdown in the drawer. It expires to **deny**, never allow: "the human never looked" is not
+> approval, and denying keeps the session alive where an abort would throw the turn away.
+
+### Node identity, and the two plan tools
+`lib/flow-model.ts` is a pure derivation over the same `source` array the transcript renders (the same
+shape of thing as `browser-view.ts`) — so the two views cannot show different runs. **Both** plan tools
+are read, because both are live:
+
+| tool | semantics | identity |
+|---|---|---|
+| `TaskCreate` / `TaskUpdate` | incremental | real id, parsed from the result text (`Task #3 created…`) |
+| `TodoWrite` | REPLACE — every call carries the whole list | reconstructed by `reconcileKeys` |
+
+Supporting only `TodoWrite` was the original design and it was wrong: measured, given an explicit
+"track this with TodoWrite" instruction, Claude reached for `TaskCreate` anyway — so the graph silently
+fell back to one-node-per-tool-call, which reads as "the feature is broken" rather than "wrong tool".
+
+`reconcileKeys` exists because `TodoWrite` has no ids: keying on array index churns whenever the list
+grows, keying on content churns whenever an item is reworded, and either way the node you are reading
+re-mounts and jumps mid-review. It matches on normalised content first, falls back to position, and
+only then mints. `TaskCreate`'s real id needs none of this, which is why it is the better path.
+
+Turns with no plan at all (quick answers, one-file edits) synthesize a node per tool call, so the
+canvas is never empty.
+
+### Gotchas
+- **`fitView` is not used, deliberately.** It fits against the container as it is at that instant, and
+  this pane is a flex child that hasn't reached full size when nodes finish measuring — measured
+  result: zoom 0.85, column jammed left, never corrected. Chasing it with a `ResizeObserver` only moves
+  the race. And fitting is wrong anyway for a spine that grows downward without limit: a 20-step plan
+  would fit at ~0.3 zoom, where nothing is readable. A fixed viewport at zoom 1 is the review surface.
+- **The ⚙ is a sibling of the tile, not a child** — the tile is itself a `<button>`, and nesting one is
+  invalid HTML whose inner click also fires the outer one. Hence the wrapper `motion.div`.
+- **React Flow's stylesheet is imported from inside components**, so Next emits it *after*
+  `globals.css`. Dark-mode overrides there need doubled-up selectors or they silently lose the cascade
+  (measured: the controls stayed `rgb(254,254,254)`).
+- A **held** prompt is answered in the canvas drawer, so `app/page.tsx` suppresses the ordinary
+  permission card for it — otherwise there'd be two Approve buttons for one decision. Every non-held
+  prompt still renders normally, so a Flow pane in `default` mode is no less answerable than a Chat one.
 
 ---
 
