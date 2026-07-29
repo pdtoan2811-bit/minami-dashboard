@@ -722,6 +722,49 @@ predictable rather than magic:
   It fails loudly on purpose: silently dropping `resume` would hand back a context-less session that
   looks like it worked, which is the exact failure this feature exists to remove.
 
+**The candidate is scoped to `s.cwd === cwd`, and that is not redundant with "same topic."** A topic is
+keyed on `basename(cwd)`, so `~/work/api` and `~/personal/api` are one topic whose `cwd` is whichever
+session sorted first — without the test, a pane could resume a conversation recorded in one directory
+and run it in another. Note also that the candidate pool is already filtered by the date-window chip and
+`isTrivial`, so the target is the most recent chat *among those shown*, not necessarily the latest one
+that exists. The UI names the chat and its age rather than claiming "your last chat", because that
+phrasing would be false whenever the window excludes something newer.
+
+**The SDK has a native `continue: boolean`** ("continue the most recent conversation in the current
+directory", mutually exclusive with `resume`) that this deliberately does not use: it's opaque — you
+can't name the target before sending — and it would happily grab a conversation that's live in another
+pane, which is the corruption case below. `forkSession` defaults false, which is why `resume` appends to
+the same file rather than branching; `forkSession: true` is the alternative design, trading split
+history for immunity to two writers.
+
+> 🐛 **The two-writers guard had a 1–2 second hole — in the exact window that mattered.** It consults
+> the `live:<id>` alias, but that alias was only registered when the SDK's `init` message arrived, which
+> is *after* the ~1-2s cold start the code elsewhere narrates as `spawning`. Two blank panes offering the
+> same chat (neither has a session id yet, so neither appears in the other's `openSids`) that sent within
+> that window both measured `cold`, both found no owner, and both spawned a subprocess appending to one
+> JSONL — the precise corruption the guard exists to prevent. The id is now claimed at spawn time in
+> `ensureSession`. `init` drops the claim if the SDK returns a *different* id: teardown only deletes the
+> final `sessionId`, so an orphaned alias would outlive the session and make the guard reject that
+> conversation as "already open" forever.
+
+> 🐛 **A refused resume kept the id it had just been refused — and the first fix only half-worked.**
+> `send()` adopts `opts.resume` before the POST (that's what lets the pane stream and reconcile as that
+> conversation) but never gave it back on error, so a rejected continue left the message undelivered
+> while the pane silently re-pointed itself at the very conversation it had been refused, with an
+> optimistic user turn on screen implying otherwise.
+>
+> Undoing it in `use-agent` alone was **not enough**, which only running it revealed: `onLive` is
+> one-way — it fires only on a *truthy* id — so the parent had already latched `pane.sid` and kept it.
+> Measured on the preview: the pane retitled itself to the target chat while displaying
+> `folder does not exist: /private/tmp/minami-permtest`. The release is now explicit, `onLive("")`,
+> scoped by a ref to adoptions the pane made via continue so a pane opened directly on a session is
+> never reset by it. `resumedFrom` is cleared with it — otherwise the seam would go on claiming context
+> that was never loaded.
+>
+> The general lesson, and the reason this one is written up rather than quietly fixed: **optimistic
+> state that flows outward needs a symmetric way back.** A rollback that only touches the local copy
+> leaves every consumer that already latched it out of sync.
+
 ### Composer
 A `<textarea>` that grows to `MAX_H` (220px) and then scrolls, with a pixel-aligned mirror layer behind
 it that tints markdown syntax without touching metrics (that constraint is why bold renders as dimmed
@@ -1262,6 +1305,16 @@ timestamp comparison, an actual HTTP probe — and check that instead.
   containers, moved `drop-shadow` off the rotating icon, and added `prefers-reduced-motion`. Measured
   A/B in the same page and process: **GPU 31.1% → 14.0%**. Layer promotion was tried and rejected
   (33.8% → 33.2%, inside noise). *Reported by user: "lag and heat on my local machine".*
+- **Audit of continue-on-open — four defects fixed, and the feature actually exercised** (§5e). The
+  candidate is now scoped to `s.cwd === cwd` (a topic is keyed on `basename(cwd)`, so same-named folders
+  share one); the two-writers guard claims the id at spawn instead of at `init`, closing a 1–2s window
+  where two panes could both pass it; a refused resume now hands the id back through `onLive("")`, since
+  undoing it locally left the parent still latched; and the copy no longer claims "where you left off"
+  when the date-window chip may have hidden something newer. Verified on the preview rather than by
+  inspection: a resumed pane answered a question only the earlier conversation could answer
+  (`cat probe.txt`), the chat count stayed at 7 so nothing forked, and two concurrent rival resumes of
+  the same not-yet-live session ended with exactly one accepted.
+  *Requested by user: "audit the resume automation".*
 - **Blank chat panes continue the topic's last conversation** (§5e) — `claude --continue` parity. A
   blank pane used to start a session that could see none of the project's history. It now names the
   chat it will pick up before you type (with `Start fresh instead`), draws a seam in the transcript

@@ -257,6 +257,14 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     toolBufs: new Map(),
   };
   store.set(key, s);
+  // Claim the resumed id NOW, not when the SDK's `init` arrives with it. The `live:<id>` alias is what
+  // sendMessage's two-writers guard consults, and init lands only after the ~1-2s cold start — so
+  // registering it there left a window where a SECOND pane resuming the same conversation saw no owner,
+  // passed the guard, and spawned a rival subprocess appending to the same JSONL. That is the precise
+  // corruption the guard exists to prevent, and it was reachable by two blank panes continuing the same
+  // chat within a second of each other. handleSystem re-sets this key on init (same session, same value
+  // in the resume case), and teardown is identity-checked, so claiming early costs nothing.
+  if (resume) store.set(SID_KEY + resume, s);
   // Adopt anyone who subscribed while this key had no session yet (see `waiting`), so the very first
   // events of the turn — init, the opening activity state — reach them.
   const early = waiting.get(key);
@@ -504,6 +512,14 @@ function handleSystem(s: Session, m: any) {
   switch (m.subtype) {
     case "init":
       if (m.session_id) {
+        // Drop the alias we claimed at spawn time if the SDK came back with a DIFFERENT id than the one
+        // we resumed. With `forkSession` unset that shouldn't happen (resume continues the same id), but
+        // a stale alias is not a harmless leak: teardown only ever deletes the FINAL sessionId, so the
+        // orphan would outlive the session and make the two-writers guard reject that conversation as
+        // "already open" forever. Identity-checked so it can't delete a newer session's claim.
+        if (s.sessionId && s.sessionId !== m.session_id && store.get(SID_KEY + s.sessionId) === s) {
+          store.delete(SID_KEY + s.sessionId);
+        }
         s.sessionId = m.session_id;
         // Also register the session under its Claude id, so ANY pane viewing this session — not just
         // the one that started it — can subscribe/send/reattach and stream it live (the client uses
