@@ -149,6 +149,34 @@ parks a promise in `s.pending` and blocks.
 
 ---
 
+### Restart safety — the deploy kills every conversation
+
+Every live session's SDK subprocess is a **child of the Next server process**. `bin/serve.sh` kills
+whatever holds `:3000`, so a deploy doesn't just swap the UI — it takes down every in-flight turn on
+the box and its MCP servers. Worse, the trigger is usually a *different* pane finishing an edit, so
+the interruption lands on whoever happens to be typing. That is the real source of "my request got
+interrupted and I never touched anything."
+
+`drainForRestart(timeoutMs = 60_000)` broadcasts a `notice{kind:"restarting"}` to every pane — the
+one notice a user gets *before* the disruption — then polls every 250 ms until nothing is busy. It
+deliberately closes nothing; the caller is about to kill the process anyway, and a turn that lands
+inside the window writes its result to the JSONL, which is what a pane reconciles against on the new
+build. `bin/serve.sh` also refuses to start when a turn is in flight unless given `--force`.
+
+> ⚠️ **This is a blast-radius reducer, not a fix.** The durable answer is hosting sessions outside
+> the process that gets redeployed. The code says so itself.
+
+> 🐛 **The drain endpoint can't gate on "is this loopback".** A Next route handler has no access to
+> the peer socket address, and `x-forwarded-for` proves nothing: Next backfills it from
+> `socket.remoteAddress` (so its presence isn't evidence of a proxy hop — an early version treated it
+> as such and 403'd its own caller), and it only fills the header when *absent*, so any LAN client can
+> send `x-forwarded-for: 127.0.0.1` via `curl -H` and have it preserved verbatim. It now gates on a
+> shared secret in a `0600` file, compared with `timingSafeEqual` after a length precheck — that
+> function throws on length mismatch, which would leak length through the error path. No token file
+> means **deny**.
+
+---
+
 ## 4. Activity labels — `lib/agent/labels.ts`
 
 Computed **server-side on purpose**: it survives a browser refresh by riding the reconnect snapshot,
@@ -234,9 +262,15 @@ with `toolkit/brand/tokens.css`.
 |---|---|
 | `architecture.html` — the whole system | shipped |
 | `transcripts.html` — pipeline 1: disk → parser → tile | shipped |
-| Live sessions — pipeline 2 | not written |
+| `live-sessions.html` — pipeline 2: browser → SDK → claude | shipped |
 | Cross-machine metrics — pipeline 3 | not written |
 | Operations — deploy · identity · runbook | not written |
+
+Every page carries the shared top nav (`KB.nav()`), so no page is a dead end and unwritten pages
+show as visible-but-unclickable placeholders. **Light is the default theme**, deliberately — there is
+no `prefers-color-scheme` rule, matching `~/dataAnalyticsOwnego`'s hub ("light by default"), so the
+KB looks identical on every machine and screenshots of it are reproducible. Dark is opt-in via the
+toggle and remembered across pages.
 
 **Two ways to read it**, and the difference matters:
 
@@ -302,6 +336,12 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **KB navigation + light-mode default** — shared sticky top nav on every page via `KB.nav()`;
+  `architecture.html` migrated off its duplicated inline CSS onto `kb.css`/`kb.js`; light is now the
+  default theme with no `prefers-color-scheme` rule, matching dataAnalyticsOwnego's hub.
+  `live-sessions.html` shipped (7 sections, 3 diagrams) — including the restart/drain mechanism and
+  the drain-endpoint auth reasoning, neither of which was recorded here before.
+  *Reported by user: "implement the navigation ... match 1-1, also light mode as detail."*
 - **KB moved onto a shared shell** — `kb.css` + `kb.js` extracted, hub rebuilt on it, and
   `transcripts.html` added as the first deep-dive page (7 sections, 3 diagrams). Page set now
   declared up front in the hub with honest "not written yet" placeholders. The six-phase build

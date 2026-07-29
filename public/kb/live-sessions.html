@@ -1,0 +1,469 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live sessions — Minami Bento KB</title>
+<link rel="stylesheet" href="./kb.css">
+
+<div class="topnav" id="topnav"></div>
+
+<div class="guide">
+<nav class="rail" aria-label="Sections">
+  <a class="home" href="./">← knowledge base</a>
+  <ol id="rail"></ol>
+</nav>
+<div class="col">
+
+<header class="hero">
+  <p class="kicker" style="--st:var(--agent)">Minami Bento · pipeline 2 of 3</p>
+  <h1>A conversation held open by a generator that never returns</h1>
+  <p class="lede">A live pane isn't a transcript viewer. It's one SDK <code>query()</code> call that
+  stays open for the life of the pane, fed by an async generator and drained over SSE. Almost
+  everything difficult here comes from that call outliving the HTTP request that started it — and
+  from its subprocess being a child of the web server.</p>
+</header>
+
+<!-- 01 -->
+<section id="generator">
+  <p class="eyebrow" style="--st:var(--agent)">01 · the shape</p>
+  <h2>One query, forever</h2>
+  <div class="prose">
+    <p>Every pane that goes live gets exactly one <code>query()</code> — created once in
+    <code>ensureSession()</code> and held in a registry for the life of the pane. Not one per
+    message. The prompt isn't a string; it's <code>inputGen(s)</code>, an async generator that yields
+    queued messages and then <strong>parks on an unresolved promise</strong> until the next send
+    wakes it.</p>
+    <p>That's the whole trick. Streaming-input mode turns a normally one-shot CLI invocation into
+    something you can keep talking to, because the subprocess and its context never tear down between
+    turns.</p>
+    <pre><i>// the entire "hold it open" mechanism</i>
+async function* inputGen(s) {
+  while (!s.closed) {
+    if (s.queue.length) { yield s.queue.shift(); continue; }
+    await new Promise((resolve) =&gt; { <b>s.waiter = resolve;</b> });  <i>// park until sendMessage() wakes us</i>
+  }
+}</pre>
+    <p>The registry lives on <code>globalThis</code> so a Next dev hot-reload — which wipes
+    module-level state on every save — doesn't orphan a running subprocess.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead"><span class="ptitle">cold.start.sequence</span></div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-cold" viewBox="0 0 1000 330" role="img"
+        aria-label="Sequence across browser, API route, session manager and Agent SDK for the first message on a cold pane: the browser posts and opens the SSE stream in the same tick, the manager creates the session and starts the query, and any subscriber that arrived before the session existed is adopted so the opening events are not lost."></svg>
+    </div></div>
+  </div></div>
+
+  <div class="note warn"><p class="lbl">The race is real, and handled</p>
+  <p>The browser fires the POST and opens the <code>EventSource</code> in the same tick, so either can
+  win. A subscriber that arrives first is parked in a separate <code>waiting</code> map and
+  <strong>adopted the instant the session is created</strong> — otherwise the opening
+  <code>init</code> and <code>activity</code> events stream into the void.</p></div>
+</section>
+
+<!-- 02 -->
+<section id="wire">
+  <p class="eyebrow" style="--st:var(--agent)">02 · the wire</p>
+  <h2>Fourteen event shapes, one stream</h2>
+  <div class="prose">
+    <p><code>AgentEvent</code> is a fourteen-variant tagged union, and the stream route does nothing
+    but stringify whatever <code>subscribe()</code> hands it. There is no endpoint per event type: the
+    entire live experience is one <code>text/event-stream</code> per pane, plus a handful of POSTs
+    that mutate server state and let the stream report the consequence.</p>
+    <p>A 20-second <code>: ping</code> comment line keeps the connection alive through idle-timing
+    proxies. SSE comment lines never fire <code>onmessage</code>, so the client never sees it.</p>
+    <pre>t: <b>init · delta · thinking · snapshot · detached · tool · tool_end</b>
+   <b>activity · notice · permission · ask · result · busy · error</b>
+<i>// notice.kind: retry · compact · task · limit · denied · aborted · restarting</i></pre>
+  </div>
+  <div class="note warn"><p class="lbl">No backpressure</p>
+  <p><code>broadcast()</code> has no flow control, and a subscriber callback that throws is swallowed.
+  A dead client is silently dropped rather than erroring the session — deliberate, but it means a slow
+  consumer can't push back.</p></div>
+</section>
+
+<!-- 03 -->
+<section id="activity">
+  <p class="eyebrow" style="--st:var(--agent)">03 · the label</p>
+  <h2>The server decides what it's doing</h2>
+  <div class="prose">
+    <p>"Reading package.json", "waiting on approval · run: npm test", "compacting 42k → 18k" — none of
+    that is inferred in the browser. It's an eight-state machine tracked per session and rebroadcast
+    with <strong>REPLACE semantics</strong> on every transition.</p>
+    <p>It lives server-side for one reason: the label has to survive a refresh. Every
+    <code>subscribe()</code> replay carries a snapshot with the current activity, so a pane that
+    reconnects mid-tool-call resumes with the real label and a correctly offset clock instead of a
+    generic spinner. And because the whole state is rebuilt every time, a client that misses an event
+    self-heals on the next one rather than accumulating drift.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">activity.phase</span>
+      <div class="ctrl"><button id="fsmMode" type="button">Show what triggers each</button></div>
+    </div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-fsm" viewBox="0 0 1000 320" role="img"
+        aria-label="The eight activity phases — idle, spawning, thinking, responding, tool, awaiting, retrying and compacting — and the SDK events that move between them."></svg>
+    </div></div>
+  </div></div>
+
+  <div class="prose">
+    <pre><i>// the stale-label fix: re-derive from what is ACTUALLY still in flight</i>
+function settle(s) {
+  if (s.pending.size) return touch(s, <b>"awaiting"</b>);              <i>// a human is blocking</i>
+  if (s.liveTools.size || s.liveTasks.size) return touch(s, <b>"tool"</b>);
+  touch(s, s.busy ? <b>"thinking"</b> : <b>"idle"</b>);
+}</pre>
+    <p>Without <code>settle()</code>, a finished tool's label stays on screen — <em>run: npm test</em>
+    still animating long after the command exited.</p>
+  </div>
+</section>
+
+<!-- 04 -->
+<section id="permission">
+  <p class="eyebrow" style="--st:var(--ui)">04 · the pause</p>
+  <h2>A promise only a different request can resolve</h2>
+  <div class="prose">
+    <p>When Claude reaches for a tool the config doesn't auto-approve, the SDK calls
+    <code>canUseTool()</code> and awaits whatever comes back. Our implementation decides nothing: it
+    broadcasts a prompt, stores <code>{resolve, toolName, input}</code> in <code>s.pending</code>, and
+    returns a promise that <strong>only a separate HTTP request can settle</strong>. The SDK's entire
+    turn parks there for as long as the human takes.</p>
+    <p>That gap is where three separate failure modes live, and each one is defended individually.</p>
+  </div>
+
+  <table>
+    <thead><tr><th>If…</th><th>Then, without a fix</th><th>Defence</th></tr></thead>
+    <tbody>
+      <tr><td>the tab closes mid-approval</td>
+        <td><code>busy</code> pinned true forever — no <code>result</code> ever arrives to trigger cleanup, so the subprocess leaks permanently</td>
+        <td>the idle reaper auto-denies pending prompts before deciding whether to close</td></tr>
+      <tr><td>the query iterator ends while a prompt is parked</td>
+        <td>the browser's Allow/Deny dialog has no working button — its POST finds no session and the UI never clears</td>
+        <td>the consumer loop's <code>finally</code> denies everything left, with "Session ended."</td></tr>
+      <tr><td>Stop races a fast follow-up</td>
+        <td>the <em>new</em> turn's prompt gets denied with a stale "Stopped by user."</td>
+        <td><code>stop()</code> snapshots pending entries <strong>before</strong> awaiting <code>interrupt()</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead"><span class="ptitle">permission.lifecycle</span></div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-perm" viewBox="0 0 1000 300" role="img"
+        aria-label="A tool call needing approval: the SDK calls canUseTool and blocks, the manager broadcasts a permission event and parks a promise, the browser renders a dialog, the user denies via a separate POST, and only then does the SDK's await return."></svg>
+    </div></div>
+  </div></div>
+</section>
+
+<!-- 05 -->
+<section id="reconnect">
+  <p class="eyebrow" style="--st:var(--agent)">05 · coming back</p>
+  <h2>Three copies of the truth, one winner</h2>
+  <div class="prose">
+    <p>On reconnect there are three versions of the current turn: the JSONL on disk, the server's
+    in-memory partial, and whatever the browser already painted. Picking wrong either loses text that
+    arrived during the outage, or <strong>visibly un-streams text the user already watched appear</strong>.</p>
+    <p>The deciding signal isn't a guess about which source is fresher — it's timing. Did a token land
+    <em>after</em> the resync started? If not, the local copy is stale-after-an-outage and the server
+    wins. If one did, the connection was live the whole time and the local turn is actually ahead of
+    disk, which hasn't been flushed yet.</p>
+    <pre><i>// the arbitration, in one line</i>
+const staleAfterOutage = !liveTurn || <b>lastDeltaAtRef.current &lt;= resyncStartedAt</b>;
+return [...seed, ...(liveTurn &amp;&amp; !staleAfterOutage ? [liveTurn] : overlay)];</pre>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">backgrounded.and.back</span>
+      <div class="ctrl">
+        <div class="steps"><span id="rLbl">step 1 / 5</span><span class="dotrow" id="rDots"></span></div>
+        <button id="rPrev" type="button">‹ back</button>
+        <button id="rNext" type="button">next ›</button>
+      </div>
+    </div>
+    <div class="pbody">
+      <div class="scroll">
+        <svg id="viz-recon" viewBox="0 0 1000 220" role="img"
+          aria-label="A tab backgrounded mid-reply: the connection freezes while the server keeps streaming, the tab returns and forces an explicit re-attach, the server replays a snapshot, and the client arbitrates between disk, server partial and local state."></svg>
+      </div>
+      <p class="narr" id="rNarr"></p>
+    </div>
+  </div></div>
+
+  <div class="note bug"><p class="lbl">The reap that started a blank session</p>
+  <p>Re-attaching used to optimistically mark the pane as backed by a live session. Combined with the
+  idle reaper, that meant the next message could <strong>silently start a brand-new, context-less
+  session</strong> — the client believed something was there that wasn't. Now that flag is only set by
+  a <code>snapshot</code> (proof it exists) and cleared by <code>detached</code> (proof it doesn't).
+  The reaper also moved from 10 minutes to 30, because backgrounding a mobile tab tears down SSE
+  routinely and shouldn't cost you a warm subprocess.</p></div>
+</section>
+
+<!-- 06 -->
+<section id="restart">
+  <p class="eyebrow" style="--st:var(--ui)">06 · the deploy problem</p>
+  <h2>Redeploying kills every conversation on the box</h2>
+  <div class="prose">
+    <p>Every live session's subprocess is a <strong>child of the Next server process</strong>. The
+    deploy step kills whatever holds port 3000 — so it doesn't just swap the UI, it takes down every
+    in-flight turn on the machine, along with their MCP servers.</p>
+    <p>The cruel part is who it lands on. The trigger is usually a <em>different</em> pane finishing an
+    edit and redeploying, so the interruption arrives at whoever happens to be typing. That's the real
+    source of "my request got interrupted and I never touched anything."</p>
+    <p>The mitigation is a drain, and it is honestly labelled as one. Before the kill,
+    <code>drainForRestart()</code> broadcasts a <code>restarting</code> notice to every open pane —
+    the one notice a user gets <em>before</em> the disruption rather than after — then polls until no
+    session is busy, up to a timeout. Turns that land inside that window write their result to the
+    JSONL, which is exactly what a pane reconciles against when it reattaches to the new build.</p>
+    <pre><i>// deliberately closes nothing — the caller is about to kill the process anyway</i>
+while (Date.now() - startedAt &lt; timeoutMs) {
+  const busy = eachSession().filter((s) =&gt; s.busy).length;
+  if (!busy) return { drained: true, stillBusy: 0, waitedMs: Date.now() - startedAt };
+  await new Promise((r) =&gt; setTimeout(r, <b>250</b>));   <i>// poll, don't hook every completion path</i>
+}</pre>
+  </div>
+
+  <div class="note warn"><p class="lbl">A blast-radius reducer, not a fix</p>
+  <p>The durable fix is hosting sessions outside the process that gets redeployed. The code says so
+  itself. Until then a deploy can still cut a turn off — the drain only makes it rarer, announced, and
+  recoverable from the transcript.</p></div>
+
+  <div class="prose">
+    <h3>Why the drain endpoint needs a token</h3>
+    <p>The obvious gate — "only allow loopback" — cannot be built here. A Next route handler has no
+    access to the peer socket address, and <code>x-forwarded-for</code> proves nothing: Next backfills
+    it from <code>socket.remoteAddress</code>, so its presence isn't evidence of a proxy hop, and it
+    only fills the header when <em>absent</em> — so any LAN client can send
+    <code>x-forwarded-for: 127.0.0.1</code> with <code>curl -H</code> and have it preserved verbatim.
+    An early version treated presence as proof and 403'd its own loopback caller.</p>
+    <p>So it gates on a shared secret in a <code>0600</code> file instead, compared with
+    <code>timingSafeEqual</code> after a length precheck (that function throws on mismatched lengths,
+    which would leak length through the error path). No token file means <strong>deny</strong> — it
+    fails closed.</p>
+  </div>
+</section>
+
+<!-- 07 -->
+<section id="dedup">
+  <p class="eyebrow" style="--st:var(--cache)">07 · two keys</p>
+  <h2>One session, registered twice</h2>
+  <div class="prose">
+    <p>Once the SDK reports a real session id, the same <code>Session</code> object is stored under a
+    <em>second</em> key: <code>live:&lt;sessionId&gt;</code> alongside its pane key. That's load-bearing
+    — it's what lets any tab open a running session by its real id rather than only the tab that
+    started it.</p>
+    <p>It also means any code that walks the registry naively visits every live session twice. Three
+    call sites dedupe by object identity; the health endpoint's comment spells out the consequence of
+    forgetting — it would <strong>report twice the real load</strong>, and a deploy script would think
+    a restart kills twice as many chats as it does.</p>
+    <pre>function eachSession() {
+  const seen = new Set();
+  for (const s of store.values()) {
+    if (<b>seen.has(s)</b> || s.closed) continue;   <i>// identity dedup across both keys</i>
+    seen.add(s); out.push(s);
+  }
+}</pre>
+    <p>Teardown has the mirror of this problem: it must remove both aliases, and only if they still
+    point at <em>this</em> object — a late cleanup must not delete the registry entry of a successor
+    that reclaimed the same pane key.</p>
+  </div>
+
+  <div class="note warn"><p class="lbl">Discipline, not structure</p>
+  <p>Nothing in the type system stops a fourth call site from walking the registry and forgetting to
+  dedupe. It's a convention held by comments.</p></div>
+
+  <footer>
+    <p>Source: <code>lib/agent/manager.ts</code>, <code>lib/agent/labels.ts</code>,
+    <code>lib/use-agent.ts</code>, <code>app/api/agent/*</code>. Reasoning record:
+    <code>docs/KNOWLEDGE.md</code> §3–5.</p>
+    <div class="nextprev">
+      <a href="./transcripts.html">← transcripts</a>
+      <a href="./architecture.html">the whole system</a>
+      <a href="./">knowledge base</a>
+    </div>
+  </footer>
+</section>
+
+</div>
+</div>
+
+<script src="./kb.js"></script>
+<script>
+(function(){
+"use strict";
+var K = window.KB;
+
+/* ── 01 · cold start sequence ───────────────────────────────────────── */
+(function(){
+  var s = document.getElementById("viz-cold");
+  var lanes = [{x:110,t:"browser",c:"ui"},{x:370,t:"api route",c:"agent"},
+               {x:630,t:"manager.ts",c:"agent"},{x:890,t:"Agent SDK",c:"agent"}];
+  lanes.forEach(function(l){
+    s.appendChild(K.rr(l.x-72, 20, 144, 30, 8, {fill:"var(--surface2)", stroke:"var(--"+l.c+")", "stroke-width":1.2}));
+    s.appendChild(K.txt(l.x, 40, l.t, {size:11.5, weight:600, anchor:"middle"}));
+    s.appendChild(K.el("path", {d:"M"+l.x+",56 L"+l.x+",312", stroke:"var(--rule)", "stroke-width":1, "stroke-dasharray":"2 4"}));
+  });
+  var steps = [
+    [0,1,"POST /agent/send","{key, cwd, message}"],
+    [0,1,"GET /agent/stream","EventSource — races the POST"],
+    [1,2,"sendMessage()","queue + wake the generator"],
+    [2,3,"query({prompt: inputGen})","spawns claude"],
+    [2,0,"adopt parked subscriber","so init isn't lost"],
+    [3,2,"stream_event deltas","token by token"],
+    [2,0,"delta · activity","over SSE"]
+  ];
+  steps.forEach(function(st, i){
+    var y = 86 + i*32, a = lanes[st[0]].x, b = lanes[st[1]].x, dir = b > a ? 1 : -1;
+    var x1 = a + dir*10, x2 = b - dir*10;
+    var hot = st[2].indexOf("adopt") === 0;
+    var col = hot ? "var(--metric)" : "var(--rule)";
+    s.appendChild(K.el("path", {d:"M"+x1+","+y+" L"+x2+","+y, stroke:col, "stroke-width":hot?1.8:1.4}));
+    s.appendChild(K.el("path", {d:"M"+x2+","+y+" L"+(x2-dir*7)+","+(y-4)+" L"+(x2-dir*7)+","+(y+4)+" Z", fill:col}));
+    s.appendChild(K.txt((a+b)/2, y-6, st[2], {size:10.5, weight:600, anchor:"middle", fill:hot?"var(--metric)":"var(--text)"}));
+    s.appendChild(K.txt((a+b)/2, y+12, st[3], {size:9.5, anchor:"middle", fill:"var(--text3)"}));
+    s.appendChild(K.txt(28, y+4, "0"+(i+1), {size:9.5, fill:"var(--text3)"}));
+  });
+})();
+
+/* ── 03 · phase state machine ───────────────────────────────────────── */
+var fsm = document.getElementById("viz-fsm"), fsmMode = 0;
+var PH = [
+  {id:"idle",       x:60,  y:130, t:"idle",       w:"result · nothing running"},
+  {id:"spawning",   x:230, y:40,  t:"spawning",   w:"first send — cold SDK start"},
+  {id:"thinking",   x:230, y:200, t:"thinking",   w:"send on a warm session"},
+  {id:"responding", x:430, y:200, t:"responding", w:"text_delta"},
+  {id:"tool",       x:430, y:40,  t:"tool",       w:"content_block_start: tool_use"},
+  {id:"awaiting",   x:640, y:40,  t:"awaiting",   w:"canUseTool() blocked"},
+  {id:"retrying",   x:640, y:140, t:"retrying",   w:"system: api_retry"},
+  {id:"compacting", x:640, y:238, t:"compacting", w:"system: compact_boundary"}
+];
+var TR = [["idle","spawning"],["idle","thinking"],["spawning","thinking"],["thinking","responding"],
+          ["thinking","tool"],["responding","tool"],["tool","awaiting"],["awaiting","tool"],
+          ["tool","responding"],["thinking","retrying"],["thinking","compacting"],
+          ["responding","idle"],["tool","idle"]];
+function ph(id){ for (var i=0;i<PH.length;i++) if (PH[i].id===id) return PH[i]; }
+function twin(a,b){ for (var i=0;i<TR.length;i++) if (TR[i][0]===b && TR[i][1]===a) return true; return false; }
+function drawFsm(){
+  K.clear(fsm);
+  var W = 124, H = 44;
+  TR.forEach(function(t){
+    var a = ph(t[0]), b = ph(t[1]);
+    var x1=a.x+W/2, y1=a.y+H/2, x2=b.x+W/2, y2=b.y+H/2;
+    var dx=x2-x1, dy=y2-y1, L=Math.sqrt(dx*dx+dy*dy), ux=dx/L, uy=dy/L;
+    var off = twin(t[0],t[1]) ? 5 : 0, px = -uy*off, py = ux*off;
+    var p1 = K.clipBox(x1,y1,W/2,H/2,ux,uy,3), p2 = K.clipBox(x2,y2,W/2,H/2,-ux,-uy,3);
+    K.arrow(fsm, p1[0]+px, p1[1]+py, p2[0]+px, p2[1]+py);
+  });
+  PH.forEach(function(n){
+    var acc = n.id === "awaiting" ? "ui" : n.id === "idle" ? "text3" : "agent";
+    fsm.appendChild(K.rr(n.x, n.y, W, H, 10, {fill:"var(--surface)", stroke:"var(--"+acc+")", "stroke-width":1.4}));
+    fsm.appendChild(K.txt(n.x+W/2, n.y+(fsmMode?19:27), n.t, {size:12, weight:600, anchor:"middle"}));
+    if (fsmMode) fsm.appendChild(K.txt(n.x+W/2, n.y+34, n.w, {size:8.5, fill:"var(--text3)", anchor:"middle"}));
+  });
+  fsm.appendChild(K.txt(60, 300, fsmMode
+    ? "the label under each state is the event that puts it there"
+    : "every arrow is a real transition in handleMessage()", {size:10, fill:"var(--text3)"}));
+}
+drawFsm();
+document.getElementById("fsmMode").onclick = function(){
+  fsmMode = 1 - fsmMode;
+  this.textContent = fsmMode ? "Show phases only" : "Show what triggers each";
+  drawFsm();
+};
+
+/* ── 04 · permission lifecycle ──────────────────────────────────────── */
+(function(){
+  var s = document.getElementById("viz-perm");
+  var lanes = [{x:120,t:"browser",c:"ui"},{x:400,t:"manager.ts",c:"agent"},{x:700,t:"Agent SDK",c:"agent"},{x:920,t:"tool",c:"disk"}];
+  lanes.forEach(function(l){
+    s.appendChild(K.rr(l.x-64, 18, 128, 28, 8, {fill:"var(--surface2)", stroke:"var(--"+l.c+")", "stroke-width":1.2}));
+    s.appendChild(K.txt(l.x, 37, l.t, {size:11, weight:600, anchor:"middle"}));
+    s.appendChild(K.el("path", {d:"M"+l.x+",52 L"+l.x+",286", stroke:"var(--rule)", "stroke-width":1, "stroke-dasharray":"2 4"}));
+  });
+  var steps = [
+    [2,1,"canUseTool(name, input)","the SDK now BLOCKS", true],
+    [1,0,"permission · perm-7","phase → awaiting", false],
+    [0,1,"POST /agent/permission","decide() resolves the promise", false],
+    [1,2,"{behavior: deny}","the await returns", true],
+    [2,3,"…or runs the tool","if allowed", false]
+  ];
+  steps.forEach(function(st, i){
+    var y = 82 + i*40, a = lanes[st[0]].x, b = lanes[st[1]].x, dir = b > a ? 1 : -1;
+    var x1 = a + dir*10, x2 = b - dir*10;
+    var col = st[4] ? "var(--ui)" : "var(--rule)";
+    s.appendChild(K.el("path", {d:"M"+x1+","+y+" L"+x2+","+y, stroke:col, "stroke-width":st[4]?1.8:1.4}));
+    s.appendChild(K.el("path", {d:"M"+x2+","+y+" L"+(x2-dir*7)+","+(y-4)+" L"+(x2-dir*7)+","+(y+4)+" Z", fill:col}));
+    s.appendChild(K.txt((a+b)/2, y-6, st[2], {size:10.5, weight:600, anchor:"middle", fill:st[4]?"var(--ui)":"var(--text)"}));
+    s.appendChild(K.txt((a+b)/2, y+12, st[3], {size:9.5, anchor:"middle", fill:"var(--text3)"}));
+  });
+  s.appendChild(K.txt(120, 286, "the promise outlives the request that created it", {size:10, fill:"var(--text3)", anchor:"middle"}));
+})();
+
+/* ── 05 · reconnect step theatre ────────────────────────────────────── */
+var rv = document.getElementById("viz-recon");
+function drawRecon(step){
+  K.clear(rv);
+  var lanes = [
+    {y:40,  t:"browser",  c:"ui"},
+    {y:100, t:"server",   c:"agent"},
+    {y:160, t:"disk",     c:"disk"}
+  ];
+  lanes.forEach(function(l){
+    rv.appendChild(K.txt(20, l.y+4, l.t, {size:10.5, fill:"var(--text3)"}));
+    rv.appendChild(K.el("path", {d:"M100,"+l.y+" L960,"+l.y, stroke:"var(--rule)", "stroke-width":1}));
+  });
+  // connection bar: solid when alive, dashed while dropped
+  var alive = step !== 1 && step !== 2;
+  rv.appendChild(K.el("path", {d:"M100,70 L960,70",
+    stroke: alive ? "var(--metric)" : "var(--ui)", "stroke-width":2.4,
+    "stroke-dasharray": alive ? "none" : "6 5"}));
+  rv.appendChild(K.txt(530, 62, alive ? "SSE connected" : "SSE frozen — tab backgrounded",
+    {size:10, anchor:"middle", fill: alive ? "var(--metric)" : "var(--ui)"}));
+  // server keeps producing regardless
+  var produced = [2,5,5,5,5][step];
+  for (var i=0;i<produced;i++){
+    rv.appendChild(K.rr(140+i*54, 92, 44, 16, 4, {fill:"var(--agent)", opacity:.75}));
+  }
+  rv.appendChild(K.txt(140, 128, "s.partial grows on the server whether or not anyone is listening",
+    {size:9.5, fill:"var(--text3)"}));
+  // what the browser has painted
+  var painted = [2,2,2,5,5][step];
+  for (var j=0;j<painted;j++){
+    rv.appendChild(K.rr(140+j*54, 32, 44, 16, 4, {fill:"var(--ui)", opacity:.75}));
+  }
+  // disk flush
+  var flushed = [0,0,0,0,5][step];
+  for (var d=0;d<flushed;d++){
+    rv.appendChild(K.rr(140+d*54, 152, 44, 16, 4, {fill:"var(--disk)", opacity:.7}));
+  }
+  var caption = ["streaming normally","tab backgrounded — server keeps going",
+                 "tab returns, forces an explicit re-attach","snapshot replayed — browser catches up",
+                 "turn ends, result flushed to the JSONL"][step];
+  rv.appendChild(K.txt(530, 200, caption, {size:11, weight:600, anchor:"middle"}));
+}
+K.theatre({
+  prev:"rPrev", next:"rNext", label:"rLbl", dots:"rDots", narr:"rNarr", draw:drawRecon,
+  steps:[
+    "<b>Streaming normally.</b> Tokens land on the server and reach the browser as they're produced. Nothing is on disk yet — the JSONL is written when the turn ends.",
+    "<b>The tab is backgrounded.</b> Mobile Safari freezes the EventSource. The server neither knows nor cares: the subprocess keeps streaming into <code>s.partial</code>, unread.",
+    "<b>The tab returns.</b> <code>EventSource</code> may have silently reconnected at the transport level, which would leave the gap invisible — so any open past the first is treated as a reconnect and the stream is torn down and reopened with <code>attach=1</code>.",
+    "<b>The server replays a snapshot.</b> No delta arrived after the resync began, so the local copy is stale-after-an-outage: the server's partial wins and the browser catches up in one paint.",
+    "<b>The turn ends.</b> Only now is the result flushed to the JSONL — which is what a pane reconciles against if the process restarts underneath it."
+  ]
+});
+
+/* ── nav + rail ─────────────────────────────────────────────────────── */
+K.rail([
+  ["generator","the shape","agent"],
+  ["wire","the wire","agent"],
+  ["activity","the label","agent"],
+  ["permission","the pause","ui"],
+  ["reconnect","coming back","agent"],
+  ["restart","the deploy problem","ui"],
+  ["dedup","two keys","cache"]
+]);
+K.nav("./live-sessions.html");
+})();
+</script>

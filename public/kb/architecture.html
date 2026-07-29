@@ -2,121 +2,15 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>How Minami Bento works: transcripts, live sessions, and two machines</title>
 
-<style>
-:root{
-  --ground:#f1f3f7; --surface:#fff; --surface2:#e8ebf1; --sunken:#dfe3ec;
-  --text:#161a22; --text2:#4e5665; --text3:#828b9c; --rule:#d6dbe4;
-  --disk:#c47f18; --cache:#6d5ae0; --metric:#1f8a5c; --agent:#0f7f9c; --ui:#c4486a;
-  --accent:var(--agent);
-  --shadow:0 1px 2px rgba(20,26,40,.06),0 8px 24px -12px rgba(20,26,40,.18);
-  --display:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
-  --body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --maxw:70ch;
-}
-@media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){
-  --ground:#0e1016; --surface:#161a22; --surface2:#1d222d; --sunken:#11141b;
-  --text:#eef1f7; --text2:#a3abbb; --text3:#6b7386; --rule:#262c39;
-  --disk:#e8ad4a; --cache:#9a8bf5; --metric:#4cbf8b; --agent:#3fbcd9; --ui:#ee7d9c;
-  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
-}}
-:root[data-theme=dark]{
-  --ground:#0e1016; --surface:#161a22; --surface2:#1d222d; --sunken:#11141b;
-  --text:#eef1f7; --text2:#a3abbb; --text3:#6b7386; --rule:#262c39;
-  --disk:#e8ad4a; --cache:#9a8bf5; --metric:#4cbf8b; --agent:#3fbcd9; --ui:#ee7d9c;
-  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
-}
-*{box-sizing:border-box}
-body{background:var(--ground);color:var(--text);font-family:var(--body);line-height:1.65;
-  -webkit-font-smoothing:antialiased;margin:0}
-.wrap{max-width:1180px;margin:0 auto;padding:0 24px 96px;display:grid;
-  grid-template-columns:minmax(0,1fr);gap:0}
-@media(min-width:1080px){.wrap{grid-template-columns:190px minmax(0,1fr);gap:48px}}
-.rail{display:none}
-@media(min-width:1080px){.rail{display:block;position:sticky;top:0;align-self:start;
-  padding:96px 0 0;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em}}
-.rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
-.rail a{display:flex;gap:9px;align-items:baseline;color:var(--text3);text-decoration:none;
-  padding:5px 8px;border-radius:6px;border-left:2px solid transparent;transition:.18s}
-.rail a:hover{color:var(--text);background:var(--surface2)}
-.rail a.on{color:var(--text);border-left-color:var(--dot,var(--accent));background:var(--surface2)}
-.rail .n{color:var(--dot,var(--text3));font-variant-numeric:tabular-nums}
-.col{min-width:0}
-.prose{max-width:var(--maxw)}
-h1{font-family:var(--display);font-size:clamp(38px,6vw,62px);line-height:1.03;margin:0 0 18px;
-  letter-spacing:-.022em;text-wrap:balance;font-weight:600}
-h2{font-family:var(--display);font-size:clamp(25px,3.2vw,34px);line-height:1.15;margin:0 0 6px;
-  letter-spacing:-.015em;text-wrap:balance;font-weight:600}
-h3{font-size:16.5px;margin:32px 0 8px;letter-spacing:-.005em;font-weight:650}
-p{margin:0 0 17px;color:var(--text2);font-size:16.5px}
-.prose p strong,li strong{color:var(--text);font-weight:620}
-a{color:var(--accent)}
-code{font-family:var(--mono);font-size:.88em;background:var(--surface2);padding:1px 5px;
-  border-radius:4px;color:var(--text)}
-pre{font-family:var(--mono);font-size:12.5px;line-height:1.7;background:var(--surface);
-  border:1px solid var(--rule);border-radius:10px;padding:14px 16px;overflow-x:auto;
-  margin:0 0 18px;max-width:var(--maxw);color:var(--text2)}
-pre b{color:var(--accent);font-weight:600}
-pre i{color:var(--text3);font-style:normal}
-pre u{text-decoration:none;background:color-mix(in oklab,var(--ui) 22%,transparent);
-  border-radius:3px;padding:0 2px}
-.sql-note{font-family:var(--mono);font-size:11px;color:var(--text3);margin:-10px 0 20px;
-  max-width:var(--maxw)}
-header.hero{padding:88px 0 40px;max-width:76ch}
-.kicker,.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.15em;
-  text-transform:uppercase;color:var(--st,var(--text3));margin:0 0 12px;font-weight:600}
-.lede{font-size:20px;line-height:1.5;color:var(--text2);max-width:66ch}
-section{padding:52px 0 8px;scroll-margin-top:20px}
-.note{border:1px solid var(--rule);border-left:3px solid var(--tone,var(--accent));
-  border-radius:0 10px 10px 0;padding:14px 16px;margin:22px 0;max-width:var(--maxw);
-  background:var(--surface)}
-.note p{margin:0;font-size:15px}
-.note .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;
-  color:var(--tone,var(--accent));font-weight:600;margin:0 0 5px}
-.bug{--tone:var(--ui)} .warn{--tone:var(--disk)} .good{--tone:var(--metric)}
-/* Full-bleed panels deliberately extend back under the rail column. The rail is position:sticky,
-   which paints above static content — so without an explicit stacking order the rail's link text
-   renders ON TOP of a panel scrolling past it. Give the panel the higher layer: a full-bleed
-   diagram covers the nav while it passes, and the nav reappears in the prose gaps between them. */
-.bleed{margin:26px 0 8px;position:relative;z-index:1}
-@media(min-width:1080px){.bleed{width:min(1180px,calc(100vw - 48px));margin-left:calc(-190px - 48px)}}
-.panel{background:var(--surface);border:1px solid var(--rule);border-radius:14px;
-  box-shadow:var(--shadow);overflow:hidden}
-.phead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
-  padding:11px 16px;border-bottom:1px solid var(--rule);background:var(--surface2)}
-.ptitle{font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;color:var(--text2);font-weight:600}
-.ctrl{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
-button{font-family:var(--mono);font-size:11px;letter-spacing:.03em;padding:5px 10px;border-radius:7px;
-  border:1px solid var(--rule);background:var(--surface);color:var(--text2);cursor:pointer;transition:.16s}
-button:hover{color:var(--text);border-color:var(--text3)}
-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.pbody{padding:16px}
-.scroll{overflow-x:auto}
-svg{display:block;max-width:100%;height:auto;margin:0 auto}
-.steps{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;color:var(--text3)}
-.dotrow{display:flex;gap:5px}
-.dotrow i{width:7px;height:7px;border-radius:50%;background:var(--rule);display:block;transition:.18s}
-.dotrow i.on{background:var(--accent);transform:scale(1.25)}
-.narr{font-size:14px;color:var(--text2);margin:12px 0 0;min-height:44px;max-width:82ch}
-.narr b{color:var(--text);font-weight:620}
-.legend{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;
-  color:var(--text3);padding:11px 16px;border-top:1px solid var(--rule);background:var(--surface2)}
-.legend span{display:flex;align-items:center;gap:6px}
-.legend i{width:10px;height:10px;border-radius:3px;display:block}
-table{border-collapse:collapse;width:100%;font-size:14px;margin:0 0 18px}
-th{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
-  color:var(--text3);text-align:left;padding:8px 12px;border-bottom:1px solid var(--rule);font-weight:600}
-td{padding:9px 12px;border-bottom:1px solid var(--rule);color:var(--text2);vertical-align:top}
-td strong{color:var(--text);font-weight:620}
-.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono)}
-footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--rule);max-width:var(--maxw);
-  font-size:14px;color:var(--text3)}
-footer code{font-size:.9em}
-@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
-</style>
+<link rel="stylesheet" href="./kb.css">
 
-<div class="wrap">
-<nav class="rail" aria-label="Sections"><ol id="rail"></ol></nav>
+<div class="topnav" id="topnav"></div>
+
+<div class="guide">
+<nav class="rail" aria-label="Sections">
+  <a class="home" href="./">← knowledge base</a>
+  <ol id="rail"></ol>
+</nav>
 <div class="col">
 
 <header class="hero">
@@ -512,24 +406,14 @@ state.json      active_slot = <u>oedevai2@gmail.com</u>     <i>← a label</i>
 </div>
 </div>
 
+<script src="./kb.js"></script>
 <script>
 (function(){
 "use strict";
-var SVGNS="http://www.w3.org/2000/svg";
-var reduce=matchMedia("(prefers-reduced-motion:reduce)").matches;
-
-/* CSS custom properties do NOT resolve in SVG presentation attributes -- they must be set as
-   CSS properties instead, or every shape silently paints black. */
-function el(t,a){var n=document.createElementNS(SVGNS,t);for(var k in a){var v=a[k];
-  if(typeof v==="string"&&v.indexOf("var(")>-1){n.style.setProperty(k,v);}else{n.setAttribute(k,v);}}
-  return n;}
-function txt(x,y,s,o){o=o||{};var n=el("text",{x:x,y:y,fill:o.fill||"var(--text)",
-  "font-family":o.mono===false?"var(--body)":"var(--mono)","font-size":o.size||12,
-  "text-anchor":o.anchor||"start","font-weight":o.weight||400,"letter-spacing":o.ls||0});
-  n.textContent=s;return n;}
-function rr(x,y,w,h,r,a){var o={x:x,y:y,width:w,height:h,rx:r};for(var k in a)o[k]=a[k];
-  return el("rect",o);}
-function clear(n){while(n.firstChild)n.removeChild(n.firstChild);}
+var K = window.KB;
+// Helpers come from kb.js so every page draws with the same primitives (and the same
+// var()-in-SVG fix). Aliased locally to keep the drawing code below unchanged.
+var el = K.el, txt = K.txt, rr = K.rr, clear = K.clear, reduce = K.reduce;
 
 /* ── 01 · system map ─────────────────────────────────────────────── */
 var flow=document.getElementById("viz-flow");
@@ -870,26 +754,7 @@ var items=[["map","the map","agent"],["transcripts","the substrate","disk"],
  ["turn","the live turn","agent"],["activity","the label","agent"],
  ["reconnect","dropped conn.","agent"],["metrics","second machine","metric"],
  ["accounts","whose account","ui"],["hardening","scar tissue","ui"]];
-var rail=document.getElementById("rail");
-items.forEach(function(it,i){
-  var li=document.createElement("li");
-  var a=document.createElement("a");
-  a.href="#"+it[0]; a.id="r-"+it[0];
-  a.style.setProperty("--dot","var(--"+it[2]+")");
-  a.innerHTML='<span class="n">'+String(i+1).padStart(2,"0")+'</span><span>'+it[1]+'</span>';
-  li.appendChild(a); rail.appendChild(li);
-});
-var secs=items.map(function(i){return document.getElementById(i[0]);});
-var io=new IntersectionObserver(function(es){
-  es.forEach(function(e){
-    var a=document.getElementById("r-"+e.target.id);
-    if(!a)return;
-    if(e.isIntersecting){
-      Array.prototype.forEach.call(document.querySelectorAll(".rail a"),function(x){x.classList.remove("on")});
-      a.classList.add("on");
-    }
-  });
-},{rootMargin:"-20% 0px -70% 0px"});
-secs.forEach(function(s){if(s)io.observe(s);});
+K.rail(items);
+K.nav("./architecture.html");
 })();
 </script>

@@ -40,17 +40,10 @@
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   --maxw:70ch;
 }
-/* Dark values twice: once behind the OS preference (scoped so an explicit data-theme=light wins),
-   once under an explicit data-theme=dark for the manual toggle. */
-@media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){
-  --ground:#0e1016; --surface:#161a22; --surface2:#1d222d; --sunken:#11141b;
-  --text:#eef1f7; --text2:#a3abbb; --text3:#6b7386; --rule:#262c39;
-  --disk:#e8ad4a; --cache:#9a8bf5; --metric:#4cbf8b; --agent:#3fbcd9; --ui:#ee7d9c;
-  --brand:#e8859b; --brand-ink:#d4536f; --aurora:rgba(232,133,155,.10);
-  --glass:linear-gradient(150deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
-  --idle:#565a68;
-  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
-}}
+/* LIGHT IS THE DEFAULT, deliberately — matching ~/dataAnalyticsOwnego/toolkit/hub, whose own theme
+   comment reads "Editorial Glass house style (light by default)". Dark is opt-in via the toggle and
+   remembered in localStorage; there is intentionally NO prefers-color-scheme rule, so the KB looks
+   the same on any machine and screenshots of it are reproducible. */
 :root[data-theme=dark]{
   --ground:#0e1016; --surface:#161a22; --surface2:#1d222d; --sunken:#11141b;
   --text:#eef1f7; --text2:#a3abbb; --text3:#6b7386; --rule:#262c39;
@@ -109,6 +102,30 @@ td strong{color:var(--text);font-weight:620}
 .note .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.11em;text-transform:uppercase;
   color:var(--tone,var(--accent));font-weight:600;margin:0 0 5px}
 .bug{--tone:var(--ui)} .warn{--tone:var(--disk)} .good{--tone:var(--metric)}
+
+/* ═══ shared top nav ════════════════════════════════════════════════════════════════════════════
+   Every guide page carries it, so no page is a dead end. Sticky, glass, and deliberately quiet —
+   the sticky section rail is the primary navigation *within* a page; this is only for moving
+   between them. */
+.topnav{position:sticky;top:0;z-index:20;background:var(--glass);
+  -webkit-backdrop-filter:blur(20px) saturate(160%);backdrop-filter:blur(20px) saturate(160%);
+  border-bottom:1px solid var(--rule)}
+.topnav .inner{max-width:1180px;margin:0 auto;padding:9px 24px;display:flex;align-items:center;gap:14px}
+.topnav .brand{display:flex;align-items:center;gap:9px;text-decoration:none;color:var(--text);
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;flex:0 0 auto}
+.topnav .brand .m{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;
+  background:linear-gradient(160deg,var(--brand-bright),var(--brand-ink));font-size:13px}
+.topnav .links{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1 1 auto}
+.topnav .links::-webkit-scrollbar{display:none}
+.topnav .links a{font-family:var(--mono);font-size:11.5px;letter-spacing:.02em;padding:5px 9px;
+  border-radius:7px;text-decoration:none;color:var(--text3);white-space:nowrap;transition:.16s}
+.topnav .links a:hover{color:var(--text);background:var(--surface2)}
+.topnav .links a.on{color:var(--text);background:var(--surface2);
+  box-shadow:inset 0 0 0 1px var(--rule)}
+.topnav .links a.pending{opacity:.45;pointer-events:none}
+.topnav .themeBtn{flex:0 0 auto;width:30px;height:30px;border-radius:9px;font-size:13px;padding:0;
+  display:grid;place-items:center;box-shadow:none}
+@media(max-width:700px){.topnav .brand span{display:none}}
 
 /* ═══ .guide — long explainer ═══════════════════════════════════════════════════════════════════ */
 .guide{max-width:1180px;margin:0 auto;padding:0 24px 96px;display:grid;

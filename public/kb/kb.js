@@ -171,20 +171,71 @@ window.KB = (function () {
     });
   }
 
-  /* Theme: follow the OS until the reader says otherwise, then remember it. */
+  /* Theme. Light is the default (see kb.css) — the OS preference is deliberately NOT consulted, so
+     the KB looks identical everywhere. Dark is opt-in and remembered across pages and sessions. */
   function theme(btnId) {
     var root = document.documentElement, KEY = "minami-kb-theme";
-    function apply(t) { if (t) root.setAttribute("data-theme", t); else root.removeAttribute("data-theme"); }
+    function apply(t) { if (t === "dark") root.setAttribute("data-theme", "dark"); else root.removeAttribute("data-theme"); }
     try { apply(localStorage.getItem(KEY)); } catch (e) { /* storage blocked on file:// */ }
     var b = document.getElementById(btnId || "themeBtn");
     if (!b) return;
+    function label() { b.textContent = root.getAttribute("data-theme") === "dark" ? "☀" : "◐"; }
+    label();
     b.onclick = function () {
-      var dark = root.getAttribute("data-theme") === "dark" ||
-        (!root.hasAttribute("data-theme") && matchMedia("(prefers-color-scheme:dark)").matches);
-      var next = dark ? "light" : "dark";
-      apply(next);
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      apply(next); label();
       try { localStorage.setItem(KEY, next); } catch (e) { /* ignore */ }
     };
+  }
+
+  /* The KB's page set, in reading order. One source of truth for the top nav — adding a page here
+     puts it in the nav on every existing page automatically. `pending: true` renders it as a
+     visible-but-unclickable placeholder rather than hiding it, so the shape of the set is always
+     legible even while it's incomplete. */
+  var PAGES = [
+    { href: "./", label: "hub" },
+    { href: "./architecture.html", label: "architecture" },
+    { href: "./transcripts.html", label: "transcripts" },
+    { href: "./live-sessions.html", label: "live sessions" },
+    { href: "./metrics.html", label: "metrics", pending: true },
+    { href: "./operations.html", label: "operations", pending: true },
+  ];
+
+  /* Render the shared top nav. `current` = the href of this page, for the active pill. */
+  function nav(current) {
+    var host = document.getElementById("topnav");
+    if (!host) return;
+    var inner = document.createElement("div");
+    inner.className = "inner";
+
+    var brand = document.createElement("a");
+    brand.className = "brand";
+    brand.href = "./";
+    brand.innerHTML = '<span class="m">🌸</span><span>Minami Bento KB</span>';
+    inner.appendChild(brand);
+
+    var links = document.createElement("div");
+    links.className = "links";
+    PAGES.forEach(function (p) {
+      if (p.href === "./") return; // the brand mark already goes home
+      var a = document.createElement("a");
+      a.href = p.pending ? "#" : p.href;
+      a.textContent = p.label;
+      if (p.pending) { a.className = "pending"; a.title = "not written yet"; }
+      else if (p.href === current) a.className = "on";
+      links.appendChild(a);
+    });
+    inner.appendChild(links);
+
+    var btn = document.createElement("button");
+    btn.className = "themeBtn";
+    btn.id = "themeBtn";
+    btn.title = "Toggle theme";
+    btn.setAttribute("aria-label", "Toggle theme");
+    inner.appendChild(btn);
+
+    host.appendChild(inner);
+    theme("themeBtn");
   }
 
   return {
@@ -192,5 +243,6 @@ window.KB = (function () {
     el: el, txt: txt, rr: rr, clear: clear, box: box,
     head: head, arrow: arrow, clipBox: clipBox, sPath: sPath,
     playFlow: playFlow, theatre: theatre, rail: rail, theme: theme,
+    nav: nav, PAGES: PAGES,
   };
 })();
