@@ -22,14 +22,20 @@
 #
 #   DEPLOY_PROBES="/api/fs/mkdir:400|405,/kb:200" bash bin/deploy.sh   # extra route assertions
 #
-# Log: /tmp/minami-deploy.log (appended; every run stamps a header).
+# Log: ~/.minami/deploy.log (appended; every run stamps a header). Override with DEPLOY_LOG.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 PORT="${PORT:-3000}"
 HEALTH="http://localhost:${PORT}/api/agent/health"
-LOG="${DEPLOY_LOG:-/tmp/minami-deploy.log}"
+# NOT /tmp. A deploy is the one operation whose requester is dead before the outcome exists — this log
+# is its only witness, and the bar for where a sole witness lives is higher than "conventional".
+# macOS clears /tmp on boot: on 2026-07-29 a reboot took both this log and serve.sh's with it, while
+# ~/.minami/events.jsonl (the bell's store) survived in the same instant. That's the evidence for
+# putting the durable record next to the other durable record. Still overridable via DEPLOY_LOG.
+LOG="${DEPLOY_LOG:-$HOME/.minami/deploy.log}"
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 WAIT_SECS=300
 MODE=wait          # wait | now | verify
 DETACH=0
@@ -177,7 +183,7 @@ fi
 # ---- alerting ------------------------------------------------------------------------------------
 # The deploy is the one event that can never report itself back to whoever asked for it: the requester
 # is a chat pane inside the server this script is about to kill. It used to end its life as a line in
-# /tmp/minami-deploy.log that nobody was tailing. Now it also lands in the dashboard's bell, which the
+# a log file that nobody was tailing. Now it also lands in the dashboard's bell, which the
 # *new* server serves from disk — so the answer is waiting when the panes come back. See
 # bin/minami-event.mjs for why this is a file and not an API call.
 emit_event() { # kind level title  (body on stdin)
@@ -283,10 +289,10 @@ if [ "$FORCE" = "1" ]; then bash bin/serve.sh --force; else bash bin/serve.sh; f
 rc=$?
 echo "=== serve.sh exit ${rc} at $(date '+%F %T') ==="
 if [ "$rc" != "0" ]; then
-  echo "✗ build/swap failed — see above and /tmp/minami-prod.log"
+  echo "✗ build/swap failed — see above and ${PROD_LOG:-$HOME/.minami/prod.log}"
   # The build tail is the only part anyone actually wants; the alert carries it so a compile error
   # doesn't require going and finding two log files.
-  printf 'serve.sh exited %s. Last lines:\n\n%s\n' "$rc" "$(tail -n 12 /tmp/minami-prod.log 2>/dev/null)" \
+  printf 'serve.sh exited %s. Last lines:\n\n%s\n' "$rc" "$(tail -n 12 "${PROD_LOG:-$HOME/.minami/prod.log}" 2>/dev/null)" \
     | emit_event deploy error "Deploy failed — build or swap"
   exit $rc
 fi

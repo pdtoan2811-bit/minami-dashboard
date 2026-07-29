@@ -965,7 +965,7 @@ turn is itself "busy". The deadlock is structural: the caller can never be quiet
 the PID bound to `:3000`; finding it means "I am inside the thing I'm about to kill", so it re-execs
 itself into a new session (macOS has no `setsid` — it forks through `python3`'s `os.setsid()`, since a
 plain `&` leaves the child in a process group a group-kill can still reach), then waits for the box to
-go quiet, swaps, and verifies into `/tmp/minami-deploy.log`. Waiting rather than `--force` is what keeps
+go quiet, swaps, and verifies into `~/.minami/deploy.log`. Waiting rather than `--force` is what keeps
 the deploy polite to *other* panes: `serve.sh`'s own veto still runs after the wait.
 
 ### `next build` is not a safe way to check that code compiles
@@ -1087,7 +1087,7 @@ git can reason about and you can fix.
 > plus an advisory pre-check *before* the detach fork — without that, the refusal is written to a log
 > the caller can no longer read, and an agent is told "deploy running" for a deploy that declined.
 
-> 🐛 **A deploy's own requester vetoed it.** Observed in `/tmp/minami-deploy.log`: a detached deploy
+> 🐛 **A deploy's own requester vetoed it.** Observed in `~/.minami/deploy.log`: a detached deploy
 > waited 300 s for quiet, then aborted with `still busy (1 turn(s)) — waiting on your answer`. The
 > blocking turn was **the agent that had asked for the deploy**, sitting on a question. The requester
 > can never be quiet while it is waiting to be told what to do, so the wait-for-quiet strategy has a
@@ -1114,7 +1114,7 @@ That covers none of the things that actually happen while you're away from the b
 
 | Event | Produced by | Previously visible as |
 |---|---|---|
-| Deploy live / verification failed | `bin/deploy.sh` (detached) | a line in `/tmp/minami-deploy.log` |
+| Deploy live / verification failed | `bin/deploy.sh` (detached) | a line in `~/.minami/deploy.log` |
 | Worktree build ✓ / failed | `bin/task.mjs build` | terminal scrollback of a pane you closed |
 | Merge conflict on the base checkout | `bin/task.mjs merge` | ditto |
 
@@ -1362,6 +1362,17 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **Deploy and server logs moved out of `/tmp` to `~/.minami/`** (§8) — macOS clears `/tmp` on boot. A
+  reboot at 21:57 took `minami-deploy.log` and `minami-prod.log` with it, while `~/.minami/events.jsonl`
+  survived the same instant. A deploy is the one operation whose requester is dead before the outcome
+  exists, so its log is a *sole witness*; `serve.sh`'s log is what `deploy.sh` quotes into the failure
+  alert, so losing it degrades that alert to "it failed" with no reason. Overridable via `DEPLOY_LOG` /
+  `PROD_LOG`.
+- **Correction: the swap/paging recovery credited to the pane-memory fix was a reboot.** `vm.swapusage`
+  and the swapin/swapout counters are zeroed at boot, so "swap fully reclaimed, paging stopped" read a
+  reboot's effect. `288e6ba` is deployed but its effect is **unmeasured** — the baseline was wiped.
+  Re-measure over a long uptime before claiming it works. High load right after a reboot is usually
+  `mds`/`mdworker_shared` reindexing (~190% CPU here), not the dashboard.
 - **Idle animation cost cut to the floor: a pulse now means "happening now"** (§12) — second perf
   audit. Measured that animation cost is a **fixed per-frame tax**, not per-element: 0 animated
   elements = 1.3% CPU, 1 = 12.6%, 41 = 17.1%. So one permanently pulsing dot costs what forty do — and

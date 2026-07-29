@@ -22,7 +22,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PORT="${PORT:-3000}"
-LOG="/tmp/minami-prod.log"
+# Not /tmp — macOS clears it on boot, and this is the server's own stderr: the place a crash loop or a
+# failed build actually explains itself. deploy.sh quotes its tail into the failure alert, so losing it
+# on reboot silently degrades that alert to "it failed" with no reason. See the note in deploy.sh.
+LOG="${PROD_LOG:-$HOME/.minami/prod.log}"
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 HEALTH="http://localhost:${PORT}/api/agent/health"
 DRAIN_TIMEOUT_MS="${DRAIN_TIMEOUT_MS:-60000}"
 TOKEN_FILE=".minami-drain-token"

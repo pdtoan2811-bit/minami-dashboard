@@ -56,7 +56,7 @@ pane afterwards, or run:
 
 ```bash
 bash bin/deploy.sh --verify-only     # what is serving right now
-tail -30 /tmp/minami-deploy.log      # what the deploy did
+tail -30 ~/.minami/deploy.log      # what the deploy did
 ```
 
 ### The one rule for agents
@@ -73,7 +73,7 @@ intent with the flag.
 | Command | Behaviour |
 |---|---|
 | `bash bin/deploy.sh` | Wait for quiet (300 s ceiling), swap, verify. Blocks. |
-| `bash bin/deploy.sh --detach` | Same, detached into its own session; logs to `/tmp/minami-deploy.log`. |
+| `bash bin/deploy.sh --detach` | Same, detached into its own session; logs to `~/.minami/deploy.log`. |
 | `bash bin/deploy.sh --now` | Skip the wait. `serve.sh` still vetoes if a turn is in flight. |
 | `bash bin/deploy.sh --force` | Swap even mid-turn. Cuts live conversations off. |
 | `bash bin/deploy.sh --wait 900` | Change the quiet-window ceiling. |
@@ -107,8 +107,8 @@ happened, and it looked exactly like a successful deploy (`KNOWLEDGE.md` §8). S
 | Symptom | What it means | Do this |
 |---|---|---|
 | `✋ still busy after 300s` | Another pane ran long. Nothing was touched. | Re-run, or `--force` if you know what it kills. |
-| `✗ same process as before the swap` | Build succeeded, swap didn't. Old build still serving. | `tail -50 /tmp/minami-prod.log`, then re-run. |
-| `✗ nothing is listening on :3000` | New server failed to boot (often `EADDRINUSE`). | `tail -50 /tmp/minami-prod.log`; `lsof -ti tcp:3000`. |
+| `✗ same process as before the swap` | Build succeeded, swap didn't. Old build still serving. | `tail -50 ~/.minami/prod.log`, then re-run. |
+| `✗ nothing is listening on :3000` | New server failed to boot (often `EADDRINUSE`). | `tail -50 ~/.minami/prod.log`; `lsof -ti tcp:3000`. |
 | Build fails on missing `typescript`/`tailwindcss` | `NODE_ENV=production` made `npm install` prune devDeps. | `npm install --include=dev`. |
 | Panes show "restarting" then reconnect | Normal. That's the drain notice. | Nothing. |
 

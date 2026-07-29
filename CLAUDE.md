@@ -27,7 +27,7 @@ bash bin/deploy.sh --detach     # returns immediately; waits for quiet, swaps, v
 
 Then finish your reply. **Do not wait for it, poll it, or report success** — the swap kills this session,
 so you cannot observe the outcome. Tell Thomas it's running and where the log is
-(`/tmp/minami-deploy.log`), and that his panes will blink. He can check with
+(`~/.minami/deploy.log`), and that his panes will blink. He can check with
 `bash bin/deploy.sh --verify-only`.
 
 Running `bin/serve.sh` (or `deploy.sh` without `--detach`) from a pane kills the turn that asked for it.
