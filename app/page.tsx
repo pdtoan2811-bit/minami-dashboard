@@ -2,6 +2,7 @@
 
 import { Nav } from "@/components/Nav";
 import { NotificationBell } from "@/components/NotificationBell";
+import AutopilotTile from "@/components/AutopilotTile";
 import { useSetting } from "@/lib/use-settings";
 import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type TodoItem, type Notice } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
@@ -713,6 +714,10 @@ export default function BentoHome() {
                   </motion.button>
                 );
               })}
+              {/* Autopilot sits in the grid, not in a corner: the thing it promises is that work lands
+                  without being asked for, and a promise you have to go looking for isn't kept. */}
+              <AutopilotTile />
+
               {/* Blank tile: start a brand-new topic/chat in any folder. */}
               <button onClick={() => setPicker(true)} title="Start a new topic in a folder"
                 className="group flex flex-col items-center justify-center gap-1.5 rounded-[1.4rem] border border-dashed border-white/15 p-4 text-neutral-500 transition-colors hover:border-[var(--sakura)]/50 hover:text-[var(--sakura)]">

@@ -47,6 +47,7 @@ type ListOut = {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let ticking = false;                       // one tick at a time, always
+let lastTickAt = 0;                        // so the UI can say "next check in 12s" and mean it
 const blocked = new Map<string, string>(); // task → why a human is needed. Never retried automatically.
 let lastComplaint = 0;                     // alert-storm guard for recurring, non-actionable states
 
@@ -199,6 +200,9 @@ async function tick(): Promise<void> {
   if (!cfg.enabled || !cfg.merge) return;
   if (process.env.MINAMI_AUTOPILOT_DISABLE === "1") return;
 
+  // Stamped only on a tick that actually runs, so "next check in Ns" counts down from real work rather
+  // than from a timer that fired and immediately returned because the switch is off.
+  lastTickAt = Date.now();
   ticking = true;
   try {
     const root = await mainRoot();
@@ -320,5 +324,10 @@ export async function status() {
     tasks: state?.tasks ?? [],
     blocked: Object.fromEntries(blocked),
     claim: readClaim(),
+    // The two facts a "what is it doing right now" surface can't derive on its own. `deploying` is the
+    // lock rather than anything this module remembers, so it stays true across the restart the deploy
+    // itself causes — the exact window in which a user is most likely to be watching.
+    deploying: held(DEPLOY_LOCK),
+    lastTickAt,
   };
 }

@@ -806,6 +806,43 @@ history for immunity to two writers.
 > state that flows outward needs a symmetric way back.** A rollback that only touches the local copy
 > leaves every consumer that already latched it out of sync.
 
+### The Autopilot tile — making the automation visible
+
+Autopilot could merge, resolve and deploy on its own from the moment it shipped, and it recorded every
+one of those in the event log. What it had no surface for was the *promise*: work landing without being
+asked for is indistinguishable from work not happening, and the only places to check were a Settings
+panel you had to go looking for and a bell that mixes it in with deploys, builds and everything else.
+For the user this feature exists for — someone who cannot go and read `git log` — that gap is the whole
+feature.
+
+So it gets a tile, in the grid, sized and shaped like the things they already click. It answers four
+questions in the order they get asked: **is it on** (state pill, plus the switch right there — making a
+nervous user hunt through Settings for the one control they might need in a hurry is the wrong shape),
+**is it doing something** (merging / resolving / deploying, live), **what did it just do** (the last
+completed action in plain words, with a time), and **does it need me** (blocked work, amber, never
+behind a click). The full log is one click away rather than on the tile, because a tile that tries to
+be a feed stops being scannable.
+
+Two translation rules make it readable, and both are load-bearing:
+- **Titles are rewritten for outcome.** The log says "Autopilot merged idle-unpin"; the tile says
+  "Combined idle-unpin into the main copy".
+- **Only actions appear.** The runner emits standing-state notices ("waiting — uncommitted changes in
+  the main checkout") once per process start; with a day's restarts, a log titled *what it has done*
+  filled up with ten copies of what it did **not** do. Those still reach the bell, which is the right
+  home for "FYI, blocked". Machine-generated bodies are dropped too — a successful deploy's body is a
+  table of pids, BUILD_IDs and status codes, which is the exact register the tile exists to avoid. A
+  *failed* deploy's body explains itself, so that one stays.
+
+Server-side it needed two facts `status()` didn't expose: `deploying` (read from the deploy lock, so it
+survives the restart the deploy itself causes — the exact window a user is most likely to be watching)
+and `lastTickAt`.
+
+> 🐛 **The log rendered near-black on near-black.** The modal portals to `document.body` so that
+> `fixed inset-0` isn't trapped by the pane's `backdrop-blur` containing block (§5b) — but a portal
+> escapes the app shell's inherited `text-neutral-100` as well, and body has no colour of its own. Every
+> unstyled string in it was invisible. Any portalled surface has to state its own colour; the same trap
+> as the lightbox, a different property.
+
 ### Composer
 A `<textarea>` that grows to `MAX_H` (220px) and then scrolls, with a pixel-aligned mirror layer behind
 it that tints markdown syntax without touching metrics (that constraint is why bold renders as dimmed
@@ -999,6 +1036,18 @@ thing allowed to overwrite `.next`, because it restarts the server in the same b
 > nothing in the log saying so. The `✋ still busy … aborting` line is not a warning that the app is
 > fine; after a bare build it means the app is broken until a deploy actually lands.
 > *Surfaced by user as "the browser preview is showing nothing".*
+
+> 🐛 **`next dev` returned 500 for every route, for a whole day.** `instrumentation.ts` starts Autopilot
+> behind `NEXT_RUNTIME === "nodejs"` — but that guard runs at *runtime* while webpack resolves imports
+> *statically*, and Next compiles instrumentation for the **edge** runtime too (verified: the webpack
+> callback fires with `nextRuntime="edge"`, with no middleware in the app). So the edge pass walked into
+> `lib/autopilot/runner.ts` and died on `node:child_process` — then, once that was patched, on
+> `node:fs`, then on the Agent SDK. Deferring the import doesn't help; webpack follows dynamic imports
+> too. `next build` tolerated all of it, so production was fine and nothing complained — the only
+> casualty was the preview workflow, silently. Fixed by cutting the graph at the ROOT of that subtree
+> (`config.externals` for the exact specifier, edge only, external type `var` because the edge target is
+> compiled as a script and `module` fails there). Scoped to edge alone, so a stray `node:` import in
+> client code still fails loudly, as it should.
 
 Two entry points, chosen by where you're standing — `docs/DEPLOY.md` is the protocol:
 
@@ -1444,6 +1493,16 @@ on a timer is just a slower way to fail.
 ---
 
 ## Changelog
+
+### 2026-07-30
+- **Autopilot has a face** (§5e) — a tile in the bento grid showing whether it's on, what it's doing,
+  the last thing it did in plain words, and anything blocked; the switch is on the tile, and the full
+  log of automated merges and deploys is one click away. `status()` gained `deploying` and
+  `lastTickAt`. Also fixed: `next dev` had been returning **500 for every route** since Autopilot
+  landed — the edge compilation of `instrumentation.ts` followed a runtime-guarded import into
+  node-only code (§8).
+  *Reported by user: "need an ui ux for that to let user know the task got automated with the merging
+  and deploy — perhaps a special tile".*
 
 ### 2026-07-29
 - **Autopilot: the always-on merge agent** (§12) — merges finished task worktrees, resolves mechanical
