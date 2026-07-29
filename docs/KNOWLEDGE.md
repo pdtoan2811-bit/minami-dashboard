@@ -930,6 +930,17 @@ into `running` (open) · `up next` · `done` (both one line), a twelve-step plan
 thing you actually came to see — which is the reviewer's real question. Inside a step the tool calls are
 grouped by what they DID — changed · ran · read — rather than by tool name, for the same reason.
 
+> 🐛 **The flow existed; the door didn't.** The strip that opens it read raw `TodoWrite` input, while
+> the panel behind it called `buildFlow` — two derivations of the same thing, and the shallower one
+> decided whether there was any way in. `lib/flow-model.ts` deliberately understands three plan tools
+> (Claude reaches for `TaskCreate` on its own) and synthesizes steps from tool calls when there is no
+> plan at all — so a `TaskCreate`-tracked turn, and every unplanned turn, built a perfectly good flow
+> with nothing to click. Exactly v1's failure wearing new clothes: the feature was there and could not
+> be reached. Both now read one folded turn lifted into the pane, and the strip stays put during a live
+> turn so the control is somewhere the eye can learn. Verified across four turn shapes — TodoWrite,
+> TaskCreate, no-plan, and running-with-nothing-yet — all four get a door.
+> *Reported by user: "how to find it?"*
+
 ### It is a disclosure, not a route
 The panel is component state inside `ChatColumn`, so it dies with the pane and there is no stored "which
 view is this project in" to drift out of sync with anything. `lib/view-prefs.ts` and `/api/bento/view`
@@ -1605,6 +1616,12 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Every turn shape can now open its flow** (§5f) — the strip read raw `TodoWrite` while the panel
+  used `buildFlow`, so `TaskCreate`-tracked and unplanned turns had a flow with no way in. One
+  derivation now feeds both, the label tells the truth about whether Claude planned the turn or we
+  grouped it, and the strip holds its place while a turn is running. `TodoChecklist` retired — the
+  strip is its collapsed state.
+  *Reported by user: "how to find it?"*
 - **Flow rebuilt as a disclosure in the chat, not a view mode** (§5f) — the React Flow canvas, the
   per-project view preference, the ⚙ picker on the tile, `lib/view-prefs.ts` and `/api/bento/view` are
   all gone. The plan strip above the composer is now the way in, steps group by status

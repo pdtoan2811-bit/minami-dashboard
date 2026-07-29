@@ -35,7 +35,7 @@ import {
   Check, ChevronRight, CircleDot, Clock, FileDiff, Hand, ListChecks, Pause, Play, Search,
   SquareTerminal, Users, X, Sparkles,
 } from "lucide-react";
-import { buildFlow, type FlowStep, type FlowTool, type FlowTurn } from "@/lib/flow-model";
+import { type FlowStep, type FlowTool, type FlowTurn } from "@/lib/flow-model";
 import { activityLabel, type PermissionPrompt } from "@/lib/use-agent";
 
 const HELD = "#c47f18";
@@ -148,9 +148,10 @@ function StepRow({ step, held, open, onToggle }: { step: FlowStep; held: boolean
 }
 
 export function FlowPanel({
-  turns: source, busy, hold, pending, stopping, onSetHold, onRespond, onStop, onClose,
+  turn, busy, hold, pending, stopping, onSetHold, onRespond, onStop, onClose,
 }: {
-  turns: { role: "user" | "assistant"; text: string; tools: FlowTool[]; streaming?: boolean; thinking?: string }[];
+  /** The current turn, already folded by buildFlow — see the note on FlowStrip for why it's lifted. */
+  turn: FlowTurn | undefined;
   busy: boolean;
   hold: boolean;
   pending: PermissionPrompt;
@@ -160,8 +161,6 @@ export function FlowPanel({
   onStop: () => void;
   onClose: () => void;
 }) {
-  const flow = useMemo(() => buildFlow(source), [source]);
-  const turn: FlowTurn | undefined = flow[flow.length - 1];
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
   const [showDone, setShowDone] = useState(false);
   const [showNext, setShowNext] = useState(false);
@@ -252,20 +251,42 @@ export function FlowPanel({
   );
 }
 
-/** The collapsed state: the plan strip that was already in the chat, now the way in. */
-export function FlowStrip({ steps, onOpen }: { steps: { status: string; title: string; activeForm?: string }[]; onOpen: () => void }) {
-  if (!steps.length) return null;
+/** The collapsed state: the strip above the composer that is the way in.
+ *
+ *  It reads the folded turn, not raw `TodoWrite` input, and that is the whole point of this revision.
+ *  lib/flow-model.ts deliberately understands THREE plan tools — TodoWrite, TaskCreate, TaskUpdate —
+ *  because Claude reaches for TaskCreate on its own; and where there is no plan at all it synthesizes
+ *  steps from the tool calls. The strip used to look only at TodoWrite, so a turn tracked with
+ *  TaskCreate built a perfectly good flow with **no door to it**, and an unplanned turn had none
+ *  either. Same class of bug as v1's hidden gear: the feature existed and could not be reached.
+ *
+ *  It also stays put while a turn is running but has produced no steps yet, so the control lives in
+ *  one place your eye can learn rather than appearing and vanishing mid-turn.
+ */
+export function FlowStrip({ turn, busy, onOpen }: { turn: FlowTurn | undefined; busy: boolean; onOpen: () => void }) {
+  const steps = turn?.steps ?? [];
+  if (!steps.length && !busy) return null;
+
   const done = steps.filter((s) => s.status === "completed").length;
   const now = steps.find((s) => s.status === "in_progress");
+  const planned = !!turn?.planned;
+  const actions = steps.reduce((n, s) => n + s.tools.length, 0);
+
+  // Says what it actually is. "plan · 3/12" is a claim about a plan Claude wrote; for a turn we
+  // grouped ourselves, claiming a plan would be a small lie told every time.
+  const label = !steps.length ? "flow" : planned ? `plan · ${done}/${steps.length}` : `flow · ${steps.length} step${steps.length === 1 ? "" : "s"}`;
+  const detail = now ? now.title
+    : !steps.length ? "starting…"
+    : planned && done === steps.length ? "all steps done"
+    : actions ? `${actions} action${actions === 1 ? "" : "s"}` : "";
+
   return (
     <button onClick={onOpen}
       title="Open the flow — review each step, pause and steer"
       className="mb-2 flex w-full items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-left transition-colors hover:border-white/25 hover:bg-white/[0.04]">
       <ListChecks className="h-3 w-3 shrink-0 text-neutral-500" strokeWidth={2.5} />
-      <span className="text-[10px] font-medium uppercase tracking-wide text-neutral-500">plan · {done}/{steps.length}</span>
-      <span className="min-w-0 flex-1 truncate text-xs text-[var(--sakura)]">
-        {now ? (now.activeForm || now.title) : done === steps.length ? "all steps done" : ""}
-      </span>
+      <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-neutral-500">{label}</span>
+      <span className={`min-w-0 flex-1 truncate text-xs ${now ? "text-[var(--sakura)]" : "text-neutral-500"}`}>{detail}</span>
       {/* The affordance has to be visible at rest. v1's control only appeared on hover, on a tile, in
           another view — which is the whole reason nobody could find it. */}
       <span className="flex shrink-0 items-center gap-0.5 rounded-md border border-white/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-neutral-500">

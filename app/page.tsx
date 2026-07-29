@@ -4,7 +4,7 @@ import { Nav } from "@/components/Nav";
 import { NotificationBell } from "@/components/NotificationBell";
 import AutopilotTile from "@/components/AutopilotTile";
 import { useSetting } from "@/lib/use-settings";
-import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type TodoItem, type Notice } from "@/lib/use-agent";
+import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
 import ThoughtBlock from "@/components/ThoughtBlock";
@@ -18,11 +18,12 @@ import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
 import BrowserLightbox from "@/components/BrowserLightbox";
 import { FlowPanel, FlowStrip } from "@/components/FlowPanel";
+import { buildFlow } from "@/lib/flow-model";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, Settings2, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -293,35 +294,6 @@ function NoticeStrip({ notices }: { notices: Notice[] }) {
           <span className="h-1 w-1 rounded-full" style={{ background: "currentColor" }} />{n.text}
         </span>
       ))}
-    </div>
-  );
-}
-
-// The agent's live plan (TodoWrite), pinned above the composer so it's visible while you wait — not
-// just "what tool is running now" but "what's done and what's left". Derived straight from the latest
-// TodoWrite tool call already sitting in the transcript (see ChatColumn), so it needs no server changes:
-// TodoWrite's `input.todos` is REPLACE-semantics (each call carries the whole current list) same as the
-// rest of this file's live state.
-function TodoChecklist({ todos }: { todos: TodoItem[] }) {
-  if (!todos.length) return null;
-  const done = todos.filter((t) => t.status === "completed").length;
-  return (
-    <div className="mb-2 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">
-        <ListChecks className="h-3 w-3" strokeWidth={2.5} /><span>plan · {done}/{todos.length}</span>
-      </div>
-      <div className="flex flex-col gap-1">
-        {todos.map((t, i) => (
-          <div key={i} className={`flex items-start gap-1.5 text-xs ${t.status === "completed" ? "text-neutral-600 line-through" : t.status === "in_progress" ? "text-[var(--sakura)]" : "text-neutral-400"}`}>
-            <span className="mt-1 flex h-1.5 w-1.5 shrink-0 items-center justify-center">
-              {t.status === "in_progress"
-                ? <span className="think-dot h-1.5 w-1.5 rounded-full" style={{ background: "var(--sakura)" }} />
-                : <span className={`h-1.5 w-1.5 rounded-full border ${t.status === "completed" ? "border-neutral-600 bg-neutral-600" : "border-neutral-600"}`} />}
-            </span>
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{t.status === "in_progress" && t.activeForm ? t.activeForm : t.content}</span>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -1165,19 +1137,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     el.scrollTop = el.scrollHeight;
   }, [visible.length, source[source.length - 1]?.text.length, agent.pending, agent.busy]);
 
-  // The live plan: the latest TodoWrite call's `input.todos`, wherever it landed in the transcript.
+  // The turn, folded into steps — ONE derivation, read by both the strip and the panel so they cannot
+  // disagree about what exists. Was two: the strip scanned raw TodoWrite input while the panel called
+  // buildFlow, which is how a TaskCreate-tracked turn ended up with a flow and no way to open it.
   // Nothing server-side needed — TodoWrite's input already flows through `source` like any other tool.
-  const todos: TodoItem[] = useMemo(() => {
-    for (let i = source.length - 1; i >= 0; i--) {
-      const tools = source[i].tools;
-      for (let j = tools.length - 1; j >= 0; j--) {
-        if (tools[j].name !== "TodoWrite") continue;
-        const list = (tools[j].input as { todos?: unknown })?.todos;
-        if (Array.isArray(list)) return list as TodoItem[];
-      }
-    }
-    return [];
-  }, [source]);
+  const flowTurn = useMemo(() => { const f = buildFlow(source); return f[f.length - 1]; }, [source]);
 
   // The browser tool (Playwright MCP, see manager.ts). Everything the panel shows — URL, title,
   // console counts, network rows, the screenshot filmstrip, the action log — is folded out of the tool
@@ -1471,14 +1435,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
             on a tile in another screen — the flow is opened from the thing it describes. */}
         {flowOpen ? (
           <FlowPanel
-            // The SAME `source` the transcript renders — live turns while this pane drives the session,
-            // the on-disk ones otherwise. Two views over one array, so they cannot show different runs.
-            turns={source} busy={agent.busy} hold={agent.hold} pending={agent.pending} stopping={agent.stopping}
+            // The SAME turn the strip summarises, folded from the SAME `source` the transcript renders.
+            turn={flowTurn} busy={agent.busy} hold={agent.hold} pending={agent.pending} stopping={agent.stopping}
             onSetHold={agent.setHold} onRespond={agent.respond} onStop={agent.stop}
             onClose={() => setFlowOpen(false)}
           />
         ) : (
-          <FlowStrip steps={todos.map((t) => ({ status: t.status, title: t.content, activeForm: t.activeForm }))} onOpen={() => setFlowOpen(true)} />
+          <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => setFlowOpen(true)} />
         )}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           {/* Plan vs Code — default Code. Plan proposes without applying. */}
