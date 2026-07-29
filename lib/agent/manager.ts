@@ -85,13 +85,33 @@ export const DEFAULT_PERMISSION_MODE: AllowedMode =
 // Tools `acceptEdits` is meant to wave through. Everything else still asks.
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
+/** What to hand the SDK at spawn time — NOT the mode this server enforces.
+ *
+ *  A session born in `bypassPermissions` never calls `canUseTool` at all: the CLI resolves every tool
+ *  itself and our hook is dead code for that session's whole life. That was already known (see the
+ *  comment inside canUseTool) and it has two consequences that both look like bugs:
+ *
+ *   - the composer's approval pills can't TIGHTEN a running bypass session — `setPermissionMode()` is
+ *     accepted and ignored, and our gate is never consulted, so there is nowhere left to enforce it;
+ *   - the Flow view's brake can never fire, because the brake IS that gate. Measured: hold armed, the
+ *     pane showing "release", and three Bash calls running through untouched.
+ *
+ *  So spawn permissive-but-observable — `default` makes the CLI ask us about every tool — and let
+ *  canUseTool apply the real mode from `s.mode`. That is what the file header already claims happens.
+ *  This does not widen anything: `default` is the most restrictive mode, and every auto-approval still
+ *  has to be granted explicitly by our own gate.
+ *
+ *  `plan` is passed through untouched. It isn't only a permission level — it changes how the model
+ *  behaves (propose, don't apply), so rewriting it to `default` would silently disable Plan mode. */
+const spawnMode = (m: AllowedMode): AllowedMode => (m === "plan" ? "plan" : "default");
+
 // Events pushed to the browser over SSE.
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] };
 export type AgentEvent =
   | { t: "init"; sessionId: string; model?: string }
   | { t: "delta"; text: string } // streaming assistant text token(s)
   | { t: "thinking"; text: string } // streaming reasoning token(s) — see the `thinking` option below
-  | { t: "snapshot"; busy: boolean; partial: string; partialThinking: string; activity: ActivityState } // sent on (re)subscribe: the in-flight turn's state
+  | { t: "snapshot"; busy: boolean; partial: string; partialThinking: string; activity: ActivityState; hold: boolean } // sent on (re)subscribe: the in-flight turn's state
   | { t: "detached" } // no live session exists for this key — client should fall back to the on-disk view
   | { t: "tool"; name: string; input: unknown; id?: string } // a tool call started (live feedback)
   | { t: "tool_end"; id: string; name: string; ok: boolean; ms: number; output?: ToolOutput } // its result came back
@@ -103,15 +123,28 @@ export type AgentEvent =
   // a new build — see drainForRestart() below. It's the one notice the user gets BEFORE the disruption
   // rather than after, which is the whole point: an unexplained dead turn reads as a bug.
   | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
-  | { t: "permission"; id: string; toolName: string; input: unknown } // waiting on the user
+  | { t: "permission"; id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } // waiting on the user
+  | { t: "hold"; hold: boolean } // the Flow view's brake: park every tool call at the gate (REPLACE semantics)
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
   | { t: "result"; subtype: string; costUsd?: number } // turn finished
   | { t: "busy"; busy: boolean }
   | { t: "error"; message: string };
 
 type Decision = { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string };
-type Pending = { resolve: (d: Decision) => void; toolName: string; input: unknown };
+// `timer` is only set for a HELD call (see setHold) — the auto-release backstop described there.
+type Pending = { resolve: (d: Decision) => void; toolName: string; input: unknown; timer?: ReturnType<typeof setTimeout>; expiresAt?: number };
 type Sub = (ev: AgentEvent) => void;
+
+// How long a held tool call may sit at the gate before it releases itself. A parked canUseTool promise
+// pins `busy` true — no `result` message can arrive while it's unresolved — and `busy` is what
+// bin/deploy.sh waits on BOX-WIDE before restarting. So a hold that nobody comes back to doesn't just
+// stall one pane, it starves every deploy on the machine (the deadlock documented in the minami-flow
+// skill, reached there via an unanswered permission prompt). Bounded, so walking away is survivable.
+//
+// It expires to DENY, never allow: the entire point of the hold is that an unreviewed Edit/Bash must
+// not run, and "the human never looked" is not approval. Denying also keeps the session alive — Claude
+// reads the reason and carries on — where an abort would throw away the turn.
+const HOLD_TIMEOUT_MS = Math.max(30_000, Number(process.env.MINAMI_HOLD_TIMEOUT_MS) || 10 * 60 * 1000);
 
 type Session = {
   key: string;
@@ -124,6 +157,11 @@ type Session = {
   /** The permission mode this session is CURRENTLY under. The SDK is told too, but this is the copy
    *  the server enforces with — see canUseTool. */
   mode: AllowedMode;
+  /** Flow view's brake. While true, canUseTool stops auto-approving REGARDLESS of `mode` and parks the
+   *  next tool call at the gate — a real mid-flight halt with no process kill. Deliberately separate
+   *  from `mode`: it's a transient supervision state the reviewer toggles, not a permission level, and
+   *  conflating them would mean releasing the brake silently rewrote the session's permissions. */
+  hold: boolean;
   sawText: boolean; // has the current turn streamed any assistant text yet? (for paragraph breaks)
   sawThinking: boolean; // ...same for reasoning, so the seam between thinking passes can be marked
   partial: string; // text of the assistant message currently streaming — replayed on reconnect so a
@@ -197,6 +235,14 @@ function settle(s: Session) {
   touch(s, s.busy ? "thinking" : "idle");
 }
 
+// Resolve every parked prompt as denied. Centralised because a held call also owns a timer (see
+// HOLD_TIMEOUT_MS) — resolving its promise without clearing that timer leaves a callback that fires
+// minutes later and broadcasts a spurious "auto-denied" notice into a session that moved on long ago.
+function denyAllPending(s: Session, message: string) {
+  for (const [, p] of s.pending) { if (p.timer) clearTimeout(p.timer); p.resolve({ behavior: "deny", message }); }
+  s.pending.clear();
+}
+
 function resetActivity(s: Session, phase: ActivityPhase) {
   s.liveTools.clear();
   s.liveTasks.clear();
@@ -226,7 +272,7 @@ function scheduleIdle(s: Session) {
       // this same cleanup — so the session (and its SDK subprocess) would leak in the registry
       // permanently instead of being reaped like every other idle session. Auto-deny so the SDK call
       // unblocks and the turn runs to a natural (denied) conclusion instead.
-      for (const [id, p] of s.pending) { p.resolve({ behavior: "deny", message: "No client connected — auto-denied after idle timeout." }); s.pending.delete(id); }
+      denyAllPending(s, "No client connected — auto-denied after idle timeout.");
     }
     if (!s.busy) closeSession(s.key);
     // Still busy (e.g. the denial above hasn't produced a `result` yet, or a turn is genuinely still
@@ -250,7 +296,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   if (existing && !existing.closed) return existing;
 
   const s: Session = {
-    key, cwd, mode, q: null, queue: [], waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
+    key, cwd, mode, hold: false, q: null, queue: [], waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
     sessionId: resume || null, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
@@ -280,19 +326,42 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     // here is what makes the composer's pills mean something on a session that's already running.
     // AskUserQuestion is exempt on purpose: it isn't a permission, it's Claude asking the human a
     // question, and auto-answering it would silently discard the question.
-    if (toolName !== "AskUserQuestion") {
+    //
+    // `s.hold` short-circuits the auto-approve branches below. That ordering is the whole feature: on
+    // this box the mode is `bypassPermissions`, so without the hold check the very next line returns
+    // "allow" and there is no moment at which a reviewer could intervene. Checking the brake FIRST is
+    // what turns a bypass session into a step-through one, and releasing it restores bypass exactly —
+    // no permission state was rewritten to get here.
+    if (toolName !== "AskUserQuestion" && !s.hold) {
       if (s.mode === "bypassPermissions") return { behavior: "allow", updatedInput: input as Record<string, unknown> };
       if (s.mode === "acceptEdits" && EDIT_TOOLS.has(toolName)) return { behavior: "allow", updatedInput: input as Record<string, unknown> };
     }
     const id = "perm-" + ++permCounter;
+    // A held call is one the session would otherwise have run unattended, so it gets the auto-release
+    // backstop (HOLD_TIMEOUT_MS) that an ordinary, deliberately-requested approval prompt does not.
+    const held = toolName !== "AskUserQuestion" && s.hold;
+    const expiresAt = held ? Date.now() + HOLD_TIMEOUT_MS : undefined;
     if (toolName === "AskUserQuestion") {
       broadcast(s, { t: "ask", id, questions: (input as { questions?: AgentQuestion[] })?.questions || [] });
     } else {
-      broadcast(s, { t: "permission", id, toolName, input });
+      broadcast(s, { t: "permission", id, toolName, input, held, expiresAt });
     }
-    const p = new Promise<Decision>((resolve) => { s.pending.set(id, { resolve, toolName, input }); });
+    const p = new Promise<Decision>((resolve) => {
+      const entry: Pending = { resolve, toolName, input, expiresAt };
+      if (held) {
+        entry.timer = setTimeout(() => {
+          // Identity-checked: by now this id may have been resolved and the map entry replaced.
+          if (s.pending.get(id) !== entry) return;
+          s.pending.delete(id);
+          resolve({ behavior: "deny", message: `Not reviewed within ${Math.round(HOLD_TIMEOUT_MS / 60000)} minutes — the step was held for human review and auto-denied. Ask before retrying it.` });
+          broadcast(s, { t: "notice", kind: "denied", text: "a held step timed out waiting for review — auto-denied" });
+          settle(s);
+        }, HOLD_TIMEOUT_MS);
+      }
+      s.pending.set(id, entry);
+    });
     // Claude is now blocked on a human, not working — say so, and name the tool it's waiting on.
-    touch(s, "awaiting", toolName === "AskUserQuestion" ? "waiting on your answer" : `waiting on approval · ${activityLabel(toolName, input)}`);
+    touch(s, "awaiting", toolName === "AskUserQuestion" ? "waiting on your answer" : `${held ? "held for review" : "waiting on approval"} · ${activityLabel(toolName, input)}`);
     return p;
   };
 
@@ -300,7 +369,9 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     prompt: inputGen(s),
     options: {
       cwd,
-      permissionMode: mode,
+      // What the SDK is TOLD is not what this server enforces — see spawnMode() for why handing it the
+      // real mode makes both the composer's pills and the Flow view's brake unenforceable.
+      permissionMode: spawnMode(mode),
       canUseTool,
       includePartialMessages: true, // stream assistant text token-by-token
       // Ask for the reasoning summary. Without this the API defaults to display "omitted", which
@@ -339,8 +410,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // Allow/Deny POST does `store.get(key)` → undefined → returns false → the client only shows an
       // error, never clears `pending`/`ask` (see the "error" case in lib/use-agent.ts). Denying here
       // mirrors closeSession()'s own handling of a session closed while a prompt is outstanding.
-      for (const [, p] of s.pending) p.resolve({ behavior: "deny", message: "Session ended." });
-      s.pending.clear();
+      denyAllPending(s, "Session ended.");
       resetActivity(s, "idle");
       broadcast(s, { t: "activity", activity: activityOf(s) });
       broadcast(s, { t: "busy", busy: false });
@@ -595,7 +665,7 @@ function handleSystem(s: Session, m: any) {
 }
 
 // Send a user message; creates the session on first call (with resume/mode) or feeds the live one.
-export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
+export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; hold?: boolean; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
   // A session object existing (and not closed) means its SDK process is already warm — this is just
   // the next turn. Otherwise ensureSession() below is about to spin up a brand-new `query()`, which is
   // the actual ~1-2s cold start `spawning` narrates; a resumed (on-disk) conversation still pays this
@@ -622,6 +692,12 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   // whatever it was born with forever. Re-applying per turn means the composer's pill is authoritative
   // even if the change-mode request never happened (a pane that reloaded, a dropped fetch).
   if (!cold && s.mode !== wanted) setMode(opts.key, wanted);
+  // The brake rides in with the message rather than being POSTed separately, and that's a race fix,
+  // not a convenience: arming it on a pane with no live session yet has nothing to arm, and arming it
+  // straight after the send loses to the SSE `snapshot` (which carries the session's real hold — still
+  // false — and would immediately switch it back off). Applied here, it is true before the session's
+  // first tool call can possibly reach the gate.
+  if (opts.hold !== undefined && s.hold !== !!opts.hold) { s.hold = !!opts.hold; broadcast(s, { t: "hold", hold: s.hold }); }
   // Content stays a bare STRING when there are no images. That is not just tidiness: a string is what
   // every existing transcript line holds, and `claude-sessions.ts` reads user turns by pulling text
   // blocks out of whatever shape it finds — so keeping the common case identical means the parser, the
@@ -652,8 +728,12 @@ export function decide(key: string, id: string, decision: "allow" | "deny", mess
   const s = store.get(key);
   const p = s?.pending.get(id);
   if (!s || !p) return false;
+  if (p.timer) clearTimeout(p.timer); // a held call's auto-release backstop — the human beat it here
   s.pending.delete(id);
   if (decision === "allow") p.resolve({ behavior: "allow", updatedInput: p.input });
+  // `message` is what makes steering work: a denial reason is handed straight back to Claude as the
+  // tool result, so a correction typed on a node lands INSIDE the same turn with its context intact,
+  // rather than as a follow-up message after the bad step already ran.
   else p.resolve({ behavior: "deny", message: message || "User denied this tool call." });
   // Leave "waiting for you" behind the instant the user acts, so the pane goes back to animating.
   settle(s);
@@ -666,6 +746,7 @@ export function answer(key: string, id: string, answers: Record<string, string |
   const s = store.get(key);
   const p = s?.pending.get(id);
   if (!s || !p) return false;
+  if (p.timer) clearTimeout(p.timer);
   s.pending.delete(id);
   const questions = (p.input as { questions?: unknown })?.questions ?? [];
   p.resolve({ behavior: "allow", updatedInput: { questions, answers } });
@@ -699,8 +780,24 @@ export async function stop(key: string): Promise<boolean> {
     new Promise((resolve) => setTimeout(resolve, 8000)),
   ]);
   for (const [id, p] of toDeny) {
-    if (s.pending.get(id) === p) { p.resolve({ behavior: "deny", message: "Stopped by user." }); s.pending.delete(id); }
+    if (s.pending.get(id) === p) { if (p.timer) clearTimeout(p.timer); p.resolve({ behavior: "deny", message: "Stopped by user." }); s.pending.delete(id); }
   }
+  // Aborting is also the end of supervising this turn — leaving the brake on would silently park the
+  // first tool call of whatever the user sends next, which reads as "my next message hung".
+  if (s.hold) { s.hold = false; broadcast(s, { t: "hold", hold: false }); }
+  return true;
+}
+
+/** The Flow view's brake. Returns whether a live session actually took it, so the client's toggle can
+ *  revert rather than claim a hold that no session is honouring — same contract as setMode(). */
+export function setHold(key: string, hold: boolean): boolean {
+  const s = store.get(key);
+  if (!s || s.closed) return false;
+  s.hold = !!hold;
+  broadcast(s, { t: "hold", hold: s.hold });
+  // Releasing does NOT retroactively approve what's already parked. A call sitting at the gate was
+  // stopped so a human could look at it, and "resume the session" is a different decision from "run
+  // this specific step" — the reviewer still answers it explicitly (allow, or deny with a reason).
   return true;
 }
 
@@ -711,7 +808,10 @@ export function setMode(key: string, mode?: string): boolean {
     const s = store.get(key);
     if (!s || s.closed) return false;
     s.mode = safeMode(mode); // the copy canUseTool reads — this is the one that actually decides
-    const p = s.q?.setPermissionMode?.(safeMode(mode));
+    // Tell the SDK the SPAWN mode, not the real one. Handing it `bypassPermissions` mid-session would
+    // stop it consulting canUseTool at all (see spawnMode), silently disarming both our own enforcement
+    // and the Flow brake — the exact failure this indirection exists to prevent.
+    const p = s.q?.setPermissionMode?.(spawnMode(safeMode(mode)));
     // setPermissionMode() returns a promise; this call is intentionally fire-and-forget (the route
     // just wants the mode applied, not to block on it), but an un-awaited promise that later rejects
     // (e.g. the mode toggle is flipped right as the session ends) becomes an UNHANDLED REJECTION with
@@ -755,10 +855,12 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
   if (s.sessionId) replay.push({ t: "init", sessionId: s.sessionId });
   // `activity` rides along so a client that refreshed mid-tool-call resumes with the real label and a
   // correctly-offset elapsed clock, instead of falling back to a generic "working…".
-  replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s) });
+  replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold });
   for (const [id, p] of s.pending) {
     if (p.toolName === "AskUserQuestion") replay.push({ t: "ask", id, questions: (p.input as { questions?: AgentQuestion[] })?.questions || [] });
-    else replay.push({ t: "permission", id, toolName: p.toolName, input: p.input });
+    // `expiresAt` is an absolute timestamp, not a remaining duration, precisely so a client that
+    // reconnects halfway through a hold shows the real countdown instead of restarting it at 10:00.
+    else replay.push({ t: "permission", id, toolName: p.toolName, input: p.input, held: !!p.timer, expiresAt: p.expiresAt });
   }
   return {
     replay,
@@ -857,8 +959,7 @@ export function closeSession(key: string): void {
   const s = store.get(key);
   if (!s) return;
   s.closed = true;
-  for (const [, p] of s.pending) p.resolve({ behavior: "deny", message: "Session closed." });
-  s.pending.clear();
+  denyAllPending(s, "Session closed.");
   if (s.waiter) { const w = s.waiter; s.waiter = null; w(); }
   // close() may return a promise; guard against a later rejection going unhandled (harmless today since
   // instrumentation.ts's global handler catches it, but this keeps the same fire-and-forget-safely

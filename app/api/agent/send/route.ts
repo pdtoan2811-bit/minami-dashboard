@@ -5,11 +5,14 @@ import { imageBlocksFor } from "@/lib/agent/images";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// POST { key, cwd, message, mode?, resume? } → feed a user message into a live session (creating it
-// on the first call). Local-only: drives the machine's own Claude Code via the Agent SDK.
+// POST { key, cwd, message, mode?, resume?, hold? } → feed a user message into a live session
+// (creating it on the first call). Local-only: drives the machine's own Claude Code via the Agent SDK.
+//
+// `hold` carries the Flow view's brake in WITH the message — see sendMessage for why arming it as a
+// separate request can't work for the first turn of a session.
 export async function POST(req: Request) {
   try {
-    const { key, cwd, message, mode, resume } = await req.json();
+    const { key, cwd, message, mode, resume, hold } = await req.json();
     // typeof-guard before .trim(): a non-string truthy `message` (number, object, array) would otherwise
     // throw inside this try and come back as a 500 "message.trim is not a function" instead of the clean
     // 400 this validation is meant to produce.
@@ -30,7 +33,7 @@ export async function POST(req: Request) {
     // Deliberately best-effort — a missing or oversized file degrades to the old path-only behaviour
     // rather than failing the send.
     const images = await imageBlocksFor(String(message));
-    const { sessionId } = sendMessage({ key, cwd, message: String(message), mode, resume, images });
+    const { sessionId } = sendMessage({ key, cwd, message: String(message), mode, resume, images, hold: typeof hold === "boolean" ? hold : undefined });
     return Response.json({ ok: true, sessionId });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e) }, { status: 500 });
