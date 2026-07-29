@@ -29,10 +29,21 @@
   </header>
 
   <div class="strip">
-    <div class="stat"><span>pipelines</span><b>3</b><span class="val">live · transcripts · metrics</span></div>
-    <div class="stat"><span>surfaces</span><b>4</b><span class="val">/ · dashboard · settings · architecture</span></div>
-    <div class="stat"><span>documented incidents</span><b>13</b></div>
-    <div class="stat"><span>house style</span><b class="val" style="font-family:var(--mono)">zero dependencies</b></div>
+    <div class="stat"><span>status</span><b><i class="dot ok"></i>3 of 5 pages written</b></div>
+    <div class="stat"><span>pipelines</span><span class="val">live · transcripts · metrics</span></div>
+    <div class="stat"><span>documented incidents</span><span class="val">13</span></div>
+    <div class="spacer"></div>
+    <div class="stat"><span>house style</span><span class="val">one directory · zero dependencies</span></div>
+  </div>
+
+  <div class="ready">
+    <div class="rtxt">
+      <h2>Read it without the app running</h2>
+      <p>The dashboard takes <code>:3000</code> down on every deploy. The knowledge base doesn't
+      depend on it — it serves itself.</p>
+    </div>
+    <span class="cmd" id="cmd" title="click to copy">npm run kb</span>
+    <a class="act" href="./architecture.html">Start reading</a>
   </div>
 
   <p class="sect">The system</p>
@@ -45,13 +56,9 @@
   <div class="grid" id="reference"></div>
 
   <footer>
-    <p>All of this lives in the repo, not a wiki — <code>public/kb/</code> for pages,
-    <code>docs/KNOWLEDGE.md</code> for the reasoning record. The rule that keeps it true: any change
-    to a subsystem updates its section <em>in the same turn</em>, enforced by the
-    <code>minami-kb</code> skill. A doc that lags is worse than no doc, because the next session
-    trusts it.</p>
-    <p style="margin-top:10px">Read it without the app: <code>npm run kb</code> → localhost:4400, or
-    double-click <code>Open Knowledge Base.command</code>.</p>
+    <p>Pick a page, or run <code>npm run kb</code> to read this without the dashboard.</p>
+    <p>Kept true by the <code>minami-kb</code> skill: any change to a subsystem updates its section
+    in the same turn.</p>
   </footer>
 </div>
 
@@ -65,28 +72,28 @@ var PAGES = [
   { group:"system", icon:"◇", title:"Architecture", tint:"agent",
     tag:"read first · ~15 min",
     makes:"The three pipelines, why the parser is incremental, and the incidents that shaped the code. Ten sections, five interactive diagrams.",
-    href:"./architecture.html", status:"ok", pill:"interactive" },
+    href:"./architecture.html", status:"ok", pill:"interactive", where:"public/kb/architecture.html" },
 
   { group:"system", icon:"⬡", title:"Module map", tint:"agent",
     tag:"live in the app",
     makes:"Every file and the edges between them, extracted from source. Solid lines are imports, dashed are runtime fetch/SSE. Click a node to isolate what touches it.",
-    href:"/architecture", status:"ok", pill:"React Flow", needsApp:true },
+    href:"/architecture", status:"ok", pill:"React Flow", needsApp:true, where:"app/architecture" },
 
   { group:"system", icon:"▤", title:"The reasoning record", tint:"cache",
     tag:"docs/KNOWLEDGE.md",
     makes:"Per-subsystem mechanics, gotchas, bug post-mortems and a dated changelog. The authoritative answer to “why is it like this?”",
     href:"https://github.com/pdtoan2811-bit/minami-dashboard/blob/main/docs/KNOWLEDGE.md",
-    status:"ok", pill:"markdown" },
+    status:"ok", pill:"markdown", where:"docs/KNOWLEDGE.md" },
 
   { group:"deep", icon:"▦", title:"The transcript pipeline", tint:"disk",
     tag:"pipeline 1 of 3",
     makes:"Reading a 61 MB append-only log cheaply: the incremental parser, the head fingerprint that catches a truncate-and-rewrite, and the cache thrash that reintroduced the same stall.",
-    href:"./transcripts.html", status:"ok", pill:"7 sections" },
+    href:"./transcripts.html", status:"ok", pill:"7 sections", where:"public/kb/transcripts.html" },
 
   { group:"deep", icon:"◆", title:"Live sessions", tint:"agent",
     tag:"pipeline 2 of 3",
     makes:"One turn end to end: the dual-key registry, the permission promise that can pin a session busy forever, and what a restart does to an in-flight turn.",
-    href:"#", status:"idle", pill:"not written yet", soon:true },
+    href:"./live-sessions.html", status:"ok", pill:"7 sections", where:"public/kb/live-sessions.html" },
 
   { group:"deep", icon:"⇅", title:"Cross-machine metrics", tint:"metric",
     tag:"pipeline 3 of 3",
@@ -120,12 +127,14 @@ function card(c){
   a.innerHTML =
     '<div class="cicon">' + c.icon + '</div>' +
     '<h3></h3><p class="tag"></p><p class="makes"></p>' +
-    '<span class="pill"><i class="dot ' + c.status + '"></i><span class="pl"></span></span>';
+    '<span class="pill"><i class="dot ' + c.status + '"></i><span class="pl"></span></span>' +
+    '<div class="where"></div>';
   // textContent, not innerHTML, for anything that could carry a stray < or &
   a.querySelector("h3").textContent = c.title;
   a.querySelector(".tag").textContent = c.tag;
   a.querySelector(".makes").textContent = c.makes;
   a.querySelector(".pl").textContent = c.pill;
+  a.querySelector(".where").textContent = c.where || "";
   return a;
 }
 PAGES.forEach(function(c){
@@ -134,6 +143,20 @@ PAGES.forEach(function(c){
 });
 
 KB.theme("themeBtn");
+
+// The chip advertises `cursor:copy`, so it should actually copy. Falls back silently on
+// file:// or any context where the clipboard API is unavailable — an affordance that quietly
+// does nothing is better than a thrown error in the console.
+var cmd = document.getElementById("cmd");
+if (cmd) cmd.onclick = function(){
+  var t = cmd.textContent;
+  try {
+    navigator.clipboard.writeText(t).then(function(){
+      cmd.textContent = "copied";
+      setTimeout(function(){ cmd.textContent = t; }, 1100);
+    }).catch(function(){});
+  } catch (e) { /* no clipboard here */ }
+};
 
 // Two ways to reach this page: the standalone KB server (its own port) or the Next app at /kb. Only
 // the standalone server answers /api/state — from Next that request 404s, and that failure IS the
