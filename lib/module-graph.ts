@@ -124,11 +124,9 @@ export const NODES: ModuleNode[] = [
   { id: "x/events", label: "~/.minami/events.jsonl", sub: "alert log · deploy.sh + task.mjs write", layer: "runtime", row: 5 },
 
   // ── Flow view: the step graph + its brake (KNOWLEDGE.md §5f) ────────────
-  { id: "c/FlowView", label: "FlowView", sub: "step graph · hold/steer/abort\n(React Flow)", layer: "component", row: 21, pipeline: "live" },
+  { id: "c/FlowPanel", label: "FlowPanel", sub: "plan, grouped by status\nhold · steer · abort", layer: "component", row: 21, pipeline: "live" },
   { id: "l/flowmodel", label: "flow-model.ts", sub: "transcript → step graph\n(TodoWrite + TaskCreate)", layer: "core", row: 16, pipeline: "live" },
-  { id: "l/viewprefs", label: "view-prefs.ts", sub: "per-topic chat|flow choice", layer: "core", row: 17 },
   { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
-  { id: "r/view", label: "/api/bento/view", sub: "reads/writes the view choice", layer: "route", row: 14 },
 ];
 
 export const EDGES: ModuleEdge[] = [
@@ -249,12 +247,8 @@ export const EDGES: ModuleEdge[] = [
 
   // Flow view. The brake is drawn as a full round trip on purpose: the button is in the component,
   // but the only place it can be ENFORCED is canUseTool inside the manager — see KNOWLEDGE.md §5f.
-  { from: "app/page", to: "c/FlowView", kind: "import" },
-  { from: "app/page", to: "l/viewprefs", kind: "import" },
-  { from: "c/FlowView", to: "l/flowmodel", kind: "import" },
-  { from: "c/FlowView", to: "r/hold", kind: "http", label: "arm/release" },
-  { from: "app/page", to: "r/view", kind: "http", label: "per-topic view" },
+  { from: "app/page", to: "c/FlowPanel", kind: "import" },
+  { from: "c/FlowPanel", to: "l/flowmodel", kind: "import" },
+  { from: "c/FlowPanel", to: "r/hold", kind: "http", label: "arm/release" },
   { from: "r/hold", to: "l/manager", kind: "import" },
-  { from: "r/view", to: "l/viewprefs", kind: "import" },
-  { from: "l/viewprefs", to: "x/bentocache", kind: "http", label: "views.json" },
 ];
