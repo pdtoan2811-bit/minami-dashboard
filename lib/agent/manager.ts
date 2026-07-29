@@ -769,6 +769,14 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
 
 // A snapshot of every live session's current activity, keyed by Claude sessionId — polled by the grid
 // so each running Bento tile can show what it's doing (thinking / reading X / running: …).
+/** Is a specific pane key mid-turn? The autopilot's conflict resolver needs to know when its own
+ *  session has stopped, and `liveActivity()` is keyed by sessionId — which the caller doesn't have,
+ *  and which several sessions in the same cwd would make ambiguous anyway. */
+export function isBusy(key: string): boolean {
+  const s = store.get(key);
+  return !!s && !s.closed && s.busy;
+}
+
 export function liveActivity(): Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string }> {
   const out: Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string }> = {};
   const seen = new Set<Session>();

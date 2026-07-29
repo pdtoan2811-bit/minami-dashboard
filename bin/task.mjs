@@ -13,10 +13,10 @@
 // in a shared checkout are not conflicts; they are just losses, with nothing to resolve.
 //
 //   node bin/task.mjs new <name> [--base <branch>]   worktree + branch, ready for an agent
-//   node bin/task.mjs list                           every task, its branch, dirt, and preview port
+//   node bin/task.mjs list [--json]                  every task, its branch, dirt, and preview port
 //   node bin/task.mjs build <name>                   build INSIDE the worktree, own dist dir
 //   node bin/task.mjs preview <name>                 build, then serve it on its own port
-//   node bin/task.mjs merge <name> [--keep]          verify → build → merge into base (serialised)
+//   node bin/task.mjs merge <name> [--keep] [--json] verify → build → merge into base (serialised)
 //   node bin/task.mjs rm <name> [--force]            drop the worktree (and its branch)
 //
 // Ports are derived from the task name, never assigned round-robin: a preview must land on the same
@@ -53,6 +53,21 @@ function currentBranch(cwd = ROOT) {
 function isDirty(cwd) {
   return tryGit(["status", "--porcelain"], { cwd }).out.trim().length > 0;
 }
+/** A merge that stopped halfway leaves MERGE_HEAD behind. Everything else in this file assumes the
+ *  base is in a normal state, and the autopilot must be able to SEE that it isn't. */
+function isMerging(cwd) {
+  const dir = tryGit(["rev-parse", "--git-dir"], { cwd }).out.trim();
+  if (!dir) return false;
+  return fs.existsSync(path.resolve(cwd, dir, "MERGE_HEAD"));
+}
+
+/** Committer time of HEAD, ms. The autopilot waits for this to settle: "committed" is not the same as
+ *  "finished", and a run of commits 20 seconds apart is one thought, not three. */
+function lastCommitTs(cwd) {
+  const t = tryGit(["log", "-1", "--format=%ct"], { cwd }).out.trim();
+  return t ? Number(t) * 1000 : 0;
+}
+
 function listTasks() {
   if (!fs.existsSync(TREES)) return [];
   return fs.readdirSync(TREES)
@@ -137,9 +152,20 @@ async function cmdNew(raw, base) {
   console.log(`nothing it writes can collide with another agent in ${path.basename(ROOT)}.`);
 }
 
-async function cmdList() {
+async function cmdList({ json = false } = {}) {
   const tasks = listTasks();
   const live = await liveCwds();
+  if (json) {
+    // The autopilot reads THIS, not git directly — so the thing that decides "is this task ready"
+    // stays one implementation. A second reader of git plumbing is a second set of gates to keep in
+    // sync, and the one that drifts is always the automated one nobody watches.
+    console.log(JSON.stringify({
+      base: { root: ROOT, branch: currentBranch(), dirty: isDirty(ROOT), merging: isMerging(ROOT) },
+      liveKnown: live !== null,
+      tasks: tasks.map((t) => ({ ...t, live: live === null ? null : live.has(t.cwd), lastCommitTs: lastCommitTs(t.cwd) })),
+    }));
+    return;
+  }
   if (!tasks.length) { console.log("no tasks. create one:  node bin/task.mjs new <name>"); return; }
   console.log(`${tasks.length} task(s)   base repo: ${ROOT} (${currentBranch()}${isDirty(ROOT) ? ", dirty" : ""})\n`);
   for (const t of tasks) {
@@ -188,7 +214,10 @@ async function cmdPreview(name) {
   await run("npx", ["next", "start", "-p", String(port)], dir, { NEXT_DIST_DIR: ".next-task" });
 }
 
-async function cmdMerge(name, keep) {
+async function cmdMerge(name, keep, { json = false } = {}) {
+  // Every refusal below is also a JSON outcome, so a caller that cannot read stderr still learns
+  // exactly which gate stopped it — the autopilot decides "skip quietly" vs "tell a human" from this.
+  const say = (o) => { if (json) console.log(JSON.stringify(o)); };
   const dir = dirFor(name);
   if (!fs.existsSync(dir)) { console.error(`no task "${name}"`); process.exit(2); }
   const branch = currentBranch(dir);
@@ -196,6 +225,7 @@ async function cmdMerge(name, keep) {
   if (!base) { console.error("this task has no recorded base branch — merge it by hand"); process.exit(2); }
 
   if (isDirty(dir)) {
+    say({ ok: false, reason: "task-dirty", task: name });
     console.error(`✗ ${name} has uncommitted changes. Commit them in the worktree first:`);
     console.error(`    git -C ${dir} add -A && git -C ${dir} commit -m "..."`);
     process.exit(2);
@@ -204,21 +234,23 @@ async function cmdMerge(name, keep) {
   // right now usually IS dirty (that is the habit this whole tool is meant to replace), so this refusal
   // will fire often at first — deliberately.
   if (isDirty(ROOT)) {
+    say({ ok: false, reason: "base-dirty", task: name });
     console.error(`✗ the base checkout (${ROOT}) has uncommitted changes on ${currentBranch()}.`);
     console.error("   Merging into it risks losing them. Commit or stash there first.");
     process.exit(2);
   }
   const live = await liveCwds();
   if (live && live.has(dir)) {
+    say({ ok: false, reason: "agent-live", task: name });
     console.error(`✗ an agent is live in ${name} right now — let it finish before merging.`);
     process.exit(2);
   }
 
-  if (!acquireLock("merge")) process.exit(3);
+  if (!acquireLock("merge")) { say({ ok: false, reason: "locked", task: name }); process.exit(3); }
   process.on("exit", releaseLock);
   try {
     console.log(`▸ building ${name} before merging — a task that cannot build does not get in`);
-    if (!(await cmdBuild(name, { quiet: true }))) { console.error("✗ build failed — refusing to merge"); process.exit(1); }
+    if (!(await cmdBuild(name, { quiet: true }))) { say({ ok: false, reason: "build-failed", task: name }); console.error("✗ build failed — refusing to merge"); process.exit(1); }
 
     console.log(`▸ merging ${branch} → ${base}`);
     const m = tryGit(["merge", "--no-ff", branch, "-m", `merge task ${name}`], { cwd: ROOT });
@@ -230,10 +262,12 @@ async function cmdMerge(name, keep) {
       console.error(`   or abandon:                git merge --abort`);
       // A conflicted merge leaves the base checkout mid-merge. Nothing else on the box will mention
       // that, and the next agent to touch the base will walk straight into it.
+      say({ ok: false, reason: "conflict", task: name, branch, base, files: conflicts.split("\n").filter(Boolean) });
       emit({ kind: "merge", level: "error", title: `Merge conflict — ${name}`,
              body: `${branch} → ${base}. The base checkout is mid-merge; resolve or abort it before anything else runs there.\n\n${conflicts}` });
       process.exit(1);
     }
+    say({ ok: true, task: name, branch, base });
     console.log(`✓ merged into ${base}`);
     emit({ kind: "merge", level: "success", title: `Merged ${name} → ${base}`,
            body: `Built clean and merged. Nothing is live yet — deploy when you're ready:\n  bash bin/deploy.sh --detach` });
@@ -271,10 +305,10 @@ const help = () => console.log(
 
 switch (cmd) {
   case "new": await cmdNew(arg, val("--base")); break;
-  case "list": case "ls": await cmdList(); break;
+  case "list": case "ls": await cmdList({ json: has("--json") }); break;
   case "build": await cmdBuild(arg); break;
   case "preview": await cmdPreview(arg); break;
-  case "merge": await cmdMerge(arg, has("--keep")); break;
+  case "merge": await cmdMerge(arg, has("--keep"), { json: has("--json") }); break;
   case "rm": case "remove": cmdRm(arg, has("--force")); break;
   default: help();
 }

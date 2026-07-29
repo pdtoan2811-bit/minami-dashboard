@@ -21,4 +21,15 @@ export async function register() {
     console.error("[minami] uncaught exception — exiting to avoid an inconsistent process state:", err);
     process.exit(1);
   });
+
+  // Autopilot (lib/autopilot/runner.ts). Started here rather than lazily from a route because its
+  // FIRST job is crash recovery: if the previous server died holding a conflicted merge, the checkout
+  // is broken right now, and nobody should have to visit a page to get that undone. It reads its own
+  // on-disk switch and does nothing at all while that is off, which is the shipped default.
+  try {
+    const { startAutopilot } = await import("@/lib/autopilot/runner");
+    startAutopilot();
+  } catch (e) {
+    console.error("[minami] autopilot failed to start (the app is fine without it):", e);
+  }
 }

@@ -126,6 +126,11 @@ working in a broken state, and nothing else on the box will tell them.
 **This is the one place to escalate to Thomas** — and only after aborting, so the base is clean while
 he decides.
 
+> **If Autopilot is on** (§12 of `docs/KNOWLEDGE.md`, `~/.minami/autopilot.json`), it may have already
+> tried this and given up: a task it aborted is in its `blocked` set and it will not retry. So a
+> conflict reaching you by hand has usually *already* been judged non-mechanical. Resolve it or abort
+> it yourself — do not switch Autopilot off and on hoping it will take another run at it.
+
 ---
 
 ## 5. Deploying
@@ -185,6 +190,7 @@ reason it survives.
 | `deploy.sh --force` to get past a busy box | cuts off live conversations mid-sentence | clear the blockers |
 | lengthening `--wait` past a blocked pane | the deadlock is unbounded; waiting can't win | clear the `awaiting` panes |
 | hardcoding a model id | session model and alert model drift apart | `lib/model-pins.ts` |
+| leaving the base mid-merge | every other agent in the tree is now broken and nothing tells them | resolve, or `git merge --abort` — Autopilot holds the same invariant |
 
 ---
 
