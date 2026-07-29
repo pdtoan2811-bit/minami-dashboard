@@ -697,6 +697,30 @@ props (`notices`/`activity`/`elapsed`/`busy`) only when it is the live row, so e
 prop-identical between renders. Measured on a 4-pane window with 310 rows mounted: 12 scroll-driven
 state changes produced **20** row renders instead of ~900.
 
+### Continuing a conversation — `claude --continue` parity
+
+Opening a topic restores its recent sessions as panes, so those carry their own context. A **blank**
+pane didn't: `＋ add chat`, a new topic, or a project with no remembered layout all spawned a session
+that could see none of the project's history, so a follow-up asked there landed on a model with no idea
+what it referred to.
+
+A blank pane now offers to continue the topic's most recent conversation. Three things make it
+predictable rather than magic:
+
+- **It says so before you type.** Whether Claude can see the earlier conversation changes how you'd
+  word the message, so the empty state names the chat it will pick up and how long ago it ran, with
+  `Start fresh instead` next to it. The choice is per pane — `＋ add chat` still means "new" if you say so.
+- **It draws a seam once it has.** A resumed pane adopts that session id, and `reconcile()` then pulls
+  the whole transcript in from disk — so without a marker you'd be reading messages you never sent in
+  this pane. `resumedFrom` is state, not derived: the moment the turn goes live `isNew` flips false and
+  any derived value would vanish exactly when the marker is meant to appear.
+- **It refuses to fork a transcript.** `resume` makes the CLI append to that conversation's JSONL, so
+  two panes on one id means two subprocesses interleaving writes into one file. The pane skips ids
+  already open elsewhere, and `sendMessage` **throws** if the id is live under another key — the client
+  check races (a pane can go live between the render that offered the id and the send that uses it).
+  It fails loudly on purpose: silently dropping `resume` would hand back a context-less session that
+  looks like it worked, which is the exact failure this feature exists to remove.
+
 ### Composer
 A `<textarea>` that grows to `MAX_H` (220px) and then scrolls, with a pixel-aligned mirror layer behind
 it that tints markdown syntax without touching metrics (that constraint is why bold renders as dimmed
@@ -1174,6 +1198,12 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **Blank chat panes continue the topic's last conversation** (§5e) — `claude --continue` parity. A
+  blank pane used to start a session that could see none of the project's history. It now names the
+  chat it will pick up before you type (with `Start fresh instead`), draws a seam in the transcript
+  once it has, and refuses to resume an id that's live in another pane — two subprocesses appending to
+  one JSONL corrupts it in a way no reconcile can undo.
+  *Requested by user: "auto resume session like in claude cli for consistent context and chat".*
 - **Paste an image straight into the composer** (§11) — `lib/agent/images.ts`, `app/api/fs/paste`,
   `app/api/fs/image`. The payload is a **path**, not bytes, which preserves the composer's
   single-source-of-truth invariant and gives the attach button thumbnails and inlining for free. An
