@@ -67,7 +67,9 @@ function costOf(e) {
   );
 }
 // What the same turn WOULD cost on Opus — the baseline savings are measured against.
-const OPUS = PRICES["claude-opus-4-8"];
+// Track the current default tier (Opus 5), same as lib/routing.ts. Identical $5/$25 to Opus 4.8
+// today, so this changes no number — it just stops the baseline drifting if the prices diverge.
+const OPUS = PRICES["claude-opus-5"];
 function opusOf(e) {
   return ((e.inputTokens || 0) + (e.cacheReadTokens || 0) * 0.1) / 1e6 * OPUS.in + (e.outputTokens || 0) / 1e6 * OPUS.out;
 }
