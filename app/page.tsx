@@ -935,6 +935,20 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   // When a blank chat goes live and gets a real session id, tell the parent so the pane (and its
   // persisted layout) tracks it — the next refresh then reopens the real session, not a blank.
   useEffect(() => { if (agent.sessionId && agent.sessionId !== sessionId) onLive(agent.sessionId); }, [agent.sessionId, sessionId, onLive]);
+  // ...and hand it BACK if a continue was adopted optimistically and then rejected. `onLive` is
+  // one-way — it only fires on a truthy id — so use-agent giving the id back on error was not enough
+  // on its own: the parent kept `pane.sid`, and a refused continue still left the pane re-pointed at
+  // the conversation it had just been refused (measured: the pane retitled itself to the target chat
+  // while showing "folder does not exist"). Scoped to adoptions THIS pane made via continue, so a pane
+  // opened directly on a session is never reset by it.
+  const adoptedViaContinueRef = useRef(false);
+  useEffect(() => {
+    if (adoptedViaContinueRef.current && !agent.sessionId && sessionId) {
+      adoptedViaContinueRef.current = false;
+      setResumedFrom(null); // the seam would otherwise claim context that was never loaded
+      onLive("");
+    }
+  }, [agent.sessionId, sessionId, onLive]);
   // Poll the on-disk transcript for history — but stop once this pane is driving the session live
   // (then the live turns are authoritative and the poll would just fight the stream). Skip the state
   // update when nothing changed, so an idle chat doesn't re-render every 2.5s.
@@ -1030,6 +1044,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     if (!text || agent.busy || !cwd) return;
     ensureNotifyPermission(); // lazy — a real user gesture, which browsers want for this prompt
     const continuing = !sessionId && continueOn ? continueTarget : null;
+    if (continuing) adoptedViaContinueRef.current = true; // so a rejected continue can be handed back
     agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || continuing?.id || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
     if (continuing) setResumedFrom(continuing);
     setInput("");
