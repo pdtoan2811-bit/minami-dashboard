@@ -64,6 +64,16 @@ async function mainRoot(): Promise<string | null> {
 }
 
 const git = (root: string, args: string[]) => exec("git", args, { cwd: root, maxBuffer: 8 * 1024 * 1024 });
+
+/** Mid-merge? Asked of git rather than assumed from `.git/MERGE_HEAD`: `.git` is a directory in a main
+ *  checkout but a FILE in a worktree, and some setups make it a file even in the main tree. Guessing
+ *  wrong fails silently in the worst direction — a conflicted merge would look finished. */
+async function isMerging(root: string): Promise<boolean> {
+  try {
+    const { stdout } = await git(root, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+    return fs.existsSync(path.join(stdout.trim(), "MERGE_HEAD"));
+  } catch { return false; }
+}
 const held = (lock: string) => fs.existsSync(lock);
 
 async function emit(kind: string, level: string, title: string, body = "") {
@@ -101,7 +111,7 @@ export async function recoverFromCrash(): Promise<void> {
   if (!c) return;
   const root = await mainRoot();
   if (!root) { unclaim(); return; }
-  const merging = fs.existsSync(path.join(root, ".git", "MERGE_HEAD"));
+  const merging = await isMerging(root);
   unclaim();
   if (!merging) return; // it finished before we died — nothing to undo
   await git(root, ["merge", "--abort"]).catch(() => {});
@@ -166,7 +176,7 @@ async function resolveConflict(root: string, task: string, files: string[]): Pro
     if (busy) continue;
     // It stopped. Whether it says it succeeded is not the question — what's on disk is.
     const unmerged = (await git(root, ["ls-files", "-u"]).catch(() => ({ stdout: "x" }))).stdout.trim();
-    const stillMerging = fs.existsSync(path.join(root, ".git", "MERGE_HEAD"));
+    const stillMerging = await isMerging(root);
     if (!stillMerging) return false;          // it aborted, as instructed — an honest no
     if (unmerged) return false;               // stopped with conflicts still unstaged
     if (await hasMarkers(root)) return false; // "resolved" with markers left in the file

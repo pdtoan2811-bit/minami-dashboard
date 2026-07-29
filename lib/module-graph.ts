@@ -116,6 +116,10 @@ export const NODES: ModuleNode[] = [
   { id: "x/metrics", label: "metrics server", sub: "Hetzner · Tailscale Funnel", layer: "runtime", row: 4, pipeline: "metrics" },
   // Written only by bin/deploy.sh and bin/task.mjs — processes that outlive the server, which is the
   // entire reason the alert log is a file instead of an in-memory queue. See KNOWLEDGE.md §10.
+  { id: "l/autopilot", label: "autopilot/runner", sub: "always-on merge · resolve · deploy\n(off by default)", layer: "core", row: 19 },
+  { id: "c/AutopilotPanel", label: "AutopilotPanel", sub: "the switch, in plain words", layer: "component", row: 20 },
+  { id: "r/autopilot", label: "/api/autopilot", sub: "the switch + what the runner sees", layer: "route", row: 12 },
+  { id: "x/autopilotcfg", label: "~/.minami/autopilot.json", sub: "its switch — on disk, because a\ntimer in the server reads it", layer: "runtime", row: 6 },
   { id: "x/events", label: "~/.minami/events.jsonl", sub: "alert log · deploy.sh + task.mjs write", layer: "runtime", row: 5 },
 ];
 
@@ -141,6 +145,12 @@ export const EDGES: ModuleEdge[] = [
   { from: "app/page", to: "c/ThoughtBlock", kind: "import" },
   { from: "c/ThoughtBlock", to: "c/Markdown", kind: "import" },
   { from: "app/page", to: "c/BentoRail", kind: "import" },
+  { from: "app/settings", to: "c/AutopilotPanel", kind: "import" },
+  { from: "c/AutopilotPanel", to: "r/autopilot", kind: "http" },
+  { from: "r/autopilot", to: "l/autopilot", kind: "import" },
+  { from: "l/autopilot", to: "x/autopilotcfg", kind: "import" },
+  { from: "l/autopilot", to: "l/manager", kind: "import" },
+  { from: "l/autopilot", to: "x/events", kind: "import" },
   { from: "app/page", to: "c/ProjectIcon", kind: "import" },
   { from: "c/BentoRail", to: "c/ProjectIcon", kind: "import" },
   { from: "app/page", to: "c/FolderPicker", kind: "import" },

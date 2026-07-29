@@ -58,7 +58,16 @@ export function readConfig(): AutopilotConfig {
 }
 
 export function writeConfig(patch: Partial<AutopilotConfig>): AutopilotConfig {
-  const next = { ...readConfig(), ...patch, enabled: (patch.enabled ?? readConfig().enabled) === true };
+  const cur = readConfig();
+  const merged = { ...cur, ...patch, enabled: (patch.enabled ?? cur.enabled) === true };
+  // Clamp on the way IN, not only on the way out. readConfig() would rescue a junk interval anyway,
+  // but a file containing `everyMs: 1` is a trap for the next reader — and this file is meant to be
+  // hand-editable, so what it says has to be what is actually in force.
+  const next: AutopilotConfig = {
+    ...merged,
+    settleMs: clamp(merged.settleMs, 10_000, 3_600_000, DEFAULTS.settleMs),
+    everyMs: clamp(merged.everyMs, 15_000, 600_000, DEFAULTS.everyMs),
+  };
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + "\n");
   return next;
