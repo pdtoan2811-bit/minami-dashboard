@@ -197,8 +197,8 @@ window.KB = (function () {
     { href: "./architecture.html", label: "architecture" },
     { href: "./transcripts.html", label: "transcripts" },
     { href: "./live-sessions.html", label: "live sessions" },
-    { href: "./metrics.html", label: "metrics", pending: true },
-    { href: "./operations.html", label: "operations", pending: true },
+    { href: "./metrics.html", label: "metrics" },
+    { href: "./operations.html", label: "operations" },
   ];
 
   /* Render the shared top nav. `current` = the href of this page, for the active pill. */

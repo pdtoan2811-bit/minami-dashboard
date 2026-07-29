@@ -1,0 +1,236 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Operations — Minami Bento KB</title>
+<link rel="stylesheet" href="./kb.css">
+
+<div class="topnav" id="topnav"></div>
+
+<div class="guide">
+<nav class="rail" aria-label="Sections">
+  <a class="home" href="./">← knowledge base</a>
+  <ol id="rail"></ol>
+</nav>
+<div class="col">
+
+<header class="hero">
+  <p class="kicker" style="--st:var(--ui)">Minami Bento · running it</p>
+  <h1>Deploying a thing that is running your work</h1>
+  <p class="lede">This app hosts live Claude sessions inside its own web server, so a deploy is not a
+  neutral act — it ends conversations. Add an account switcher that lies about which account is
+  active, and "operations" stops being routine. Here's what to do, and what to check when something
+  is wrong.</p>
+</header>
+
+<!-- 01 -->
+<section id="deploy">
+  <p class="eyebrow" style="--st:var(--ui)">01 · shipping</p>
+  <h2>Production mode, on purpose</h2>
+  <div class="prose">
+    <p><code>bin/serve.sh</code> builds and swaps a <strong>production</strong> server. That's not a
+    performance choice — it's because you edit this app <em>from inside this app</em>. Dev mode's Fast
+    Refresh hot-patches the running page, which changes React's hook signatures mid-session and
+    crashes the very tab you're working in. Production has no Fast Refresh, so a rebuild cannot touch
+    the tab driving it.</p>
+    <p>The swap kills only the process bound to the port, so a separate iteration server on
+    <code>:3001</code> survives untouched.</p>
+    <pre>bash bin/serve.sh            <i># refuses to swap while a turn is in flight</i>
+bash bin/serve.sh <b>--force</b>    <i># swap anyway — still warns the panes first</i></pre>
+    <p>The refusal is the important part. Because sessions are children of the server, a deploy ends
+    every conversation on the box — and the trigger is usually a <em>different</em> pane finishing an
+    edit, so it lands on whoever happens to be mid-sentence.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">deploy.sequence</span>
+      <div class="ctrl">
+        <div class="steps"><span id="dLbl">step 1 / 5</span><span class="dotrow" id="dDots"></span></div>
+        <button id="dPrev" type="button">‹ back</button>
+        <button id="dNext" type="button">next ›</button>
+      </div>
+    </div>
+    <div class="pbody">
+      <p class="narr" id="dNarr"></p>
+      <div class="scroll">
+        <svg id="viz-deploy" viewBox="0 0 1000 210" role="img"
+          aria-label="A deploy: the script asks the running server what is in flight, refuses if anything is busy, builds, warns every pane, waits for turns to land, then swaps the port."></svg>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="note warn"><p class="lbl">The check must happen before the build</p>
+  <p>The build is the point of no return — it replaces <code>.next</code> underneath the server
+  currently reading it. Bailing out after that would leave the old process serving a build it no
+  longer has on disk, so the "is anyone busy?" veto runs <em>first</em>, while backing out is free.</p></div>
+</section>
+
+<!-- 02 -->
+<section id="identity">
+  <p class="eyebrow" style="--st:var(--ui)">02 · whose account</p>
+  <h2>The status banner is a label, not evidence</h2>
+  <div class="prose">
+    <p>Claude Max accounts are pooled and swapped by a separate CLI. When the active credential dies
+    it silently fails over to whichever slot is ready, and nothing says so — you keep working, and
+    hours land on the wrong weekly limit.</p>
+    <p>The obvious fix is to read the CLI's own status. That fix is wrong. Its <code>active</code>
+    field only echoes a label written on the last switch <em>attempt</em>; it is not proof the switch
+    took. This was verified the hard way.</p>
+    <pre><i>// 2026-07-29 — these disagreed, and the CLI was the one lying</i>
+state.json      active_slot = <u>oedevai2@gmail.com</u>      <i>← a label</i>
+~/.claude.json  oauthAccount.emailAddress = <b>pdtoan2811@gmail.com</b>   <i>← the truth</i></pre>
+    <p>So the alert reads <code>~/.claude.json</code>, which Claude Code writes from the credential it
+    actually authenticated with. It also reports when the CLI's claim disagrees with reality — because
+    that means "switch back" may report success and change nothing, which is why the alert
+    <strong>re-verifies after switching</strong> rather than trusting the output.</p>
+  </div>
+
+  <table>
+    <thead><tr><th>Question</th><th>Do not ask</th><th>Ask</th></tr></thead>
+    <tbody>
+      <tr><td>Which account am I on?</td><td><code>tok status</code>'s banner</td><td><code>~/.claude.json</code> → <code>oauthAccount.emailAddress</code></td></tr>
+      <tr><td>Did the switch work?</td><td>the command's exit code</td><td>re-read the identity afterwards</td></tr>
+      <tr><td>Is this account healthy?</td><td>that it's currently live</td><td>whether the slot has a full capture — nulls mean it can't self-refresh</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note bug"><p class="lbl">A live account can still be primed to die</p>
+  <p>A pooled slot can be a <em>degraded capture</em> — <code>oauth_account</code>,
+  <code>plan</code> and <code>refresh_token_expires_at</code> all null — <strong>even while that
+  account is working</strong>. The CLI then can't proactively refresh it, so the silent expiry
+  recurs. Being logged in now is not evidence it's fixed.</p></div>
+</section>
+
+<!-- 03 -->
+<section id="reading">
+  <p class="eyebrow" style="--st:var(--metric)">03 · reading the docs</p>
+  <h2>The knowledge base outlives the app</h2>
+  <div class="prose">
+    <p>Everything you're reading serves itself. That matters because <code>bin/serve.sh</code> takes
+    <code>:3000</code> down on every deploy and refuses to restart mid-turn — so the documentation
+    would be unreachable exactly when something is broken, which is when you want it.</p>
+    <pre>npm run kb                      <i># → http://localhost:4400</i>
+open "Open Knowledge Base.command"   <i># double-click from Finder</i></pre>
+    <p>Zero dependencies, resolves its own root, walks the port up if it's taken. It uses
+    <code>KB_PORT</code> and refuses to start if that equals the app's port — because
+    <code>PORT</code> is already spoken for here, and reading it once bound the KB server to
+    <code>127.0.0.1:3000</code> alongside the dashboard's IPv6 wildcard. macOS permits that pairing
+    instead of raising an error, so requests split between two servers at random.</p>
+  </div>
+</section>
+
+<!-- 04 -->
+<section id="runbook">
+  <p class="eyebrow" style="--st:var(--disk)">04 · when it's wrong</p>
+  <h2>What to check, in order</h2>
+  <div class="prose">
+    <p>Most confusion here comes from a signal that looks authoritative but is only a claim. The
+    runbook is mostly "go find the thing that cannot lie."</p>
+  </div>
+
+  <table>
+    <thead><tr><th>Symptom</th><th>Most likely</th><th>Check</th></tr></thead>
+    <tbody>
+      <tr><td><strong>A turn died and nobody touched it</strong></td>
+        <td>another pane deployed</td>
+        <td>the pane gets a <code>restarting</code> notice first — look for it before assuming a bug</td></tr>
+      <tr><td><strong>"OAuth session expired"</strong></td>
+        <td>a pooled account lapsed</td>
+        <td><code>~/.claude.json</code> for the real identity; switch to the healthy slot, then restart the worker</td></tr>
+      <tr><td><strong>Deploy "succeeded", nothing changed</strong></td>
+        <td>the swap never ran</td>
+        <td>the build exiting 0 is not evidence — curl the route and confirm</td></tr>
+      <tr><td><strong>The grid is empty</strong></td>
+        <td>running somewhere without <code>~/.claude</code></td>
+        <td>the home page is local-only by design; only <code>/dashboard</code> is remote-safe</td></tr>
+      <tr><td><strong>Every pane frozen at once</strong></td>
+        <td>the event loop is blocked</td>
+        <td>transcript parsing — see <a href="./transcripts.html">the transcript pipeline</a></td></tr>
+      <tr><td><strong>Dashboard shows no usage</strong></td>
+        <td>the collector died or the hook is silent</td>
+        <td><code>systemctl status minami-metrics</code>; the hook fails silent by design, so absence of data is its normal failure mode</td></tr>
+      <tr><td><strong>A dialog with no working button</strong></td>
+        <td>the session ended holding the prompt</td>
+        <td>should self-heal — every terminal path auto-denies; if not, reload the pane</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note good"><p class="lbl">The pattern behind almost all of it</p>
+  <p>An mtime. A status label. A reported success. A reopened socket. A build that exited 0. Each
+  looked like evidence and was only a claim. When something here is inexplicable, the useful question
+  is <em>"what am I trusting that hasn't actually been verified?"</em></p></div>
+
+  <footer>
+    <p>Source: <code>bin/serve.sh</code>, <code>app/api/agent/health</code>,
+    <code>app/api/accounts</code>, <code>public/kb/serve.mjs</code>. Reasoning record:
+    <code>docs/KNOWLEDGE.md</code> §3, §6, §7b, §8.</p>
+    <div class="nextprev">
+      <a href="./metrics.html">← metrics</a>
+      <a href="./architecture.html">the whole system</a>
+      <a href="./">knowledge base</a>
+    </div>
+  </footer>
+</section>
+
+</div>
+</div>
+
+<script src="./kb.js"></script>
+<script>
+(function(){
+"use strict";
+var K = window.KB;
+
+/* ── 01 · the deploy sequence ───────────────────────────────────────── */
+var dv = document.getElementById("viz-deploy");
+var STAGES = [
+  {t:"ask /health",   s:"what is in flight?",     c:"agent"},
+  {t:"veto",          s:"busy → stop, free to bail", c:"ui"},
+  {t:"npm run build", s:"point of no return",     c:"disk"},
+  {t:"drain",         s:"warn panes · wait ≤60s", c:"metric"},
+  {t:"swap :3000",    s:"kill, wait, restart",    c:"cache"}
+];
+function drawDeploy(step){
+  K.clear(dv);
+  var x = 34, w = 172, gap = 16;
+  STAGES.forEach(function(n, i){
+    var xi = x + i*(w+gap), on = i <= step, cur = i === step;
+    dv.appendChild(K.rr(xi, 56, w, 62, 9, {
+      fill: cur ? "var(--surface)" : "var(--surface2)",
+      stroke: on ? "var(--"+n.c+")" : "var(--rule)",
+      "stroke-width": cur ? 1.8 : 1,
+      opacity: on ? 1 : .45
+    }));
+    if (on) dv.appendChild(K.rr(xi, 56, 4, 62, 2, {fill:"var(--"+n.c+")"}));
+    dv.appendChild(K.txt(xi + w/2, 83, n.t, {size:11.5, weight:600, anchor:"middle"}));
+    dv.appendChild(K.txt(xi + w/2, 101, n.s, {size:9, fill:"var(--text3)", anchor:"middle"}));
+    if (i < STAGES.length - 1) K.arrow(dv, xi + w + 2, 87, xi + w + gap - 2, 87);
+  });
+  // the line marking where bailing out stops being free
+  var bx = x + 2*(w+gap) - gap/2;
+  dv.appendChild(K.el("path", {d:"M"+bx+",40 L"+bx+",134",
+    stroke:"var(--ui)", "stroke-width":1.2, "stroke-dasharray":"4 4"}));
+  dv.appendChild(K.txt(bx - 8, 34, "free to bail", {size:9, fill:"var(--text3)", anchor:"end"}));
+  dv.appendChild(K.txt(bx + 8, 34, "committed", {size:9, fill:"var(--ui)"}));
+}
+K.theatre({
+  prev:"dPrev", next:"dNext", label:"dLbl", dots:"dDots", narr:"dNarr", draw:drawDeploy,
+  steps:[
+    "<b>Ask the running server what it would destroy.</b> No server, or a build too old to answer, both mean “nothing to protect” — so the deploy just proceeds.",
+    "<b>Veto if anything is busy.</b> This happens <em>before</em> the build, while backing out is still free. <code>--force</code> overrides it, and still warns the panes.",
+    "<b>Build.</b> The point of no return: <code>.next</code> is replaced underneath the server currently reading it, so from here the swap has to complete.",
+    "<b>Drain.</b> Every pane gets a <code>restarting</code> notice — the one warning that arrives <em>before</em> the disruption — then the script waits up to 60s for in-flight turns to land and write their result to the transcript.",
+    "<b>Swap.</b> Terminate the old listener, wait for the port to actually free (a fixed sleep used to race the shutdown and lose the bind), then start the new build."
+  ]
+});
+
+/* ── nav + rail ─────────────────────────────────────────────────────── */
+K.rail([
+  ["deploy","shipping","ui"],
+  ["identity","whose account","ui"],
+  ["reading","reading the docs","metric"],
+  ["runbook","when it's wrong","disk"]
+]);
+K.nav("./operations.html");
+})();
+</script>

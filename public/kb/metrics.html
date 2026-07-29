@@ -1,0 +1,361 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cross-machine metrics — Minami Bento KB</title>
+<link rel="stylesheet" href="./kb.css">
+
+<div class="topnav" id="topnav"></div>
+
+<div class="guide">
+<nav class="rail" aria-label="Sections">
+  <a class="home" href="./">← knowledge base</a>
+  <ol id="rail"></ol>
+</nav>
+<div class="col">
+
+<header class="hero">
+  <p class="kicker" style="--st:var(--metric)">Minami Bento · pipeline 3 of 3</p>
+  <h1>Counting two machines without opening a port</h1>
+  <p class="lede">Work happens on the laptop and on a Hetzner box. Counting only one is worse than
+  counting neither — it looks precise and is wrong. This is a zero-dependency collector on loopback,
+  a Stop hook that must never fail a turn, and a flat file that gets re-read on every request.</p>
+</header>
+
+<!-- 01 -->
+<section id="topology">
+  <p class="eyebrow" style="--st:var(--metric)">01 · the shape</p>
+  <h2>Nothing touches the internet except Tailscale</h2>
+  <div class="prose">
+    <p>The collector binds to <code>127.0.0.1:8787</code> and nothing else. That isn't caution for its
+    own sake — the box has <strong>no firewall</strong>, so binding wider would put
+    <code>/ingest</code> and <code>/stats</code> on the raw internet with a bearer token as the only
+    thing in the way. The source comment names <code>BIND=0.0.0.0</code> specifically as the failure
+    mode rather than leaving it implied.</p>
+    <p>Tailscale Funnel is the entire security model: it terminates HTTPS on a free
+    <code>*.ts.net</code> name and proxies down to loopback, so the Node process never handles TLS,
+    and no inbound port is ever opened.</p>
+    <p>Two Claude Code installs write here, running the <em>same</em> hook file with different
+    targets: the cloud host posts to <code>localhost</code> because it <em>is</em> the box, and the
+    Mac goes through the Funnel. Only <code>MINAMI_SOURCE</code> differs.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">metrics.topology</span>
+      <div class="ctrl"><button id="mPlay" type="button" aria-pressed="false">▶ Play flow</button></div>
+    </div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-topo" viewBox="0 0 1000 340" role="img"
+        aria-label="Two machines run the same Stop hook. The Mac posts through a Tailscale Funnel that terminates HTTPS and proxies to loopback; the cloud host posts to loopback directly because it is the same box. The collector appends to a JSONL file and serves aggregate endpoints to the dashboard."></svg>
+    </div></div>
+    <div class="legend">
+      <span><i style="background:var(--agent)"></i>machines emitting</span>
+      <span><i style="background:var(--metric)"></i>collector</span>
+      <span><i style="background:var(--disk)"></i>storage</span>
+      <span><i style="background:var(--ui)"></i>browser</span>
+    </div>
+  </div></div>
+
+  <div class="note bug"><p class="lbl">Keep it on loopback</p>
+  <p>There is no firewall on this box. <code>BIND</code> must stay <code>127.0.0.1</code> — the Funnel
+  already reaches it, so a wider bind buys nothing and exposes everything.</p></div>
+</section>
+
+<!-- 02 -->
+<section id="hook">
+  <p class="eyebrow" style="--st:var(--agent)">02 · the emitter</p>
+  <h2>A hook that must never fail a turn</h2>
+  <div class="prose">
+    <p>Every turn on either machine ends with Claude Code firing its Stop hook. The hook reads the
+    last usage block out of the transcript and posts a compact event. Its entire design philosophy is
+    one line of its own docstring: <strong>never blocks a turn, fails silent on any error.</strong>
+    Missing config? Return. Unparsable stdin? Return. Every failure path is a bare return, never a
+    raise — because a metrics hook that can break your actual work is worse than no metrics.</p>
+    <p>It smuggles a second payload along the same event: a <em>session digest</em> — the cwd, the
+    first line of your last message truncated to 60 characters, and the last reply truncated to 100.
+    No model call, pure truncation. Since Stop already fires once per turn, the digest is free, and
+    it's what powers the cross-machine "what are we doing here" feed.</p>
+    <p>The POST goes out through <code>curl</code>, not Python's own HTTP client — because urllib
+    can't find the CA bundle on macOS, while curl uses the system cert store. One code path that works
+    identically on both machines beats two that each work on one.</p>
+    <pre><i># the whole philosophy, in the failure paths</i>
+try:
+    payload = json.load(sys.stdin)
+except (json.JSONDecodeError, ValueError):
+    <b>return</b>            <i># not raise — a broken hook must never break the turn</i></pre>
+  </div>
+</section>
+
+<!-- 03 -->
+<section id="null">
+  <p class="eyebrow" style="--st:var(--ui)">03 · the crash</p>
+  <h2><code>JSON.parse("null")</code> does not throw</h2>
+  <div class="prose">
+    <p>This is the sharpest incident in the codebase, and it's four characters long.
+    <code>null</code> is valid JSON. The original ingest handler wrapped the parse in a try/catch —
+    which is correct, and completely useless here, because parsing <code>"null"</code> succeeds. It
+    returns the value <code>null</code>, sails past the catch, and the very next line does
+    <code>e.ts = e.ts || Date.now()</code> on it.</p>
+    <p>That <code>TypeError</code> had nothing to catch it. Unlike the Next app, this standalone
+    script had no process-level handler — so one malformed POST killed the whole collector. Every
+    connected dashboard's stream dropped, and any in-flight event from the <em>other</em> machine was
+    lost with it. One bad client degrades observability for both.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">null.payload</span>
+      <div class="ctrl">
+        <div class="steps"><span id="nLbl">step 1 / 5</span><span class="dotrow" id="nDots"></span></div>
+        <button id="nPrev" type="button">‹ back</button>
+        <button id="nNext" type="button">next ›</button>
+      </div>
+    </div>
+    <div class="pbody">
+      <p class="narr" id="nNarr"></p>
+      <div class="scroll">
+        <svg id="viz-null" viewBox="0 0 1000 200" role="img"
+          aria-label="A null request body passes the JSON parse guard, reaches a property assignment, throws an uncaught TypeError and kills the process — and how a type guard stops it one step earlier."></svg>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="prose">
+    <pre>try { e = JSON.parse(body); } catch { return send(res, 400, { error: "bad json" }); }
+<i>// JSON.parse("null") succeeds — the catch above never fires for it, and `e.ts = ...`</i>
+<i>// on null throws a TypeError with nothing catching it, killing the whole process.</i>
+<b>if (!e || typeof e !== "object") return send(res, 400, { error: "bad json" });</b>
+e.ts = e.ts || Date.now();</pre>
+    <p>The fix is two-layered on purpose. The type guard closes <em>this</em> hole; a process-level
+    <code>uncaughtException</code> handler that logs and exits makes sure the <em>next</em> unknown
+    failure gets a clean systemd restart instead of a zombie process serving stale state.</p>
+  </div>
+</section>
+
+<!-- 04 -->
+<section id="storage">
+  <p class="eyebrow" style="--st:var(--disk)">04 · the store</p>
+  <h2>There is no database</h2>
+  <div class="prose">
+    <p><code>events.jsonl</code> is the entire datastore — one JSON object appended per line. No
+    schema, no index, no migration. Every read endpoint re-reads the whole file and re-derives its
+    answer from scratch. At roughly one line per turn across two machines, that stays cheap for a very
+    long time, and a real time-series database would be more operational surface than the problem
+    justifies.</p>
+    <p>Malformed lines are dropped silently rather than failing the aggregate — so a half-written line
+    from a crash mid-append costs you one event, not the whole endpoint.</p>
+    <p><code>/projects</code> takes the same idea further and has <strong>no storage at all</strong>.
+    It walks the same file and keeps only the most recent event per cwd, which makes it self-pruning
+    by construction: it's always "latest per project", never an accumulating log.</p>
+    <pre>function readEvents() {
+  try {
+    return fs.readFileSync(EVENTS, "utf8").split("\n").filter(Boolean)
+      .map((l) =&gt; { try { return JSON.parse(l); } catch { return <b>null</b>; } })
+      .filter(Boolean);            <i>// one bad line costs one event, not the endpoint</i>
+  } catch { return []; }
+}</pre>
+  </div>
+
+  <div class="note warn"><p class="lbl">No rotation, deliberately deferred</p>
+  <p>Nothing trims <code>events.jsonl</code>. The README says so plainly — "rotate/trim if it ever
+  gets large (personal scale: fine for a long time)". A conscious trade with a known expiry, not an
+  oversight. It will need a cutoff eventually.</p></div>
+</section>
+
+<!-- 05 -->
+<section id="cost">
+  <p class="eyebrow" style="--st:var(--cache)">05 · the money</p>
+  <h2>Two price tables kept in sync by a comment</h2>
+  <div class="prose">
+    <p>Cost is never stored. Events carry raw token counts and a model id; the dollar figure is
+    computed at read time — in <strong>two independent places</strong>. The server has its own
+    <code>PRICES</code> table for historical aggregates, and the client has <code>MODELS</code> in
+    <code>lib/routing.ts</code> for live figures as events stream in.</p>
+    <p>There is no shared import and no build-time check. The server file's entire safeguard is a
+    comment reading <em>"mirror lib/routing.ts"</em>. If one changes and the other doesn't, the
+    historical total and the live total silently disagree, and nothing surfaces it but noticing that
+    two numbers which should match don't.</p>
+    <p>The "saved vs all-Opus" figure is a counterfactual, not a measurement: it recomputes what the
+    same tokens would have cost at Opus pricing. That's the routing policy made visible as a real
+    dollar delta per turn.</p>
+  </div>
+
+  <table>
+    <thead><tr><th>Model</th><th class="num">In $/MTok</th><th class="num">Out $/MTok</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Haiku 4.5</strong></td><td class="num">1</td><td class="num">5</td><td>search &amp; grunt</td></tr>
+      <tr><td><strong>Sonnet 5</strong></td><td class="num">2</td><td class="num">10</td><td><em>introductory — rises to 3 / 15 on 2026-09-01</em></td></tr>
+      <tr><td><strong>Opus 5</strong></td><td class="num">5</td><td class="num">25</td><td>judgement · the dashboard default</td></tr>
+      <tr><td><strong>Fable 5</strong></td><td class="num">10</td><td class="num">50</td><td>hardest reasoning only</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note warn"><p class="lbl">A dated cliff, in two files</p>
+  <p>Sonnet 5's introductory rate ends <strong>2026-08-31</strong>. On 2026-09-01 both the server's
+  <code>PRICES</code> and <code>lib/routing.ts</code> need a manual edit, or every Sonnet turn
+  under-reports and the savings bar overstates. Cache reads are billed at 0.1× input — also
+  replicated by hand in both.</p></div>
+</section>
+
+<!-- 06 -->
+<section id="identity">
+  <p class="eyebrow" style="--st:var(--ui)">06 · same project, two paths</p>
+  <h2>The server has no idea what a project is</h2>
+  <div class="prose">
+    <p><code>/projects</code> buckets by literal cwd, which is correct and useless. The vault is
+    <code>/Users/thomas/secondBrain</code> from the laptop and <code>/root/secondBrain</code> from the
+    cloud host — different user, different <code>$HOME</code>, same project. The server cannot know
+    that, so it returns two rows for one thing.</p>
+    <p>The dashboard merges them client-side by the last path segment, shows the most recently touched
+    host as the primary card, and folds the others into an "also on: cloud · 2h ago" trail. Hiding the
+    other host was explicitly rejected — the point is to see that both machines have been in here.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead"><span class="ptitle">merge.by.project</span></div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-merge" viewBox="0 0 1000 240" role="img"
+        aria-label="Two server rows keyed by different absolute paths for the same project name are grouped by their last path segment, sorted by timestamp, and rendered as one card for the most recent host with the other listed underneath as an also-on trail."></svg>
+    </div></div>
+  </div></div>
+
+  <div class="note warn"><p class="lbl">The fix lives in the view, not the data</p>
+  <p>Any second consumer of <code>/projects</code> — a CLI, a widget — inherits the unmerged,
+  duplicated-by-host view unless it reimplements the same merge.</p></div>
+
+  <footer>
+    <p>Source: <code>server/metrics-server.js</code>, <code>server/usage-hook.py</code>,
+    <code>lib/routing.ts</code>, <code>lib/sources.ts</code>, <code>components/Usage*.tsx</code>,
+    <code>components/ProjectsPanel.tsx</code>. Reasoning record: <code>docs/KNOWLEDGE.md</code>.</p>
+    <div class="nextprev">
+      <a href="./live-sessions.html">← live sessions</a>
+      <a href="./architecture.html">the whole system</a>
+      <a href="./">knowledge base</a>
+    </div>
+  </footer>
+</section>
+
+</div>
+</div>
+
+<script src="./kb.js"></script>
+<script>
+(function(){
+"use strict";
+var K = window.KB;
+
+/* ── 01 · topology ──────────────────────────────────────────────────── */
+var tv = document.getElementById("viz-topo"), tStop = null;
+var TN = [
+  {id:"mac",  x:30,  y:34,  w:200, h:64, t:"laptop",          s:"Stop hook → curl",        c:"agent"},
+  {id:"box",  x:30,  y:196, w:200, h:64, t:"Hetzner host",    s:"Stop hook → localhost",   c:"agent"},
+  {id:"fun",  x:300, y:34,  w:200, h:64, t:"Tailscale Funnel",s:"*.ts.net HTTPS",          c:"metric"},
+  {id:"srv",  x:400, y:115, w:220, h:70, t:"metrics-server.js",s:"127.0.0.1:8787 · 0 deps",c:"metric"},
+  {id:"log",  x:400, y:250, w:220, h:60, t:"events.jsonl",    s:"append-only · 1 line/turn",c:"disk"},
+  {id:"api",  x:700, y:115, w:200, h:70, t:"/stats /projects",s:"/stream /timeseries",     c:"metric"},
+  {id:"dash", x:700, y:250, w:200, h:60, t:"/dashboard",      s:"SSE + polling",           c:"ui"}
+];
+var TE = [["mac","fun"],["fun","srv"],["box","srv"],["srv","log"],["srv","api"],["api","dash"]];
+function tn(id){ for (var i=0;i<TN.length;i++) if (TN[i].id===id) return TN[i]; }
+function tPath(e){
+  var a=tn(e[0]), b=tn(e[1]);
+  var x1=a.x+a.w, y1=a.y+a.h/2, x2=b.x, y2=b.y+b.h/2;
+  if (b.x <= a.x + 20 && b.x >= a.x - 20){ x1=a.x+a.w/2; y1=a.y+a.h; x2=b.x+b.w/2; y2=b.y; return "M"+x1+","+y1+" L"+x2+","+y2; }
+  var mx=(x1+x2)/2;
+  return "M"+x1+","+y1+" C"+mx+","+y1+" "+mx+","+y2+" "+x2+","+y2;
+}
+(function(){
+  TE.forEach(function(e){
+    tv.appendChild(K.el("path", {d:tPath(e), fill:"none", stroke:"var(--rule)", "stroke-width":1.6}));
+  });
+  TN.forEach(function(n){ K.box(tv, n); });
+  tv.appendChild(K.txt(300, 330, "INGEST_TOKEN gates writes · READ_KEY is obscurity, not auth",
+    {size:10, fill:"var(--text3)"}));
+})();
+document.getElementById("mPlay").onclick = function(){
+  var on = this.getAttribute("aria-pressed") === "true";
+  this.setAttribute("aria-pressed", String(!on));
+  this.textContent = on ? "▶ Play flow" : "■ Stop";
+  if (on){ if (tStop) tStop(); tStop = null; return; }
+  tStop = K.playFlow(tv, TE, tPath, function(e){ return "var(--" + tn(e[1]).c + ")"; }, 3000);
+};
+
+/* ── 03 · the null payload ──────────────────────────────────────────── */
+var nv = document.getElementById("viz-null");
+var NSTEPS = [
+  {t:'body = "null"',            s:"a valid JSON null",                    c:"ui",     ok:null},
+  {t:'JSON.parse("null")',       s:"succeeds · no throw",                  c:"ui",     ok:false},
+  {t:"catch { … }",              s:"never fires",                          c:"text3",  ok:false},
+  {t:"e.ts = e.ts || …",         s:"TypeError · uncaught",                 c:"ui",     ok:false},
+  {t:"typeof e !== 'object'",    s:"400 · process stays up",               c:"metric", ok:true}
+];
+function drawNull(step){
+  K.clear(nv);
+  var x = 40, w = 178, gap = 14;
+  for (var i = 0; i < NSTEPS.length; i++){
+    var n = NSTEPS[i], on = i <= step, last = i === 4;
+    var xi = x + i * (w + gap);
+    nv.appendChild(K.rr(xi, 50, w, 62, 9, {
+      fill: on ? "var(--surface)" : "var(--surface2)",
+      stroke: on ? "var(--" + n.c + ")" : "var(--rule)",
+      "stroke-width": on ? 1.6 : 1,
+      "stroke-dasharray": last && step < 4 ? "4 4" : "none",
+      opacity: on ? 1 : .5
+    }));
+    nv.appendChild(K.txt(xi + w/2, 76, n.t, {size:10.5, weight:600, anchor:"middle"}));
+    nv.appendChild(K.txt(xi + w/2, 95, n.s, {size:9, fill:"var(--text3)", anchor:"middle"}));
+    if (i < NSTEPS.length - 1 && i !== 3) K.arrow(nv, xi + w + 1, 81, xi + w + gap - 1, 81);
+  }
+  // the crash marker sits under step 4
+  if (step === 3){
+    nv.appendChild(K.txt(40 + 3*(w+gap) + w/2, 138, "process dies · every SSE client drops",
+      {size:11, weight:600, anchor:"middle", fill:"var(--ui)"}));
+  }
+  if (step === 4){
+    nv.appendChild(K.txt(40 + 4*(w+gap) + w/2, 138, "guarded one step earlier",
+      {size:11, weight:600, anchor:"middle", fill:"var(--metric)"}));
+  }
+}
+K.theatre({
+  prev:"nPrev", next:"nNext", label:"nLbl", dots:"nDots", narr:"nNarr", draw:drawNull,
+  steps:[
+    "<b>A client posts <code>null</code>.</b> Not malformed — perfectly valid JSON that happens to encode nothing.",
+    "<b>The parse succeeds.</b> <code>JSON.parse(\"null\")</code> returns the value <code>null</code> without throwing. This is the whole bug.",
+    "<b>The catch never fires.</b> It only guards parse <em>failure</em>, and nothing failed. Execution continues as if the body were fine.",
+    "<b>The next line throws.</b> Assigning a property on <code>null</code> raises a <code>TypeError</code> — and this standalone script had no process-level handler, so the collector dies and takes every dashboard's stream with it.",
+    "<b>The fix rejects it one step earlier.</b> A type guard returns 400 before anything touches the value; a process-level handler ensures the <em>next</em> unknown failure exits cleanly for systemd to restart."
+  ]
+});
+
+/* ── 06 · merge by project name ─────────────────────────────────────── */
+(function(){
+  var s = document.getElementById("viz-merge");
+  s.appendChild(K.txt(30, 28, "what the server returns — bucketed by literal cwd",
+    {size:10, fill:"var(--text3)", ls:".05em"}));
+  K.box(s, {x:30,  y:44, w:300, h:56, t:"/Users/thomas/secondBrain", s:"local · 4m ago", c:"agent"});
+  K.box(s, {x:30,  y:112, w:300, h:56, t:"/root/secondBrain",        s:"cloud · 2h ago", c:"agent"});
+  K.arrow(s, 340, 100, 430, 100);
+  s.appendChild(K.txt(385, 88, "group by", {size:9, fill:"var(--text3)", anchor:"middle"}));
+  s.appendChild(K.txt(385, 118, "last segment", {size:9, fill:"var(--text3)", anchor:"middle"}));
+  K.box(s, {x:440, y:72, w:180, h:56, t:'project = "secondBrain"', s:"sort by timestamp", c:"cache"});
+  K.arrow(s, 630, 100, 700, 100);
+  s.appendChild(K.txt(710, 32, "what you see — one card", {size:10, fill:"var(--text3)", ls:".05em"}));
+  K.box(s, {x:710, y:48, w:260, h:56, t:"secondBrain · local", s:"most recently touched", c:"ui"});
+  s.appendChild(K.rr(710, 112, 260, 34, 8, {fill:"var(--surface2)", stroke:"var(--rule)", "stroke-dasharray":"4 3"}));
+  s.appendChild(K.txt(726, 133, "also on: cloud · 2h ago", {size:10.5, fill:"var(--text3)"}));
+  s.appendChild(K.txt(30, 208, "hiding the second host was rejected — seeing both machines is the point",
+    {size:10, fill:"var(--text3)"}));
+})();
+
+/* ── nav + rail ─────────────────────────────────────────────────────── */
+K.rail([
+  ["topology","the shape","metric"],
+  ["hook","the emitter","agent"],
+  ["null","the crash","ui"],
+  ["storage","the store","disk"],
+  ["cost","the money","cache"],
+  ["identity","same project, two paths","ui"]
+]);
+K.nav("./metrics.html");
+})();
+</script>

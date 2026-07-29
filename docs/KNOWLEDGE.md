@@ -45,7 +45,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Account bridge | `app/api/accounts` | **shipped** | reads ground-truth identity |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
 | KB standalone server | `public/kb/serve.mjs` | **shipped** | `npm run kb` → :4400, zero deps |
-| Runbook | — | **not written** | the one real gap |
+| Runbook | `public/kb/operations.html` | **shipped** | deploy · identity · symptom table |
 
 ---
 
@@ -263,8 +263,10 @@ with `toolkit/brand/tokens.css`.
 | `architecture.html` — the whole system | shipped |
 | `transcripts.html` — pipeline 1: disk → parser → tile | shipped |
 | `live-sessions.html` — pipeline 2: browser → SDK → claude | shipped |
-| Cross-machine metrics — pipeline 3 | not written |
-| Operations — deploy · identity · runbook | not written |
+| `metrics.html` — pipeline 3: two machines, one collector | shipped |
+| `operations.html` — deploy · identity · runbook | shipped |
+
+**The page set is complete.** Every pipeline has a deep dive, plus a system overview and a runbook.
 
 Every page carries the shared top nav (`KB.nav()`), so no page is a dead end and unwritten pages
 show as visible-but-unclickable placeholders. **Light is the default theme**, deliberately — there is
@@ -336,6 +338,16 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **KB page set complete** — `metrics.html` (6 sections) and `operations.html` (4 sections) shipped,
+  finishing all five pages. Metrics records the `JSON.parse("null")` process crash, the absent
+  retention policy, the two hand-synced price tables and the 2026-09-01 Sonnet pricing cliff.
+  Operations is the runbook, and states the pattern behind nearly every incident here: a signal that
+  looked authoritative but was only a claim.
+- **UI corrected against the rendered original** — served `~/dataAnalyticsOwnego` and compared side by
+  side rather than reading its CSS. Added the leading rule on section eyebrows, moved step narration
+  above its diagram, and gave the hub its action card, metadata strip, card footer lines and centred
+  closing line. One deliberate divergence kept: their sticky rail paints over full-bleed panels, ours
+  doesn't.
 - **KB navigation + light-mode default** — shared sticky top nav on every page via `KB.nav()`;
   `architecture.html` migrated off its duplicated inline CSS onto `kb.css`/`kb.js`; light is now the
   default theme with no `prefers-color-scheme` rule, matching dataAnalyticsOwnego's hub.
