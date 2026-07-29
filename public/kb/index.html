@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Minami Bento — Knowledge Base</title>
+<!--
+  The front door to everything written about this project.
+
+  House style is "Editorial Glass", borrowed from ~/dataAnalyticsOwnego/toolkit/hub and retuned to
+  Minami's sakura accent. Same rules as the rest of the stack: ONE file, ZERO dependencies, no build
+  step, system fonts only. It must still open from disk in ten years.
+
+  Adding an entry: append to CARDS[] at the bottom. Nothing else to touch.
+-->
+<style>
+  :root{
+    --accent:#d4536f; --accent-ink:#b23a55; --accent-bright:#e8859b;
+    --bg:#fcfcfa; --aurora:rgba(212,83,111,.07);
+    --panel:#fff; --panel-2:#f6f6f4;
+    --ink:#17191e; --ink-2:#494d55; --ink-3:#7c818b;
+    --line:#e8e7e4; --line-2:#f0efec;
+    --ok:#1f8a5c; --warn:#c98a00; --idle:#a7abb2;
+    --radius:18px;
+    --shadow:0 1px 1px rgba(16,24,40,.04),0 10px 28px -14px rgba(16,24,40,.18),0 40px 80px -44px rgba(16,24,40,.20);
+    --glass:linear-gradient(150deg,rgba(255,255,255,.7),rgba(255,255,255,.4));
+    --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0b0e12; --aurora:rgba(232,133,155,.10);
+    --panel:#141821; --panel-2:#10141b;
+    --ink:#f2f3f6; --ink-2:#b3b7c2; --ink-3:#7d8290;
+    --line:rgba(255,255,255,.10); --line-2:rgba(255,255,255,.05);
+    --idle:#565a68; --accent:#e8859b; --accent-ink:#d4536f;
+    --shadow:0 1px 2px rgba(0,0,0,.35),0 18px 44px -22px rgba(0,0,0,.72);
+    --glass:linear-gradient(150deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:
+      radial-gradient(60% 60% at 82% -8%,var(--aurora) 0%,transparent 60%),
+      radial-gradient(46% 56% at 8% 108%,var(--aurora) 0%,transparent 55%),
+      var(--bg);
+    color:var(--ink);font-family:var(--font);line-height:1.5;
+    -webkit-font-smoothing:antialiased;padding:44px 24px 72px;min-height:100vh}
+  a{color:inherit}
+  .wrap{max-width:1040px;margin:0 auto}
+
+  header{display:flex;align-items:flex-start;gap:16px;margin-bottom:6px}
+  .mark{flex:0 0 auto;width:46px;height:46px;border-radius:13px;display:grid;place-items:center;
+    background:linear-gradient(160deg,var(--accent-bright),var(--accent-ink));color:#fff;font-size:22px;
+    box-shadow:0 10px 24px -12px color-mix(in srgb,var(--accent) 80%,transparent)}
+  h1{font-family:var(--serif);font-weight:600;font-size:27px;margin:0 0 2px;letter-spacing:-.012em}
+  .sub{color:var(--ink-2);font-size:14px;margin:0;max-width:62ch}
+  .kit{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:4px}
+  .themeBtn{margin-left:auto;flex:0 0 auto;appearance:none;border:1px solid var(--line);
+    background:var(--panel);color:var(--ink-2);width:38px;height:38px;border-radius:11px;cursor:pointer;
+    display:grid;place-items:center;box-shadow:var(--shadow);font-size:15px}
+  .themeBtn:hover{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+
+  .strip{margin:24px 0 20px;background:var(--glass);
+    -webkit-backdrop-filter:blur(20px) saturate(160%);backdrop-filter:blur(20px) saturate(160%);
+    border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
+    padding:15px 20px;display:flex;flex-wrap:wrap;gap:12px 30px;align-items:center}
+  .stat{display:flex;flex-direction:column;gap:1px}
+  .stat span{font-size:10.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em}
+  .stat b{font-size:13.5px;font-weight:600}
+  .stat .val{font-size:13px;color:var(--ink-2);font-weight:500}
+
+  .sect{font-family:var(--mono);font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+    color:var(--ink-3);margin:30px 0 12px;font-weight:600}
+  .grid{display:grid;grid-template-columns:1fr;gap:16px}
+  @media(min-width:700px){.grid{grid-template-columns:1fr 1fr}}
+  @media(min-width:1000px){.grid{grid-template-columns:1fr 1fr 1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;min-height:196px;
+    text-decoration:none;transition:transform .12s ease,border-color .12s ease}
+  .card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--accent) 42%,var(--line))}
+  .card.soon{opacity:.62;pointer-events:none}
+  .cicon{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;margin-bottom:13px;
+    background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-size:18px}
+  .card h3{margin:0;font-size:16px;letter-spacing:-.01em}
+  .card .tag{margin:2px 0 9px;font-size:12px;color:var(--accent);font-weight:600;font-family:var(--mono)}
+  .card .makes{margin:0;font-size:13px;color:var(--ink-2);flex:1 1 auto}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
+    padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--ink-3);
+    align-self:flex-start;margin-top:14px;font-family:var(--mono)}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:0 0 auto}
+  .dot.ok{background:var(--ok)} .dot.idle{background:var(--idle)} .dot.warn{background:var(--warn)}
+
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--ink-3);max-width:76ch}
+  footer code{font-family:var(--mono);font-size:11.5px;background:var(--panel-2);
+    padding:1px 6px;border-radius:6px}
+  @media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="mark">🌸</div>
+    <div>
+      <h1>Minami Bento — Knowledge Base</h1>
+      <p class="sub">Everything written down about this project: how it works, why it's shaped that
+      way, and what broke to make it that shape.</p>
+      <p class="kit" id="kit">local mission-control for Claude Code sessions</p>
+    </div>
+    <button class="themeBtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  </header>
+
+  <div class="strip">
+    <div class="stat"><span>surfaces</span><b>4</b></div>
+    <div class="stat"><span>pipelines</span><b>3</b><span class="val" style="text-transform:none;letter-spacing:0">live · transcripts · metrics</span></div>
+    <div class="stat"><span>documented incidents</span><b>8</b></div>
+    <div class="stat"><span>house style</span><b class="val" style="font-family:var(--mono);font-size:12px">one file · zero deps</b></div>
+  </div>
+
+  <p class="sect">Start here</p>
+  <div class="grid" id="primary"></div>
+
+  <p class="sect">Reference</p>
+  <div class="grid" id="reference"></div>
+
+  <footer>
+    <p>All of this lives in the repo, not in a wiki — <code>public/kb/</code> for pages,
+    <code>docs/KNOWLEDGE.md</code> for the living record. The rule that keeps it true: any change to
+    a subsystem updates its section <em>in the same turn</em>, enforced by the
+    <code>minami-kb</code> skill. A doc that lags is worse than no doc, because the next session
+    trusts it.</p>
+  </footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+// Add an entry here and nowhere else. `status`: ok | idle | warn. `soon: true` greys it out.
+var CARDS = [
+  { group:"primary", icon:"◇", title:"Architecture explainer",
+    tag:"read first · ~15 min",
+    makes:"How the three pipelines work, why the parser is incremental, and the eight incidents that shaped the code. Ten sections, five interactive diagrams.",
+    href:"./architecture.html", status:"ok", pill:"interactive" },
+
+  { group:"primary", icon:"⬡", title:"Module map",
+    tag:"live in the app",
+    makes:"Every file and the edges between them, extracted from source. Solid lines are imports, dashed are runtime fetch/SSE. Click a node to isolate what touches it.",
+    href:"/architecture", status:"ok", pill:"React Flow" },
+
+  { group:"primary", icon:"▤", title:"The living record",
+    tag:"docs/KNOWLEDGE.md",
+    makes:"Per-subsystem reasoning: mechanics, gotchas, bug post-mortems, and a dated changelog. The authoritative answer to “why is it like this?”",
+    href:"https://github.com/pdtoan2811-bit/minami-dashboard/blob/main/docs/KNOWLEDGE.md",
+    status:"ok", pill:"markdown" },
+
+  { group:"reference", icon:"⚙", title:"Project README",
+    tag:"setup & features",
+    makes:"Install, run, environment variables, and the feature tour. Start here if you’ve never run it.",
+    href:"https://github.com/pdtoan2811-bit/minami-dashboard#readme", status:"ok", pill:"github" },
+
+  { group:"reference", icon:"⇅", title:"Metrics collector",
+    tag:"server/README.md",
+    makes:"The cross-machine usage pipeline: Stop hook → ingest → events log → Tailscale Funnel. Setup for a new machine.",
+    href:"https://github.com/pdtoan2811-bit/minami-dashboard/blob/main/server/README.md",
+    status:"ok", pill:"github" },
+
+  { group:"reference", icon:"◔", title:"Runbook",
+    tag:"operating it day to day",
+    makes:"Rebuild and swap safely, what to check when a pane hangs, and how to tell which Claude account you’re really on.",
+    href:"#", status:"idle", pill:"not written yet", soon:true },
+];
+
+function card(c){
+  var a = document.createElement("a");
+  a.className = "card" + (c.soon ? " soon" : "");
+  a.href = c.href;
+  if (/^https?:/.test(c.href)) { a.target = "_blank"; a.rel = "noopener"; }
+  a.innerHTML =
+    '<div class="cicon">' + c.icon + '</div>' +
+    '<h3></h3><p class="tag"></p><p class="makes"></p>' +
+    '<span class="pill"><i class="dot ' + c.status + '"></i><span class="pl"></span></span>';
+  // textContent, not innerHTML, for anything that could ever carry a stray < or &
+  a.querySelector("h3").textContent = c.title;
+  a.querySelector(".tag").textContent = c.tag;
+  a.querySelector(".makes").textContent = c.makes;
+  a.querySelector(".pl").textContent = c.pill;
+  return a;
+}
+CARDS.forEach(function(c){
+  var host = document.getElementById(c.group);
+  if (host) host.appendChild(card(c));
+});
+
+// Theme: follow the OS by default, but remember an explicit choice. Stored per-origin, so opening
+// the file straight from disk and opening it through the dev server keep separate preferences —
+// which is fine, and simpler than trying to share state across protocols.
+var root = document.documentElement, KEY = "minami-kb-theme";
+function apply(t){
+  if (t) root.setAttribute("data-theme", t); else root.removeAttribute("data-theme");
+}
+try { apply(localStorage.getItem(KEY)); } catch (e) { /* file:// with storage blocked */ }
+document.getElementById("themeBtn").onclick = function(){
+  var dark = root.getAttribute("data-theme") === "dark"
+    || (!root.hasAttribute("data-theme") && matchMedia("(prefers-color-scheme:dark)").matches);
+  var next = dark ? "light" : "dark";
+  apply(next);
+  try { localStorage.setItem(KEY, next); } catch (e) { /* ignore */ }
+};
+})();
+</script>
+</body>
+</html>

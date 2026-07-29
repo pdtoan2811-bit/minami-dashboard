@@ -17,7 +17,11 @@ LOG="/tmp/minami-prod.log"
 echo "▶ building (production, no Fast Refresh)…"
 npm run build
 
-echo "▶ swapping in the new build on :$PORT…"
+# Brace the expansion: a multibyte char immediately after $PORT gets swallowed into the variable
+# name when the shell isn't in a valid UTF-8 locale (e.g. LC_CTYPE=UTF-8, which macOS doesn't
+# recognise), so `set -u` aborts the whole script with "PORT<junk>: unbound variable" — right
+# before the swap, meaning the build succeeds and the old server keeps serving. Silently.
+echo "▶ swapping in the new build on :${PORT}…"
 # Kill ONLY the server listening on $PORT — leaves any other Next instance alone (e.g. the live-reload
 # dev server on :3001), which also runs as `next-server` and must not be swept up.
 lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true

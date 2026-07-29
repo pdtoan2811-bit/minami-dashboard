@@ -6,5 +6,11 @@ const nextConfig = {
   // Let a second instance use its own build dir so `next dev` (iteration) and `next start` (the stable
   // prod server) can run at the same time without fighting over `.next`. Defaults to `.next`.
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  // The knowledge base is plain static HTML in public/kb/, not an app route. Next strips the
+  // trailing slash from /kb/ and then has no route to match, so the bare /kb 404s even though
+  // /kb/index.html serves fine. Rewrite it so the short, linkable URL works.
+  async rewrites() {
+    return [{ source: "/kb", destination: "/kb/index.html" }];
+  },
 };
 export default nextConfig;
