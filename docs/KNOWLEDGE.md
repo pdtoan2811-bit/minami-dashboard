@@ -222,6 +222,22 @@ Four parts: the hub (`public/kb/index.html`), the visual explainer
 (`public/kb/architecture.html`), this record, and the module map data. Ported from
 `~/dataAnalyticsOwnego` (`toolkit/hub` + `queries/QUERIES.md` + the `query-docs` skill).
 
+The pages share `kb.css` and `kb.js` rather than each carrying its own copy of the chrome. The
+"one file, zero dependencies" rule that governs a *standalone artifact* is the wrong call here —
+these pages ship together in one directory, and seven copies of 250 lines of CSS drift. Still zero
+dependencies: no build step, no framework, no web fonts. Same call `~/dataAnalyticsOwnego` makes
+with `toolkit/brand/tokens.css`.
+
+**Page set** (`PAGES[]` in `index.html` is the only place to edit):
+
+| Page | State |
+|---|---|
+| `architecture.html` — the whole system | shipped |
+| `transcripts.html` — pipeline 1: disk → parser → tile | shipped |
+| Live sessions — pipeline 2 | not written |
+| Cross-machine metrics — pipeline 3 | not written |
+| Operations — deploy · identity · runbook | not written |
+
 **Two ways to read it**, and the difference matters:
 
 | | URL | Needs the app? |
@@ -286,6 +302,11 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **KB moved onto a shared shell** — `kb.css` + `kb.js` extracted, hub rebuilt on it, and
+  `transcripts.html` added as the first deep-dive page (7 sections, 3 diagrams). Page set now
+  declared up front in the hub with honest "not written yet" placeholders. The six-phase build
+  workflow is recorded in the `visual-explainer` skill.
+  *Reported by user: "change the whole KB to match the dataAnalyticOwnego UI UX and detail in each page."*
 - **KB runs standalone** — `public/kb/serve.mjs` (`npm run kb`, or the double-click
   `Open Knowledge Base.command`) serves the knowledge base on :4400 independently of the dashboard,
   so it stays readable while :3000 is down. Uses `KB_PORT`, never `PORT` — see the 🐛 in §7b.
