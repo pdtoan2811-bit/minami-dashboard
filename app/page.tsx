@@ -637,7 +637,15 @@ export default function BentoHome() {
                   <motion.button layout key={p.name} data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => openProject(p)}
                     initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: dim, scale: 1 }} whileHover={{ y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}
                     style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)` }}
-                    className={`group relative flex flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left backdrop-blur ${span} ${
+                    // NO backdrop-blur here — it was measured as the single biggest CPU cost in the app.
+                    // A `backdrop-filter` must re-blur everything beneath it whenever anything inside its
+                    // box changes, and every live indicator (pulse dot, think-dots, activity shimmer,
+                    // spinning icon) is a descendant of this tile. A 1.5px dot pulsing at 60fps therefore
+                    // re-blurred the whole 610x348 card, 60 times a second, forever.
+                    // Measured on an idle headless tab: 30.6% GPU with the blur, 4.6% without — same
+                    // animations. And it bought nothing: behind a tile is a flat body colour and a very
+                    // smooth radial gradient, and blurring a low-frequency image returns the same image.
+                    className={`group relative flex flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left ${span} ${
                       project === p.name ? "border-[var(--sakura)] ring-1 ring-[var(--sakura)]" : activeSel ? "border-[var(--sakura)]/70 ring-1 ring-[var(--sakura)] shadow-[0_22px_50px_-22px_rgba(232,133,155,0.6)]" : "border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_14px_34px_-18px_rgba(0,0,0,0.8)] hover:border-white/25"
                     }`}>
                     {p.active && <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl" style={{ background: pc + "44" }} />}
@@ -685,7 +693,11 @@ export default function BentoHome() {
 
       {/* Right: chat SIDE PANEL. `flex-1` rather than a second percentage — the rail's width is in px,
           and 100%-minus-a-percentage can't express "everything the rail didn't take". */}
-      <div className={`min-h-0 bg-neutral-900/50 backdrop-blur w-full ${railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      {/* Same reason as the tile above, and this one is worse: at 768x800 it is the largest blurred
+          surface in the app, and it hosts the think-dots and activity shimmer of every open pane — so
+          a single bouncing dot invalidated ~614k pixels of blur every frame. It sits BESIDE the grid as
+          a flex sibling, never over it, so there was never anything behind it but the page gradient. */}
+      <div className={`min-h-0 bg-neutral-900/50 w-full ${railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {proj && (
           <>
             <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2.5">

@@ -205,6 +205,30 @@ body {
   animation: spin3d 6.8s ease-in-out infinite;
 }
 
+/* Every looping animation in this app is decorative — the information is already carried by the
+   label text and the badges. So an OS-level "reduce motion" turns all of it off, which is both the
+   accessibility answer and a genuine escape hatch: measured idle GPU goes to 0.0% with animation
+   disabled. Deliberately NOT `animation: none` on everything — one-shot entrance animations
+   (`bentoIn`, `slidein`) are set to run instantly rather than be removed, so elements that animate
+   IN still end up visible rather than stuck at their initial opacity:0 frame. */
+@media (prefers-reduced-motion: reduce) {
+  .motion-icon,
+  .think-dot,
+  .activity-label,
+  .animate-pulse,
+  .group:hover .motion-icon {
+    animation: none !important;
+  }
+  .bento-in,
+  [class*="animate-[slidein"] {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* continuous, seamless 3D tumble for the icons (0% == 100% → no snap) */
 @keyframes spin3d {
   0%   { transform: rotateY(-18deg) rotateX(6deg) rotateZ(-2deg); }

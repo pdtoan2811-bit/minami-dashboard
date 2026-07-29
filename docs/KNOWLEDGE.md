@@ -55,6 +55,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Task isolation | `bin/task.mjs` | **shipped** | one task = one worktree = one branch = one agent — see §9 |
 | Out-of-pane alerts | `bin/minami-event.mjs` + `lib/events.ts` | **shipped** | disk-backed, survives the deploy that produces them — see §10 |
 | Images in a message | `lib/agent/images.ts` + `app/api/fs/paste` | **shipped** | paste a screenshot; path is the payload, so it survives a reload — see §11 |
+| Rendering cost | `app/globals.css`, `ProjectIcon.tsx` | **shipped** | idle GPU 31% → 14%; never animate inside a backdrop-blur — see §12 |
 
 ---
 
@@ -1184,6 +1185,61 @@ payload. Losing it a day later costs a thumbnail in old scrollback, never the co
 
 ---
 
+## 12. Rendering cost — why the dashboard made the machine hot
+
+This app is open all day. Anything it does *per frame*, it does forever.
+
+> 🐛 **The dashboard burned ~31% of a CPU core while sitting completely idle.** Reported as "lag and
+> heat". It was not the polling, the parser or the SDK: `next-server` measured **1.5%**, and the
+> browser's *renderer* process stayed ~6% throughout. The cost was entirely in the **GPU process** —
+> compositing. Measured on an isolated headless tab (headless does no display compositing at all, so a
+> real window is worse and drags `WindowServer` with it):
+>
+> | State | GPU process |
+> |---|---|
+> | All animations disabled | **0.0%** |
+> | As shipped (before) | **31.1%** |
+> | After removing two `backdrop-blur`s | **14.0%** |
+> | …and `spin3d` also off | 6.6% |
+>
+> **The mechanism: `backdrop-filter` × any animated descendant.** A `backdrop-filter` element must
+> re-blur everything beneath it whenever anything inside its box changes. Every live indicator — the
+> pulse dot, the think-dots, the activity shimmer, the spinning icon — was a descendant of a blurred
+> surface. A **1.5-pixel dot** pulsing at 60fps therefore re-blurred an entire 610×348 tile, and the
+> think-dots re-blurred the **768×800** chat panel, sixty times a second, forever. Isolated: the same
+> eight animations cost **30.6%** with the blur and **4.6%** without — a **6.6× multiplier**.
+>
+> **And it bought nothing.** `backdrop-filter` blurs what is *behind* an element. Behind these was a
+> flat `body` colour and one very smooth radial gradient — and blurring a low-frequency image returns
+> essentially the same image. The panel is a flex *sibling* of the grid, never over it. Verified with
+> `elementsFromPoint`, and by screenshot.
+
+### Rules that follow
+- **Never animate inside a `backdrop-filter` subtree.** Not "prefer not to" — it converts a
+  few-pixel animation into a full-surface re-blur every frame. If a surface needs blur, it must not
+  contain anything that moves; if it contains something that moves, it must not be blurred.
+- **Never put a CSS `filter` on an animating element.** A filter on an animating node can't be
+  compositor-cached. Moving `drop-shadow` off the rotating icon onto its static wrapper cut `spin3d`
+  from 45.2% to 18.6% for the same seven icons. The shadow no longer tracks the rotation — invisible
+  at this size, and not worth a permanent tax.
+- **`prefers-reduced-motion` is honoured**, which is both the accessibility answer and a real off
+  switch — idle GPU goes to 0.0%. One-shot entrance animations are made instant rather than removed,
+  so elements that animate *in* don't get stranded at `opacity: 0`.
+
+### Measured and rejected
+**Layer promotion (`will-change: transform` + `backface-visibility: hidden`) on the icons does
+nothing here** — 33.8% → 33.2% for a fixed 12-icon workload, inside noise. The residual `spin3d` cost
+is per-frame compositing of the 3D layers themselves, not re-rasterisation, so promotion only adds
+memory. Recorded because it is the obvious next thing to try, and it doesn't work.
+
+### How to measure this again
+`ps -o time=` deltas over a fixed interval, **not** `%CPU` — macOS `%CPU` is a decaying average and
+bleeds previous state into the next sample. Drive one isolated headless tab, then A/B by injecting
+CSS at runtime into the *same* page and process; the live data changes the animation count between
+page loads, so comparing two loads is not a controlled experiment.
+
+---
+
 ## The pattern behind the incidents
 
 Six of the eight bugs above are the same mistake in different clothes: **trusting a signal that looks
@@ -1198,6 +1254,14 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **The dashboard was burning ~31% of a CPU core while idle** (§12) — reported as "lag and heat".
+  Not the polling, parser or SDK (`next-server` measured 1.5%): it was `backdrop-filter` re-blurring a
+  whole tile / the 768×800 chat panel every frame because a 1.5px indicator dot was animating inside
+  it. Same animations cost 30.6% with the blur and 4.6% without — a 6.6× multiplier — and the blur was
+  visually inert, since behind it was a flat colour and a smooth gradient. Removed from both
+  containers, moved `drop-shadow` off the rotating icon, and added `prefers-reduced-motion`. Measured
+  A/B in the same page and process: **GPU 31.1% → 14.0%**. Layer promotion was tried and rejected
+  (33.8% → 33.2%, inside noise). *Reported by user: "lag and heat on my local machine".*
 - **Blank chat panes continue the topic's last conversation** (§5e) — `claude --continue` parity. A
   blank pane used to start a session that could see none of the project's history. It now names the
   chat it will pick up before you type (with `Start fresh instead`), draws a seam in the transcript
