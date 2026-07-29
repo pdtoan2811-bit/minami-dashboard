@@ -1,0 +1,384 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The transcript pipeline — Minami Bento KB</title>
+<link rel="stylesheet" href="./kb.css">
+
+<div class="guide">
+<nav class="rail" aria-label="Sections">
+  <a class="home" href="./">← knowledge base</a>
+  <ol id="rail"></ol>
+</nav>
+<div class="col">
+
+<header class="hero">
+  <p class="kicker" style="--st:var(--disk)">Minami Bento · pipeline 1 of 3</p>
+  <h1>Reading someone else's append-only log, cheaply</h1>
+  <p class="lede">Bento doesn't instrument Claude Code. It reads the JSONL transcripts Claude Code
+  was already writing — files that reach 61 MB, change every few seconds while a session is live,
+  and number in the hundreds. Nearly every hard problem in this codebase comes from that one
+  decision, and every fix below was a real stall someone sat through.</p>
+</header>
+
+<!-- 01 -->
+<section id="cold">
+  <p class="eyebrow" style="--st:var(--disk)">01 · the cold start</p>
+  <h2>Nine seconds of nothing</h2>
+  <div class="prose">
+    <p><code>listSessions()</code> needs metadata for every session file before the grid can paint a
+    single tile: tokens, cost, title, last activity. The obvious implementation reads each file and
+    parses every line. With real transcripts at 29–61 MB and hundreds of them on disk, that measured
+    <strong>about nine seconds of synchronous work on every cold launch</strong> — and because Node
+    runs one event loop, the whole UI sat behind it.</p>
+    <p>The fix is a metadata cache keyed by <code>(mtime, size)</code>, mirrored to
+    <code>~/.minami-bento/meta-cache.json</code>. <code>loadDiskCache()</code> hydrates it before
+    anything is parsed, so a cold launch serves known files from cache and reads only what changed.
+    <strong>9.3 s → 8 ms.</strong></p>
+    <p>The same Map is also parked on <code>globalThis</code>. That's not belt-and-braces for its own
+    sake: a Next dev hot-reload re-runs module top-level code, which would otherwise discard a warm
+    cache mid-session. Two independent survival paths for the same state — process memory for a hot
+    reload, disk for a hard restart.</p>
+    <pre><i>// two survival paths, deliberately</i>
+const cache = ((globalThis as any).<b>__minamiMetaCache</b> ||= new Map());
+const META_CACHE_FILE = path.join(os.homedir(), <b>".minami-bento"</b>, "meta-cache.json");</pre>
+  </div>
+</section>
+
+<!-- 02 -->
+<section id="incremental">
+  <p class="eyebrow" style="--st:var(--disk)">02 · the parser</p>
+  <h2>Read only what's new</h2>
+  <div class="prose">
+    <p>Caching by modification time solves the cold start and does nothing for the case that hurts
+    most. An <em>active</em> session appends on nearly every turn, so its mtime changes on nearly
+    every poll — and the original <code>summarize()</code> responded by re-reading and re-parsing the
+    entire file. On a 29 MB transcript that meant blocking the event loop every few seconds, for
+    every request and every open pane, for as long as that session stayed live.</p>
+    <p>The file is an append log, so treat it as one. <code>readNewBytes(file, readStart, size)</code>
+    reads only the bytes added since last time, and a <code>ParseAccum</code> carries running state
+    across polls instead of being rebuilt. Cost becomes proportional to what changed, not to how much
+    history has piled up.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">incremental.read</span>
+      <div class="ctrl">
+        <div class="steps"><span id="pLbl">step 1 / 4</span><span class="dotrow" id="pDots"></span></div>
+        <button id="pPrev" type="button">‹ back</button>
+        <button id="pNext" type="button">next ›</button>
+      </div>
+    </div>
+    <div class="pbody">
+      <div class="scroll">
+        <svg id="viz-parse" viewBox="0 0 1000 250" role="img"
+          aria-label="Four polls against a growing transcript, showing which byte range is read each time: a full cold read, an incremental tail read after the file grows, a zero-byte cache hit when nothing changed, and a full re-parse when the head fingerprint changes."></svg>
+      </div>
+      <p class="narr" id="pNarr"></p>
+    </div>
+  </div></div>
+
+  <div class="note bug"><p class="lbl">The byte that isn't a character</p>
+  <p>An arbitrary byte range can end mid-way through a multi-byte UTF-8 character.
+  <code>Buffer#toString</code> doesn't throw — it substitutes <code>U+FFFD</code>, corrupting text
+  that was perfectly valid on disk. <code>splitTrailingIncompleteUtf8()</code> walks back up to three
+  continuation bytes, and if the sequence doesn't fit, holds it as <code>byteLeftoverB64</code>
+  (base64, so it round-trips through the JSON cache) to prepend to the next read.</p></div>
+</section>
+
+<!-- 03 -->
+<section id="fingerprint">
+  <p class="eyebrow" style="--st:var(--cache)">03 · trusting the key</p>
+  <h2>Same size, different file</h2>
+  <div class="prose">
+    <p>Incremental parsing rests entirely on one assumption: that the bytes between
+    <code>cached.size</code> and <code>size</code> are genuinely new content appended after what was
+    already folded in. <strong>mtime and size cannot establish that.</strong> A truncate-and-rewrite
+    landing on an equal-or-larger size is indistinguishable from an append.</p>
+    <p>Nothing would error. <code>readNewBytes()</code> would take an arbitrary slice of unrelated
+    content, <code>foldLine()</code> would fold it into the accumulator — which is never reset on the
+    incremental path — and that session's totals and title would be permanently, silently wrong.</p>
+    <p>So the key carries a third element: a SHA-1 of the first 4 KB. A genuine append can never touch
+    bytes that already existed, so the fingerprint is invariant across appends and changes the instant
+    anything rewrites the start of the file.</p>
+    <pre><i>// the line that catches a truncate+rewrite</i>
+const headOk = !!cached && (cached.size === 0 ||
+  cached.head === <b>headFingerprint(file, Math.min(cached.size, HEAD_FINGERPRINT_BYTES))</b>);
+const canIncremental = raw === undefined && !!cached && !!cached.accum
+  && cached.size &lt;= size && <b>headOk</b>;</pre>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead"><span class="ptitle">summarize.branch</span></div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-branch" viewBox="0 0 1000 250" role="img"
+        aria-label="The three-way branch in summarize: an exact cache-key match returns cached metadata with zero bytes read; a matching head fingerprint with a grown file reads only the appended bytes; a changed fingerprint or shrunken file discards the accumulator and re-parses in full."></svg>
+    </div></div>
+    <div class="legend">
+      <span><i style="background:var(--metric)"></i>zero I/O</span>
+      <span><i style="background:var(--agent)"></i>reads the delta</span>
+      <span><i style="background:var(--ui)"></i>reads everything</span>
+    </div>
+  </div></div>
+
+  <div class="note bug"><p class="lbl">Curated labels wiped by a torn write</p>
+  <p>Both disk caches write to a temp file and <code>rename</code> into place. A crash mid-write — or
+  two Next processes sharing a home directory, which has happened here — leaves JSON that fails to
+  parse. For the meta cache that just forces a fresh parse. For the enrichment cache it was worse: a
+  failed read returns <code>{}</code>, and the next <code>enrich()</code> wrote that empty object
+  back, <strong>permanently erasing every hand-curated goal and task label</strong>.</p></div>
+</section>
+
+<!-- 04 -->
+<section id="window">
+  <p class="eyebrow" style="--st:var(--cache)">04 · the regression</p>
+  <h2>The same stall, through a different door</h2>
+  <div class="prose">
+    <p>With a correct incremental parser shipped, the app froze again. Not a parser bug this time — a
+    counting one. The meta cache holds 500 entries. This machine has <strong>375 transcripts and
+    climbing</strong>. A sweep that touches every file pushes past the bound partway through, so the
+    LRU evicts entries that <em>the same sweep just created</em>, forcing a full re-parse of files
+    parsed moments earlier. On every poll.</p>
+    <p>That is the exact failure mode the incremental parser had already fixed, arriving through cache
+    thrash instead of a busted parser. The fix isn't a bigger cache — it's never calling the expensive
+    function on a file that couldn't matter. A stat-only pass ranks every file by mtime and takes the
+    <strong>150 most recent</strong> as candidates before <code>summarize()</code> runs at all.</p>
+    <p>mtime is a safe recency proxy precisely because <em>any</em> activity touches it, including an
+    in-progress stream — so a genuinely live session can never fall outside the window. 150 is
+    deliberately generous against the eventual 60 tiles, because candidates get dropped downstream;
+    what matters is that it's a <em>fixed</em> number, so per-sweep work never again scales with how
+    much history is on disk.</p>
+  </div>
+
+  <table>
+    <thead><tr><th>Constant</th><th class="num">Value</th><th>Guards against</th></tr></thead>
+    <tbody>
+      <tr><td><code>CANDIDATE_WINDOW</code></td><td class="num">150</td><td>work scaling with total files on disk</td></tr>
+      <tr><td><code>META_CACHE_MAX</code></td><td class="num">500</td><td>unbounded growth, one entry per session ever seen</td></tr>
+      <tr><td><code>TURNS_CACHE_MAX</code></td><td class="num">60</td><td>matches the grid cap — only a few panes open</td></tr>
+      <tr><td><code>ID_INDEX_MAX</code></td><td class="num">2000</td><td>cheap per entry, so it can afford to be large</td></tr>
+      <tr><td><code>HEAD_FINGERPRINT_BYTES</code></td><td class="num">4096</td><td>undetected truncate-and-rewrite (§03)</td></tr>
+      <tr><td><code>TAIL_BYTES</code></td><td class="num">1,500,000</td><td>reading a 61 MB file to show the last screen</td></tr>
+      <tr><td><code>TAIL_HARD_CAP</code></td><td class="num">12,000,000</td><td>a single line larger than the tail window (§05)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 05 -->
+<section id="tail">
+  <p class="eyebrow" style="--st:var(--disk)">05 · the open pane</p>
+  <h2>A turn that vanished</h2>
+  <div class="prose">
+    <p>An open chat pane polls its transcript roughly every 2.5 seconds. It doesn't need the whole
+    file — just the end — so <code>readTail()</code> reads the last 1.5 MB and starts at the first
+    newline, which guarantees a clean line boundary.</p>
+    <p>Except a <code>tool_result</code> carrying a large embedded base64 image can produce a
+    <em>single JSONL line longer than 1.5 MB</em>. The window then contains no newline at all. The old
+    code fed that unaligned blob forward anyway, <code>JSON.parse</code> failed on every line, and the
+    entire turn disappeared from the UI — no error, no placeholder, no indication anything had been
+    dropped.</p>
+    <p>Now a missing newline widens the window fourfold and retries, capped at 12 MB. Past that it
+    returns empty, which the caller reads as "no new turns" — a line bigger than 12 MB isn't worth
+    reading the whole file for.</p>
+    <pre><i>// the retry that stops a turn from silently disappearing</i>
+const nl = s.indexOf("\n");
+if (nl &gt;= 0) return s.slice(nl + 1);
+if (window &gt;= TAIL_HARD_CAP || window &gt;= size) return "";  <i>// give up, not guess</i>
+<b>window *= 4;</b>  <i>// and read again</i></pre>
+  </div>
+
+  <div class="note good"><p class="lbl">Asymmetric freshness, on purpose</p>
+  <p><code>/api/bento/session/[id]</code> serves <code>meta</code> best-effort from cache and never
+  forces a parse — only <code>turns</code> does real I/O, and only on a miss. That asymmetry is
+  exactly what makes a 2.5-second poll per open pane affordable.</p></div>
+</section>
+
+<!-- 06 -->
+<section id="enrich">
+  <p class="eyebrow" style="--st:var(--metric)">06 · the label layer</p>
+  <h2>Naming things costs a subprocess</h2>
+  <div class="prose">
+    <p>Tiles carry a semantic <strong>Project › Goal › Task</strong> label, produced by shelling out to
+    the local <code>claude</code> CLI on Haiku 4.5. The first version used <code>spawnSync</code> —
+    which froze the entire server, including transcript loads for unrelated panes, for the whole
+    duration of every label call.</p>
+    <p>It's now async <code>spawn()</code> in a Promise, bounded by a 90-second timeout and an 8 MB
+    output cap, both of which resolve with whatever was captured rather than hanging. Re-labelling is
+    rationed: a session already labelled is only re-run when it is <em>not</em> active and has grown
+    by more than 30 messages, so a live conversation doesn't burn a Haiku call every few turns.</p>
+    <p>The write path has a race that is narrowed rather than closed. <code>enrich()</code> reads the
+    cache, then awaits up to 90 seconds — during which another process could write newer curated
+    labels. Writing the original snapshot back would clobber them, so it <strong>re-reads immediately
+    before merging</strong>. That shrinks the vulnerable window from the whole Haiku call to a single
+    read-then-write. Without a cross-process lock it cannot be eliminated, and the code says so.</p>
+  </div>
+</section>
+
+<!-- 07 -->
+<section id="assembly">
+  <p class="eyebrow" style="--st:var(--ui)">07 · assembly</p>
+  <h2>Three layers, three cadences</h2>
+  <div class="prose">
+    <p>A tile is assembled from three independently cached layers polled on three different clocks,
+    and none of them trusts another's freshness. The grid route merges parsed metadata with
+    enrichment labels but <em>never</em> triggers enrichment — spending Haiku tokens is the sole job
+    of a separate explicit <code>POST</code>.</p>
+  </div>
+
+  <div class="bleed"><div class="panel">
+    <div class="phead">
+      <span class="ptitle">routes.and.caches</span>
+      <div class="ctrl"><button id="asmPlay" type="button" aria-pressed="false">▶ Play flow</button></div>
+    </div>
+    <div class="pbody"><div class="scroll">
+      <svg id="viz-asm" viewBox="0 0 1000 320" role="img"
+        aria-label="Three routes over shared caches: the sessions route reads the meta cache and merges enrichment labels read-only; the enrich route spends Haiku tokens and writes the enrichment cache; the single-session route uses an id index and the turns cache and never forces a parse."></svg>
+    </div></div>
+    <div class="legend">
+      <span><i style="background:var(--ui)"></i>route</span>
+      <span><i style="background:var(--cache)"></i>cache</span>
+      <span><i style="background:var(--metric)"></i>spends tokens</span>
+    </div>
+  </div></div>
+
+  <div class="note warn"><p class="lbl">Local only</p>
+  <p><code>listSessions()</code> returns an empty array on Vercel — there is no
+  <code>~/.claude/projects</code> on a cloud host. The grid isn't broken there; it has nothing to
+  read. Only <code>/dashboard</code> is remote-safe.</p></div>
+
+  <footer>
+    <p>Source: <code>lib/claude-sessions.ts</code>, <code>lib/bento-enrich.ts</code>,
+    <code>app/api/bento/*</code>. The reasoning record for this subsystem lives in
+    <code>docs/KNOWLEDGE.md</code> §1–2.</p>
+    <div class="nextprev">
+      <a href="./architecture.html">← the whole system</a>
+      <a href="./">knowledge base</a>
+    </div>
+  </footer>
+</section>
+
+</div>
+</div>
+
+<script src="./kb.js"></script>
+<script>
+(function(){
+"use strict";
+var K = window.KB;
+
+/* ── 02 · incremental read ──────────────────────────────────────────── */
+var pv = document.getElementById("viz-parse");
+var WIDTHS = [520, 700, 700, 430];
+var READS  = [[0,520], [520,700], [0,0], [0,430]];
+var KEYS = [
+  ["mtime",   "no entry", "changed", "same", "changed"],
+  ["size",    "no entry", "larger",  "same", "smaller"],
+  ["head sha","no entry", "same",    "same", "different"]
+];
+var VERDICT = ["cold — parse everything", "append — incremental fold",
+               "hit — return cached meta", "rewrite — discard and reparse"];
+function drawParse(step){
+  K.clear(pv);
+  var x = 60, y = 76, H = 52, w = WIDTHS[step], r = READS[step];
+  var tone = step === 3 ? "ui" : step === 0 ? "disk" : "agent";
+  pv.appendChild(K.txt(60, 44, "transcript on disk", {size:10.5, fill:"var(--text3)", ls:".08em"}));
+  pv.appendChild(K.rr(x, y, w, H, 6, {fill:"var(--surface2)", stroke:"var(--rule)", "stroke-width":1}));
+  pv.appendChild(K.rr(x, y, 46, H, 6, {fill:"none", stroke:"var(--cache)", "stroke-width":1.4, "stroke-dasharray":"3 3"}));
+  pv.appendChild(K.txt(x + 23, y + H + 16, "head", {size:9, fill:"var(--cache)", anchor:"middle"}));
+  if (r[1] > r[0]) {
+    pv.appendChild(K.rr(x+r[0], y, r[1]-r[0], H, 6, {fill:"var(--"+tone+")", opacity:.22}));
+    pv.appendChild(K.rr(x+r[0], y, r[1]-r[0], H, 6, {fill:"none", stroke:"var(--"+tone+")", "stroke-width":1.6}));
+    pv.appendChild(K.txt(x+(r[0]+r[1])/2, y+H/2+5,
+      step===0 ? "full read" : step===1 ? "read only this" : "full re-parse",
+      {size:11, weight:600, anchor:"middle"}));
+  } else {
+    pv.appendChild(K.txt(x+w/2, y+H/2+5, "nothing read", {size:11, weight:600, anchor:"middle", fill:"var(--metric)"}));
+  }
+  if (step === 1) {
+    pv.appendChild(K.el("path", {d:"M"+(x+520)+","+(y-10)+" L"+(x+520)+","+(y+H+10),
+      stroke:"var(--text3)", "stroke-width":1, "stroke-dasharray":"3 3"}));
+    pv.appendChild(K.txt(x+520, y-16, "where we stopped last time", {size:9.5, fill:"var(--text3)", anchor:"middle"}));
+  }
+  pv.appendChild(K.txt(60, 176, "cache key", {size:10.5, fill:"var(--text3)", ls:".08em"}));
+  KEYS.forEach(function(row, i){
+    var yy = 196 + i*18, val = row[step+1];
+    pv.appendChild(K.txt(60, yy, row[0], {size:10.5, fill:"var(--text3)"}));
+    pv.appendChild(K.txt(165, yy, val, {size:10.5, weight:600,
+      fill: val === "same" ? "var(--metric)" : val === "different" || val === "smaller" ? "var(--ui)" : "var(--text2)"}));
+  });
+  pv.appendChild(K.txt(940, 214, VERDICT[step], {size:12, weight:600, anchor:"end",
+    fill:"var(--"+(step===2?"metric":step===3?"ui":"agent")+")"}));
+}
+K.theatre({
+  prev:"pPrev", next:"pNext", label:"pLbl", dots:"pDots", narr:"pNarr", draw:drawParse,
+  steps:[
+    "<b>Poll 1 — cold.</b> No cache entry at all, so the whole file is read once and folded into an accumulator. This is the only time the full cost is paid.",
+    "<b>Poll 2 — the session appended.</b> mtime and size changed, but the first 4 KB still hash the same, so this is a genuine append: read <b>only the new bytes</b> and fold them onto the existing state.",
+    "<b>Poll 3 — nothing changed.</b> mtime and size match. Return immediately. <b>Zero bytes read</b> — the common case for the other 149 candidates in the window.",
+    "<b>Poll 4 — the head fingerprint changed.</b> The file was truncated and rewritten. mtime-and-size alone would call this an append and fold unrelated bytes in forever. The hash catches it; the accumulator is thrown away."
+  ]
+});
+
+/* ── 03 · the three-way branch ──────────────────────────────────────── */
+(function(){
+  var s = document.getElementById("viz-branch");
+  K.box(s, {x:24, y:96, w:170, h:58, t:"summarize()", s:"one candidate file", c:"cache"});
+  var outs = [
+    {y:16,  t:"cache hit",  s:"0 bytes read",     c:"metric", k:"mtime + size + head all match"},
+    {y:96,  t:"appended",   s:"read the delta",   c:"agent",  k:"head same, file grew"},
+    {y:176, t:"rewritten",  s:"full re-parse",    c:"ui",     k:"head differs, or shrank"}
+  ];
+  outs.forEach(function(o){
+    K.arrow(s, 194, 125, 386, o.y + 29);
+    s.appendChild(K.txt(290, o.y + 22, o.k, {size:9, fill:"var(--text3)", anchor:"middle"}));
+    K.box(s, {x:386, y:o.y, w:190, h:58, t:o.t, s:o.s, c:o.c});
+    K.arrow(s, 576, o.y + 29, 736, 125);
+  });
+  K.box(s, {x:736, y:96, w:190, h:58, t:"SessionMeta", s:"tokens · cost · title", c:"ui"});
+})();
+
+/* ── 07 · routes and caches ─────────────────────────────────────────── */
+var asm = document.getElementById("viz-asm"), asmStop = null;
+var AN = [
+  {id:"r1", x:24,  y:24,  w:210, h:58, t:"GET /bento/sessions", s:"the grid · 5s",       c:"ui"},
+  {id:"r2", x:24,  y:128, w:210, h:58, t:"POST /bento/enrich",  s:"explicit only",       c:"ui"},
+  {id:"r3", x:24,  y:232, w:210, h:58, t:"GET /bento/session",  s:"open pane · 2.5s",    c:"ui"},
+  {id:"c1", x:352, y:24,  w:210, h:58, t:"meta cache",          s:"500 · mtime+size+sha",c:"cache"},
+  {id:"c2", x:352, y:128, w:210, h:58, t:"enrichment cache",    s:"curated labels",      c:"cache"},
+  {id:"c3", x:352, y:232, w:210, h:58, t:"turns cache + index", s:"60 · 2000",           c:"cache"},
+  {id:"h",  x:684, y:128, w:210, h:58, t:"Haiku 4.5",           s:"spends tokens",       c:"metric"},
+  {id:"d",  x:684, y:24,  w:210, h:58, t:"~/.claude/projects",  s:"*.jsonl",             c:"disk"}
+];
+var AE = [["r1","c1"],["r1","c2"],["r2","c2"],["c2","h"],["r3","c3"],["c1","d"],["c3","d"]];
+function an(id){ for (var i=0;i<AN.length;i++) if (AN[i].id===id) return AN[i]; }
+function aPath(e){ var a=an(e[0]), b=an(e[1]);
+  var x1=a.x+a.w, y1=a.y+a.h/2, x2=b.x, y2=b.y+b.h/2, mx=(x1+x2)/2;
+  return "M"+x1+","+y1+" C"+mx+","+y1+" "+mx+","+y2+" "+x2+","+y2; }
+(function(){
+  AE.forEach(function(e){
+    asm.appendChild(K.el("path", {d:aPath(e), fill:"none", stroke:"var(--rule)", "stroke-width":1.6}));
+  });
+  AN.forEach(function(n){ K.box(asm, n); });
+  asm.appendChild(K.txt(24, 308, "the grid route reads enrichment but never triggers it — only the explicit POST spends tokens",
+    {size:10, fill:"var(--text3)"}));
+})();
+document.getElementById("asmPlay").onclick = function(){
+  var on = this.getAttribute("aria-pressed") === "true";
+  this.setAttribute("aria-pressed", String(!on));
+  this.textContent = on ? "▶ Play flow" : "■ Stop";
+  if (on) { if (asmStop) asmStop(); asmStop = null; return; }
+  asmStop = K.playFlow(asm, AE, aPath, function(e){ return "var(--" + an(e[1]).c + ")"; }, 2800);
+};
+
+/* ── rail ───────────────────────────────────────────────────────────── */
+K.rail([
+  ["cold","the cold start","disk"],
+  ["incremental","the parser","disk"],
+  ["fingerprint","trusting the key","cache"],
+  ["window","the regression","cache"],
+  ["tail","the open pane","disk"],
+  ["enrich","the label layer","metric"],
+  ["assembly","assembly","ui"]
+]);
+})();
+</script>
