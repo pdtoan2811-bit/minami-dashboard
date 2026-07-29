@@ -13,8 +13,23 @@
 // "bypassPermissions" IS a real, user-selectable mode (the composer's "bypass" toggle, see
 // app/page.tsx's MODE_HINT/perm state) — auto-approves every tool, no canUseTool prompt at all.
 // It's opt-in and labeled with a warning in the UI, never the shipped default.
-import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
+
+// Default model/effort for every dashboard-driven session — mirrors Minami's own cloud-side
+// BRAIN_MODEL/BRAIN_EFFORT convention (see the model-routing skill): Opus 4.8 at effort "high" is
+// the weekly-subscription-limit lever (fewer reasoning tokens/turn), not a $/MTok saving — Opus 5
+// costs the same. Opus 4.8's 1M-token context window is already its default at standard pricing,
+// no beta flag or extra option needed (see shared/models.md in the claude-api skill). Overridable
+// per-deploy without a code change, same pattern as MINAMI_DISABLE_BROWSER_TOOL above.
+const DEFAULT_MODEL = process.env.MINAMI_DASHBOARD_MODEL || "claude-opus-4-8";
+const DEFAULT_EFFORT = (process.env.MINAMI_DASHBOARD_EFFORT || "high") as EffortLevel;
+
+// Auto-compact trigger threshold, as a percent of the context window — mirrors the same
+// CLAUDE_AUTOCOMPACT_PCT_OVERRIDE the CLI reads from ~/.claude/settings.json's "env" block
+// (currently 60 there too). Set explicitly here rather than relying on inheriting the host's
+// global settings, so the dashboard's behavior doesn't depend on which machine happens to run it.
+const AUTOCOMPACT_PCT = process.env.MINAMI_DASHBOARD_AUTOCOMPACT_PCT || "60";
 
 // The browser tool (Playwright MCP), given to every session unless explicitly disabled. MCP tools are
 // deferred behind tool search by default (see `alwaysLoad` below), so a chat that never touches the
@@ -226,6 +241,12 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // raw chain of thought is never returned on current models.
       thinking: { type: "adaptive", display: "summarized" },
       settingSources: ["user", "project", "local"], // mirror the user's own CLAUDE.md / permissions / MCP
+      model: DEFAULT_MODEL,
+      effort: DEFAULT_EFFORT,
+      // env is otherwise inherited from process.env by default (per the SDK's own doc comment) —
+      // spread it explicitly so this override adds to, rather than replaces, everything the
+      // subprocess already needs (PATH, HOME, ANTHROPIC_API_KEY, token-slayer's active credential).
+      env: { ...process.env, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: AUTOCOMPACT_PCT },
       ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS } : {}),
       ...(resume ? { resume } : {}),
     } as any,
