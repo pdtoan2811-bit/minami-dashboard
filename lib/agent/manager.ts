@@ -16,14 +16,16 @@
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
 
-// Default model/effort for every dashboard-driven session — mirrors Minami's own cloud-side
-// BRAIN_MODEL/BRAIN_EFFORT convention (see the model-routing skill): Opus 4.8 at effort "high" is
-// the weekly-subscription-limit lever (fewer reasoning tokens/turn), not a $/MTok saving — Opus 5
-// costs the same. Opus 4.8's 1M-token context window is already its default at standard pricing,
-// no beta flag or extra option needed (see shared/models.md in the claude-api skill). Overridable
-// per-deploy without a code change, same pattern as MINAMI_DISABLE_BROWSER_TOOL above.
-const DEFAULT_MODEL = process.env.MINAMI_DASHBOARD_MODEL || "claude-opus-4-8";
-const DEFAULT_EFFORT = (process.env.MINAMI_DASHBOARD_EFFORT || "high") as EffortLevel;
+// Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
+// effort"). Opus 5 is the current top-tier model (see the claude-api skill's model table); "default
+// effort" means DON'T force an override — leave `effort` unset so the SDK/model's own default
+// applies, rather than pinning every session to "high" the way Minami's cloud brain does (that's a
+// deliberate weekly-limit lever documented in the model-routing skill; the dashboard doesn't need
+// it). Opus 5's 1M-token context window is already its default at standard pricing, no beta flag or
+// extra option needed. Both overridable per-deploy without a code change — set
+// MINAMI_DASHBOARD_EFFORT to pin an effort level again if ever wanted.
+const DEFAULT_MODEL = process.env.MINAMI_DASHBOARD_MODEL || "claude-opus-5";
+const DEFAULT_EFFORT = process.env.MINAMI_DASHBOARD_EFFORT as EffortLevel | undefined;
 
 // Auto-compact trigger threshold, as a percent of the context window — mirrors the same
 // CLAUDE_AUTOCOMPACT_PCT_OVERRIDE the CLI reads from ~/.claude/settings.json's "env" block
@@ -242,7 +244,9 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       thinking: { type: "adaptive", display: "summarized" },
       settingSources: ["user", "project", "local"], // mirror the user's own CLAUDE.md / permissions / MCP
       model: DEFAULT_MODEL,
-      effort: DEFAULT_EFFORT,
+      // Only set effort if explicitly pinned via env — omitting it lets the SDK/model default apply
+      // (see the DEFAULT_EFFORT comment above; "default effort" was the explicit ask, not "high").
+      ...(DEFAULT_EFFORT ? { effort: DEFAULT_EFFORT } : {}),
       // env is otherwise inherited from process.env by default (per the SDK's own doc comment) —
       // spread it explicitly so this override adds to, rather than replaces, everything the
       // subprocess already needs (PATH, HOME, ANTHROPIC_API_KEY, token-slayer's active credential).
