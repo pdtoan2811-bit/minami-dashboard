@@ -333,7 +333,10 @@ export function useAgent(paneKey: string) {
     setLive(true); setBusy(true);
     applyActivity({ phase: "thinking", label: "thinking…", elapsedMs: 0, tools: [], tasks: [] });
     ensureStream();
-    if (!sessionIdRef.current && opts.resume) { setSessionId(opts.resume); sessionIdRef.current = opts.resume; }
+    // Adopting the id up front is what lets the pane stream and reconcile as that conversation — but it
+    // has to be UNDONE if the server rejects the send, so remember whether this call is what adopted it.
+    const adoptedHere = !sessionIdRef.current && !!opts.resume;
+    if (adoptedHere) { setSessionId(opts.resume!); sessionIdRef.current = opts.resume!; }
     const usingResume = !sentOnce.current;
     const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined };
     try {
@@ -342,7 +345,14 @@ export function useAgent(paneKey: string) {
       // Only latch sentOnce once the server actually accepted this send — the snapshot handler above
       // is the other (more common) place this flips true. On failure, leave it alone so a retry still
       // offers `resume` instead of quietly falling back to a fresh, context-less session.
-      if (d?.error) { setError(d.error); setBusy(false); applyActivity(IDLE_ACTIVITY); unstickTrailingTurn(); }
+      if (d?.error) {
+        setError(d.error); setBusy(false); applyActivity(IDLE_ACTIVITY); unstickTrailingTurn();
+        // Give the id back. The server refuses a resume whose conversation is already live under another
+        // key — and without this the pane KEPT the id it was just refused, so a rejected "continue last
+        // chat" silently re-pointed the pane at that conversation (onLive → pane.sid) while its message
+        // was never delivered. Only ever undoes an adoption made by THIS call.
+        if (adoptedHere) { setSessionId(null); sessionIdRef.current = null; }
+      }
       else { sentOnce.current = true; if (d?.sessionId && !sessionIdRef.current) { setSessionId(d.sessionId); sessionIdRef.current = d.sessionId; } }
     } catch (e) {
       setError(String((e as Error)?.message || e)); setBusy(false); applyActivity(IDLE_ACTIVITY); unstickTrailingTurn();

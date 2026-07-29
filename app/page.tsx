@@ -1006,8 +1006,18 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   // tidiness: `resume` makes the CLI append to that conversation's JSONL, so two panes driving one id
   // means two subprocesses interleaving writes into one file. The server refuses it outright
   // (sendMessage) — this just avoids offering what would be rejected.
-  const continueTarget = isNew ? chats.find((s) => !openSids.includes(s.id)) || null : null;
-  const [continueOn, setContinueOn] = useState(true); // opt-out lives per pane; "＋ add chat" still means "new"
+  //
+  // The `s.cwd === cwd` test is NOT redundant with "same topic". A topic is keyed on
+  // basename(cwd) (see `project` in lib/claude-sessions.ts), so ~/work/api and ~/personal/api collapse
+  // into one topic whose `cwd` is just whichever session sorted first. Without this, a blank pane could
+  // resume a conversation recorded in one directory while the SDK runs it in another — same history,
+  // wrong CLAUDE.md, wrong relative paths. `claude --continue` is explicitly scoped to the current
+  // directory, and so is this.
+  const continueTarget = isNew ? chats.find((s) => s.cwd === cwd && !openSids.includes(s.id)) || null : null;
+  // Persisted, because it's a decision about THIS pane that must outlive a remount: a project switch or
+  // refresh remounts ChatColumn, and an ephemeral useState would quietly revert "start fresh" back to
+  // continuing — re-attaching context the user had explicitly declined.
+  const [continueOn, setContinueOn] = useSetting<boolean>("continue:" + paneKey, true);
   // Which conversation this pane actually continued, kept for the in-chat marker. It has to be state,
   // not derived: the moment the resumed turn goes live the pane adopts that session id, `isNew` flips
   // false and `continueTarget` becomes null — so anything derived would vanish exactly when the marker
@@ -1223,9 +1233,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
             <p className="text-2xl">{continueTarget && continueOn ? "⟲" : "✳"}</p>
-            <p className="mt-2 text-sm font-medium text-neutral-300">{continueTarget && continueOn ? "Continuing where you left off" : `New chat in ${proj}`}</p>
+            <p className="mt-2 text-sm font-medium text-neutral-300">{continueTarget && continueOn ? "Continuing an earlier chat" : `New chat in ${proj}`}</p>
             {/* Stated BEFORE the first message, not after: whether Claude can see the earlier
-                conversation changes how you'd word the message you're about to type. */}
+                conversation changes how you'd word the message you're about to type.
+                Deliberately NOT phrased as "where you left off" / "your last chat": the candidate pool
+                is filtered by the date-window chip and by isTrivial, so the target is the most recent
+                chat AMONG THOSE SHOWN, which isn't always the genuinely latest one. Naming the chat and
+                its age is the honest version — it's checkable, and the claim can't go stale. */}
             {continueTarget && continueOn ? (
               <p className="mt-1 text-xs">
                 Picks up <span className="text-neutral-400">“{continueTarget.title}”</span> ({ago(continueTarget.lastActivity)} ago) with its full context.{" "}
