@@ -697,6 +697,7 @@ export default function BentoHome() {
                 // in-flight EventSource/turns mid-stream for no reason. An explicit user pick of a
                 // DIFFERENT existing session (onPick below) SHOULD remount — see onPick's comment.
                 <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools}
+                  openSids={panes.map((p) => p.sid).filter(Boolean)}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
                   onClose={() => setPanes((p) => p.filter((_, j) => j !== idx))} />
@@ -711,8 +712,8 @@ export default function BentoHome() {
   );
 }
 
-function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, onPick, onLive, onClose }: {
-  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, openSids, onPick, onLive, onClose }: {
+  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; openSids: string[]; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
 }) {
   // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
@@ -797,12 +798,30 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const visible = hiddenCount ? allVisible.slice(-limit) : allVisible;
   const chats = [...sessions].sort((a, b) => b.lastActivity - a.lastActivity);
 
+  // `claude --continue` parity. A blank pane used to start a session that could see none of the
+  // project's history — you'd ask a follow-up in a fresh chat and Claude had no idea what you meant.
+  // The pane now offers to continue the topic's most recent conversation instead.
+  //
+  // Sessions already open in another pane are skipped, and that's a correctness guard rather than
+  // tidiness: `resume` makes the CLI append to that conversation's JSONL, so two panes driving one id
+  // means two subprocesses interleaving writes into one file. The server refuses it outright
+  // (sendMessage) — this just avoids offering what would be rejected.
+  const continueTarget = isNew ? chats.find((s) => !openSids.includes(s.id)) || null : null;
+  const [continueOn, setContinueOn] = useState(true); // opt-out lives per pane; "＋ add chat" still means "new"
+  // Which conversation this pane actually continued, kept for the in-chat marker. It has to be state,
+  // not derived: the moment the resumed turn goes live the pane adopts that session id, `isNew` flips
+  // false and `continueTarget` becomes null — so anything derived would vanish exactly when the marker
+  // is supposed to appear.
+  const [resumedFrom, setResumedFrom] = useState<SessionMeta | null>(null);
+
   const effectiveMode: AgentMode = planning ? "plan" : perm; // Plan overrides the approval level
   const submit = () => {
     const text = input.trim();
     if (!text || agent.busy || !cwd) return;
     ensureNotifyPermission(); // lazy — a real user gesture, which browsers want for this prompt
-    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+    const continuing = !sessionId && continueOn ? continueTarget : null;
+    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || continuing?.id || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+    if (continuing) setResumedFrom(continuing);
     setInput("");
   };
   // Both toggles flip local UI state immediately (optimistic — feels instant), then revert it if the
@@ -957,14 +976,37 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
         {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
-            <p className="text-2xl">✳</p>
-            <p className="mt-2 text-sm font-medium text-neutral-300">New chat in {proj}</p>
-            <p className="mt-1 text-xs">Type below to start a live Claude Code session in <code className="text-[11px] text-neutral-400">{cwd || proj}</code>.</p>
+            <p className="text-2xl">{continueTarget && continueOn ? "⟲" : "✳"}</p>
+            <p className="mt-2 text-sm font-medium text-neutral-300">{continueTarget && continueOn ? "Continuing where you left off" : `New chat in ${proj}`}</p>
+            {/* Stated BEFORE the first message, not after: whether Claude can see the earlier
+                conversation changes how you'd word the message you're about to type. */}
+            {continueTarget && continueOn ? (
+              <p className="mt-1 text-xs">
+                Picks up <span className="text-neutral-400">“{continueTarget.title}”</span> ({ago(continueTarget.lastActivity)} ago) with its full context.{" "}
+                <button onClick={() => setContinueOn(false)} className="text-[var(--sakura)] underline decoration-dotted underline-offset-2 hover:opacity-80">Start fresh instead</button>
+              </p>
+            ) : (
+              <p className="mt-1 text-xs">
+                Type below to start a live Claude Code session in <code className="text-[11px] text-neutral-400">{cwd || proj}</code>.{" "}
+                {continueTarget && <button onClick={() => setContinueOn(true)} className="text-[var(--sakura)] underline decoration-dotted underline-offset-2 hover:opacity-80">Continue last chat</button>}
+              </p>
+            )}
           </div>
         ) : visible.length === 0 ? (
           agent.busy ? <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} /> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
         ) : (
         <>
+        {/* What Claude can actually see is never left implicit. Once this pane resumes a conversation
+            it adopts that session id and reconcile() pulls the whole transcript in from disk — so
+            without a seam you'd be reading messages you never sent in this pane and guessing whether
+            the model remembers them. It does. */}
+        {resumedFrom && (
+          <div className="flex items-center gap-2 text-[10px] text-neutral-500">
+            <span className="h-px flex-1 bg-white/10" />
+            <span className="shrink-0">⟲ continued “{resumedFrom.title}”</span>
+            <span className="h-px flex-1 bg-white/10" />
+          </div>
+        )}
         {hiddenCount > 0 && (
           <button onClick={() => setLimit((n) => n + 60)} className="mx-auto block rounded-full border border-white/10 px-3 py-1 text-[11px] text-neutral-400 transition-colors hover:border-white/25 hover:text-neutral-200">
             Show {Math.min(hiddenCount, 60)} earlier {hiddenCount === 1 ? "message" : "messages"}

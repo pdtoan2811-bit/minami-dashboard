@@ -547,6 +547,19 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   // the first time THIS pane drives it live, since the SDK process itself is new either way.
   const existing = store.get(opts.key);
   const cold = !existing || existing.closed;
+  // Never let two SDK processes drive one conversation. `resume` hands the CLI a transcript to continue
+  // and it appends to that same JSONL — so if the requested id is ALREADY live under a different key,
+  // resuming it again gives two subprocesses interleaving writes into one file, and the transcript both
+  // panes read back is corrupt in a way no reconcile can undo. The composer's continue-on-open feature
+  // (see ChatColumn) already skips ids open in another pane, but that check races: a pane can go live in
+  // the moment between the render that offered the id and the send that uses it. Fail loudly instead of
+  // silently dropping `resume`, which would hand back a context-less session that LOOKS like it worked.
+  if (opts.resume && (!existing || existing.closed)) {
+    const owner = store.get(SID_KEY + opts.resume);
+    if (owner && !owner.closed && owner.key !== opts.key) {
+      throw new Error("That conversation is already open and running in another pane.");
+    }
+  }
   const s = ensureSession(opts.key, opts.cwd, safeMode(opts.mode), opts.resume);
   s.queue.push({ type: "user", message: { role: "user", content: opts.message }, parent_tool_use_id: null });
   s.busy = true;
