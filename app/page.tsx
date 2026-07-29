@@ -20,7 +20,7 @@ import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, typ
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -551,6 +551,26 @@ export default function BentoHome() {
   // The rail is only a state the bento can be *in* while a chat is open; with no panel it would just
   // be a worse grid. Every collapse path checks this, so there's one definition of "railed".
   const railed = !!proj && rail;
+  // ⌘B / Ctrl+B toggles the bento between grid and rail — the shortcut every editor with a sidebar
+  // already trained everyone to reach for. Both buttons name it in their tooltip, which is the only
+  // reason a shortcut ever gets discovered.
+  //
+  // Guarded on the composer: this app's primary input is a textarea, and ⌘B is *also* "bold" muscle
+  // memory. Stealing it mid-message would be the worst kind of shortcut — one that fires when you were
+  // writing, not navigating. Only bound while a chat is open, since the rail is meaningless without one.
+  useEffect(() => {
+    if (!proj) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "b" && e.key !== "B") return;
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
+      e.preventDefault();
+      setRail((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [proj, setRail]);
   const busyCwds = useMemo(() => new Set(Object.values(liveAct).filter((x) => x.busy).map((x) => x.cwd)), [liveAct]);
   // How many live sessions sit in each working tree. Two agents in one checkout share a branch and an
   // index: one's `grep` returns code the other is halfway through rewriting, and whoever writes last
@@ -597,9 +617,13 @@ export default function BentoHome() {
                 <button key={k} onClick={() => setSortBy(k)} className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${sortBy === k ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{label}</button>
               ))}
             </div>}
-            {/* Collapsing is discoverable here, not just by dragging the divider to the edge. */}
-            {proj && <button onClick={() => setRail(true)} title="Collapse the bento to a rail"
-              className="hidden rounded-lg border border-white/10 px-1.5 py-1 text-[11px] leading-none text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-200 md:block">⇤</button>}
+            {/* Collapsing is discoverable here, not just by dragging the divider to the edge.
+                This and the rail's expand button are deliberately the SAME control in two states —
+                same icon family, same hover treatment, same ⌘B — because they are one toggle. It used
+                to be a bare `⇤` here and a flower there: two glyphs, two locations, two metaphors, and
+                nothing to tell you they were the same idea. */}
+            {proj && <button onClick={() => setRail(true)} title="Collapse the bento to a rail  (⌘B)" aria-label="Collapse the bento to a rail"
+              className="hidden rounded-lg border border-white/10 p-1.5 text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-200 md:block"><PanelLeftClose className="h-3.5 w-3.5" /></button>}
             {/* Out-of-pane alerts (deploys, worktree builds). Distinct from the per-pane notify()
                 calls below, which are transient by design — these have bodies worth re-reading. */}
             <NotificationBell />

@@ -1375,6 +1375,20 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **Rail ⇄ grid is now one control with two states, plus ⌘B** (§5e) — it used to be a bare `⇤` glyph in
+  the page header and a 🌸 logo in the rail: two glyphs, two locations, two metaphors, nothing saying
+  they were the same idea. Both are now `PanelLeftClose`/`PanelLeftOpen` with the shortcut in the
+  tooltip. At 56px the rail has room for exactly one control, so the mark *stays* the target (the
+  affordance people already learned) but swaps to the panel glyph on hover — branding at rest, an
+  obvious control on approach. ⌘B is guarded against the composer: this app's primary input is a
+  textarea and ⌘B is bold muscle memory, so it must never fire while you're writing. Verified all three
+  paths, including that one.
+- **Rail icons were 4px off-centre** (§5e) — `gap-2` applied between the icon and the name span, which
+  stays mounted at width 0 while collapsed (deliberately — mounting it on hover reflows the row). A
+  flex gap is applied between items regardless of whether one has width, so 8px of gap sat between the
+  icon and nothing and displaced it by half. `justify-center` couldn't help: it was faithfully centring
+  "icon + gap + nothing". Gap is now conditional on the names being out. Measured -4.0px → **0.00px**
+  on every chip. *Reported by user: "the icon on the bento strip is not 100% centered".*
 - **Idle panes now unpin their session, visible or not** (§3) — third perf pass. Measured first: with
   the animation and hidden-tab fixes in, the client is already at **60 fps, 0 long tasks, 0% main
   thread, 30 MB heap** with 4 panes open, endpoints answer in 1-10 ms, 108 req/min costs ~0.4% of a

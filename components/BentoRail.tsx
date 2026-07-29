@@ -18,6 +18,7 @@
 // you hunt one at a time. Widening once shows the whole list at once, and costs no layout — the strip
 // keeps its 56px footprint and the panel overlays.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { PanelLeftOpen } from "lucide-react";
 import { ProjectIcon } from "@/components/ProjectIcon";
 
 /** Structural subset of `Project` in app/page.tsx — kept loose so the rail doesn't import the page. */
@@ -88,10 +89,14 @@ export default function BentoRail({ projects, current, accent, fmtNum, busyCwds,
         style={{ width: open ? OPEN_W : RAIL_W }}>
 
         <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
-          {/* The mark doubles as the way out — the affordance you reach for is the one you know. */}
-          <button onClick={onExpand} title="Expand the bento (or drag the divider right)"
-            className="group flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-lg transition-colors hover:bg-white/10">
-            <span className="transition-transform group-hover:scale-110">🌸</span>
+          {/* The mark doubles as the way out — the affordance you reach for is the one you know. That
+              stays true, but a logo doesn't *look* clickable, so on hover it becomes the panel-expand
+              glyph: branding at rest, an unmistakable control the moment you go near it. Same target,
+              same click, no extra chrome — which matters because at 56px there is only room for one. */}
+          <button onClick={onExpand} title="Expand the bento  (⌘B)" aria-label="Expand the bento"
+            className="group relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-white/10">
+            <span className="text-lg transition-opacity duration-150 group-hover:opacity-0">🌸</span>
+            <PanelLeftOpen className="absolute h-4 w-4 text-neutral-200 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
           </button>
           <span className={`min-w-0 flex-1 truncate text-[11px] font-semibold tracking-tight transition-opacity duration-150 ${open ? "opacity-100" : "opacity-0"}`}>
             Minami Bento
@@ -113,8 +118,14 @@ export default function BentoRail({ projects, current, accent, fmtNum, busyCwds,
             return (
               <button key={p.name} onClick={() => onOpen(p)} title={open ? undefined : p.name}
                 style={{ height: h, opacity: dim, background: `linear-gradient(135deg, ${pc}26, transparent 70%)` }}
-                className={`group relative flex w-full shrink-0 items-center gap-2 overflow-hidden rounded-xl border px-2 transition-[opacity,border-color,background-color] duration-200 hover:!opacity-100 ${
-                  open ? "" : "justify-center"} ${
+                // `gap-2` ONLY while the names are out. Collapsed, the name span is still in the flex
+                // row at width 0 (it stays mounted on purpose — see below), and a flex gap is applied
+                // between items regardless of whether one has any width. So the 8px gap sat between the
+                // icon and nothing, displacing the icon by half of it: measured at exactly 4.0px left
+                // of the chip's centre on every chip. `justify-center` can't correct that — it was
+                // faithfully centring "icon + gap + nothing".
+                className={`group relative flex w-full shrink-0 items-center overflow-hidden rounded-xl border px-2 transition-[opacity,border-color,background-color] duration-200 hover:!opacity-100 ${
+                  open ? "gap-2" : "justify-center gap-0"} ${
                   on ? "border-[var(--sakura)] ring-1 ring-[var(--sakura)]" : "border-white/10 hover:border-white/30"}`}>
                 {busy && <span className="pointer-events-none absolute inset-0 animate-pulse rounded-xl ring-1" style={{ ["--tw-ring-color" as string]: pc + "88" }} />}
                 {/* `busy`, not `p.active`: the ring above already uses it, and `p.active` only means
