@@ -124,7 +124,7 @@ export function RoutingFlow() {
       </div>
 
       <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-white/10">
-        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: "var(--sakura)" }} />
+        <div className="h-full rounded-full transition-[width] duration-700" style={{ width: `${pct}%`, background: "var(--sakura)" }} />
       </div>
 
       <div className="grid grid-cols-4 gap-2">

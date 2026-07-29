@@ -9,10 +9,10 @@
 // The SDK uses the machine's existing Claude Code login (no API key) and persists every session to
 // ~/.claude/projects/<enc-cwd>/<id>.jsonl exactly like the CLI, so the rest of Bento keeps working.
 //
-// Safety: safeMode() clamps any unrecognized string to "default" before it reaches the SDK.
-// "bypassPermissions" IS a real, user-selectable mode (the composer's "bypass" toggle, see
-// app/page.tsx's MODE_HINT/perm state) — auto-approves every tool, no canUseTool prompt at all.
-// It's opt-in and labeled with a warning in the UI, never the shipped default.
+// Permissions: the mode is enforced by canUseTool in THIS file, not merely handed to the SDK — see
+// DEFAULT_PERMISSION_MODE and the comment inside canUseTool for why (the SDK's setPermissionMode()
+// accepts a mid-session change and then ignores it). safeMode() clamps any unrecognised string to
+// "default", so only an explicit, recognised value can ever widen permissions.
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
 import { DASHBOARD_MODEL } from "../model-pins";
@@ -67,12 +67,23 @@ const MCP_SERVERS: NonNullable<Options["mcpServers"]> | undefined = BROWSER_TOOL
 // session doesn't get instructions about a tool it can't see.
 const BROWSER_PROMPT = `When you use the browser tools, take a screenshot after navigating and after any action that changes what's on screen. The browser is headless and a human is watching those screenshots in a live panel — an accessibility snapshot is invisible to them.`;
 
-// "bypassPermissions" auto-approves every tool with no prompt — powerful but dangerous. It's opt-in
-// (the user has to pick it via the composer's "bypass" toggle), never the shipped default. Any string
-// outside this list (typos, stale client state) is clamped to "default" by safeMode() below.
+// "bypassPermissions" auto-approves every tool with no prompt — powerful, and the configured default
+// on this box (Thomas's explicit call: every prompt on a local, single-user machine is friction he
+// pays for and never wanted). Override per install with MINAMI_DASHBOARD_PERMISSION_MODE.
+//
+// Note what is and isn't defaulted: a *missing* mode gets DEFAULT_MODE, but a mode string that isn't
+// recognised (a typo, stale client state, a hand-rolled request) is still clamped to the most
+// restrictive "default". Garbage input must never be able to widen permissions.
 export type AllowedMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 const ALLOWED: AllowedMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
 export const safeMode = (m?: string): AllowedMode => (ALLOWED.includes(m as AllowedMode) ? (m as AllowedMode) : "default");
+export const DEFAULT_PERMISSION_MODE: AllowedMode =
+  ALLOWED.includes(process.env.MINAMI_DASHBOARD_PERMISSION_MODE as AllowedMode)
+    ? (process.env.MINAMI_DASHBOARD_PERMISSION_MODE as AllowedMode)
+    : "bypassPermissions";
+
+// Tools `acceptEdits` is meant to wave through. Everything else still asks.
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 // Events pushed to the browser over SSE.
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] };
@@ -110,7 +121,11 @@ type Session = {
   waiter: (() => void) | null; // resolves the generator's pending await when a message arrives
   closed: boolean;
   busy: boolean;
+  /** The permission mode this session is CURRENTLY under. The SDK is told too, but this is the copy
+   *  the server enforces with — see canUseTool. */
+  mode: AllowedMode;
   sawText: boolean; // has the current turn streamed any assistant text yet? (for paragraph breaks)
+  sawThinking: boolean; // ...same for reasoning, so the seam between thinking passes can be marked
   partial: string; // text of the assistant message currently streaming — replayed on reconnect so a
                    // refreshed client picks the sentence back up where it left off (reset per message)
   partialThinking: string; // same, for the reasoning stream
@@ -235,7 +250,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   if (existing && !existing.closed) return existing;
 
   const s: Session = {
-    key, cwd, q: null, queue: [], waiter: null, closed: false, busy: false, sawText: false, partial: "",
+    key, cwd, mode, q: null, queue: [], waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
     sessionId: resume || null, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
@@ -250,6 +265,17 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   // Called by the SDK for any tool the user's config doesn't already auto-approve, AND for the
   // AskUserQuestion tool (Claude's clarifying question). We surface it and block until the user acts.
   const canUseTool = async (toolName: string, input: unknown): Promise<Decision> => {
+    // The mode is enforced HERE, not just handed to the SDK at spawn time. `setPermissionMode()` on a
+    // running query is accepted and then silently ignored by the CLI — measured: flip a warm session to
+    // bypassPermissions, it answers ok, and the very next Bash write still raises a prompt. Since this
+    // hook IS the gate the CLI consults (a session *born* in bypass never calls it at all), deciding
+    // here is what makes the composer's pills mean something on a session that's already running.
+    // AskUserQuestion is exempt on purpose: it isn't a permission, it's Claude asking the human a
+    // question, and auto-answering it would silently discard the question.
+    if (toolName !== "AskUserQuestion") {
+      if (s.mode === "bypassPermissions") return { behavior: "allow", updatedInput: input as Record<string, unknown> };
+      if (s.mode === "acceptEdits" && EDIT_TOOLS.has(toolName)) return { behavior: "allow", updatedInput: input as Record<string, unknown> };
+    }
     const id = "perm-" + ++permCounter;
     if (toolName === "AskUserQuestion") {
       broadcast(s, { t: "ask", id, questions: (input as { questions?: AgentQuestion[] })?.questions || [] });
@@ -338,9 +364,22 @@ function handleMessage(s: Session, m: any) {
       if (ev?.type === "message_start") { s.partial = ""; s.partialThinking = ""; }
       // Reasoning tokens. These arrive before (and between) text blocks, so they double as the
       // "Claude is still working" signal during a long think where no text has been emitted yet.
-      if (ev?.type === "content_block_start" && ev.content_block?.type === "thinking") touch(s, "thinking");
+      // A second thinking block is a second *pass* — Claude reasoning again after a tool result came
+      // back. The deltas carry no seam, so the client would glue "I'll check X" onto "so X was wrong"
+      // as one paragraph; mark it the way text blocks are marked and let the pane draw the divider.
+      // Gated on sawThinking (set by the deltas, not the block) because some setups open thinking
+      // blocks with an empty body — see the `thinking` option below — and an empty pass must not
+      // earn a divider. A trailing seam with nothing after it is dropped client-side.
+      if (ev?.type === "content_block_start" && ev.content_block?.type === "thinking") {
+        if (s.sawThinking) {
+          if (s.partialThinking) s.partialThinking += "\n---\n"; // ...unless it'd lead the snapshot
+          broadcast(s, { t: "thinking", text: "\n---\n" });
+        }
+        touch(s, "thinking");
+      }
       if (ev?.type === "content_block_delta" && ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
         s.partialThinking += ev.delta.thinking;
+        s.sawThinking = true;
         if (s.phase !== "thinking") touch(s, "thinking");
         broadcast(s, { t: "thinking", text: ev.delta.thinking });
       }
@@ -540,17 +579,34 @@ function handleSystem(s: Session, m: any) {
 }
 
 // Send a user message; creates the session on first call (with resume/mode) or feeds the live one.
-export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string }): { sessionId: string | null } {
+export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
   // A session object existing (and not closed) means its SDK process is already warm — this is just
   // the next turn. Otherwise ensureSession() below is about to spin up a brand-new `query()`, which is
   // the actual ~1-2s cold start `spawning` narrates; a resumed (on-disk) conversation still pays this
   // the first time THIS pane drives it live, since the SDK process itself is new either way.
   const existing = store.get(opts.key);
   const cold = !existing || existing.closed;
-  const s = ensureSession(opts.key, opts.cwd, safeMode(opts.mode), opts.resume);
-  s.queue.push({ type: "user", message: { role: "user", content: opts.message }, parent_tool_use_id: null });
+  // An absent mode means "whatever this install defaults to"; an explicit one always wins.
+  const wanted = opts.mode === undefined ? DEFAULT_PERMISSION_MODE : safeMode(opts.mode);
+  const s = ensureSession(opts.key, opts.cwd, wanted, opts.resume);
+  // ensureSession only applies `mode` when it CREATES the session, so a warm one would otherwise keep
+  // whatever it was born with forever. Re-applying per turn means the composer's pill is authoritative
+  // even if the change-mode request never happened (a pane that reloaded, a dropped fetch).
+  if (!cold && s.mode !== wanted) setMode(opts.key, wanted);
+  // Content stays a bare STRING when there are no images. That is not just tidiness: a string is what
+  // every existing transcript line holds, and `claude-sessions.ts` reads user turns by pulling text
+  // blocks out of whatever shape it finds — so keeping the common case identical means the parser, the
+  // caches and the on-disk history are untouched by this feature until an image is actually present.
+  //
+  // Image FIRST, then the text. Claude attends to a question asked after the evidence more reliably
+  // than before it, and this is the order the API's own vision guidance recommends.
+  const content = opts.images?.length
+    ? [...opts.images, { type: "text" as const, text: opts.message }]
+    : opts.message;
+  s.queue.push({ type: "user", message: { role: "user", content }, parent_tool_use_id: null });
   s.busy = true;
   s.sawText = false; // fresh turn: the next text block opens the reply, no leading separator
+  s.sawThinking = false; // ...and the first thinking pass opens the reasoning, no leading seam
   s.partial = "";
   s.partialThinking = "";
   // Start the indicator on the SAME tick as the send, not when the first SDK event arrives — the gap
@@ -619,10 +675,14 @@ export async function stop(key: string): Promise<boolean> {
   return true;
 }
 
-export function setMode(key: string, mode?: string): void {
+/** Returns whether a live session actually took the change — the route reports this verbatim, so the
+ *  composer's pill can revert instead of lighting up over a no-op. */
+export function setMode(key: string, mode?: string): boolean {
   try {
     const s = store.get(key);
-    const p = s?.q?.setPermissionMode?.(safeMode(mode));
+    if (!s || s.closed) return false;
+    s.mode = safeMode(mode); // the copy canUseTool reads — this is the one that actually decides
+    const p = s.q?.setPermissionMode?.(safeMode(mode));
     // setPermissionMode() returns a promise; this call is intentionally fire-and-forget (the route
     // just wants the mode applied, not to block on it), but an un-awaited promise that later rejects
     // (e.g. the mode toggle is flipped right as the session ends) becomes an UNHANDLED REJECTION with
@@ -630,7 +690,8 @@ export function setMode(key: string, mode?: string): void {
     // killing every open pane over one stale mode change. Attaching a no-op .catch() here keeps it
     // fire-and-forget while ensuring it can never do that.
     if (p && typeof (p as Promise<unknown>).then === "function") (p as Promise<unknown>).catch(() => { /* session likely gone — nothing to do */ });
-  } catch { /* not initialized yet */ }
+    return true;
+  } catch { return false; /* not initialized yet */ }
 }
 
 // Subscribe an SSE client. `exists` tells the route whether a live session backs this key at all (so a

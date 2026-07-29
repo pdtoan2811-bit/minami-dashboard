@@ -6,7 +6,7 @@ import { useSetting } from "@/lib/use-settings";
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
     <button onClick={() => onChange(!on)} className={`relative h-6 w-11 rounded-full transition-colors ${on ? "bg-[var(--sakura)]" : "bg-white/15"}`}>
-      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
+      <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${on ? "translate-x-[18px]" : "translate-x-0"}`} />
     </button>
   );
 }
@@ -26,6 +26,9 @@ const WINDOWS: { label: string; days: number | null }[] = [
 
 export default function Settings() {
   const [showTools, setShowTools] = useSetting<boolean>("showToolLogs", false);
+  // Same key and same default as the composer's pills (app/page.tsx) — this is the seed a NEW chat
+  // starts from, not a retroactive change to sessions already running.
+  const [permDefault, setPermDefault] = useSetting<"default" | "acceptEdits" | "bypassPermissions">("permMode", "bypassPermissions");
   const [defaultWindow, setDefaultWindow] = useSetting<number | null>("defaultWindow", 3);
 
   return (
@@ -42,7 +45,7 @@ export default function Settings() {
             <Row title="Default time window" desc="How far back the bento shows on open. Projects older than this are hidden until you widen it.">
               <div className="flex items-center gap-1 rounded-lg border border-white/10 p-0.5">
                 {WINDOWS.map((w) => (
-                  <button key={w.label} onClick={() => setDefaultWindow(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${defaultWindow === w.days ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{w.label}</button>
+                  <button key={w.label} onClick={() => setDefaultWindow(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${defaultWindow === w.days ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{w.label}</button>
                 ))}
               </div>
             </Row>
@@ -54,6 +57,17 @@ export default function Settings() {
           <div className="space-y-2">
             <Row title="Show tool logs" desc="Show each turn's tool calls (Bash, Edit, Read…) inline in the chat. Off keeps the read cleaner.">
               <Toggle on={showTools} onChange={setShowTools} />
+            </Row>
+            <Row title="Approval level for new chats"
+              desc="Bypass auto-runs every tool with no prompt — the default here, and the reason this dashboard is local-only. Existing chats keep the level shown on their own pills.">
+              <div className="flex items-center gap-1 rounded-lg border border-white/10 p-0.5">
+                {([["default", "ask"], ["acceptEdits", "auto-edits"], ["bypassPermissions", "bypass"]] as const).map(([m, label]) => (
+                  <button key={m} onClick={() => setPermDefault(m)}
+                    className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${permDefault === m
+                      ? (m === "bypassPermissions" ? "bg-green-500/20 text-green-400" : "bg-[var(--sakura)] text-white")
+                      : "text-neutral-400 hover:text-neutral-200"}`}>{label}</button>
+                ))}
+              </div>
             </Row>
           </div>
         </section>

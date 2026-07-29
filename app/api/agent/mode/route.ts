@@ -10,8 +10,11 @@ export async function POST(req: Request) {
   try {
     const { key, mode } = await req.json();
     if (!key) return Response.json({ error: "key required" }, { status: 400 });
-    setMode(key, mode);
-    return Response.json({ ok: true });
+    // Report whether it APPLIED. This used to always answer ok:true, including when the key matched no
+    // live session at all — so the composer's pill lit up over a no-op and the badge you were reading
+    // described a mode the session had never been in. The client reverts the pill on ok:false.
+    const ok = setMode(key, mode);
+    return Response.json({ ok });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e) }, { status: 500 });
   }

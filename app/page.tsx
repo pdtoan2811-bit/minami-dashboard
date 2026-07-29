@@ -1,21 +1,25 @@
 "use client";
 
 import { Nav } from "@/components/Nav";
+import { NotificationBell } from "@/components/NotificationBell";
 import { useSetting } from "@/lib/use-settings";
 import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type TodoItem, type Notice } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
+import ThoughtBlock from "@/components/ThoughtBlock";
 import FolderPicker from "@/components/FolderPicker";
 import AttachBar from "@/components/AttachBar";
 import BrandIcon, { type Icon } from "@/components/BrandIcon";
+import { ProjectIcon, assignIcons } from "@/components/ProjectIcon";
+import BentoRail, { RAIL_W } from "@/components/BentoRail";
 import AskCard from "@/components/AskCard";
 import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
 import BrowserLightbox from "@/components/BrowserLightbox";
-import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf } from "@/lib/browser-view";
+import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
@@ -27,7 +31,9 @@ type SessionMeta = {
 // Reuses AgentToolCall (not a separate shape) so a disk-loaded tool call and a live-streamed one render
 // through the exact same code — `done`/`ms` just stay unset for disk data, `output` (incl. screenshots)
 // is populated by claude-sessions.ts the same way manager.ts populates it live.
-type Turn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; ts: number; model?: string };
+// Mirrors lib/claude-sessions.ts's Turn. `off` (the byte offset of the line that produced this turn) is
+// what lets a fetched history page be de-duplicated against the polled window.
+type Turn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; ts: number; model?: string; off?: number };
 // Live turns carry per-tool completion state (id/done/ok/ms) that the on-disk transcript doesn't have.
 type RenderTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
 
@@ -49,7 +55,10 @@ const asPanes = (v: unknown): Pane[] => Array.isArray(v)
 // paints instantly from what was cached a moment ago, instead of a cold fetch+parse for every open pane.
 // sessionStorage (not localStorage) deliberately — this cache is scoped to "this tab's lifetime": it
 // should survive a reload but not linger forever across days like a stale localStorage entry would.
-type Detail = { meta: SessionMeta | null; turns: Turn[] };
+// `start` is the byte offset the server's window begins at, and `hasMore` is simply `start > 0` — the
+// signal the old shape had no way to express, which is why a truncated transcript was indistinguishable
+// from a short one. Both optional so a response cached by an older build still deserializes.
+type Detail = { meta: SessionMeta | null; turns: Turn[]; start?: number; hasMore?: boolean };
 const TS_PREFIX = "bento:t:";
 const TS_ORDER_KEY = "bento:t:__order";
 const TS_MAX = 24;
@@ -123,59 +132,23 @@ function ago(ms: number) {
   if (s < 60) return "now"; if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`; return `${Math.floor(s / 86400)}d`;
 }
+// How long a thin session still counts as "something the user just started" rather than noise.
+const FRESH_MS = 24 * 3600 * 1000;
+// Sessions worth hiding from the grid: the enrichment summarizer's probes, slash-command echoes, and
+// one-shot noise. `messages` counts user AND assistant records, so a real first exchange is exactly 2.
+//
+// That made `messages < 3` fatal for new topics: you'd pick a folder, send one message, get a reply —
+// and the topic had no tile, because its only session was 2 messages and got filtered out here. It
+// appeared on the third message, which reads exactly like "Bento can't create the topic". A thin
+// session is now only trivial once it's gone cold, so a topic you just made is always visible.
 function isTrivial(s: SessionMeta) {
-  if (s.messages < 3) return true;
   const t = s.title.toLowerCase();
-  return t.startsWith("reply with") || t.includes("model_ok") || t.startsWith("<local-command") || t.includes("caveat: the messages");
+  if (t.startsWith("reply with") || t.includes("model_ok") || t.startsWith("<local-command") || t.includes("caveat: the messages")) return true;
+  if (s.messages < 3) return !s.active && Date.now() - s.lastActivity > FRESH_MS;
+  return false;
 }
 const goalOf = (s: SessionMeta) => s.goal || "General";
 const titleOf = (s: SessionMeta) => s.task || s.title;
-
-// Project → 3D icon (assets from 3dicons.co, in /public/icons). Icons are inferred from keywords in
-// the project (working-directory) name, so this works for anyone's projects with zero config. To pin
-// a specific project to a specific icon, add an exact-name entry to ICON_OVERRIDES.
-const ICON_OVERRIDES: Record<string, string> = {
-  // "my-project": "rocket",
-};
-const ICON_KEYWORDS: [RegExp, string][] = [
-  [/web|site|landing|www|link|url/, "link"],
-  [/app|mobile|ios|android|flutter/, "mobile"],
-  [/data|analytic|metric|chart|stat|report|dashboard|bento|monitor|observab|telemetry/, "chart"],
-  [/ai|\bml\b|model|intel|brain|agent|llm/, "bulb"],
-  [/design|\bui\b|\bux\b|figma|brand|theme/, "color-palette"],
-  [/doc|guide|note|wiki|content|blog|readme/, "notebook"],
-  [/tool|kit|util|\bcli\b|script|helper/, "tools"],
-  [/bot|slack|chat|message|mail/, "chat"],
-  [/money|pay|finance|invoice|commerce|shop|store|ecom|cart/, "money-bag"],
-  [/game|play|puzzle|fun/, "puzzle"],
-  [/secur|auth|lock|secret|vault|key/, "lock"],
-  [/config|setting|infra|ops|deploy|server|api/, "setting"],
-  [/rocket|launch|startup|mvp|central|core/, "rocket"],
-];
-function iconOf(project: string): string {
-  if (ICON_OVERRIDES[project]) return ICON_OVERRIDES[project];
-  const key = project.toLowerCase();
-  for (const [re, icon] of ICON_KEYWORDS) if (re.test(key)) return icon;
-  return "cube";
-}
-
-// A transparent 3D icon (static 3dicons render) with a premium default motion: it gently tilts then
-// rotates on a seamless loop (CSS `spin3d` keyframes in globals.css). Hovering the parent `.group`
-// faces it front and scales it up; active projects run the loop a touch faster.
-function ProjectIcon({ name, big, active }: { name: string; big?: boolean; active?: boolean }) {
-  const icon = iconOf(name);
-  const s = big ? "h-14 w-14" : "h-9 w-9";
-  return (
-    <div className={`relative shrink-0 [perspective:600px] transition-transform duration-300 group-hover:scale-[1.16] ${s}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={`/icons/${icon}.webp`} alt="" draggable={false}
-        className="motion-icon h-full w-full object-contain [transform-style:preserve-3d] drop-shadow-[0_10px_16px_rgba(0,0,0,0.5)]"
-        style={active ? { animation: "spin3d 4.5s ease-in-out infinite" } : undefined}
-      />
-    </div>
-  );
-}
 
 type Project = { name: string; sessions: SessionMeta[]; cwd: string; reqs: number; tokens: number; last: number; active: boolean; review: boolean; goals: string[]; latest: string; weight: number };
 const WINDOWS: { label: string; days: number | null }[] = [
@@ -351,28 +324,6 @@ function TodoChecklist({ todos }: { todos: TodoItem[] }) {
   );
 }
 
-// Claude's reasoning summary. While it's the only thing on screen (a long think before any answer)
-// it stays open so you can watch the work happen; once the answer starts it folds away.
-function ThoughtBlock({ text, live }: { text: string; live: boolean }) {
-  const body = "border-l-2 pl-3 text-[13px] italic leading-relaxed text-neutral-500 [overflow-wrap:anywhere]";
-  if (live) {
-    return (
-      <div className={`mb-2 border-[var(--sakura)]/30 ${body}`}>
-        {text}
-        <span className="ml-0.5 inline-block h-3 w-[2px] animate-pulse align-middle" style={{ background: "var(--sakura)" }} />
-      </div>
-    );
-  }
-  return (
-    <details className="group/think mb-2">
-      <summary className="cursor-pointer select-none text-[11px] text-neutral-600 transition-colors hover:text-neutral-400">
-        <span className="mr-1 inline-block transition-transform group-open/think:rotate-90">›</span>thought process
-      </summary>
-      <div className={`mt-1 border-white/10 ${body}`}>{text}</div>
-    </details>
-  );
-}
-
 // A readable one-line-ish preview of what a tool wants to do, for the permission prompt.
 function permPreview(tool: string, input: unknown): string {
   const o = (input || {}) as Record<string, unknown>;
@@ -407,10 +358,21 @@ export default function BentoHome() {
   const [newTopic, setNewTopic] = useState<Project | null>(null); // ad-hoc topic opened via the folder picker
   const [picker, setPicker] = useState(false); // folder picker modal open
   const [techIcons, setTechIcons] = useState<Record<string, Icon>>({}); // brand icon SVGs
-  const [attachMap, setAttachMap] = useState<Record<string, { tech: string[] }>>({}); // per-project tech
+  const [attachMap, setAttachMap] = useState<Record<string, { tech: string[]; icon?: string }>>({}); // per-project tech + topic icon
   const [showTools] = useSetting<boolean>("showToolLogs", false);
   const [panelW, setPanelW] = useSetting<number>("panelWidth", 60); // chat panel width %, persisted
+  // Past a threshold the bento stops shrinking and becomes a rail (see components/BentoRail.tsx). It's
+  // explicit state, not a width derivation: it has to survive a reload, and a percentage-of-viewport
+  // means a different thing on a 13" laptop than on a 32" display.
+  const [rail, setRail] = useSetting<boolean>("bentoRail", false);
   const [isDragging, setDragging] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null); // the split's DOM node, written to directly mid-drag
+  const railRef = useRef(rail); // read inside the drag listener, which is deliberately not re-subscribed
+  railRef.current = rail;
+  // The width in flight. It lives in a ref, not in the drag effect's closure: flipping to the rail
+  // mid-gesture re-renders, and anything held in the effect's locals is reset when it re-subscribes —
+  // which silently threw away the width you'd just dragged to.
+  const pendingW = useRef(panelW);
   const enrichLock = useRef(false);
   const rounds = useRef(0);
   const sessionsSig = useRef("");
@@ -478,7 +440,16 @@ export default function BentoHome() {
     // session isn't in the current window/list — that used to silently discard a brand-new running chat
     // on a project switch. A pane reattaches by session id, so a running one resumes streaming.
     const remembered = asPanes(openPanesMap[p.name]);
-    const initial = remembered.length ? remembered.slice(0, MAX_PANES) : (recent.length ? recent.map((sid) => mkPane(sid)) : [mkPane()]);
+    // ...unless what's remembered is nothing but BLANK panes while the project does have chats. That's
+    // the fingerprint of a brand-new topic whose pane never learned its session id: the SDK reports the
+    // id a second or two after the first send (via the SSE `init` event → onLive), so closing or
+    // reloading inside that window persists `sid: ""` forever. The topic then reopened on an empty "New
+    // chat" every time, with the actual conversation reachable only from the chat-switcher dropdown —
+    // it looked like the chat had been thrown away. A deliberately-kept blank pane alongside real ones
+    // still survives, because this only triggers when EVERY remembered pane is blank.
+    const allBlank = remembered.length > 0 && remembered.every((x) => !x.sid);
+    const usable = allBlank && recent.length ? [] : remembered;
+    const initial = usable.length ? usable.slice(0, MAX_PANES) : (recent.length ? recent.map((sid) => mkPane(sid)) : [mkPane()]);
     setNewTopic(null); setProject(p.name); setPanes(initial); setAddMenu(false);
   }, [openPanesMap]);
   // Prefetch a project's likely-open transcripts on hover so clicking it paints instantly (the fetch +
@@ -547,35 +518,91 @@ export default function BentoHome() {
     setSel(n);
   }, [sel, projects, project, openProject]);
   useEffect(() => { window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onKey]);
-  // draggable panel divider → persists width across sessions
+  // draggable panel divider → persists width across sessions.
+  //
+  // The split is painted STRAIGHT TO THE DOM while dragging, and only committed to React state on
+  // mouseup. Routing every mousemove through `setPanelW` re-rendered the entire bento — every tile is
+  // a `motion.button` with `layout`, so each pixel of drag re-ran a spring layout animation — and the
+  // divider visibly lagged the cursor. The variables it writes are the same `--lw`/`--rw` the render
+  // sets, so the two can't disagree: the next React render simply overwrites them.
+  //
+  // Snapping is immediate and one-way-at-a-time: cross COLLAPSE_AT and the bento becomes the rail on
+  // that very frame (no in-between column that can show neither a tile nor a rail), and coming back
+  // out needs a *lower* threshold, or the divider chatters between states on a pixel of mouse jitter.
   useEffect(() => {
     if (!isDragging) return;
-    const move = (e: MouseEvent) => setPanelW(Math.min(80, Math.max(30, Math.round((1 - e.clientX / window.innerWidth) * 100))));
-    const up = () => setDragging(false);
+    const COLLAPSE_AT = 260, EXPAND_AT = 170;
+    const move = (e: MouseEvent) => {
+      const left = e.clientX; // the bento column ends where the divider is
+      if (left < (railRef.current ? EXPAND_AT : COLLAPSE_AT)) { if (!railRef.current) setRail(true); return; }
+      if (railRef.current) setRail(false);
+      const pct = Math.min(80, Math.max(30, Math.round((1 - left / window.innerWidth) * 100)));
+      pendingW.current = pct;
+      const el = shellRef.current;
+      if (el) { el.style.setProperty("--lw", `${100 - pct}%`); el.style.setProperty("--rw", `${pct}%`); }
+    };
+    const up = () => { setDragging(false); setPanelW(pendingW.current); };
     window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-  }, [isDragging, setPanelW]);
+  }, [isDragging, setPanelW, setRail]);
 
   const proj = project ? projects.find((p) => p.name === project) : newTopic;
   const maxW = Math.max(1, ...projects.map((p) => p.weight)); // size ratio is vs the busiest project
+  // The rail is only a state the bento can be *in* while a chat is open; with no panel it would just
+  // be a worse grid. Every collapse path checks this, so there's one definition of "railed".
+  const railed = !!proj && rail;
+  const busyCwds = useMemo(() => new Set(Object.values(liveAct).filter((x) => x.busy).map((x) => x.cwd)), [liveAct]);
+  // How many live sessions sit in each working tree. Two agents in one checkout share a branch and an
+  // index: one's `grep` returns code the other is halfway through rewriting, and whoever writes last
+  // wins silently. Nothing in git or the SDK prevents this, so the least we can do is say it out loud.
+  const cwdAgentCount = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const x of Object.values(liveAct)) m[x.cwd] = (m[x.cwd] || 0) + 1;
+    return m;
+  }, [liveAct]);
+  // One assignment pass for every surface — the grid, the rail and the chat header all read this, so
+  // a project is the same glyph everywhere and no two projects share one.
+  const topicIcons = useMemo(
+    () => assignIcons(projects.map((p) => p.name), Object.fromEntries(Object.entries(attachMap).map(([k, v]) => [k, v.icon]))),
+    [projects, attachMap],
+  );
 
   return (
-    <div className={`bg-bento flex h-screen w-screen overflow-hidden text-neutral-100 ${isDragging ? "select-none" : ""}`} style={{ ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
-      {/* Left: bento */}
-      <div className={`flex min-w-0 flex-col w-full md:w-[var(--lw)] ${proj ? "hidden md:flex" : ""} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+    <div ref={shellRef} className={`bg-bento flex h-screen w-screen overflow-hidden text-neutral-100 ${isDragging ? "cursor-col-resize select-none" : ""}`} style={{ ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
+      {/* Left: bento — full grid, or the rail once the chat panel has taken the room. */}
+      {railed ? (
+        <div className={`hidden shrink-0 md:block ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`} style={{ width: RAIL_W }}>
+          <BentoRail
+            projects={projects} current={project} accent={accent} fmtNum={short} busyCwds={busyCwds} icons={topicIcons}
+            onOpen={(p) => openProject(projects.find((x) => x.name === p.name)!)}
+            onExpand={() => setRail(false)}
+            onNew={() => setPicker(true)}
+          />
+        </div>
+      ) : (
+      // `@container`: the header's controls have to thin out by the BENTO COLUMN's width, not the
+      // window's. At a 60% chat panel this column is ~500px on a wide display — plenty of window,
+      // nowhere near enough column, and the old `md:` breakpoints happily overflowed it.
+      <div className={`@container flex min-w-0 flex-col w-full md:w-[var(--lw)] ${proj ? "hidden md:flex" : ""} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-6 pb-2 pt-5">
           <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">Minami Bento</h1>
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
           <div className="ml-auto flex items-center gap-2">
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
-            <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex">{WINDOWS.map((w) => <button key={w.label} onClick={() => setWinDays(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${winDays === w.days ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{w.label}</button>)}</div>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
+            <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 @min-[700px]:flex">{WINDOWS.map((w) => <button key={w.label} onClick={() => setWinDays(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${winDays === w.days ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{w.label}</button>)}</div>
             {!proj && <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex" title="Sort projects">
               <span className="px-1 text-[10px] text-neutral-600">↕</span>
               {([["recent", "Recent"], ["busy", "Busy"], ["name", "A–Z"]] as const).map(([k, label]) => (
-                <button key={k} onClick={() => setSortBy(k)} className={`rounded-md px-2 py-0.5 text-[11px] transition-all ${sortBy === k ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{label}</button>
+                <button key={k} onClick={() => setSortBy(k)} className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${sortBy === k ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{label}</button>
               ))}
             </div>}
+            {/* Collapsing is discoverable here, not just by dragging the divider to the edge. */}
+            {proj && <button onClick={() => setRail(true)} title="Collapse the bento to a rail"
+              className="hidden rounded-lg border border-white/10 px-1.5 py-1 text-[11px] leading-none text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-200 md:block">⇤</button>}
+            {/* Out-of-pane alerts (deploys, worktree builds). Distinct from the per-pane notify()
+                calls below, which are transient by design — these have bodies worth re-reading. */}
+            <NotificationBell />
             <Nav />
           </div>
         </header>
@@ -615,7 +642,7 @@ export default function BentoHome() {
                     }`}>
                     {p.active && <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl" style={{ background: pc + "44" }} />}
                     <div className="relative flex items-start justify-between">
-                      <ProjectIcon name={p.name} big={big} active={p.active} />
+                      <ProjectIcon name={p.name} icon={topicIcons[p.name]} big={big} active={p.active} />
                       {status && <span className="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium" style={{ borderColor: status.tint + "55", color: status.tint, background: status.tint + "1e" }}>{status.pulse && <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: status.tint }} />}{status.label}</span>}
                     </div>
                     <p className={`relative mt-1.5 font-semibold tracking-tight ${big ? "text-xl" : "text-sm"}`}>{p.name}</p>
@@ -649,12 +676,16 @@ export default function BentoHome() {
           )}
         </div>
       </div>
+      )}
 
-      {/* draggable divider (persists panel width) */}
-      {proj && <div onMouseDown={() => setDragging(true)} title="Drag to resize" className="hidden w-1.5 shrink-0 cursor-col-resize bg-white/[0.06] transition-colors hover:bg-[var(--sakura)]/60 md:block" />}
+      {/* draggable divider (persists panel width, and snaps the bento to the rail) */}
+      {proj && <div onMouseDown={() => { pendingW.current = panelW; setDragging(true); }} onDoubleClick={() => setRail((v) => !v)}
+        title={railed ? "Drag right to bring the bento back (or double-click)" : "Drag to resize · drag left to collapse the bento"}
+        className="hidden w-1.5 shrink-0 cursor-col-resize bg-white/[0.06] transition-colors hover:bg-[var(--sakura)]/60 md:block" />}
 
-      {/* Right: chat SIDE PANEL */}
-      <div className={`min-h-0 bg-neutral-900/50 backdrop-blur w-full md:w-[var(--rw)] ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      {/* Right: chat SIDE PANEL. `flex-1` rather than a second percentage — the rail's width is in px,
+          and 100%-minus-a-percentage can't express "everything the rail didn't take". */}
+      <div className={`min-h-0 bg-neutral-900/50 backdrop-blur w-full ${railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {proj && (
           <>
             <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2.5">
@@ -662,7 +693,7 @@ export default function BentoHome() {
                   path stays complete without ever pushing the count / add-chat / esc controls off-screen. */}
               <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 <button onClick={closePanel} className="group flex shrink-0 items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
-                  <ProjectIcon name={proj.name} /><span className="font-semibold">{proj.name}</span>
+                  <ProjectIcon name={proj.name} icon={topicIcons[proj.name]} /><span className="font-semibold">{proj.name}</span>
                 </button>
                 <AttachBar inline cwd={proj.cwd} project={proj.name} />
               </div>
@@ -696,7 +727,7 @@ export default function BentoHome() {
                 // session id" transition (onLive below) must NOT remount — that would tear down the
                 // in-flight EventSource/turns mid-stream for no reason. An explicit user pick of a
                 // DIFFERENT existing session (onPick below) SHOULD remount — see onPick's comment.
-                <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools}
+                <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools} agentsHere={cwdAgentCount[proj.cwd] || 0}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
                   onClose={() => setPanes((p) => p.filter((_, j) => j !== idx))} />
@@ -711,8 +742,138 @@ export default function BentoHome() {
   );
 }
 
-function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, onPick, onLive, onClose }: {
-  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
+// Absolute paths to image files, mentioned anywhere in a message. Must stay in step with
+// IMAGE_PATH in lib/agent/images.ts, which is what decides which of these actually get sent to the
+// model — a path that renders here but isn't inlined there (or vice versa) is a lie either way.
+const IMAGE_REF = /(?:^|[\s(])"(\/[^"]+\.(?:png|jpe?g|gif|webp))"|(?:^|[\s(])(\/[^\s"'()]+\.(?:png|jpe?g|gif|webp))(?=[\s)]|$)/gi;
+
+/** Thumbnails for the images a turn refers to. Covers pasted screenshots and folder-picker
+ *  attachments identically, because both are just a path in the text by the time they land here. */
+const ImageRefs = memo(function ImageRefs({ text }: { text: string }) {
+  const paths = useMemo(() => {
+    if (!text) return [];
+    const out: string[] = [];
+    // Group 1 is the quoted form, group 2 the bare one — exactly one is set per match.
+    for (const m of text.matchAll(IMAGE_REF)) { const p = m[1] || m[2]; if (p && !out.includes(p)) out.push(p); }
+    return out.slice(0, 5);
+  }, [text]);
+  if (paths.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {paths.map((p) => (
+        <a key={p} href={`/api/fs/image?path=${encodeURIComponent(p)}`} target="_blank" rel="noreferrer"
+          title={p} className="block overflow-hidden rounded-lg border border-white/10 transition-colors hover:border-white/30">
+          {/* A path can point at something deleted (pastes are pruned after 24h) or unreadable. Drop the
+              whole chip rather than leaving a broken-image glyph in the transcript. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={`/api/fs/image?path=${encodeURIComponent(p)}`} alt={p.split("/").pop() || "image"}
+            // Small on purpose: four panes share this grid, and an attachment is a reminder of what
+            // you sent, not the subject of the pane. Click through for full size.
+            className="max-h-20 w-auto object-contain"
+            onError={(e) => { const el = e.currentTarget.closest("a"); if (el) el.style.display = "none"; }} />
+        </a>
+      ))}
+    </div>
+  );
+});
+
+// One message in the transcript. Extracted and memoised for one reason: a streaming reply updates the
+// LAST turn's text ~30×/second, and re-rendering the whole list on every token means re-walking every
+// earlier turn's tool rows, badges and images too. `Markdown` was already memoised, which hid how much
+// of the cost sat around it. With the volatile props confined to the live row, everything above it is
+// prop-identical between renders and React skips it outright.
+type LiveBits = { notices: Notice[]; activity: ActivityState; elapsed: number; busy: boolean };
+const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, live }: {
+  turn: RenderTurn;
+  showTools: boolean;
+  shots: BrowserState["shots"];
+  onOpenShot: (i: number) => void;
+  /** Non-null only for the one row that is currently streaming. */
+  live: LiveBits | null;
+}) {
+  return (
+          <div className={`flex flex-col ${t.role === "user" ? "items-end" : "items-start"}`}>
+            <span className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">{t.role === "user" ? "You" : "Claude"}</span>
+            <div className={t.role === "user"
+              ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[15px] leading-[1.65] text-neutral-100 [overflow-wrap:anywhere]"
+              : "w-full text-[15px] leading-[1.75] text-neutral-100/95 [overflow-wrap:anywhere]"}>
+              {t.role === "assistant" && t.thinking && <ThoughtBlock text={t.thinking} live={!!t.streaming && !t.text} />}
+              {t.text && <Markdown text={t.text} />}
+              {/* Images the turn REFERS TO, rendered from their paths. Deliberately derived from the
+                  text rather than from message content: `claude-sessions.ts` keeps only text blocks
+                  when it rebuilds a user turn from disk, so an inline image block would render live
+                  and then vanish on the next reload. A path survives, so this survives. It also means
+                  a pasted screenshot and a folder-picker attachment display identically, with one
+                  renderer and no second source of truth. */}
+              <ImageRefs text={t.text} />
+              {/* Stays visible for the WHOLE turn. It used to collapse to a 2px caret as soon as any
+                  text existed, so a long tool run after the first paragraph looked like a dead pane. */}
+              {live && (
+                <div className={`flex flex-col gap-1.5 ${t.text ? "mt-2" : ""}`}>
+                  <NoticeStrip notices={live.notices} />
+                  <ActivityLine busy={live.busy} activity={live.activity} elapsed={live.elapsed} notices={live.notices} />
+                </div>
+              )}
+              {showTools && t.tools.map((tool, j) => {
+                const cat = toolCategory(tool.name);
+                const tint = TOOL_TINT[cat];
+                const Icon = TOOL_ICON[cat];
+                // Result content, not just the input — a browser tool's screenshot lives here, and any
+                // tool's text result is now worth showing instead of just what was asked of it.
+                const images = tool.output?.blocks.filter((b): b is Extract<ToolOutputBlock, { type: "image" }> => b.type === "image") || [];
+                const textOut = tool.output?.blocks.find((b): b is Extract<ToolOutputBlock, { type: "text" }> => b.type === "text");
+                return (
+                  <details key={tool.id || j} className="mt-2 rounded-lg border-l-2 bg-black/40 px-2.5 py-1.5 text-xs" style={{ borderLeftColor: tint + "80", borderTop: "1px solid rgba(255,255,255,0.06)", borderRight: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                    <summary className="flex cursor-pointer select-none items-center gap-1.5 text-neutral-400">
+                      <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />
+                      <span className="rounded px-1.5 py-0.5 text-[10px] font-medium" style={{ background: tint + "1e", color: tint }}>{tool.name}</span>
+                      <span className="min-w-0 flex-1 truncate text-neutral-500">{activityLabel(tool.name, tool.input)}</span>
+                      {/* Per-call outcome: without it every tool in the transcript looks in-flight. */}
+                      {tool.done
+                        ? <span className="shrink-0 text-[10px]" style={{ color: tool.ok ? "#4ade80" : "#ef7c7c" }}>{tool.ok ? "✓" : "✗"}{tool.ms != null ? ` ${fmtElapsed(tool.ms)}` : ""}</span>
+                        : <span className="shrink-0 text-[10px] text-neutral-600">running…</span>}
+                    </summary>
+                    {/* Browser calls get Claude Code's compact one-field summary instead of a wall of
+                        input JSON (`Claude in Chrome[navigate] example.com`). The JSON is still one
+                        click away — this row is inside a <details> — but the default view stays
+                        scannable across a 30-action QA pass. */}
+                    {cat === "browser" && browserArg(tool.name, tool.input) && (
+                      <p className="mt-1.5 font-mono text-[11px] text-neutral-400">
+                        <span className="text-neutral-500">{browserVerb(tool.name)}</span> {browserArg(tool.name, tool.input)}
+                      </p>
+                    )}
+                    <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
+                    {textOut && (
+                      <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-black/30 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-neutral-500">{textOut.text}</pre>
+                    )}
+                    {images.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {images.map((img, k) => {
+                          // These used to be <a href="data:…" target="_blank">, which Chrome silently
+                          // refuses to navigate to (top-level data: URLs blocked since v60) — the link
+                          // never worked. Route them into the same lightbox as the panel instead,
+                          // matching them up by identity so it opens on the right frame.
+                          const at = shots.findIndex((s) => s.id === `${tool.id || ""}:${k}` || (!!img.data && s.data === img.data));
+                          return (
+                            <button key={k} onClick={() => onOpenShot(at >= 0 ? at : shots.length - 1)}
+                              disabled={!shots.length} title="Open full size">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={`data:${img.mediaType};base64,${img.data}`} alt="" className="h-24 rounded border border-white/10 object-cover transition-opacity hover:opacity-80" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </details>
+                );
+              })}
+            </div>
+          </div>
+  );
+});
+
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, onPick, onLive, onClose }: {
+  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
 }) {
   // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
@@ -747,7 +908,16 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const [attachOpen, setAttachOpen] = useState(false); // file-attach picker
   const [planning, setPlanning] = useState(false); // Plan vs Code — default Code
   // Approval level in Code mode; persisted so your last choice (incl. bypass) becomes the default.
-  const [perm, setPerm] = useSetting<Exclude<AgentMode, "plan">>("permMode", "default");
+  // PER SESSION, with the last choice as the seed for the next new chat. It used to be one global key
+  // while `changeMode()` applies per session on the SERVER — so setting bypass in one chat flipped
+  // every other chat's badge, and the badge you were reading could be describing a session other than
+  // the one actually executing. A permission level is the most dangerous thing in this UI to be wrong
+  // about, so it follows the conversation, not the window.
+  // Bypass is the default on this box — see DEFAULT_PERMISSION_MODE in lib/agent/manager.ts. The
+  // server defaults the same way, so a pane with no stored preference and a session started outside
+  // the UI agree instead of one of them quietly asking for approvals.
+  const [permDefault, setPermDefault] = useSetting<Exclude<AgentMode, "plan">>("permMode", "bypassPermissions");
+  const [perm, setPerm] = useSetting<Exclude<AgentMode, "plan">>("permMode:" + effectiveKey, permDefault);
   const scrollRef = useRef<HTMLDivElement>(null);
   const agent = useAgent(effectiveKey);
   const isNew = !sessionId;
@@ -768,6 +938,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   // (then the live turns are authoritative and the poll would just fight the stream). Skip the state
   // update when nothing changed, so an idle chat doesn't re-render every 2.5s.
   const sigRef = useRef("");
+  // History pages fetched on demand, kept SEPARATE from `detail` because the 2.5s poll replaces `detail`
+  // wholesale — merging older turns into it would mean every poll silently discarded them.
+  const [older, setOlder] = useState<{ turns: Turn[]; start: number } | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   useEffect(() => {
     if (isNew || agent.live) return;
     let a = true;
@@ -786,15 +960,41 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const cur = sessions.find((s) => s.id === sessionId);
   const cwd = cwdProp || cur?.cwd || sessions[0]?.cwd || "";
   const proj = sessions[0]?.project || cwd.split("/").filter(Boolean).pop() || "";
-  const fileTurns = detail?.turns || [];
+  // Fetched history sits in front of the polled window. Drop anything at or past the window's lower
+  // bound so a page and the tail can't double-render the same turn if the window shifted between fetches.
+  const windowStart = detail?.start ?? 0;
+  const olderTurns = older ? older.turns.filter((t) => (t.off ?? 0) < windowStart) : [];
+  const fileTurns = [...olderTurns, ...(detail?.turns || [])];
   // Unified render model: on-disk history until this pane goes live, then the streamed turns.
   const source: RenderTurn[] = agent.live ? agent.turns : fileTurns;
   const allVisible = showTools ? source : source.filter((t) => t.text.trim() || t.streaming);
   // Lazy render: only the most recent `limit` messages (older revealed on demand). Rendering a long
   // transcript's worth of Markdown up front is a big cost; the tail is what the user actually reads.
   const [limit, setLimit] = useState(40);
+  // Reset both on session switch. `limit` used to persist across switches, so opening a short chat after
+  // expanding a long one rendered hundreds of messages at once for no reason.
+  useEffect(() => { setOlder(null); setLimit(40); }, [sessionId]);
   const hiddenCount = Math.max(0, allVisible.length - limit);
   const visible = hiddenCount ? allVisible.slice(-limit) : allVisible;
+  // TWO different "there's more" conditions, deliberately behind one button: turns already fetched but
+  // not yet rendered (instant, no network), and turns still on disk below the window (one request). The
+  // old button only knew the first, so it vanished at the window edge and read as "start of conversation".
+  const earliestStart = older ? older.start : windowStart;
+  const moreOnDisk = !agent.live && earliestStart > 0;
+  const loadOlder = () => {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    fetch(`/api/bento/session/${sessionId}?before=${earliestStart}`)
+      .then((r) => r.json())
+      .then((d: Detail) => {
+        const got: Turn[] = d?.turns || [];
+        // Even an empty page must advance `start`, or the button would re-request the same offset forever.
+        setOlder((p) => ({ turns: [...got, ...(p?.turns || [])], start: d?.start ?? 0 }));
+        setLimit((n) => n + Math.max(got.length, 1)); // reveal what just arrived instead of hiding it
+      })
+      .catch(() => {})
+      .finally(() => setLoadingOlder(false));
+  };
   const chats = [...sessions].sort((a, b) => b.lastActivity - a.lastActivity);
 
   const effectiveMode: AgentMode = planning ? "plan" : perm; // Plan overrides the approval level
@@ -816,11 +1016,33 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const setPermLevel = (m: Exclude<AgentMode, "plan">) => {
     const prev = perm;
     setPerm(m);
+    setPermDefault(m); // seed the next NEW chat only — never retroactively re-mode an existing one
     if (!planning) agent.changeMode(m).then((ok) => { if (!ok) setPerm(prev); });
   };
-  // Jump straight to the last message; keep pinned as tokens stream in.
+  // Follow the stream — but only while the reader is actually AT the bottom.
+  //
+  // This used to slam `scrollTop = scrollHeight` on every token, which meant scrolling up to re-read
+  // something during a live turn yanked you back down a few milliseconds later, every time. The fix
+  // every mature chat UI converges on: treat "pinned to the bottom" as state the user owns. They leave
+  // it by scrolling away, they return by scrolling back (or with the button below) — and nothing else
+  // moves the viewport for them.
+  const [pinned, setPinned] = useState(true);
+  const pinnedRef = useRef(true);
+  pinnedRef.current = pinned;
+  const BOTTOM_SLOP = 72; // px — a hair of tolerance so a fractional scrollHeight doesn't unpin you
+  const atBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLOP;
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setPinned(true);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
   useEffect(() => {
-    const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight;
+    const el = scrollRef.current;
+    if (!el || !pinnedRef.current) return;
+    // Straight assignment, not scrollTo({behavior:"smooth"}): this fires on every token, and a smooth
+    // scroll that restarts 30×/second never arrives anywhere. Smooth belongs to the deliberate jump.
+    el.scrollTop = el.scrollHeight;
   }, [visible.length, source[source.length - 1]?.text.length, agent.pending, agent.busy]);
 
   // The live plan: the latest TodoWrite call's `input.todos`, wherever it landed in the transcript.
@@ -845,23 +1067,44 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const lastTool = source[source.length - 1]?.tools.at(-1);
   const browserBusy = !!lastTool && isBrowserTool(lastTool.name) && !lastTool.done;
   const browserActionLabel = browserBusy ? activityLabel(lastTool!.name, lastTool!.input) : browser.shots.at(-1)?.action;
-  const [browserPanelHidden, setBrowserPanelHidden] = useState(false);
+  // Collapsing the panel has to OUTLIVE the pane. This was `useState(false)`, which dies with the
+  // component — and switching topics unmounts the whole chat column, so every trip away and back
+  // re-opened a panel that had been deliberately closed. `browser.everUsed` latches true forever once
+  // a browser tool has run in a session, so the panel came back on *every* return, not just the first.
+  //
+  // Global, like the two settings below it, because collapsed-vs-open is the same category of thing as
+  // stacked-vs-side and the split width: a statement about how you want the UI laid out, not about one
+  // conversation. It is deliberately NOT the per-session `permMode:<id>` shape — that pattern exists to
+  // stop one chat's *permission level* describing another's, which is a correctness problem. This is a
+  // preference, and making it per-session would mean every NEW chat pops the panel open again, which is
+  // the annoyance itself.
+  const [browserPanelHidden, setBrowserPanelHidden] = useSetting("browserHidden", false);
   // Layout is a per-user preference, not per-pane state: 300px side-by-side (the old hardcoded width)
   // is unusable in a 3- or 4-pane grid, so both the split and the side/stacked choice persist.
   const [browserStacked, setBrowserStacked] = useSetting("browserStacked", false);
   const [browserW, setBrowserW] = useSetting("browserWidth", 42);
   const [browserDrag, setBrowserDrag] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
+  const browserPaneRef = useRef<HTMLDivElement>(null); // the panel whose width the drag paints
+  const pendingBrowserW = useRef(browserW);
   useEffect(() => {
     if (!browserDrag) return;
+    // Same discipline as the bento divider: paint each frame straight to the DOM, commit once on
+    // mouseup. Going through `setBrowserW` per mousemove re-rendered the whole pane — transcript,
+    // browser panel and all — AND, because it's a `useSetting`, wrote to localStorage on every pixel
+    // of travel. A synchronous storage write inside a pointer handler is the textbook way to make a
+    // drag stutter.
+    //
     // Measured against the PANE, not the window — each chat column is its own grid cell, so a
     // window-relative calculation (the way the bento's own divider works) would be wrong here.
     const move = (e: MouseEvent) => {
       const r = paneRef.current?.getBoundingClientRect();
       if (!r || r.width < 80) return;
-      setBrowserW(Math.min(75, Math.max(22, Math.round(((r.right - e.clientX) / r.width) * 100))));
+      const pct = Math.min(75, Math.max(22, Math.round(((r.right - e.clientX) / r.width) * 100)));
+      pendingBrowserW.current = pct;
+      if (browserPaneRef.current) browserPaneRef.current.style.width = `${pct}%`;
     };
-    const up = () => setBrowserDrag(false);
+    const up = () => { setBrowserDrag(false); setBrowserW(pendingBrowserW.current); };
     window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -954,7 +1197,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           "side panel next to the chat", not inline in the transcript or a full takeover. */}
       <div className="flex min-h-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
+      <div ref={scrollRef}
+        // Passive by default in React 19; this only reads geometry, so it never blocks the scroll.
+        onScroll={(e) => { const on = atBottom(e.currentTarget); if (on !== pinnedRef.current) setPinned(on); }}
+        className="relative min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 [scrollbar-gutter:stable]">
         {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
             <p className="text-2xl">✳</p>
@@ -965,82 +1211,36 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           agent.busy ? <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} /> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
         ) : (
         <>
-        {hiddenCount > 0 && (
-          <button onClick={() => setLimit((n) => n + 60)} className="mx-auto block rounded-full border border-white/10 px-3 py-1 text-[11px] text-neutral-400 transition-colors hover:border-white/25 hover:text-neutral-200">
-            Show {Math.min(hiddenCount, 60)} earlier {hiddenCount === 1 ? "message" : "messages"}
+        {/* Two agents in one checkout is a silent-data-loss condition, not a warning-level one — but the
+            dashboard is the only thing on the box that can see both, so it's the only thing that can
+            say so. `bin/task.mjs new` gives each one its own worktree. */}
+        {agentsHere > 1 && (
+          <div className="mx-auto mb-1 flex items-center gap-1.5 rounded-full border border-[#e0a33e]/30 bg-[#e0a33e]/10 px-3 py-1 text-[11px] text-[#e0a33e]">
+            <span>⚠</span>
+            <span>{agentsHere} agents are live in this folder — they share one branch and will overwrite each other</span>
+          </div>
+        )}
+        {(hiddenCount > 0 || moreOnDisk) && (
+          <button
+            onClick={() => (hiddenCount > 0 ? setLimit((n) => n + 60) : loadOlder())}
+            disabled={loadingOlder}
+            className="mx-auto block rounded-full border border-white/10 px-3 py-1 text-[11px] text-neutral-400 transition-colors hover:border-white/25 hover:text-neutral-200 disabled:opacity-50"
+          >
+            {loadingOlder ? "Loading earlier messages…"
+              : hiddenCount > 0 ? `Show ${Math.min(hiddenCount, 60)} earlier ${hiddenCount === 1 ? "message" : "messages"}`
+              : "Load earlier messages from disk"}
           </button>
         )}
         {visible.map((t, i) => (
-          <div key={i} className={`flex flex-col ${t.role === "user" ? "items-end" : "items-start"}`}>
-            <span className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">{t.role === "user" ? "You" : "Claude"}</span>
-            <div className={t.role === "user"
-              ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[15px] leading-[1.65] text-neutral-100 [overflow-wrap:anywhere]"
-              : "w-full text-[15px] leading-[1.75] text-neutral-100/95 [overflow-wrap:anywhere]"}>
-              {t.role === "assistant" && t.thinking && <ThoughtBlock text={t.thinking} live={!!t.streaming && !t.text} />}
-              {t.text && <Markdown text={t.text} />}
-              {/* Stays visible for the WHOLE turn. It used to collapse to a 2px caret as soon as any
-                  text existed, so a long tool run after the first paragraph looked like a dead pane. */}
-              {t.streaming && i === visible.length - 1 && (
-                <div className={`flex flex-col gap-1.5 ${t.text ? "mt-2" : ""}`}>
-                  <NoticeStrip notices={agent.notices} />
-                  <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} />
-                </div>
-              )}
-              {showTools && t.tools.map((tool, j) => {
-                const cat = toolCategory(tool.name);
-                const tint = TOOL_TINT[cat];
-                const Icon = TOOL_ICON[cat];
-                // Result content, not just the input — a browser tool's screenshot lives here, and any
-                // tool's text result is now worth showing instead of just what was asked of it.
-                const images = tool.output?.blocks.filter((b): b is Extract<ToolOutputBlock, { type: "image" }> => b.type === "image") || [];
-                const textOut = tool.output?.blocks.find((b): b is Extract<ToolOutputBlock, { type: "text" }> => b.type === "text");
-                return (
-                  <details key={tool.id || j} className="mt-2 rounded-lg border-l-2 bg-black/40 px-2.5 py-1.5 text-xs" style={{ borderLeftColor: tint + "80", borderTop: "1px solid rgba(255,255,255,0.06)", borderRight: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    <summary className="flex cursor-pointer select-none items-center gap-1.5 text-neutral-400">
-                      <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />
-                      <span className="rounded px-1.5 py-0.5 text-[10px] font-medium" style={{ background: tint + "1e", color: tint }}>{tool.name}</span>
-                      <span className="min-w-0 flex-1 truncate text-neutral-500">{activityLabel(tool.name, tool.input)}</span>
-                      {/* Per-call outcome: without it every tool in the transcript looks in-flight. */}
-                      {tool.done
-                        ? <span className="shrink-0 text-[10px]" style={{ color: tool.ok ? "#4ade80" : "#ef7c7c" }}>{tool.ok ? "✓" : "✗"}{tool.ms != null ? ` ${fmtElapsed(tool.ms)}` : ""}</span>
-                        : <span className="shrink-0 text-[10px] text-neutral-600">running…</span>}
-                    </summary>
-                    {/* Browser calls get Claude Code's compact one-field summary instead of a wall of
-                        input JSON (`Claude in Chrome[navigate] example.com`). The JSON is still one
-                        click away — this row is inside a <details> — but the default view stays
-                        scannable across a 30-action QA pass. */}
-                    {cat === "browser" && browserArg(tool.name, tool.input) && (
-                      <p className="mt-1.5 font-mono text-[11px] text-neutral-400">
-                        <span className="text-neutral-500">{browserVerb(tool.name)}</span> {browserArg(tool.name, tool.input)}
-                      </p>
-                    )}
-                    <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
-                    {textOut && (
-                      <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-black/30 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-neutral-500">{textOut.text}</pre>
-                    )}
-                    {images.length > 0 && (
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {images.map((img, k) => {
-                          // These used to be <a href="data:…" target="_blank">, which Chrome silently
-                          // refuses to navigate to (top-level data: URLs blocked since v60) — the link
-                          // never worked. Route them into the same lightbox as the panel instead,
-                          // matching them up by identity so it opens on the right frame.
-                          const at = browser.shots.findIndex((s) => s.id === `${tool.id || ""}:${k}` || (!!img.data && s.data === img.data));
-                          return (
-                            <button key={k} onClick={() => setLightbox(at >= 0 ? at : browser.shots.length - 1)}
-                              disabled={!browser.shots.length} title="Open full size">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={`data:${img.mediaType};base64,${img.data}`} alt="" className="h-24 rounded border border-white/10 object-cover transition-opacity hover:opacity-80" />
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </details>
-                );
-              })}
-            </div>
-          </div>
+          <TurnRow
+            key={i} turn={t} showTools={showTools} shots={browser.shots} onOpenShot={setLightbox}
+            // Only the LAST row needs the live indicator, so only it receives props that change on
+            // every token. Every earlier row gets a prop set that is identical between renders, and
+            // React.memo skips it entirely — which is the entire point of the extraction.
+            live={t.streaming && i === visible.length - 1
+              ? { notices: agent.notices, activity: agent.activity, elapsed: agent.elapsed, busy: agent.busy }
+              : null}
+          />
         ))}
         {/* Safety net: a turn is in flight but no visible turn is carrying the indicator (reattach
             mid-turn before the snapshot lands, or the streaming turn scrolled out of the window).
@@ -1102,6 +1302,18 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         );
       })()}
 
+      {/* The way back. Only rendered while the reader has scrolled away, and it says whether anything
+          arrived while they were up there — without it, "stop following" is a trap you have to scroll
+          out of by hand. Sits above the composer rather than floating over the transcript, so it can't
+          cover the text you scrolled up to read. */}
+      {!pinned && (
+        <button onClick={jumpToLatest}
+          className="mx-auto -mb-1 flex translate-y-0 items-center gap-1.5 rounded-full border border-white/15 bg-neutral-900/90 px-3 py-1 text-[11px] text-neutral-300 shadow-lg backdrop-blur transition-[transform,background-color] hover:-translate-y-0.5 hover:bg-neutral-800/90">
+          <span className="text-[9px]">▼</span>
+          {agent.busy ? "following the reply" : "jump to latest"}
+        </button>
+      )}
+
       <div className="border-t border-white/10 px-4 py-3">
         <TodoChecklist todos={todos} />
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -1133,6 +1345,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
               : agent.live ? <><span className="h-1.5 w-1.5 rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</> : "ready"}
           </span>
         </div>
+        {/* Preview what's attached BEFORE sending. Same component, same path-detection as the
+            transcript — so a pasted screenshot, a picked file, and the message you eventually send all
+            agree by construction rather than by three code paths staying in sync. */}
+        <div className="px-1"><ImageRefs text={input} /></div>
         <div className={`flex items-end gap-2 rounded-xl border bg-white/[0.03] px-3 py-2 transition-colors ${agent.busy ? "border-white/10 opacity-70" : "border-white/15 focus-within:border-[var(--sakura)]/60"}`}>
           <button onClick={() => setAttachOpen(true)} disabled={!cwd} title="Attach a file (inserts its path for Claude to read)"
             className="shrink-0 self-end rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
@@ -1151,11 +1367,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
       </div>
       {showBrowserPanel && !browserStacked && (
         <>
-        <div onMouseDown={() => setBrowserDrag(true)} title="Drag to resize"
+        <div onMouseDown={() => { pendingBrowserW.current = browserW; setBrowserDrag(true); }} title="Drag to resize"
           className="group relative w-1 shrink-0 cursor-col-resize bg-white/[0.07] transition-colors hover:bg-[#5ec8f8]/40">
           <span className="absolute inset-y-0 -left-1 -right-1" />
         </div>
-        <div className="flex min-h-0 shrink-0 flex-col" style={{ width: `${browserW}%` }}>
+        <div ref={browserPaneRef} className="flex min-h-0 shrink-0 flex-col" style={{ width: `${browserW}%` }}>
           <BrowserPanel
             state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
             live={!!cwd && !agent.busy} stacked={false}
@@ -1187,7 +1403,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         />
       )}
       {attachOpen && <FolderPicker pickFiles start={cwd} onClose={() => setAttachOpen(false)}
-        onPick={(p) => { setInput((v) => (v ? v.replace(/\s*$/, " ") : "") + p + " "); setAttachOpen(false); }} />}
+        // Quote a path containing spaces. Unquoted it is ambiguous to every reader of this text —
+        // Claude, the thumbnail matcher, and the inliner all stop at the first space — and the most
+        // common file anyone attaches on a Mac is "Screen Shot … .png".
+        onPick={(p) => { const q = /\s/.test(p) ? `"${p}"` : p; setInput((v) => (v ? v.replace(/\s*$/, " ") : "") + q + " "); setAttachOpen(false); }} />}
     </div>
   );
 }

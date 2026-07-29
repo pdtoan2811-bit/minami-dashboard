@@ -36,13 +36,21 @@ export async function GET(req: Request) {
     if (!cwd || !path.isAbsolute(cwd)) return new Response("bad cwd", { status: 400 });
     if (!SAFE_NAME.test(file)) return new Response("bad file", { status: 400 });
 
-    const dir = path.join(cwd, ".playwright-mcp");
-    const full = path.resolve(dir, file);
-    // Belt-and-braces: SAFE_NAME already rules out separators, but a symlinked/odd `dir` shouldn't be
-    // able to escape either.
-    if (full !== path.join(dir, file)) return new Response("bad path", { status: 400 });
-
-    const body = await readFile(full);
+    // TWO locations, and the second is not optional. Playwright MCP writes to `<cwd>/.playwright-mcp/`
+    // only when it picks the name itself; pass `filename: "shot.png"` and it saves to `./shot.png` —
+    // the MCP process's cwd, i.e. the session root. That call ALSO returns no inline image, so the file
+    // is the panel's only source, and looking in one directory made every named screenshot render as
+    // "this screenshot's pixels are gone".
+    const dirs = [path.join(cwd, ".playwright-mcp"), cwd];
+    let body: Buffer | null = null;
+    for (const dir of dirs) {
+      const full = path.resolve(dir, file);
+      // Belt-and-braces: SAFE_NAME already rules out separators, but a symlinked/odd `dir` shouldn't be
+      // able to escape either.
+      if (full !== path.join(dir, file)) return new Response("bad path", { status: 400 });
+      try { body = await readFile(full); break; } catch { /* try the next location */ }
+    }
+    if (!body) { const e = new Error("not found") as NodeJS.ErrnoException; e.code = "ENOENT"; throw e; }
     const ext = file.split(".").pop()!.toLowerCase();
     return new Response(new Uint8Array(body), {
       headers: {

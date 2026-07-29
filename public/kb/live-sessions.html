@@ -76,6 +76,21 @@ async function* inputGen(s) {
    <b>activity · notice · permission · ask · result · busy · error</b>
 <i>// notice.kind: retry · compact · task · limit · denied · aborted · restarting</i></pre>
   </div>
+  <div class="note"><p class="lbl">Two events carry a separator the model never sent</p>
+  <p>A new <code>text</code> block mid-turn means Claude resumed talking after a tool call, and a second
+  <code>thinking</code> block is a second reasoning <em>pass</em>. The deltas carry no boundary, so the
+  server injects one into the stream itself: <code>\n\n</code> for text, <code>\n---\n</code> for
+  thinking. Without them the pane glues "I'll check X" onto "so X was wrong" as a single paragraph.
+  The thinking seam is gated on a delta having actually arrived — some setups open thinking blocks
+  with an empty body, and an empty pass must not earn a divider.</p></div>
+  <div class="note warn"><p class="lbl">The permission mode is enforced here, not by the SDK</p>
+  <p>Each session carries its own mode and <code>canUseTool</code> decides before it prompts:
+  <code>bypassPermissions</code> allows everything, <code>acceptEdits</code> allows the edit tools,
+  everything else asks. The SDK is told too, so the CLI agrees — but it isn't trusted to enforce:
+  <code>setPermissionMode()</code> on a <em>running</em> query is accepted and then ignored, so the
+  composer's pills used to change nothing on a session that was already live while reporting success.
+  <code>bypassPermissions</code> is this install's default; an <em>unrecognised</em> mode string still
+  clamps to the strictest one, so bad input can never widen permissions.</p></div>
   <div class="note warn"><p class="lbl">No backpressure</p>
   <p><code>broadcast()</code> has no flow control, and a subscriber callback that throws is swallowed.
   A dead client is silently dropped rather than erroring the session — deliberate, but it means a slow

@@ -39,6 +39,24 @@ bash bin/serve.sh <b>--force</b>    <i># swap anyway — still warns the panes f
     <p>The refusal is the important part. Because sessions are children of the server, a deploy ends
     every conversation on the box — and the trigger is usually a <em>different</em> pane finishing an
     edit, so it lands on whoever happens to be mid-sentence.</p>
+
+    <h3>Don't call that directly — the requester can't survive it</h3>
+    <p>Deploy requests come from a chat pane, and that pane's <code>claude</code> is a
+    <em>grandchild</em> of the server the script must kill. Running it inline kills the turn that asked
+    — and <code>serve.sh</code> vetoes first anyway, because the requesting turn is itself “busy”. The
+    caller can never be quiet while it is calling. So the deploy has to outlive it:</p>
+    <pre>bash bin/deploy.sh <b>--detach</b>   <i># from a chat pane — the only correct form</i>
+bash bin/deploy.sh --verify-only  <i># what is serving right now</i></pre>
+    <p><code>bin/deploy.sh</code> walks its own process ancestry for the PID bound to
+    <code>:3000</code>. Finding it means <em>“I am inside the thing I'm about to kill”</em>, so it
+    re-execs into a new session, waits for the box to go quiet, swaps, and writes the verdict to
+    <code>/tmp/minami-deploy.log</code> — the only witness, since the requester is dead by then.</p>
+    <p>From Finder, double-click <b>Redeploy Minami.command</b>: that Terminal isn't a child of the
+    server, so it runs inline and can ask <code>[w]</code>ait / <code>[f]</code>orce /
+    <code>[q]</code>uit when panes are busy.</p>
+    <p><strong>Success is never “exit 0”.</strong> A build can succeed while the swap silently leaves
+    the old process serving — that happened (see the symptom table). The check asserts the server
+    <b>PID changed</b> and reports whether <code>.next/BUILD_ID</code> changed.</p>
   </div>
 
   <div class="bleed"><div class="panel">
@@ -116,6 +134,20 @@ open "Open Knowledge Base.command"   <i># double-click from Finder</i></pre>
     <code>PORT</code> is already spoken for here, and reading it once bound the KB server to
     <code>127.0.0.1:3000</code> alongside the dashboard's IPv6 wildcard. macOS permits that pairing
     instead of raising an error, so requests split between two servers at random.</p>
+
+    <h3>The conversations outlive it too</h3>
+    <p>Same principle, applied to your transcripts. The UI reads history in <em>windows</em> — right
+    for a pane that polls every 2.5&nbsp;s, useless when you want the whole thing or the app is down.
+    <code>bin/transcript.mjs</code> is one streaming pass over the raw JSONL: no server, no cache, no
+    caps.</p>
+    <pre>node bin/transcript.mjs list minami-dashboard
+node bin/transcript.mjs show b33e1c2c                 <i># id prefix is enough</i>
+node bin/transcript.mjs show b33e1c2c --tail 20 --tools
+node bin/transcript.mjs show b33e1c2c --format json | jq -r 'select(.role=="user") | .text'</pre>
+    <p><code>--format json</code> emits JSONL, one turn per line — the surface for token-slayer and
+    <code>jq</code>. It pulled <strong>1813 turns out of a 64&nbsp;MB transcript in 0.25&nbsp;s</strong>.
+    Its parser deliberately duplicates the dashboard's: merging them would either make the app
+    full-read on every poll, or give the CLI the window and quietly cap what it can show you.</p>
   </div>
 </section>
 
@@ -139,7 +171,20 @@ open "Open Knowledge Base.command"   <i># double-click from Finder</i></pre>
         <td><code>~/.claude.json</code> for the real identity; switch to the healthy slot, then restart the worker</td></tr>
       <tr><td><strong>Deploy "succeeded", nothing changed</strong></td>
         <td>the swap never ran</td>
-        <td>the build exiting 0 is not evidence — curl the route and confirm</td></tr>
+        <td>the build exiting 0 is not evidence — <code>bash bin/deploy.sh --verify-only</code>; a PID
+        unchanged across the swap means the old build is still serving</td></tr>
+      <tr><td><strong>Asked a pane to deploy, nothing happened</strong></td>
+        <td>it ran the swap inline and died with the server</td>
+        <td><code>tail /tmp/minami-deploy.log</code>. From a pane the command is
+        <code>bin/deploy.sh --detach</code> — see <code>docs/DEPLOY.md</code></td></tr>
+      <tr><td><strong>The whole UI is unstyled text, stuck on "Reading local sessions…"</strong></td>
+        <td>someone ran a bare <code>npm run build</code> under the live server</td>
+        <td>the served HTML names a CSS hash that isn't on disk — <code>curl -s :3000/ | grep _next/static/css</code>,
+        then fetch one; a 400 confirms it. Fix: deploy. Prevent: <code>npm run build:check</code></td></tr>
+      <tr><td><strong>Browser preview is blank but the agent took a screenshot</strong></td>
+        <td>the shot was saved with an explicit <code>filename</code></td>
+        <td>those land in the session root, not <code>.playwright-mcp/</code>, and carry no inline image.
+        <code>/api/agent/browser/file</code> checks both — a 404 from it means the file is genuinely gone</td></tr>
       <tr><td><strong>The grid is empty</strong></td>
         <td>running somewhere without <code>~/.claude</code></td>
         <td>the home page is local-only by design; only <code>/dashboard</code> is remote-safe</td></tr>
@@ -161,9 +206,10 @@ open "Open Knowledge Base.command"   <i># double-click from Finder</i></pre>
   is <em>"what am I trusting that hasn't actually been verified?"</em></p></div>
 
   <footer>
-    <p>Source: <code>bin/serve.sh</code>, <code>app/api/agent/health</code>,
-    <code>app/api/accounts</code>, <code>public/kb/serve.mjs</code>. Reasoning record:
-    <code>docs/KNOWLEDGE.md</code> §3, §6, §7b, §8.</p>
+    <p>Source: <code>bin/serve.sh</code>, <code>bin/deploy.sh</code>,
+    <code>Redeploy Minami.command</code>, <code>app/api/agent/health</code>,
+    <code>app/api/accounts</code>, <code>public/kb/serve.mjs</code>. Protocol:
+    <code>docs/DEPLOY.md</code>. Reasoning record: <code>docs/KNOWLEDGE.md</code> §3, §6, §7b, §8.</p>
     <div class="nextprev">
       <a href="./metrics.html">← metrics</a>
       <a href="./architecture.html">the whole system</a>

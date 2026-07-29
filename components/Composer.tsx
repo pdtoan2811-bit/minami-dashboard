@@ -11,7 +11,7 @@
 // you typed. The mirror only recolours characters; it never changes a glyph's width, weight or style, so
 // the two layers wrap identically and stay pixel-aligned. That constraint is why bold renders as dimmed
 // `**` delimiters rather than actual bold: changing font-weight would shift the text off the caret.
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 // useLayoutEffect is a no-op (and warns) during Next's server prerender.
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
@@ -92,7 +92,17 @@ function renumberRun(el: HTMLTextAreaElement) {
 
 const DIM = "text-neutral-500";
 const ACCENT = "text-[var(--sakura)]";
-const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\([^)\s]+\))/g;
+// The image-path alternatives go LAST so every existing token still wins first — a path inside a code
+// span is already claimed by the backtick branch and must keep rendering as code.
+//
+// They exist because an attached image is an absolute path, and an absolute path is long: pasted into
+// a narrow pane it wraps over three lines and visually becomes the message. Tinting it as a chip
+// (directory dimmed, filename accented) keeps the text itself untouched — the textarea is still the
+// single source of truth — while letting the eye skip it the way it skips a filename in a chat app.
+const INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\([^)\s]+\)|"\/[^"\n]+\.(?:png|jpe?g|gif|webp)"|\/[^\s"'()]+\.(?:png|jpe?g|gif|webp))/g;
+
+/** A token that is an image path (quoted or bare), per the last two INLINE alternatives. */
+const isImagePath = (tok: string) => /^"?\/.*\.(?:png|jpe?g|gif|webp)"?$/i.test(tok);
 
 function tintInline(text: string, key: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -103,7 +113,18 @@ function tintInline(text: string, key: string): ReactNode[] {
     const tok = m[0];
     const kk = `${key}i${k++}`;
     if (tok.startsWith("`")) {
-      out.push(<span key={kk} className="rounded-[3px] bg-white/[0.07] text-[#e8b3c0]">{tok}</span>);
+      // chip-wrap: a code span that wraps must draw a whole box on each line, not one box sliced in
+      // half with its first fragment bleeding to the edge of the line — see globals.css.
+      out.push(<span key={kk} className="chip-wrap rounded-[3px] bg-white/[0.07] text-[#e8b3c0]">{tok}</span>);
+    } else if (isImagePath(tok)) {
+      // Split at the last slash: the directory is noise, the filename is what identifies it.
+      const cut = tok.lastIndexOf("/") + 1;
+      out.push(
+        <span key={kk} className="chip-wrap rounded-[3px] bg-white/[0.07]">
+          <span className={DIM}>{tok.slice(0, cut)}</span>
+          <span className={ACCENT}>{tok.slice(cut)}</span>
+        </span>,
+      );
     } else if (tok.startsWith("[")) {
       const cut = tok.indexOf("](");
       out.push(<span key={kk}><span className={DIM}>[</span><span className={ACCENT}>{tok.slice(1, cut)}</span><span className={DIM}>{tok.slice(cut)}</span></span>);
@@ -140,6 +161,38 @@ function tintLine(line: string, key: string): ReactNode {
   return tintInline(line, key);
 }
 
+/* ---------------- caret visibility ---------------- */
+
+// Where the caret sits, in content pixels. Nothing in the textarea API reports this, and counting
+// "\n"s is wrong the moment a line soft-wraps — which, in a 220px box, is most of them. The mirror
+// solves it: it holds the same characters at the same metrics as the textarea, so a collapsed Range
+// over its text nodes lands exactly where the caret is, wraps included.
+function caretY(mirrorEl: HTMLElement, index: number): number | null {
+  const walk = document.createTreeWalker(mirrorEl, NodeFilter.SHOW_TEXT);
+  let seen = 0, node: Node | null;
+  while ((node = walk.nextNode())) {
+    const len = node.nodeValue?.length ?? 0;
+    if (seen + len >= index) {
+      const off = index - seen;
+      const r = document.createRange();
+      r.setStart(node, off);
+      r.setEnd(node, off);
+      let rect = r.getBoundingClientRect();
+      // A collapsed range can measure 0×0 at a line boundary. Widen it by one character — either
+      // direction works, both sit on the caret's line.
+      if (!rect.height) {
+        if (off < len) r.setEnd(node, off + 1);
+        else if (off > 0) r.setStart(node, off - 1);
+        rect = r.getBoundingClientRect();
+      }
+      if (!rect.height) return null;
+      return rect.top - mirrorEl.getBoundingClientRect().top + mirrorEl.scrollTop;
+    }
+    seen += len;
+  }
+  return null;
+}
+
 /* ---------------- component ---------------- */
 
 export default function Composer({ value, onChange, onSubmit, placeholder, disabled }: {
@@ -152,16 +205,94 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
 
+  // Scroll the caret back into view. Only ever needed once the composer has hit MAX_H and started
+  // scrolling — which is exactly when a Shift+Enter used to insert a line you couldn't see.
+  const followCaret = () => {
+    const el = ref.current, mi = mirror.current;
+    if (!el || !mi || el.scrollHeight <= el.clientHeight + 1) return;
+    // Track the END that moves: during a downward drag-select the anchor stays put, and chasing it
+    // would yank the view back to where the selection started.
+    const pos = el.selectionDirection === "backward" ? el.selectionStart : el.selectionEnd;
+    const y = caretY(mi, pos);
+    if (y == null) return;
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || 18;
+    if (y < el.scrollTop) el.scrollTop = y;
+    else if (y + lh > el.scrollTop + el.clientHeight) el.scrollTop = y + lh - el.clientHeight;
+    mi.scrollTop = el.scrollTop;
+  };
+
   // Grow to fit the content, then scroll. Runs before paint so there's no visible reflow jump.
   useIsoLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // An EMPTY box is exactly one row — never measured.
+    //
+    // `scrollHeight` on an empty textarea reports the height of the wrapped PLACEHOLDER, because the
+    // browser lays that text out for real. So auto-grow was sizing the box to a string the user hasn't
+    // typed: "Message Claude in minami-dashboard…" wraps to three lines in a 150px pane (measured:
+    // scrollHeight 68px with an empty value), and the composer sat there as a tall empty box that
+    // changed shape with the project's name and the pane's width. Clearing the inline height hands
+    // sizing back to `rows={1}`, which is the honest answer for "no content".
+    if (!value) {
+      el.style.height = "";
+      el.style.overflowY = "hidden";
+      if (mirror.current) mirror.current.scrollTop = 0;
+      return;
+    }
+    // The `height:auto` probe below makes the box briefly tall enough to hold everything, which zeroes
+    // scrollTop — and the browser does NOT restore it when the height snaps back. That's what made a
+    // newline at the bottom of a long draft land off-screen: it existed, the view had just jumped
+    // elsewhere. Save the offset across the measurement, then follow the caret from wherever it lands.
+    const prev = el.scrollTop;
     el.style.height = "auto";
     const h = Math.min(el.scrollHeight, MAX_H);
     el.style.height = `${h}px`;
     el.style.overflowY = el.scrollHeight > MAX_H ? "auto" : "hidden";
+    el.scrollTop = prev;
+    followCaret();
     if (mirror.current) mirror.current.scrollTop = el.scrollTop;
   }, [value]);
+
+  // Paste an image straight into the box. The bytes go to disk and the PATH is inserted as text —
+  // which keeps this composer's one invariant (the textarea is the only source of truth for what
+  // Claude receives) and means a pasted screenshot and a folder-picker attachment are the same thing
+  // downstream. /api/agent/send reads whatever paths the message mentions and ships them inline, so
+  // Claude sees the picture without spending a Read call, while the path is what survives into the
+  // transcript for the thumbnail to come back after a reload.
+  const [pasting, setPasting] = useState(0);
+  const [pasteError, setPasteError] = useState<string | null>(null);
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData?.items || [])
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => !!f);
+    // Only intercept when there is actually an image. Text, and a copied file's *name*, must paste
+    // exactly as before — a paste handler that swallows ordinary Cmd-V is far worse than no paste
+    // handler at all.
+    if (files.length === 0) return;
+    e.preventDefault();
+    setPasteError(null);
+
+    for (const f of files) {
+      setPasting((n) => n + 1);
+      fetch("/api/fs/paste", { method: "POST", headers: { "content-type": f.type }, body: f })
+        .then(async (r) => {
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d?.path) throw new Error(d?.error || `upload failed (${r.status})`);
+          const el = ref.current;
+          if (!el) return;
+          // Insert at wherever the caret is NOW — the upload is async and the user may well have kept
+          // typing. Pad so the path can't fuse with adjacent words and break the path regex.
+          const at = el.selectionStart;
+          const before = el.value.slice(0, at);
+          const lead = before && !/\s$/.test(before) ? " " : "";
+          replaceRange(el, at, at, `${lead}${d.path} `);
+        })
+        .catch((err) => setPasteError(String(err?.message || err)))
+        .finally(() => setPasting((n) => n - 1));
+    }
+  };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const el = ref.current;
@@ -233,12 +364,25 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
         rows={1}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
+        // Arrowing or clicking up into a long draft moves the caret without changing the value, so the
+        // layout effect never fires — this is the other half of keeping it on screen.
+        onSelect={followCaret}
         onScroll={() => { if (mirror.current && ref.current) mirror.current.scrollTop = ref.current.scrollTop; }}
         placeholder={placeholder}
         disabled={disabled}
         spellCheck={false}
         className="relative block max-h-[220px] w-full resize-none whitespace-pre-wrap bg-transparent text-sm leading-relaxed text-transparent caret-white outline-none [overflow-wrap:break-word] selection:bg-[var(--sakura)]/35 placeholder:text-neutral-600"
       />
+      {/* An upload is a beat of dead time between Cmd-V and the path appearing; without this the
+          composer looks like it ignored the paste. Absolute so it can't reflow the growing textarea. */}
+      {(pasting > 0 || pasteError) && (
+        <div className="pointer-events-none absolute -top-5 left-0 text-[10px]">
+          {pasting > 0
+            ? <span className="text-neutral-500">saving image{pasting > 1 ? `s (${pasting})` : ""}…</span>
+            : <span className="text-[#ef7c7c]">{pasteError}</span>}
+        </div>
+      )}
     </div>
   );
 }

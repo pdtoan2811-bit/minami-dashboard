@@ -13,10 +13,26 @@
 // can't drive the browser directly, so they **drive the agent** instead, by sending it a message. That
 // isn't a workaround; it's exactly Claude Code's model, where navigation is a tool call rather than a
 // chrome affordance.
+//
+// ── Layout: one bar, one hero, two overlays ────────────────────────────────────────────────────────
+// v1 stacked four permanent rows of chrome (toolbar · status strip · filmstrip · drawer tabs) above a
+// viewport that had whatever height was left. In a side panel next to a chat that's most of the panel
+// spent on controls, and the thing you actually came to look at — the page — was the smallest part.
+//
+//   Simplicity · ONE bar. Navigation, address, problems, and two disclosures. Nothing else is
+//               permanent, so the frame is the hero at every panel size.
+//   Hide       · Everything rare — device presets, recording, layout, pop-out, copy, open-externally,
+//               profile facts — lives behind a single ⋯ menu. Console/network/actions live behind one
+//               drawer toggle rather than three always-on tabs. Both are one click from anywhere.
+//   Embody     · The panel behaves like a browser: the frame fills it, a stale frame *looks* stale
+//               (dimmed, not just labelled), recording shows as a red pulse on the panel itself, and
+//               the filmstrip is a scrubber that appears over the page when you reach for it — the way
+//               video controls do — instead of permanently taxing the height.
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, Camera, Chrome, Circle, ExternalLink, Globe, Monitor, PanelRightClose,
-  RefreshCw, Smartphone, Square, Tablet, Terminal, ArrowLeft, ArrowRight, Copy, Check, Radio,
+  RefreshCw, Smartphone, Square, Tablet, ArrowLeft, ArrowRight, Copy, Check, Radio,
+  MoreHorizontal, PanelBottom, Film,
 } from "lucide-react";
 import type { BrowserState, Shot } from "@/lib/browser-view";
 import { shotSrc } from "./BrowserLightbox";
@@ -58,10 +74,11 @@ export default function BrowserPanel({
   // `pinned === null` means "follow the newest shot", which is what you want while watching a QA run.
   const [pinned, setPinned] = useState<number | null>(null);
   const [tab, setTab] = useState<Tab | null>(null);
+  const [drawer, setDrawer] = useState(false);
+  const [menu, setMenu] = useState(false);
   const [urlDraft, setUrlDraft] = useState("");
   const [editingUrl, setEditingUrl] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [deviceOpen, setDeviceOpen] = useState(false);
   const strip = useRef<HTMLDivElement>(null);
 
   const shownIdx = pinned ?? shots.length - 1;
@@ -82,25 +99,35 @@ export default function BrowserPanel({
   // instead of a broken-image icon with alt text sitting where the page should be.
   const [dead, setDead] = useState<Record<string, boolean>>({});
   const src = shot && !dead[shot.id] ? shotSrc(shot, cwd, false) : null;
-  const consoleBody = useMemo(() => state.consoleLines.filter((l) => tab === "console"), [state.consoleLines, tab]);
+  const consoleBody = useMemo(() => state.consoleLines.filter(() => tab === "console"), [state.consoleLines, tab]);
 
   const ask = (p: string) => { if (live) onAsk(p); };
+  // One disclosure at a time. Two panels open in a 200px-tall pane leaves no page visible at all, and
+  // "the menu is still open behind the drawer" is a state nobody can see or reason about.
+  const openDrawer = (t: Tab) => { setMenu(false); setTab(t); setDrawer(true); };
 
   return (
-    <div className={stacked
-      ? "flex min-h-0 shrink-0 flex-col border-t border-white/10 bg-black/20"
-      : "flex min-h-0 flex-1 flex-col border-l border-white/10 bg-black/20"}>
+    // `flex-1 min-h-0` in BOTH orientations, deliberately. With `shrink-0` when stacked, this root
+    // refused to shrink below its content height inside a fixed-height wrapper, so the filmstrip and
+    // drawer were clipped off the bottom of the pane. Filling the parent and letting the viewport (the
+    // one `flex-1` child) absorb the difference is what keeps the chrome reachable at any height.
+    //
+    // `@container` so the bar can thin itself out by the PANEL's width, not the window's — this thing
+    // is ~160px wide in a 4-pane grid and full-width when popped out, at the same viewport size.
+    <div className={`@container flex min-h-0 flex-1 flex-col bg-black/20 ${stacked ? "border-t" : "border-l"} border-white/10`}>
 
-      {/* ── Zone 1: chrome toolbar. Every control sends the agent a message. ───────────────────── */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-white/[0.07] px-2 py-1.5">
-        <Nav title="Back" onClick={() => ask("Go back in the browser, then take a screenshot.")} disabled={!live}><ArrowLeft className="h-3.5 w-3.5" /></Nav>
-        <Nav title="Forward" onClick={() => ask("Go forward in the browser, then take a screenshot.")} disabled={!live}><ArrowRight className="h-3.5 w-3.5" /></Nav>
+      {/* ── The one bar ───────────────────────────────────────────────────────────────────────── */}
+      <div className="flex shrink-0 items-center gap-0.5 border-b border-white/[0.07] px-1.5 py-1">
+        {/* Back/forward are the first thing to go when the panel is narrow: they're the least-used
+            controls here (the agent navigates by intent, not by history) and cost 44px. */}
+        <Nav title="Back" onClick={() => ask("Go back in the browser, then take a screenshot.")} disabled={!live} className="@max-[300px]:hidden"><ArrowLeft className="h-3.5 w-3.5" /></Nav>
+        <Nav title="Forward" onClick={() => ask("Go forward in the browser, then take a screenshot.")} disabled={!live} className="@max-[300px]:hidden"><ArrowRight className="h-3.5 w-3.5" /></Nav>
         <Nav title="Reload" onClick={() => ask("Reload the current page in the browser, then take a screenshot.")} disabled={!live || !url}>
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
         </Nav>
 
         {/* URL bar — editable. Enter asks the agent to navigate. */}
-        <div className="flex min-w-0 flex-1 items-center gap-1 rounded-md border border-white/10 bg-black/40 px-1.5 py-0.5 focus-within:border-[#5ec8f8]/50">
+        <div className="group/url flex min-w-[4.5rem] flex-1 items-center gap-1 rounded-md border border-white/10 bg-black/40 px-1.5 py-0.5 focus-within:border-[#5ec8f8]/50">
           <Globe className="h-3 w-3 shrink-0 text-neutral-600" />
           {editingUrl ? (
             <input
@@ -121,7 +148,9 @@ export default function BrowserPanel({
             <button
               onClick={() => { setUrlDraft(url || ""); setEditingUrl(true); }}
               disabled={!live}
-              title={live ? (url ? `${url} — click to edit and navigate` : "Click to enter a URL") : url || ""}
+              // The page title used to have its own row. It's the same fact as the URL, so it's the
+              // URL's tooltip now — one line of chrome recovered for the page itself.
+              title={[title, live ? (url ? `${url} — click to edit and navigate` : "Click to enter a URL") : url || ""].filter(Boolean).join("\n")}
               className="min-w-0 flex-1 truncate text-left text-[11px] text-neutral-300 disabled:cursor-default">
               {url ? url.replace(/^https?:\/\//, "") : <span className="text-neutral-600">no page yet</span>}
             </button>
@@ -129,103 +158,107 @@ export default function BrowserPanel({
           {httpStatus !== undefined && httpStatus >= 400 && (
             <span className="shrink-0 rounded px-1 text-[9px] font-semibold text-[#ef7c7c]">{httpStatus}</span>
           )}
+          {/* Revealed by proximity rather than parked in the menu: opening a localhost dev server for
+              real is the single most-reached-for thing here, and it belongs on the address it opens. */}
           {url && (
-            <>
-              <button title={copied ? "Copied" : "Copy URL"}
-                onClick={() => { navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
-                className="shrink-0 text-neutral-600 transition-colors hover:text-neutral-300">
-                {copied ? <Check className="h-3 w-3 text-[#4ade80]" /> : <Copy className="h-3 w-3" />}
-              </button>
-              {/* Opening it for real is the single most useful thing here when it's a localhost dev server. */}
-              <button title="Open in your own browser" onClick={() => window.open(url, "_blank", "noreferrer")}
-                className="shrink-0 text-neutral-600 transition-colors hover:text-neutral-300">
-                <ExternalLink className="h-3 w-3" />
-              </button>
-            </>
+            <button title="Open in your own browser" onClick={() => window.open(url, "_blank", "noreferrer")}
+              className="shrink-0 text-neutral-700 opacity-0 transition-[opacity,color] hover:text-neutral-200 focus:opacity-100 group-hover/url:opacity-100">
+              <ExternalLink className="h-3 w-3" />
+            </button>
           )}
         </div>
 
-        {/* Console-error badge. Front and center because "live debugging" — read the console, fix the
-            code that caused it — is the primary documented use case for a browser in a coding agent. */}
-        <button
-          onClick={() => { setTab(tab === "console" ? null : "console"); if (live && !state.consoleLines.length && errCount) onAsk("Read the browser console messages (errors only) and tell me what's failing."); }}
-          title={problem ? `${errCount} console error${errCount === 1 ? "" : "s"}` : "Console"}
-          className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[10px] tabular-nums transition-colors ${problem
-            ? "bg-[#ef7c7c]/15 text-[#ef7c7c] hover:bg-[#ef7c7c]/25"
-            : "text-neutral-600 hover:bg-white/10 hover:text-neutral-300"}`}>
-          {problem ? <AlertTriangle className="h-3 w-3" /> : <Terminal className="h-3 w-3" />}
-          {errCount > 0 && errCount}
-          {consoleWarnings > 0 && <span className="text-[#f0a868]">{consoleWarnings}</span>}
-        </button>
+        {/* Console-error badge. Stays on the bar — "live debugging" (read the console, fix the code
+            that caused it) is the primary documented use case for a browser in a coding agent, and a
+            problem you have to open a menu to discover is a problem you don't discover. */}
+        {(problem || errCount > 0 || consoleWarnings > 0) && (
+          <button
+            onClick={() => { openDrawer("console"); if (live && !state.consoleLines.length && errCount) onAsk("Read the browser console messages (errors only) and tell me what's failing."); }}
+            title={`${errCount} console error${errCount === 1 ? "" : "s"}${consoleWarnings ? `, ${consoleWarnings} warning${consoleWarnings === 1 ? "" : "s"}` : ""}`}
+            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[10px] tabular-nums transition-colors ${problem
+              ? "bg-[#ef7c7c]/15 text-[#ef7c7c] hover:bg-[#ef7c7c]/25"
+              : "text-[#f0a868] hover:bg-white/10"}`}>
+            <AlertTriangle className="h-3 w-3" />
+            {/* Under ~260px the counts are what has to go: the icon alone still says "something is
+                wrong here", which is the whole job of a badge. The number is in the tooltip. */}
+            {errCount > 0 && <span className="@max-[260px]:hidden">{errCount}</span>}
+            {consoleWarnings > 0 && <span className="text-[#f0a868] @max-[260px]:hidden">{consoleWarnings}</span>}
+          </button>
+        )}
 
+        <Nav title="Console · network · actions" onClick={() => { setMenu(false); setDrawer((v) => !v); if (!tab) setTab("actions"); }}
+          className={drawer ? "bg-white/10 text-neutral-200" : ""}>
+          <PanelBottom className="h-3.5 w-3.5" />
+        </Nav>
+        <Nav title="Viewport, recording, layout" onClick={() => { setDrawer(false); setMenu((v) => !v); }}
+          className={`relative ${menu ? "bg-white/10 text-neutral-200" : ""}`}>
+          <MoreHorizontal className="h-3.5 w-3.5" />
+          {/* Recording is the one hidden state that must stay visible — it writes a file and keeps
+              running. A red pulse on the control that can stop it is the whole disclosure. */}
+          {recording && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-[#ef7c7c]" />}
+        </Nav>
         {onClose && <Nav title="Hide the browser panel" onClick={onClose}><PanelRightClose className="h-3.5 w-3.5" /></Nav>}
       </div>
 
-      {/* ── Zone 1b: status strip — the analogue of Claude Code's Status/Extension/Browser triad. ── */}
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-white/[0.07] px-2 py-1 text-[10px] text-neutral-600">
-        <Chrome className="h-3 w-3 shrink-0" style={{ color: TINT }} strokeWidth={2.25} />
-        <span className="shrink-0" title="Each chat gets its own in-memory browser profile — no cookies, nothing on disk, nothing shared between chats">
-          headless · isolated
-        </span>
-        {viewport && (
-          <button onClick={() => setDeviceOpen((v) => !v)} disabled={!live}
-            title={live ? "Ask Claude to resize the viewport" : `Viewport ${viewport}`}
-            className={`shrink-0 rounded px-1 py-0.5 tabular-nums transition-colors hover:bg-white/10 hover:text-neutral-300 disabled:hover:bg-transparent ${deviceOpen ? "bg-white/10 text-neutral-300" : ""}`}>
-            {viewport}
-          </button>
-        )}
-        {state.tabCount !== undefined && state.tabCount > 1 && (
-          <span className="shrink-0" title={`${state.tabCount} open tabs`}>{state.tabCount} tabs</span>
-        )}
-        {title && <span className="min-w-0 flex-1 truncate text-neutral-500" title={title}>{title}</span>}
-        {!title && <span className="flex-1" />}
-
-        {/* Recording. `browser_start_video` needs --caps=devtools on the MCP spawn (see manager.ts) —
-            it's the closest analogue to Claude Code's gif_creator, and a genuinely useful QA artifact. */}
-        <button
-          onClick={() => ask(recording
-            ? "Stop the browser video recording and tell me where the file was saved."
-            : "Start recording a video of the browser, then continue.")}
-          disabled={!live} title={recording ? "Stop recording" : "Record a video of the browser"}
-          className={`flex shrink-0 items-center gap-1 rounded px-1 py-0.5 transition-colors disabled:opacity-30 ${recording ? "text-[#ef7c7c]" : "hover:bg-white/10 hover:text-neutral-300"}`}>
-          {recording ? <Square className="h-2.5 w-2.5 fill-current" /> : <Circle className="h-2.5 w-2.5" />}
-          {recording && "rec"}
-        </button>
-        {onToggleLayout && (
-          <button onClick={onToggleLayout} title={stacked ? "Move to the side of the chat" : "Move below the chat"}
-            className="shrink-0 rounded px-1 py-0.5 transition-colors hover:bg-white/10 hover:text-neutral-300">
-            {stacked ? "▤" : "▥"}
-          </button>
-        )}
-        {onPopOut && (
-          <button onClick={onPopOut} title="Open in its own window"
-            className="shrink-0 rounded px-1 py-0.5 transition-colors hover:bg-white/10 hover:text-neutral-300">⧉</button>
-        )}
-      </div>
-
-      {/* Device presets as an inline row, NOT a floating dropdown. An absolutely-positioned menu is
-          clipped here: the chat pane is `overflow-hidden` and this panel can be ~160px wide in a 4-pane
-          grid, so a 160px menu anchored to a button near the panel's left edge gets cut in half. A row
-          that flows inside the panel works at every width. */}
-      {deviceOpen && (
-        <div className="flex shrink-0 items-center gap-1 border-b border-white/[0.07] bg-black/30 px-2 py-1">
-          {DEVICES.map(({ label, w, h, Icon }) => (
-            // The icon carries the device identity (Tablet vs Smartphone are visually distinct) and the
-            // number carries the size, so this stays readable at ~160px where a "Desktop"/"iPhone" label
-            // would truncate to an ambiguous "D…"/"iP…". Full detail lives in the tooltip.
-            <button key={label} title={`${label} — ${w}×${h}`}
-              onClick={() => { ask(`Resize the browser viewport to ${w}x${h} and take a screenshot.`); setDeviceOpen(false); }}
-              className="flex min-w-0 flex-1 items-center justify-center gap-1 rounded border border-white/10 px-1 py-0.5 text-[9px] tabular-nums text-neutral-400 transition-colors hover:border-[#5ec8f8]/50 hover:text-neutral-100">
-              <Icon className="h-2.5 w-2.5 shrink-0" />
-              <span className="truncate">{w}</span>
-            </button>
-          ))}
+      {/* ── The ⋯ menu ────────────────────────────────────────────────────────────────────────────
+          An inline panel, NOT an absolutely-positioned dropdown. A floating menu is clipped here: the
+          chat pane is `overflow-hidden` and this panel can be ~160px wide in a 4-pane grid, so a menu
+          anchored near its left edge gets cut in half. A block that flows inside the panel works at
+          every width, and stacking its rows means nothing has to truncate. */}
+      {menu && (
+        <div className="shrink-0 space-y-1.5 border-b border-white/[0.07] bg-black/30 px-2 py-1.5">
+          <Row label="Size">
+            {DEVICES.map(({ label, w, h, Icon }) => (
+              // The icon carries the device identity (Tablet vs Smartphone are visually distinct) and
+              // the number carries the size, so this stays readable at ~160px where a "Desktop"/
+              // "iPhone" label would truncate to an ambiguous "D…"/"iP…". Detail is in the tooltip.
+              <button key={label} title={`${label} — ${w}×${h}`} disabled={!live}
+                onClick={() => { ask(`Resize the browser viewport to ${w}x${h} and take a screenshot.`); setMenu(false); }}
+                className={`flex min-w-0 flex-1 items-center justify-center gap-1 rounded border px-1 py-0.5 text-[9px] tabular-nums transition-colors disabled:opacity-30 ${
+                  viewport === `${w}x${h}` ? "border-[#5ec8f8]/60 text-[#5ec8f8]" : "border-white/10 text-neutral-400 hover:border-[#5ec8f8]/50 hover:text-neutral-100"}`}>
+                <Icon className="h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">{w}</span>
+              </button>
+            ))}
+          </Row>
+          <Row label="Capture">
+            <MenuBtn title="Take a screenshot now" disabled={!live} onClick={() => { ask("Take a screenshot of the current browser page."); setMenu(false); }}>
+              <Camera className="h-2.5 w-2.5" /> shot
+            </MenuBtn>
+            {/* `browser_start_video` needs --caps=devtools on the MCP spawn (see manager.ts) — the
+                closest analogue to Claude Code's gif_creator, and a genuinely useful QA artifact. */}
+            <MenuBtn title={recording ? "Stop recording" : "Record a video of the browser"} disabled={!live} active={recording}
+              onClick={() => { ask(recording ? "Stop the browser video recording and tell me where the file was saved." : "Start recording a video of the browser, then continue."); setMenu(false); }}>
+              {recording ? <Square className="h-2.5 w-2.5 fill-current" /> : <Circle className="h-2.5 w-2.5" />} {recording ? "stop" : "rec"}
+            </MenuBtn>
+            {url && (
+              <MenuBtn title={copied ? "Copied" : "Copy URL"} onClick={() => { navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}>
+                {copied ? <Check className="h-2.5 w-2.5 text-[#4ade80]" /> : <Copy className="h-2.5 w-2.5" />} url
+              </MenuBtn>
+            )}
+          </Row>
+          {(onToggleLayout || onPopOut) && (
+            <Row label="Window">
+              {onToggleLayout && (
+                <MenuBtn title={stacked ? "Move to the side of the chat" : "Move below the chat"} onClick={() => { onToggleLayout(); setMenu(false); }}>
+                  {stacked ? "▤" : "▥"} {stacked ? "side" : "below"}
+                </MenuBtn>
+              )}
+              {onPopOut && <MenuBtn title="Open in its own window" onClick={() => { onPopOut(); setMenu(false); }}>⧉ pop out</MenuBtn>}
+            </Row>
+          )}
+          {/* The profile facts are reference, not control — last, small, and never in the way. */}
+          <p className="flex items-center gap-1 pt-0.5 text-[9px] text-neutral-600"
+            title="Each chat gets its own in-memory browser profile — no cookies, nothing on disk, nothing shared between chats">
+            <Chrome className="h-2.5 w-2.5 shrink-0" style={{ color: TINT }} strokeWidth={2.25} />
+            headless · isolated{viewport ? ` · ${viewport}` : ""}{state.tabCount !== undefined && state.tabCount > 1 ? ` · ${state.tabCount} tabs` : ""}
+          </p>
         </div>
       )}
 
-      {/* ── Zone 2: the viewport ──────────────────────────────────────────────────────────────── */}
+      {/* ── The hero: the page itself ─────────────────────────────────────────────────────────── */}
       <div
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2"
+        className="group/view relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2"
         style={{ backgroundImage: "repeating-conic-gradient(rgba(255,255,255,0.03) 0% 25%, transparent 0% 50%)", backgroundSize: "16px 16px" }}
       >
         {src ? (
@@ -234,7 +267,10 @@ export default function BrowserPanel({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={src} alt={shot?.action || ""}
               onError={() => shot && setDead((d) => ({ ...d, [shot.id]: true }))}
-              className="max-h-full max-w-full rounded border border-white/10 object-contain shadow-lg transition-opacity group-hover:opacity-90" />
+              // A stale frame is *shown* stale rather than only labelled: the pill explains it, the
+              // dimming makes you doubt it, which is the correct instinct about an old screenshot.
+              className={`max-h-full max-w-full rounded border border-white/10 object-contain shadow-lg transition-opacity group-hover:opacity-90 ${
+                following && staleBy > 0 ? "opacity-70" : ""}`} />
           </button>
         ) : state.everUsed ? (
           // Active browser, no pixels. Extremely common: an accessibility snapshot is cheaper than a
@@ -277,113 +313,142 @@ export default function BrowserPanel({
             {actionLabel}
           </span>
         )}
+
+        {/* ── Scrubber: the filmstrip, over the page instead of under it ───────────────────────
+            It used to hold ~46px of permanent height for something you look at occasionally. Now it
+            behaves like a video player's controls: a hairline that says how many frames exist, opening
+            to thumbnails on hover — and staying open whenever you've pinned a frame, because then it's
+            the only way back. */}
+        {shots.length > 1 && (
+          <div className={`absolute inset-x-0 bottom-0 transition-transform duration-200 ${
+            following ? "translate-y-[calc(100%-6px)] group-hover/view:translate-y-0" : "translate-y-0"}`}>
+            <div className="flex items-center gap-1 bg-gradient-to-t from-black/85 to-transparent px-2 pb-1.5 pt-4">
+              <Film className="h-3 w-3 shrink-0 text-neutral-500" />
+              <div ref={strip} className="flex flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {shots.map((s, i) => {
+                  const thumb = dead[s.id] ? null : shotSrc(s, cwd, false);
+                  const on = i === shownIdx;
+                  return (
+                    <button key={s.id} onClick={() => setPinned(i === shots.length - 1 ? null : i)} onDoubleClick={() => onOpenShot(i)}
+                      title={`${s.action}${s.url ? ` — ${s.url}` : ""}\nDouble-click to open full size`}
+                      className={`shrink-0 overflow-hidden rounded border transition-colors ${on ? "border-[#5ec8f8]" : "border-white/10 hover:border-white/40"}`}>
+                      {thumb
+                        // eslint-disable-next-line @next/next/no-img-element
+                        ? <img src={thumb} alt="" onError={() => setDead((d) => ({ ...d, [s.id]: true }))} className="h-9 w-auto max-w-[72px] object-cover" />
+                        : <span className="flex h-9 w-12 items-center justify-center text-[8px] text-neutral-600">—</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="shrink-0 text-[9px] tabular-nums text-neutral-500">{shownIdx + 1}/{shots.length}</span>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ── Zone 3: filmstrip ─────────────────────────────────────────────────────────────────── */}
-      {shots.length > 1 && (
-        <div ref={strip} className="flex shrink-0 gap-1 overflow-x-auto border-t border-white/[0.07] px-2 py-1.5">
-          {shots.map((s, i) => {
-            const thumb = dead[s.id] ? null : shotSrc(s, cwd, false);
-            const on = i === shownIdx;
-            return (
-              <button key={s.id} onClick={() => setPinned(i === shots.length - 1 ? null : i)} onDoubleClick={() => onOpenShot(i)}
-                title={`${s.action}${s.url ? ` — ${s.url}` : ""}\nDouble-click to open full size`}
-                className={`shrink-0 overflow-hidden rounded border transition-colors ${on ? "border-[#5ec8f8]" : "border-white/10 hover:border-white/30"}`}>
-                {thumb
-                  // eslint-disable-next-line @next/next/no-img-element
-                  ? <img src={thumb} alt="" onError={() => setDead((d) => ({ ...d, [s.id]: true }))} className="h-9 w-auto max-w-[72px] object-cover" />
-                  : <span className="flex h-9 w-12 items-center justify-center text-[8px] text-neutral-600">—</span>}
-              </button>
-            );
-          })}
+      {/* ── The drawer ────────────────────────────────────────────────────────────────────────── */}
+      {drawer && (
+        <div className="shrink-0 border-t border-white/[0.07]">
+          <div className="flex items-center gap-0.5 px-2 py-1">
+            {(["console", "network", "actions"] as Tab[]).map((t) => {
+              const n = t === "console" ? state.consoleLines.length || errCount : t === "network" ? network.length : actions.length;
+              return (
+                <button key={t} onClick={() => setTab(t)}
+                  className={`rounded px-1.5 py-0.5 text-[10px] capitalize transition-colors ${tab === t ? "bg-white/10 text-neutral-200" : "text-neutral-600 hover:text-neutral-400"}`}>
+                  {t}{n ? <span className="ml-1 tabular-nums text-neutral-500">{n}</span> : null}
+                </button>
+              );
+            })}
+            <button onClick={() => setDrawer(false)} title="Close" className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-neutral-600 transition-colors hover:text-neutral-300">✕</button>
+          </div>
+
+          {tab === "console" && (
+            <Drawer>
+              {consoleBody.length ? consoleBody.map((l, i) => (
+                <p key={i} className={`truncate font-mono ${/^\s*\[ERROR\]/i.test(l) ? "text-[#ef7c7c]" : /^\s*\[WARNING\]/i.test(l) ? "text-[#f0a868]" : "text-neutral-500"}`} title={l}>{l}</p>
+              )) : (
+                <Empty>
+                  {errCount > 0
+                    ? `The page reported ${errCount} error${errCount === 1 ? "" : "s"}, but the messages themselves live in a separate log.`
+                    : "No console errors reported."}
+                  {live && errCount > 0 && (
+                    <button onClick={() => onAsk("Read the browser console messages (errors only) and summarise what's failing.")}
+                      className="mt-1.5 block rounded border border-white/15 px-2 py-0.5 text-[10px] text-neutral-300 transition-colors hover:border-[#5ec8f8]/50 hover:text-white">
+                      Read the console
+                    </button>
+                  )}
+                </Empty>
+              )}
+            </Drawer>
+          )}
+
+          {tab === "network" && (
+            <Drawer>
+              {network.length ? network.map((r, i) => (
+                <p key={i} className="flex gap-1.5 truncate font-mono">
+                  <span className="w-10 shrink-0 text-neutral-600">{r.method}</span>
+                  <span className={`w-7 shrink-0 tabular-nums ${r.status && r.status >= 400 ? "text-[#ef7c7c]" : "text-[#4ade80]"}`}>{r.status ?? ""}</span>
+                  <span className="truncate text-neutral-500" title={r.url}>{r.url.replace(/^https?:\/\//, "")}</span>
+                </p>
+              )) : (
+                <Empty>
+                  Nothing captured — network requests are only reported when Claude asks for them.
+                  {live && (
+                    <button onClick={() => onAsk("List the browser's network requests (skip static assets) and flag any that failed.")}
+                      className="mt-1.5 block rounded border border-white/15 px-2 py-0.5 text-[10px] text-neutral-300 transition-colors hover:border-[#5ec8f8]/50 hover:text-white">
+                      List requests
+                    </button>
+                  )}
+                </Empty>
+              )}
+            </Drawer>
+          )}
+
+          {tab === "actions" && (
+            <Drawer>
+              {actions.length ? [...actions].reverse().map((a) => (
+                <p key={a.id} className="flex items-center gap-1.5 truncate">
+                  <span className="shrink-0" style={{ color: a.done ? (a.ok === false ? "#ef7c7c" : "#4ade80") : "#525252" }}>
+                    {a.done ? (a.ok === false ? "✗" : "✓") : "⋯"}
+                  </span>
+                  <span className="shrink-0 text-neutral-400">{a.verb}</span>
+                  {a.arg && <span className="truncate font-mono text-neutral-600">{a.arg}</span>}
+                  {a.hadImage && <Camera className="h-2.5 w-2.5 shrink-0 text-neutral-700" />}
+                  {a.ms != null && <span className="ml-auto shrink-0 tabular-nums text-neutral-700">{a.ms}ms</span>}
+                </p>
+              )) : <Empty>No browser actions yet.</Empty>}
+            </Drawer>
+          )}
         </div>
       )}
-
-      {/* ── Zone 4: the drawer ────────────────────────────────────────────────────────────────── */}
-      <div className="shrink-0 border-t border-white/[0.07]">
-        <div className="flex items-center gap-0.5 px-2 py-1">
-          {(["console", "network", "actions"] as Tab[]).map((t) => {
-            const n = t === "console" ? state.consoleLines.length || errCount : t === "network" ? network.length : actions.length;
-            return (
-              <button key={t} onClick={() => setTab(tab === t ? null : t)}
-                className={`rounded px-1.5 py-0.5 text-[10px] capitalize transition-colors ${tab === t ? "bg-white/10 text-neutral-200" : "text-neutral-600 hover:text-neutral-400"}`}>
-                {t}{n ? <span className="ml-1 tabular-nums text-neutral-500">{n}</span> : null}
-              </button>
-            );
-          })}
-          <span className="ml-auto text-[9px] text-neutral-700">{tab ? "click to collapse" : ""}</span>
-        </div>
-
-        {tab === "console" && (
-          <Drawer>
-            {consoleBody.length ? consoleBody.map((l, i) => (
-              <p key={i} className={`truncate font-mono ${/^\s*\[ERROR\]/i.test(l) ? "text-[#ef7c7c]" : /^\s*\[WARNING\]/i.test(l) ? "text-[#f0a868]" : "text-neutral-500"}`} title={l}>{l}</p>
-            )) : (
-              <Empty>
-                {errCount > 0
-                  ? `The page reported ${errCount} error${errCount === 1 ? "" : "s"}, but the messages themselves live in a separate log.`
-                  : "No console errors reported."}
-                {live && errCount > 0 && (
-                  <button onClick={() => onAsk("Read the browser console messages (errors only) and summarise what's failing.")}
-                    className="mt-1.5 block rounded border border-white/15 px-2 py-0.5 text-[10px] text-neutral-300 transition-colors hover:border-[#5ec8f8]/50 hover:text-white">
-                    Read the console
-                  </button>
-                )}
-              </Empty>
-            )}
-          </Drawer>
-        )}
-
-        {tab === "network" && (
-          <Drawer>
-            {network.length ? network.map((r, i) => (
-              <p key={i} className="flex gap-1.5 truncate font-mono">
-                <span className="w-10 shrink-0 text-neutral-600">{r.method}</span>
-                <span className={`w-7 shrink-0 tabular-nums ${r.status && r.status >= 400 ? "text-[#ef7c7c]" : "text-[#4ade80]"}`}>{r.status ?? ""}</span>
-                <span className="truncate text-neutral-500" title={r.url}>{r.url.replace(/^https?:\/\//, "")}</span>
-              </p>
-            )) : (
-              <Empty>
-                Nothing captured — network requests are only reported when Claude asks for them.
-                {live && (
-                  <button onClick={() => onAsk("List the browser's network requests (skip static assets) and flag any that failed.")}
-                    className="mt-1.5 block rounded border border-white/15 px-2 py-0.5 text-[10px] text-neutral-300 transition-colors hover:border-[#5ec8f8]/50 hover:text-white">
-                    List requests
-                  </button>
-                )}
-              </Empty>
-            )}
-          </Drawer>
-        )}
-
-        {tab === "actions" && (
-          <Drawer>
-            {actions.length ? [...actions].reverse().map((a) => (
-              <p key={a.id} className="flex items-center gap-1.5 truncate">
-                <span className="shrink-0" style={{ color: a.done ? (a.ok === false ? "#ef7c7c" : "#4ade80") : "#525252" }}>
-                  {a.done ? (a.ok === false ? "✗" : "✓") : "⋯"}
-                </span>
-                <span className="shrink-0 text-neutral-400">{a.verb}</span>
-                {a.arg && <span className="truncate font-mono text-neutral-600">{a.arg}</span>}
-                {a.hadImage && <Camera className="h-2.5 w-2.5 shrink-0 text-neutral-700" />}
-                {a.ms != null && <span className="ml-auto shrink-0 tabular-nums text-neutral-700">{a.ms}ms</span>}
-              </p>
-            )) : <Empty>No browser actions yet.</Empty>}
-          </Drawer>
-        )}
-      </div>
     </div>
   );
 }
 
-function Nav({ title, onClick, disabled, children }: { title: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+function Nav({ title, onClick, disabled, className = "", children }: { title: string; onClick: () => void; disabled?: boolean; className?: string; children: React.ReactNode }) {
   return (
     <button title={title} onClick={onClick} disabled={disabled}
-      className="shrink-0 rounded-md px-1 py-1 text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200 disabled:opacity-25 disabled:hover:bg-transparent">
+      className={`shrink-0 rounded-md px-1 py-1 text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200 disabled:opacity-25 disabled:hover:bg-transparent ${className}`}>
       {children}
     </button>
   );
 }
+
+// A labelled row inside the ⋯ menu. The label is what makes a stack of 9px icon buttons legible.
+const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div className="flex items-center gap-1">
+    <span className="w-14 shrink-0 text-[9px] uppercase tracking-[0.08em] text-neutral-600">{label}</span>
+    {children}
+  </div>
+);
+
+const MenuBtn = ({ title, onClick, disabled, active, children }: { title: string; onClick: () => void; disabled?: boolean; active?: boolean; children: React.ReactNode }) => (
+  <button title={title} onClick={onClick} disabled={disabled}
+    className={`flex min-w-0 flex-1 items-center justify-center gap-1 rounded border px-1 py-0.5 text-[9px] transition-colors disabled:opacity-30 ${
+      active ? "border-[#ef7c7c]/60 text-[#ef7c7c]" : "border-white/10 text-neutral-400 hover:border-[#5ec8f8]/50 hover:text-neutral-100"}`}>
+    {children}
+  </button>
+);
 
 const Drawer = ({ children }: { children: React.ReactNode }) => (
   <div className="max-h-32 space-y-0.5 overflow-y-auto border-t border-white/[0.05] bg-black/30 px-2 py-1.5 text-[10px] leading-relaxed">{children}</div>

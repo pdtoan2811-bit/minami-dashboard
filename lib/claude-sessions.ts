@@ -362,90 +362,32 @@ export function listSessions(): SessionMeta[] {
 }
 
 export type ToolCallRecord = { name: string; input: any; id?: string; output?: ToolOutput; ok?: boolean };
-export type Turn = { role: "user" | "assistant"; text: string; tools: ToolCallRecord[]; ts: number; model?: string };
+// `off` is the byte offset of the JSONL line that started this turn. It's what makes history pageable:
+// a window's lower bound is exactly turns[0].off, so "give me what came before" is a precise byte
+// request rather than a guess, and trimming a window from the front stays self-consistent.
+export type Turn = { role: "user" | "assistant"; text: string; tools: ToolCallRecord[]; ts: number; model?: string; off?: number };
+export type SessionPage = { meta: SessionMeta | null; turns: Turn[]; start: number; hasMore: boolean };
 
-// Parsed transcripts, cached by file mtime — the chat panel polls this every couple seconds, so an
-// unchanged (often huge) transcript must not be re-read or re-parsed each time. Kept on globalThis (dev
-// hot-reload survives) AND mirrored to disk (a `bin/serve.sh` restart survives) — same pattern as the
-// meta cache above. Before this, a restart meant every open transcript re-tailed + re-parsed from
-// scratch, which is exactly what "loading transcript takes forever after a reload" was.
-const turnsCache: Map<string, { mtime: number; turns: Turn[] }> = ((globalThis as any).__minamiTurnsCache ||= new Map());
-const TURNS_CACHE_FILE = path.join(CACHE_DIR, "turns-cache.json");
-const TURNS_CACHE_MAX = 60; // matches the 60-tile cap listSessions() returns — no point caching more
-let turnsCacheDirty = false;
-function loadTurnsDiskCache(): void {
-  const g = globalThis as any;
-  if (g.__minamiTurnsCacheLoaded) return;
-  g.__minamiTurnsCacheLoaded = true;
-  try {
-    const obj = JSON.parse(fs.readFileSync(TURNS_CACHE_FILE, "utf8")) as Record<string, { mtime: number; turns: Turn[] }>;
-    for (const [f, v] of Object.entries(obj)) if (!turnsCache.has(f)) turnsCache.set(f, v);
-  } catch { /* no cache file yet — first run */ }
-}
-function saveTurnsDiskCache(): void {
-  if (!turnsCacheDirty) return;
-  turnsCacheDirty = false;
-  try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const obj: Record<string, { mtime: number; turns: Turn[] }> = {};
-    for (const [f, v] of turnsCache) obj[f] = v;
-    fs.writeFileSync(TURNS_CACHE_FILE, JSON.stringify(obj));
-  } catch { /* best effort */ }
-}
-// Delete+reinsert moves an entry to "most recently used" and lets us evict the oldest once we're over
-// the cap, so a long-lived server can't grow this file without bound (a full transcript tail can be
-// hundreds of KB). Thin wrapper over the generic touchLRU above, kept for its existing call sites.
-function touchTurnsLRU(file: string, entry: { mtime: number; turns: Turn[] }): void {
-  touchLRU(turnsCache, file, entry, TURNS_CACHE_MAX);
-}
+// WHY WINDOWS AND NOT A TAIL
+// The old code read a fixed 1.5MB tail and then `slice(-120)`, which made everything before that
+// permanently unreachable — on a 64MB/1813-turn transcript only ~5% of the conversation could ever be
+// displayed, with no marker saying so. The caps themselves were right (full-reading 64MB on a 2.5s poll
+// is what commit 6505ed2 fixed for metadata); what was missing is that a bounded read must be a PAGE,
+// not the only shot. Transcripts are append-only, so any window below the live tail is immutable and can
+// be cached forever with no invalidation — history costs one read per page, once, ever.
+const WINDOW_BYTES = 512_000;      // first read: small, because only ~40 turns render initially
+const WINDOW_MIN_TURNS = 60;       // ...but widen if the window is all giant lines (base64 tool results)
+const WINDOW_HARD_CAP = 8 * WINDOW_BYTES;
+const LIVE_WINDOW_TURNS = 400;     // in-memory cap for the growing tail; older turns are re-fetchable
+const DISK_WINDOW_TURNS = 60;      // what gets persisted — enough to paint instantly after a restart
 
-// id → file path index, built as a side effect of listSessions()'s directory walk (which already scans
-// everything) so getSession()'s hot polling path (every ~2.5s per open chat pane) doesn't have to
-// re-scan all project dirs with fs.existsSync just to find a file it already found last time. Bounded
-// LRU for the same reason as the meta cache above — otherwise it's one more Map that only ever grows
-// for the life of the process, over every distinct session id ever seen.
-const idIndex: Map<string, string> = ((globalThis as any).__minamiIdIndex ||= new Map());
-const ID_INDEX_MAX = 2000; // tiny entries (id → path string) — generous cap costs almost nothing
-
-export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[] } {
-  if (!/^[a-zA-Z0-9._-]+$/.test(id)) return { meta: null, turns: [] };
-  loadDiskCache();
-  loadTurnsDiskCache();
-  let found = idIndex.get(id) || "";
-  if (found && !fs.existsSync(found)) found = ""; // stale (file moved/deleted) — fall back to a real scan
-  if (!found) {
-    try {
-      for (const d of fs.readdirSync(PROJECTS)) {
-        const file = path.join(PROJECTS, d, id + ".jsonl");
-        if (fs.existsSync(file)) { found = file; break; }
-      }
-    } catch { /* none */ }
-    if (found) touchLRU(idIndex, id, found, ID_INDEX_MAX);
-  } else {
-    touchLRU(idIndex, id, found, ID_INDEX_MAX); // bump recency on every hit too, not just on insert
-  }
-  if (!found) return { meta: null, turns: [] };
-  const st = fs.statSync(found);
-  const mtime = st.mtimeMs;
-  // Meta (token/cost totals) needs the whole file and would defeat the point of tailing — but the chat
-  // panel renders titles from the sessions list, not from here, and listSessions keeps meta warm. So
-  // serve meta from cache only (best-effort) and never full-read a huge file just to attach it.
-  const metaEntry = cache.get(found);
-  if (metaEntry) touchLRU(cache, found, metaEntry, META_CACHE_MAX);
-  const meta = metaEntry?.meta ?? null;
-  const tc = turnsCache.get(found);
-  // Cache hit — bump LRU order in memory only. No disk write here: this is the path every 2.5s poll
-  // takes when nothing changed, and rewriting the cache file on every idle tick would just trade one
-  // kind of thrashing for another.
-  if (tc && tc.mtime === mtime) { touchTurnsLRU(found, tc); return { meta, turns: tc.turns }; }
-  // Turns only need the file's tail — parse that, which keeps opening a long chat fast on first view.
-  const raw = readTail(found, st.size);
-  const turns: Turn[] = [];
-  // tool_use and its tool_result live on two DIFFERENT lines (assistant, then the next user row) — this
-  // maps a call's id to the (still-mutable, already-pushed-into-`turns`) record so the result row can
-  // attach its output/ok onto the turn that started it, same as the live SSE path does with liveTools.
-  const toolIndex = new Map<string, ToolCallRecord>();
-  for (const line of raw.split("\n")) {
+// Parse JSONL lines into turns, tracking each line's byte offset. `startOff` is the file offset of
+// lines[0]; every line advances it by its own byte length + 1 for the newline.
+function parseLines(lines: string[], startOff: number, turns: Turn[], toolIndex: Map<string, ToolCallRecord>): number {
+  let off = startOff;
+  for (const line of lines) {
+    const lineOff = off;
+    off += Buffer.byteLength(line, "utf8") + 1;
     if (!line.trim()) continue;
     let r: Row;
     try { r = JSON.parse(line); } catch { continue; }
@@ -462,18 +404,311 @@ export function getSession(id: string): { meta: SessionMeta | null; turns: Turn[
           toolz.push(rec);
           if (b.id) toolIndex.set(b.id, rec);
         } else if (b?.type === "tool_result" && b.tool_use_id) {
+          // tool_use and its tool_result live on two DIFFERENT lines (assistant, then the next user row),
+          // so the result row mutates the already-pushed record its call created — same as the live SSE
+          // path does with liveTools. Across an incremental fold the call may be in a previous chunk,
+          // which is why the index is rebuilt from the tail of `turns` rather than started empty.
           const rec = toolIndex.get(b.tool_use_id);
           if (rec) { rec.output = summarizeToolResult(b.content); rec.ok = !b.is_error; }
         }
       }
     }
     if (text.trim() || toolz.length) {
-      turns.push({ role: r.type, text: text.trim(), tools: toolz, ts: Date.parse(r.timestamp || "") || 0, model: r.message?.model });
+      turns.push({ role: r.type, text: text.trim(), tools: toolz, ts: Date.parse(r.timestamp || "") || 0, model: r.message?.model, off: lineOff });
     }
   }
-  const sliced = turns.slice(-120);
-  touchTurnsLRU(found, { mtime, turns: sliced });
+  return off;
+}
+
+function rebuildToolIndex(turns: Turn[], lookback = 20): Map<string, ToolCallRecord> {
+  const m = new Map<string, ToolCallRecord>();
+  for (const t of turns.slice(-lookback)) for (const tc of t.tools) if (tc.id) m.set(tc.id, tc);
+  return m;
+}
+
+// Read backwards from `end` until we have `minTurns` turns (or run out of file / hit the cap). The
+// newline search runs on the BUFFER, not the decoded string: slicing mid-file almost always lands
+// inside a UTF-8 sequence, and computing the post-drop byte offset from a string index that contains
+// replacement characters would be silently wrong — which is exactly the kind of off-by-N that makes a
+// page overlap or skip turns.
+function readTurnsBack(file: string, end: number, minTurns: number): { turns: Turn[]; start: number } {
+  let window = WINDOW_BYTES;
+  for (;;) {
+    const start0 = Math.max(0, end - window);
+    const buf = readNewBytes(file, start0, end);
+    let body = buf;
+    let bodyStart = start0;
+    if (start0 > 0) {
+      const nl = buf.indexOf(0x0a); // first line is partial — it belongs to the previous page
+      if (nl < 0) {
+        // A single JSONL line longer than the whole window (a big embedded base64 tool result). Widen
+        // rather than feed a non-newline-aligned blob to the parser, which would drop the turn silently.
+        if (window >= WINDOW_HARD_CAP) return { turns: [], start: start0 };
+        window *= 4;
+        continue;
+      }
+      body = buf.subarray(nl + 1);
+      bodyStart = start0 + nl + 1;
+    }
+    const turns: Turn[] = [];
+    parseLines(body.toString("utf8").split("\n"), bodyStart, turns, new Map());
+    if (turns.length >= minTurns || bodyStart === 0 || window >= WINDOW_HARD_CAP) return { turns, start: bodyStart };
+    window *= 4;
+  }
+}
+
+type TurnsEntry = {
+  mtime: number;
+  size: number;            // file size at last parse — the window's upper bound
+  head: string;            // rewrite guard, same contract as the meta cache's fingerprint
+  start: number;           // window's lower bound; > 0 means older history exists on disk
+  turns: Turn[];
+  lineLeftover: string;    // trailing partial line held for the next fold
+  byteLeftoverB64: string; // trailing partial UTF-8 sequence, ditto
+};
+
+// Parsed transcripts, cached by file — the chat panel polls this every couple seconds, so an unchanged
+// (often huge) transcript must not be re-read or re-parsed each time. Kept on globalThis (dev
+// hot-reload survives) AND mirrored to disk (a `bin/serve.sh` restart survives) — same pattern as the
+// meta cache above. Before this, a restart meant every open transcript re-tailed + re-parsed from
+// scratch, which is exactly what "loading transcript takes forever after a reload" was.
+const turnsCache: Map<string, TurnsEntry> = ((globalThis as any).__minamiTurnsCache2 ||= new Map());
+const TURNS_CACHE_FILE = path.join(CACHE_DIR, "turns-cache.json");
+const TURNS_CACHE_MAX = 60; // matches the 60-tile cap listSessions() returns — no point caching more
+let turnsCacheDirty = false;
+
+// Trim a window to its last `maxTurns`, keeping `start` exact — turns[0].off IS the new lower bound, so
+// a trimmed window is still a valid page and `hasMore` stays truthful.
+function trimWindow(e: TurnsEntry, maxTurns: number): TurnsEntry {
+  if (e.turns.length <= maxTurns) return e;
+  const turns = e.turns.slice(-maxTurns);
+  return { ...e, turns, start: turns[0]?.off ?? e.start };
+}
+
+// A turn count is the wrong budget for the DISK copy: tool inputs/outputs dominate an entry's size, so
+// 60 turns of a screenshot-heavy session serialises to hundreds of KB while 60 turns of plain chat is a
+// few. Measured at 60 turns/entry the cache file was still ~450KB per session — 27MB at a full 60
+// entries, worse than the 8MB this was meant to shrink. Budget by serialised bytes instead, so one
+// unusual session can't inflate a file that gets written synchronously.
+const DISK_ENTRY_MAX_BYTES = 64_000;
+function trimForDisk(e: TurnsEntry): TurnsEntry {
+  let out = trimWindow(e, DISK_WINDOW_TURNS);
+  let n = out.turns.length;
+  while (n > 4 && JSON.stringify(out).length > DISK_ENTRY_MAX_BYTES) {
+    n = Math.floor(n / 2);
+    out = trimWindow(out, n);
+  }
+  return out;
+}
+
+function loadTurnsDiskCache(): void {
+  const g = globalThis as any;
+  if (g.__minamiTurnsCacheLoaded2) return;
+  g.__minamiTurnsCacheLoaded2 = true;
+  try {
+    const obj = JSON.parse(fs.readFileSync(TURNS_CACHE_FILE, "utf8")) as Record<string, TurnsEntry>;
+    // Only entries written by this (windowed) format are usable: an older entry has no `start`/`off`,
+    // so folding new bytes onto it would produce a window whose claimed lower bound is a lie.
+    for (const [f, v] of Object.entries(obj)) {
+      if (!turnsCache.has(f) && v && typeof v.start === "number" && typeof v.size === "number") turnsCache.set(f, v);
+    }
+  } catch { /* no cache file yet — first run */ }
+}
+
+// THROTTLED. This used to run on every reparse, and a reparse happens on essentially every 2.5s poll of
+// a LIVE session — meaning a JSON.stringify of all 60 cached sessions plus a synchronous multi-megabyte
+// writeFileSync, on Node's single event loop, several times a second, exactly when the dashboard is
+// busiest. The file is a warm-start optimisation; it does not need to be current to the second.
+const TURNS_SAVE_INTERVAL = 15_000;
+let turnsSaveTimer: NodeJS.Timeout | null = null;
+let turnsLastSaveAt = 0;
+function saveTurnsDiskCache(): void {
+  if (!turnsCacheDirty) return;
+  turnsCacheDirty = false;
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    const obj: Record<string, TurnsEntry> = {};
+    // Persist only the last DISK_WINDOW_TURNS per session. Enough to paint a pane instantly on restart,
+    // and it keeps this file small — it had grown to ~8MB of full windows, which is what made the
+    // synchronous write above expensive in the first place. A trimmed window is still self-consistent
+    // (see trimWindow), so the next poll can fold new bytes straight onto it.
+    for (const [f, v] of turnsCache) obj[f] = trimForDisk(v);
+    fs.writeFileSync(TURNS_CACHE_FILE, JSON.stringify(obj));
+  } catch { /* best effort */ }
+}
+function scheduleTurnsDiskSave(): void {
+  if (turnsSaveTimer) return;
+  const wait = Math.max(0, TURNS_SAVE_INTERVAL - (Date.now() - turnsLastSaveAt));
+  turnsSaveTimer = setTimeout(() => {
+    turnsSaveTimer = null;
+    turnsLastSaveAt = Date.now();
+    saveTurnsDiskCache();
+  }, wait);
+  // Never keep the process alive just to flush a cache file.
+  if (typeof turnsSaveTimer.unref === "function") turnsSaveTimer.unref();
+}
+// Delete+reinsert moves an entry to "most recently used" and lets us evict the oldest once we're over
+// the cap, so a long-lived server can't grow this file without bound (a full transcript tail can be
+// hundreds of KB). Thin wrapper over the generic touchLRU above, kept for its existing call sites.
+function touchTurnsLRU(file: string, entry: TurnsEntry): void {
+  touchLRU(turnsCache, file, entry, TURNS_CACHE_MAX);
+}
+
+// Cold history pages, keyed by (file, requested upper bound). A page below the live tail is IMMUTABLE —
+// appends never rewrite existing bytes — so there is no mtime in this key and no invalidation: fetch a
+// given page once, ever. The head fingerprint is the sole escape hatch, for a truncate-and-rewrite.
+// Deliberately NOT persisted to disk: the disk cache exists to make a cold start fast for the grid, and
+// writing history pages into it is how an 8MB file becomes an 80MB one.
+const pageCache: Map<string, { head: string; turns: Turn[]; start: number }> = ((globalThis as any).__minamiPageCache ||= new Map());
+const PAGE_CACHE_MAX = 24;
+
+// id → file path index, built as a side effect of listSessions()'s directory walk (which already scans
+// everything) so getSession()'s hot polling path (every ~2.5s per open chat pane) doesn't have to
+// re-scan all project dirs with fs.existsSync just to find a file it already found last time. Bounded
+// LRU for the same reason as the meta cache above — otherwise it's one more Map that only ever grows
+// for the life of the process, over every distinct session id ever seen.
+const idIndex: Map<string, string> = ((globalThis as any).__minamiIdIndex ||= new Map());
+const ID_INDEX_MAX = 2000; // tiny entries (id → path string) — generous cap costs almost nothing
+
+export function resolveSessionFile(id: string): string {
+  if (!/^[a-zA-Z0-9._-]+$/.test(id)) return "";
+  let found = idIndex.get(id) || "";
+  if (found && !fs.existsSync(found)) found = ""; // stale (file moved/deleted) — fall back to a real scan
+  if (!found) {
+    try {
+      for (const d of fs.readdirSync(PROJECTS)) {
+        const file = path.join(PROJECTS, d, id + ".jsonl");
+        if (fs.existsSync(file)) { found = file; break; }
+      }
+    } catch { /* none */ }
+    if (found) touchLRU(idIndex, id, found, ID_INDEX_MAX);
+  } else {
+    touchLRU(idIndex, id, found, ID_INDEX_MAX); // bump recency on every hit too, not just on insert
+  }
+  return found;
+}
+
+export function getSession(id: string, opts?: { before?: number }): SessionPage {
+  const empty: SessionPage = { meta: null, turns: [], start: 0, hasMore: false };
+  loadDiskCache();
+  loadTurnsDiskCache();
+  const found = resolveSessionFile(id);
+  if (!found) return empty;
+  const st = fs.statSync(found);
+  const mtime = st.mtimeMs;
+  const size = st.size;
+  // Meta (token/cost totals) needs the whole file and would defeat the point of windowing — but the chat
+  // panel renders titles from the sessions list, not from here, and listSessions keeps meta warm. So
+  // serve meta from cache only (best-effort) and never full-read a huge file just to attach it.
+  const metaEntry = cache.get(found);
+  if (metaEntry) touchLRU(cache, found, metaEntry, META_CACHE_MAX);
+  const meta = metaEntry?.meta ?? null;
+
+  // --- history page: everything strictly BEFORE a byte offset the client already has -----------------
+  if (opts?.before !== undefined && opts.before > 0) {
+    const head = headFingerprint(found, Math.min(size, HEAD_FINGERPRINT_BYTES));
+    const key = `${found}|${opts.before}`;
+    const hit = pageCache.get(key);
+    if (hit && hit.head === head) {
+      touchLRU(pageCache, key, hit, PAGE_CACHE_MAX);
+      return { meta, turns: hit.turns, start: hit.start, hasMore: hit.start > 0 };
+    }
+    const { turns, start } = readTurnsBack(found, Math.min(opts.before, size), WINDOW_MIN_TURNS);
+    touchLRU(pageCache, key, { head, turns, start }, PAGE_CACHE_MAX);
+    return { meta, turns, start, hasMore: start > 0 };
+  }
+
+  // --- live tail ------------------------------------------------------------------------------------
+  const tc = turnsCache.get(found);
+  // Unchanged (both mtime AND size) — cheap path, no file read at all. No disk write either: this is the
+  // path every 2.5s poll takes when nothing changed, and rewriting the cache file on every idle tick
+  // would just trade one kind of thrashing for another.
+  if (tc && tc.mtime === mtime && tc.size === size) {
+    touchTurnsLRU(found, tc);
+    return { meta, turns: tc.turns, start: tc.start, hasMore: tc.start > 0 };
+  }
+
+  // INCREMENTAL by design, for the same reason summarize() is: an actively streaming session's mtime
+  // changes on almost every poll, and re-reading the whole window each time is what made a live pane
+  // expensive. Only the bytes appended since the last parse are read and folded onto the existing turns.
+  // The head fingerprint is mandatory, not defensive: without it a truncate-and-rewrite that lands on an
+  // equal-or-larger size looks exactly like a pure append, and we would fold unrelated bytes onto a stale
+  // window forever, with no error and permanently wrong output.
+  const headOk = !!tc && (tc.size === 0 || tc.head === headFingerprint(found, Math.min(tc.size, HEAD_FINGERPRINT_BYTES)));
+  let entry: TurnsEntry;
+  if (tc && tc.size < size && headOk) {
+    const turns = tc.turns.slice();
+    const toolIndex = rebuildToolIndex(turns);
+    const leftoverBytes = tc.byteLeftoverB64 ? Buffer.from(tc.byteLeftoverB64, "base64") : Buffer.alloc(0);
+    const newBuf = readNewBytes(found, tc.size, size);
+    const combined = leftoverBytes.length ? Buffer.concat([leftoverBytes, newBuf]) : newBuf;
+    const { complete, leftover } = splitTrailingIncompleteUtf8(combined);
+    const text = tc.lineLeftover + complete.toString("utf8");
+    // The held partial line's bytes were already counted in tc.size, so the chunk's true starting offset
+    // sits that far back — otherwise every turn in this fold would be labelled with a too-large offset
+    // and paging from it would skip the turns in between.
+    const chunkStart = tc.size - Buffer.byteLength(tc.lineLeftover, "utf8") - leftoverBytes.length;
+    const parts = text.split("\n");
+    const lineLeftover = text.endsWith("\n") ? "" : (parts.pop() || "");
+    if (text.endsWith("\n")) parts.pop(); // trailing "" left by split()
+    parseLines(parts, chunkStart, turns, toolIndex);
+    entry = {
+      mtime, size, head: headFingerprint(found, Math.min(size, HEAD_FINGERPRINT_BYTES)),
+      start: tc.start, turns, lineLeftover,
+      byteLeftoverB64: leftover.length ? leftover.toString("base64") : "",
+    };
+  } else {
+    const { turns, start } = readTurnsBack(found, size, WINDOW_MIN_TURNS);
+    entry = {
+      mtime, size, head: headFingerprint(found, Math.min(size, HEAD_FINGERPRINT_BYTES)),
+      start, turns, lineLeftover: "", byteLeftoverB64: "",
+    };
+  }
+
+  entry = trimWindow(entry, LIVE_WINDOW_TURNS);
+  touchTurnsLRU(found, entry);
   turnsCacheDirty = true;
-  saveTurnsDiskCache(); // only fires on an actual reparse (mtime changed), so this stays cheap
-  return { meta, turns: sliced };
+  scheduleTurnsDiskSave(); // throttled — never on the hot path
+  return { meta, turns: entry.turns, start: entry.start, hasMore: entry.start > 0 };
+}
+
+// Full history, streamed line by line — never bounded, never cached, never on a request path. This is
+// what the CLI (bin/transcript.mjs) uses: a 64MB transcript must be readable end-to-end without the
+// windowing above and without holding the whole file in memory.
+export function readAllTurns(file: string, onTurn: (t: Turn) => void): number {
+  const CHUNK = 1 << 20;
+  const fd = fs.openSync(file, "r");
+  let off = 0, count = 0;
+  let lineLeftover = "";
+  // Uint8Array, not Buffer: splitTrailingIncompleteUtf8 hands back a subarray whose backing store is
+  // ArrayBufferLike, which no longer assigns to Buffer<ArrayBuffer> under this TS lib.
+  let byteLeftover: Uint8Array = Buffer.alloc(0);
+  const toolIndex = new Map<string, ToolCallRecord>();
+  try {
+    const size = fs.fstatSync(fd).size;
+    while (off < size) {
+      const len = Math.min(CHUNK, size - off);
+      const buf = Buffer.allocUnsafe(len);
+      const read = fs.readSync(fd, buf, 0, len, off);
+      off += read;
+      const combined = byteLeftover.length ? Buffer.concat([byteLeftover, buf.subarray(0, read)]) : buf.subarray(0, read);
+      const { complete, leftover } = splitTrailingIncompleteUtf8(combined);
+      byteLeftover = leftover;
+      const text = lineLeftover + complete.toString("utf8");
+      const parts = text.split("\n");
+      lineLeftover = text.endsWith("\n") ? "" : (parts.pop() || "");
+      if (text.endsWith("\n")) parts.pop();
+      const turns: Turn[] = [];
+      parseLines(parts, 0, turns, toolIndex);
+      // Emit as we go so the caller can stream to stdout — holding 1813 turns of a 64MB transcript in an
+      // array is exactly the memory blow-up this function exists to avoid.
+      for (const t of turns) { onTurn(t); count++; }
+    }
+    if (lineLeftover.trim()) {
+      const turns: Turn[] = [];
+      parseLines([lineLeftover], 0, turns, toolIndex);
+      for (const t of turns) { onTurn(t); count++; }
+    }
+  } finally { fs.closeSync(fd); }
+  return count;
 }

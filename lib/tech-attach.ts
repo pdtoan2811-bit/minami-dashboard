@@ -6,8 +6,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export type Attach = { repo: { url: string; host: string; name: string } | null; tech: string[] };
-export type IconStore = Record<string, { icons?: string[]; primary?: string }>;
+export type Attach = { repo: { url: string; host: string; name: string } | null; tech: string[]; icon?: string };
+/** `icon` is the topic's 3D glyph (a filename in /public/icons), NOT a tech slug — it's what the tile
+ *  and the rail aim at. Same store, because it's the same act of curation. */
+export type IconStore = Record<string, { icons?: string[]; primary?: string; icon?: string }>;
 
 const STORE = path.join(os.homedir(), ".minami-bento", "icons.json");
 
@@ -85,5 +87,5 @@ export function getAttach(cwd: string, project?: string): Attach {
   const primary = store[key]?.primary || store[cwd]?.primary;
   const ordered = [...(primary ? [primary] : []), ...assigned, ...slugs];
   const tech = [...new Set(ordered)].slice(0, 10);
-  return { repo, tech };
+  return { repo, tech, icon: store[key]?.icon || store[cwd]?.icon };
 }

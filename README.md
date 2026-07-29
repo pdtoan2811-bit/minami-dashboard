@@ -36,10 +36,10 @@ single board:
 | **Bento home** (`/`) | Live grid of every local Claude Code project. Weighted tile sizes, keyboard nav (`↑↓←→` / `Tab`, `↵` open, `esc` close), search, sort (Recent / Busy / A–Z), configurable time window. |
 | **Chat side-panel** | Slide-in transcript per project, live-tailing. Rich rendering — GFM tables, task lists, blockquotes, links, and syntax-highlighted code with copy. |
 | **Up to 4 chats · 2×2 grid** | Open several chats of a topic at once, like windows on a foldable. Clicking a tile restores its recent chats (within the date filter); your open/closed layout is remembered per topic; add any chat from a picker. |
-| **New topic + folder picker** | A `＋ New topic` tile starts a fresh chat in any folder you browse to — no existing session required. |
+| **New topic + folder picker** | A `＋ New topic` tile starts a fresh chat in any folder you browse to — no existing session required. Don't have a folder yet? Create one from the picker (`＋ folder`, or type a path and hit **Create this folder**). The topic gets its tile as soon as you send the first message; its name is the folder's own name. |
 | **Repo & tech attach bar** | Each topic shows its git repo (link) and the tech it uses (Shopify, ClickHouse, BigQuery, Google Cloud, …) as brand icons, detected from `.git`, `package.json`, and config files. |
 | **Live drive** (Phase 2) | Actually run Claude Code from the panel — send messages, watch tokens stream in, and approve/deny tool calls inline. `Plan`/`Code` toggle (default Code) + approval level (`ask` / `auto-edits`), with a live "what it's doing" hint that tells cold-start (`starting session…`) apart from mid-turn thinking, escalates ("still working…") past a minute, and flashes the tab title if you've wandered off. A live checklist tracks the agent's TodoWrite plan as it works, not just the current tool. Uses your existing Claude login (no API key). |
-| **Browser tool** | Every live-driven chat gets a headless, isolated browser (Playwright MCP) so Claude can navigate/click/type/screenshot — built for QA-testing your own apps. Screenshots dock in a live side panel next to the chat and stay in the transcript history. Gated by your normal permission mode, same as any other tool. See [Browser tool](#browser-tool) below. |
+| **Browser tool** | Every live-driven chat gets a headless, isolated browser (Playwright MCP) so Claude can navigate/click/type/screenshot — built for QA-testing your own apps. Because it's headless, the docked panel *is* the browser window: URL bar, device presets, screenshot filmstrip, console/network/actions drawer, full-screen lightbox, and a pop-out window. Gated by your normal permission mode, with per-host "allow all" for QA runs. See [Browser tool](#browser-tool) below. |
 | **Semantic labels** | Sessions are grouped **Project › Goal › Task** and flagged for review by a cheap local Haiku pass (uses your Claude subscription via the `claude` CLI — no API key). Cached to disk; curate by hand or via the `bento-taxonomy` skill. |
 | **Metrics** (`/dashboard`) | Usage heatmap (cohort calendar), live model-routing feed, per-machine usage, routing table + savings. Optional — needs the metrics server below. |
 | **Pluggable panels** | Task log / Trace-back / Analytics / People read from a JSON file you provide (`MINAMI_PANELS_FILE`). Empty and harmless by default. |
@@ -67,9 +67,51 @@ npm run build && npm start
 > New here? **[SETUP.md](SETUP.md)** has a full walkthrough — including a prompt you can paste into
 > Claude Code to have it set Bento up for you.
 
+### Reading a transcript from the terminal
+
+The UI pages history in on demand. When you want the *whole* conversation — piped, grepped, or with
+the app down — use the CLI. No server, no caps, streams a 64 MB transcript in a quarter-second:
+
+```bash
+node bin/transcript.mjs list                      # every session, newest first
+node bin/transcript.mjs show <id>                 # whole conversation (an id prefix is enough)
+node bin/transcript.mjs show <id> --tail 20 --tools
+node bin/transcript.mjs show <id> --format md --out chat.md
+node bin/transcript.mjs show <id> --format json | jq -r 'select(.role=="user") | .text'
+```
+
 > **Deploying to Vercel etc. won't show your sessions** — a cloud host has no access to your home
 > directory. Bento is a local tool by design. Deploy only the `/dashboard` metrics view if you want a
 > remote read-out (see the metrics server).
+
+### Shipping a change to the running instance
+
+Live chats run *inside* the server process, so a restart ends every in-flight turn — including, if you
+asked for the deploy from a chat pane, the one asking. Hence one wrapper and two entry points:
+
+```bash
+bash bin/deploy.sh --detach     # from a dashboard chat pane: waits for quiet, swaps, verifies
+bash bin/deploy.sh --verify-only # what's actually serving right now
+```
+
+or double-click **`Redeploy Minami.command`** from Finder, which runs interactively and asks before
+cutting off busy panes. Full protocol and failure modes: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+
+### Working on two things at once
+
+Two chat panes on one project share a working tree and a branch — so they overwrite each other's edits
+with no conflict and no warning. Give each its own checkout instead:
+
+```bash
+node bin/task.mjs new browser-fix       # git worktree + branch, prints its own preview port
+node bin/task.mjs list                  # branch · commits ahead · dirt · which have a live agent
+node bin/task.mjs preview browser-fix   # build + serve it on that port — :3000 untouched
+node bin/task.mjs merge browser-fix     # verify → build → merge into base (serialised)
+```
+
+Point a pane at `.minami-worktrees/<name>` and that agent physically cannot touch another's files.
+Integration happens at the merge, where a collision is a *conflict git can show you* rather than a
+silent loss. The dashboard also warns when more than one agent is live in the same folder.
 
 ## Configuration
 
@@ -157,17 +199,29 @@ few situations apart instead of one flat "thinking…":
 ### Browser tool
 
 Every live-driven chat is handed a browser (via the official [`@playwright/mcp`](https://www.npmjs.com/package/@playwright/mcp)
-server, headless + isolated per session — nothing written to disk, nothing shared between chats) so
-Claude can navigate, click, type, and screenshot — built for having it QA-test your own apps rather
-than general web automation. It's just another tool: gated by whatever permission mode the chat is in,
-same Approve/Deny prompt as anything else.
+server, headless + isolated per session — nothing shared between chats) so Claude can navigate, click,
+type, and screenshot — built for having it QA-test your own apps rather than general web automation.
+It's just another tool: gated by whatever permission mode the chat is in, same Approve/Deny prompt as
+anything else. Browser prompts get a plain-English one, though: *"Claude wants to fill in a form on
+localhost:3000"*, with an **Allow all on localhost:3000** button that auto-approves the rest of that
+host for the life of the pane — approving thirty clicks one at a time isn't a QA pass.
 
-Once a pane's used it, a **live view panel** docks next to that chat and shows the latest screenshot,
-updating the instant a `browser_*` call returns one — swap in, not continuous video (a real CDP
-screencast is a much bigger lift; sub-second-after-every-action is what you actually watch during a
-QA pass anyway). Screenshots also persist in the transcript history (`showTools` on) so you can scroll
-back through what it saw. Toggle the panel from the small browser icon in the chat header; turn the
-tool off entirely with `MINAMI_DISABLE_BROWSER_TOOL=1`.
+Once a pane's used it, a **browser panel** docks beside that chat. Because the browser is headless,
+the panel *is* the browser window:
+
+| | |
+|---|---|
+| **Toolbar** | Editable URL bar, back / forward / reload, a ⧉ to open the page in your own browser, device presets (Desktop / Laptop / iPad / iPhone), a ⏺ record button, and a console-error badge. None of these touch the browser directly — they ask Claude, the same way Claude Code treats navigation as a tool call. |
+| **Viewport** | The latest screenshot, letterboxed. Shows how many actions old it is, and says so plainly when Claude is reading the page as an accessibility tree instead (with a one-click *Ask for a screenshot*). |
+| **Filmstrip** | Every screenshot in the session. Click to pin one, *back to live* to follow the newest again. |
+| **Drawer** | Console, Network, and an Actions log of every `browser_*` call with pass/fail and duration. |
+
+Click the viewport (or any screenshot in the transcript) for a **full-screen lightbox** — zoom, pan,
+`←`/`→` to step through the filmstrip, `Esc` to close. Full-resolution pixels are read back from
+`<cwd>/.playwright-mcp/`, so they survive a page reload; the inline copies don't. Drag the divider to
+resize, `▥` to move the panel below the chat instead of beside it, and `⧉` to pop it into its own
+window (handy on a second monitor — it's read-only there). Turn the whole tool off with
+`MINAMI_DISABLE_BROWSER_TOOL=1`.
 
 ## Roadmap
 
@@ -177,7 +231,10 @@ tool off entirely with `MINAMI_DISABLE_BROWSER_TOOL=1`.
   resume — a real alternative to CLI windows.
 - **Phase 3 — Share (in progress).** ✅ Richer "what's it doing" hints (cold-start vs. thinking,
   escalating reassurance, live plan checklist, away-tab notifications). ✅ Browser tool (Playwright MCP)
-  with a live screenshot panel for QA-testing your own apps. Next: per-topic thumbnails, file
+  with a full browser panel — toolbar, filmstrip, console/network, lightbox, pop-out — for QA-testing
+  your own apps. Next: letting the panel drive the browser directly (Playwright MCP over `--port` with a
+  shared context, so the view is live rather than screenshot-by-screenshot and you can click through it
+  yourself), optional attach-to-your-real-Chrome via `--extension`, per-topic thumbnails, file
   attachments in chat, open-source packaging.
 
 ## Tech

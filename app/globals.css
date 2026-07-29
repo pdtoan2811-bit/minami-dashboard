@@ -70,9 +70,105 @@ body {
   }
 }
 
-/* smooth, non-stiff motion primitives */
+/* ── Motion ──────────────────────────────────────────────────────────────────
+   Four durations and two curves, and everything in the app picks from them. The
+   point isn't tidiness: an interface reads as *one* object only when the things
+   that move together move alike, and ad-hoc 150/200/300/500/700ms values are
+   what make a UI feel assembled rather than designed.
+
+   How to choose: a control the pointer is ON (hover, press, focus) uses --dur-1
+   and must never exceed ~120ms, because past that the response stops feeling
+   attached to the input. State that changes underneath you (a panel opening, a
+   row selecting) uses --dur-2. Only something crossing a large distance earns
+   --dur-3, and --dur-4 is reserved for the width transitions between layout
+   modes, which are big enough that a fast version reads as a glitch.
+
+   --ease-out is the workhorse: leaves immediately, settles softly, which is
+   what "snappy" actually means — the *start* is instant, not the whole thing.
+   --ease-spring overshoots slightly and belongs only to things entering. */
+:root {
+  --dur-1: 90ms;
+  --dur-2: 150ms;
+  --dur-3: 220ms;
+  --dur-4: 420ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Retune Tailwind's OWN defaults rather than blanket-styling `*`. A bare
+   `transition-colors` then inherits the house curve with nothing restated at the
+   call site. Setting `transition-duration` on `*` would look equivalent and is a
+   trap: `transition-property`'s initial value is `all`, so every element would
+   start animating every property change — including width and height, which is
+   both mushy and a layout-thrash source. Opt-in stays opt-in. */
+@theme {
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Respecting this is table stakes, not a nicety: vestibular disorders make
+   large motion genuinely painful, and the OS toggle is the user telling us so.
+   Everything still *changes* — instantly — so no state becomes unreachable.
+   1ms rather than 0 because some engines skip transitionend on a 0s duration,
+   and code that waits for it would hang. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 .ease-spring {
-  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  transition-timing-function: var(--ease-spring);
+}
+
+/* ── Inline chips (code spans, tinted tokens) ────────────────────────────────
+   An inline background that wraps is sliced by default: the first fragment's box
+   runs to the edge of the line, both fragments get square inner corners, and any
+   horizontal padding lands only on the outermost ends. It reads as one box torn
+   in half — which is exactly what a `code` span in a wrapped sentence looks like
+   without this. `clone` re-draws the box per fragment, corners and padding
+   included.
+
+   Metrics-safe by construction, which matters for the composer: its mirror layer
+   must wrap identically to the textarea underneath it, so a tint may change how
+   a glyph LOOKS but never where it sits. box-decoration-break moves nothing. */
+.chip-wrap {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* ── Focus ───────────────────────────────────────────────────────────────────
+   Not one focus style existed in the app: the interactive surface is built from
+   `<button>`s with custom borders, several of which set `outline-none`, so a
+   keyboard user had no idea where they were. `:focus-visible` (not `:focus`) is
+   the rule that makes this bearable — the ring appears for keyboard and
+   assistive navigation and stays out of the way of a mouse click, which is why
+   people reached for `outline-none` in the first place.
+
+   TEXT FIELDS ARE DELIBERATELY ABSENT from the list. `:focus-visible` matches a
+   text input on a PLAIN MOUSE CLICK — the spec treats a typing target as always
+   warranting an indicator — so listing `input, textarea, select` here drew a
+   sakura rectangle around the composer every time you clicked into it. Nothing
+   local could opt out, either: `:where()` keeps SPECIFICITY at zero, but this
+   rule is unlayered while Tailwind's `outline-none` sits in `@layer utilities`,
+   and unlayered styles beat layered ones at any specificity — so the composer's
+   own `outline-none` never stood a chance. Specificity was the wrong lever.
+
+   Nothing is lost: a text field announces focus with its caret, and the
+   composer's pill does it properly already, with
+   `focus-within:border-[var(--sakura)]/60` (app/page.tsx).
+
+   No `border-radius: inherit` either. An outline already follows the element's
+   own corners; inheriting REPLACES them with the parent's for as long as focus
+   lasts, which visibly squares off a `rounded-full` button in a square box. */
+:where(a, button, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--sakura);
+  outline-offset: 2px;
 }
 .bento-in {
   animation: bentoIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;

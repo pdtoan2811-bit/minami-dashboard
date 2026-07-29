@@ -18,12 +18,37 @@ subprocess is a child of `next-server`. Restarting the server kills every in-fli
 
 ## Applying changes
 
+**If you are running inside a dashboard chat pane — which you almost always are — the only correct
+command is:**
+
 ```
-bash bin/serve.sh          # build + drain + swap. The only supported deploy path.
+bash bin/deploy.sh --detach     # returns immediately; waits for quiet, swaps, verifies, logs
 ```
 
+Then finish your reply. **Do not wait for it, poll it, or report success** — the swap kills this session,
+so you cannot observe the outcome. Tell Thomas it's running and where the log is
+(`/tmp/minami-deploy.log`), and that his panes will blink. He can check with
+`bash bin/deploy.sh --verify-only`.
+
+Running `bin/serve.sh` (or `deploy.sh` without `--detach`) from a pane kills the turn that asked for it.
+`deploy.sh` walks its ancestry and auto-detaches if it catches you, but pass the flag deliberately.
+
+From Finder/Terminal — not a child of the server — double-click **`Redeploy Minami.command`**, which is
+interactive and prompts when other panes are busy. Full protocol: **`docs/DEPLOY.md`**.
+
 The busy check runs **before** `npm run build` on purpose: `next build` replaces `.next` in place under
-the running server, so that's the point of no return.
+the running server, so that's the point of no return. Success is judged on a changed server PID and a
+changed `BUILD_ID`, never on exit 0 — a build can succeed while the swap silently leaves the old process
+serving.
+
+### Never run bare `npm run build` on this box
+
+To check that your change compiles, use **`npm run build:check`** (builds into `.next-verify`). A bare
+`npm run build` overwrites `.next` **underneath the live server**, which keeps serving its old in-memory
+manifests: the HTML it hands out then references CSS/JS hashes that no longer exist on disk, every asset
+400s, and the dashboard renders as unstyled text that never hydrates — no tiles, no panes, no browser
+preview. It looks exactly like "the app is broken", it survives a reload, and only a real restart fixes
+it. `bin/deploy.sh` is allowed to do this because it restarts the server in the same breath.
 
 ## Conventions
 
@@ -34,6 +59,10 @@ the running server, so that's the point of no return.
   dropped SSE event self-heals on the next one. Don't add client-side derivation that can disagree.
 - **Model pins live in `lib/model-pins.ts`** — never hardcode a model id elsewhere, so the session model
   and the model the dashboard *alerts on* can't drift apart.
+- **`bypassPermissions` is the default permission mode** (`DEFAULT_PERMISSION_MODE` in
+  `lib/agent/manager.ts`, override with `MINAMI_DASHBOARD_PERMISSION_MODE`). Every dashboard session
+  auto-approves every tool with no prompt. The mode is enforced by the server's own `canUseTool`, not
+  by the SDK — see §3 of `docs/KNOWLEDGE.md` for why. This raises the stakes on the next line.
 - **Security posture is loopback/local-only.** The metrics API binds loopback; `/api/agent/health` uses a
   shared secret (`.minami-drain-token`). Do **not** gate a local endpoint on `Host` or
   `x-forwarded-for` — Next injects the latter from the socket and preserves a client-supplied value, so

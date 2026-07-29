@@ -11,5 +11,11 @@
 next-env.d.ts
 .env.local
 .next-dev/
+.next-verify/
 .playwright-mcp/
 .minami-drain-token
+
+# Task worktrees — each is a full checkout of this repo; never commit them into it.
+.minami-worktrees/
+.next-task/
+.next-verify/
