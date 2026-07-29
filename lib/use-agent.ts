@@ -276,9 +276,55 @@ export function useAgent(paneKey: string) {
   // browser is already re-dialling (CONNECTING) heals itself and must be left alone; only a CLOSED one
   // needs replacing. Paired with the longer server-side reap window (IDLE_REAP_MS in
   // lib/agent/manager.ts), this is what lets the phone view survive being put in a pocket.
+  //
+  // The same handler also runs the OPPOSITE direction — releasing a stream that has been hidden for a
+  // while — because an open tab is what pins the SDK subprocess in memory. The server only arms its
+  // idle reaper when a session's subscriber count reaches zero (`scheduleIdle`, and note the
+  // `subs.size !== 0` early return inside it), and a visible pane's EventSource is always a subscriber.
+  // So `IDLE_REAP_MS` never got a chance to apply to a tab someone left open: measured on this box,
+  // each live pane pins a ~400 MB `claude` process indefinitely, on a 16 GB machine that was down to
+  // 81 MB free with 6 GB in swap. Dropping the stream after a long hide hands the session back to the
+  // existing reaper instead of inventing a second eviction path.
+  //
+  // Deliberately much longer than a glance at another window: the whole point of a warm pane is that
+  // switching away and back is free, and re-attaching costs a cold start. This only targets the tab
+  // that has genuinely been left open in the background.
+  const HIDDEN_RELEASE_MS = 10 * 60 * 1000;
+  const hiddenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const releasedWhileHiddenRef = useRef(false);
+  // Mirrored into a ref because the release timer's callback would otherwise close over the state as it
+  // was when the tab was hidden — and "was this pane busy 10 minutes ago" is the wrong question.
+  const releasableRef = useRef(true);
+  releasableRef.current = !busy && !pending && !ask;
   useEffect(() => {
+    const releaseIfSafe = () => {
+      hiddenTimerRef.current = null;
+      if (document.visibilityState === "visible") return;
+      // Never release mid-turn or over an unanswered prompt. A parked permission/AskUserQuestion promise
+      // is auto-denied once the server reaps the session, so releasing here would silently answer a
+      // question on the user's behalf; and dropping the stream mid-turn loses the tokens it was carrying.
+      // Re-check on a short cadence instead, so a long unattended turn is still released once it lands.
+      if (!releasableRef.current) { hiddenTimerRef.current = setTimeout(releaseIfSafe, 60_000); return; }
+      closeStream();
+      releasedWhileHiddenRef.current = true;
+    };
     const onVisible = () => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible") {
+        if (!live || detached) return; // nothing warm to give back
+        if (hiddenTimerRef.current) clearTimeout(hiddenTimerRef.current);
+        hiddenTimerRef.current = setTimeout(releaseIfSafe, HIDDEN_RELEASE_MS);
+        return;
+      }
+      if (hiddenTimerRef.current) { clearTimeout(hiddenTimerRef.current); hiddenTimerRef.current = null; }
+      // Came back to a stream we let go on purpose. Re-attach down the same path a refresh takes: if the
+      // session survived, the snapshot rebuilds the pane; if the reaper got it, the server says
+      // `detached` and the pane falls back to disk with `resume` re-armed for the next send.
+      if (releasedWhileHiddenRef.current) {
+        releasedWhileHiddenRef.current = false;
+        attachingRef.current = true;
+        ensureStream(true);
+        return;
+      }
       if (!live || detached) return; // never went live, or the session is legitimately gone
       const es = esRef.current;
       if (es && es.readyState !== EventSource.CLOSED) return; // open, or already reconnecting
@@ -287,8 +333,11 @@ export function useAgent(paneKey: string) {
       ensureStream(true);
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [live, detached, closeStream, ensureStream]);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      if (hiddenTimerRef.current) { clearTimeout(hiddenTimerRef.current); hiddenTimerRef.current = null; }
+    };
+  }, [live, detached, closeStream, ensureStream, HIDDEN_RELEASE_MS]);
 
   // Reattach to a still-running server session after a page refresh: open the stream and let the
   // server's snapshot rebuild the transcript (history + in-flight message + any pending prompt). If no

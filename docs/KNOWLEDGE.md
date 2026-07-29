@@ -264,6 +264,34 @@ paragraph — see §5c.
 
 ---
 
+### Memory: an open tab used to pin every pane's subprocess forever
+
+Each live pane holds a `claude` subprocess measuring **~330–410 MB**. The idle reaper (`IDLE_REAP_MS`,
+30 min) is armed **only when a session's subscriber count reaches zero** — `unsubscribe()` is what calls
+`scheduleIdle`, and `scheduleIdle`'s own callback returns early on `subs.size !== 0`. A visible pane's
+EventSource is always a subscriber, so a tab left open all day reclaimed *nothing*, no matter how idle.
+
+Measured on this box during the audit: 16 GB machine, **81 MB free**, ~22 GB of logical memory
+compressed into 5.5 GB, **6.0 of 7.2 GB swap in use**, and `kernel_task` at 20% doing the compression
+and swap I/O. That is what makes the machine hot — not dashboard CPU, which is negligible
+(`next-server` ~3%, polled endpoints 10–20 ms, idle page **0 long tasks / 0% main thread**).
+
+`use-agent.ts` now releases a pane's stream after **10 minutes hidden**, which hands the session to the
+existing reaper rather than inventing a second eviction path. Deliberately long: a warm pane means
+switching away and back is free, and re-attaching costs a cold start — this targets only the tab
+genuinely left in the background. It never releases mid-turn or over an unanswered prompt (a parked
+permission promise is auto-denied when the session is reaped, so releasing would answer for the user);
+it re-checks every 60 s instead, so a long unattended turn is still released once it lands. Coming back
+re-attaches down the same path a refresh takes: session alive → snapshot; reaped → `detached`, falling
+back to disk with `resume` re-armed.
+
+> ⚠️ **Verify this by watching the subprocess, not by reasoning — and watch long enough.** A first
+> attempt looked like a total failure (subprocess still alive 30 s after release) and was nearly
+> diagnosed as a broken client. It wasn't: `scheduleIdle` **re-arms** rather than firing once, so the
+> reap landed at ~40 s. The way to tell a broken release from a slow one is to count sockets —
+> `lsof -nP -iTCP:<port> -sTCP:ESTABLISHED` dropped 5 → 3 at release, proving the client half worked
+> while the reaper was still cycling.
+
 ### Restart safety — the deploy kills every conversation
 
 Every live session's SDK subprocess is a **child of the Next server process**. `bin/serve.sh` kills
@@ -1297,6 +1325,12 @@ timestamp comparison, an actual HTTP probe — and check that instead.
 ## Changelog
 
 ### 2026-07-29
+- **A hidden tab now gives its panes' memory back** (§3) — each live pane pins a ~330–410 MB `claude`
+  subprocess, and the idle reaper only ever armed at zero subscribers, so an open tab reclaimed nothing.
+  Panes hidden for 10 min release their stream and hand the session to the existing reaper. Found while
+  auditing machine heat: the dashboard's CPU is negligible (~3% server, 0% page main thread) — the cost
+  was memory, on a 16 GB box down to 81 MB free with 6 GB swapped.
+  *Requested by user: "audit the heat problem running Minami dashboard".*
 - **The dashboard was burning ~31% of a CPU core while idle** (§12) — reported as "lag and heat".
   Not the polling, parser or SDK (`next-server` measured 1.5%): it was `backdrop-filter` re-blurring a
   whole tile / the 768×800 chat panel every frame because a 1.5px indicator dot was animating inside
