@@ -112,9 +112,15 @@ its own, without this brief next to it.`;
  * "and also write your memory" gets treated as one task with a tail, and the tail is what gets
  * dropped when the real work runs long. As its own turn it either happens or visibly doesn't.
  */
-export function wrapUpPrompt(a: AgentDef, cwd: string): string {
+export function wrapUpPrompt(a: AgentDef, cwd: string, title?: string): string {
   const away = cwd !== a.home;
-  return `That run is finished. Before this session ends, update your memory.
+  // Leading with the task title is not decoration. A transcript's title is derived from its LAST user
+  // prompt (see buildMeta in lib/claude-sessions.ts), and the wrap-up is always the last thing sent —
+  // so every finished task was titled "That run is finished. Before this session ends, update your
+  // memory…", on the agent's own transcript viewer AND on the main bento board. Every completed run on
+  // the box looked like the same nameless chore. Naming the task here fixes both surfaces at once,
+  // which beats teaching the read pipeline about the agents layer to special-case one message.
+  return `**Wrap-up: ${title || "that task"}** — the run is finished. Before this session ends, update your memory.
 
 ${away ? `You were working in \`${cwd}\`, which is not your home. The work stays there; what you
 LEARNED goes back to \`${a.home}\`. Write to the absolute paths under your home folder — don't write

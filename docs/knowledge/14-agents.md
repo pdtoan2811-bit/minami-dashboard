@@ -219,6 +219,15 @@ so, which is what the prompt asks for ("an honest empty is better than padding")
 > in use: a stopped task that says "done" is not a symptom anyone reports, it's just a wrong record
 > you later trust.
 
+> 🐛 **Every finished task was titled "That run is finished…".** A transcript's title is derived from
+> its LAST user prompt (`buildMeta` in `lib/claude-sessions.ts`), and the wrap-up is by construction
+> the last thing sent — so every completed run carried the wrap-up's opening words as its name, on the
+> agent's transcript viewer and on the main bento board. Every task on the box looked like the same
+> nameless chore. Fixed by leading the wrap-up with the task title (`**Wrap-up: <title>** — …`), which
+> corrects both surfaces at once. The alternative — teaching the read pipeline to recognise and skip
+> one specific agent message — would have inverted the dependency the whole architecture rests on: the
+> agents layer sits on top of the read pipeline, never inside it.
+
 ### Handoffs
 
 `handoffTo` chains a second agent onto the first's result, and the chain fires **after** the
