@@ -3,6 +3,7 @@
 import { Nav } from "@/components/Nav";
 import { useSetting } from "@/lib/use-settings";
 import AutopilotPanel from "@/components/AutopilotPanel";
+import PreferredAccountPanel from "@/components/PreferredAccountPanel";
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -72,11 +73,13 @@ export default function Settings() {
             </Row>
           </div>
         </section>
+        <PreferredAccountPanel />
         <AutopilotPanel />
 
         <p className="px-1 text-[11px] text-neutral-600">
-          Settings are stored locally in this browser. Bento reads them live. Autopilot is the exception —
-          it lives on the machine, because the thing that obeys it runs there.
+          Settings are stored locally in this browser. Bento reads them live. Autopilot and the
+          preferred account are the exceptions — they live on the machine, because the things that
+          obey them run there.
         </p>
       </main>
     </div>

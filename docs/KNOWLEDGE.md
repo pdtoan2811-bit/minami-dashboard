@@ -43,7 +43,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Transcript CLI | `bin/transcript.mjs` | **shipped** | full history, no server, no caps — see §1 |
 | Client SSE | `lib/use-agent.ts` | **shipped** | reconnect-aware |
 | Metrics collector | `server/metrics-server.js` | **shipped** | systemd on Hetzner |
-| Account bridge | `app/api/accounts` | **shipped** | reads ground-truth identity |
+| Account bridge | `app/api/accounts` | **shipped** | ground-truth identity; preferred account set in Settings |
 | Browser panel | `lib/browser-view.ts` + `components/BrowserPanel.tsx` | **shipped** | derived from tool results; observer-only — see §5b |
 | Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | can create folders; cwd validated — see §5d |
 | Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
@@ -1449,7 +1449,29 @@ credential it actually authenticated with. `/api/accounts` layers a `live` block
 `offPreferred` and `claimsMismatch`. `AccountStatus` triggers on it and **re-verifies after
 switching** rather than believing the CLI's reported success.
 
+### The preferred account is chosen in Settings, and lives on disk
+
+`lib/preferred-account.ts` stores it in `~/.minami/account.json` (override: `MINAMI_ACCOUNT_CONFIG`).
+It cannot be a `useSetting` — the thing that reads it is this API route inside next-server, which has
+no browser to ask, and `AccountStatus` is mounted globally in `app/layout.tsx`. Same reasoning as
+`lib/autopilot/config.ts`. Read per-request, so a change in Settings lands on the next 30s poll.
+
+Precedence is **file → `MINAMI_PREFERRED_ACCOUNT` → built-in fallback**, deliberately in that order.
+Env-var-wins is the obvious alternative and it's wrong: on any machine that sets the var, the
+Settings control would silently do nothing, which is a dead switch that costs an hour to diagnose.
+The env var is a seed for a fresh install; once you pick an account, your choice is the answer.
+`live.preferredPinned` distinguishes "someone chose this" from "nobody has, this is the fallback".
+
+**Two verbs, kept apart on purpose.** `POST` switches the live credential — a side effect that
+rewrites the shared Keychain entry and kills every running `claude` on the box. `PUT` only records
+which account *should* be live. Conflating them would mean picking a target in Settings silently
+dropped your sessions. `PUT` also rejects any address not in the token-slayer pool, because a typo
+would pin the alert to an account that can never go live, leaving it stuck red with no way to read why.
+
 ### Caveats
+- The shipped fallback in `preferred-account.ts` is **hand-synced with the pool**. `tok setup` can
+  remove an account, and a fallback naming a deleted one makes the panel flag every healthy session
+  as wrong-account. Pin a real choice in Settings rather than relying on the fallback.
 - `oauthAccount.displayName` goes stale across switches (read "OE Dev" while every UUID said
   `pdtoan2811`). Use the UUID/email fields; the display name is cosmetic.
 - token-slayer's stored slot for a pooled account can be a **degraded capture** (`oauth_account`,
@@ -2068,6 +2090,16 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Preferred account is now chosen in Settings** (§6) — new `lib/preferred-account.ts` persists it to
+  `~/.minami/account.json`, `GET /api/accounts` reads it per-request, and a new `PUT` sets it.
+  `components/PreferredAccountPanel.tsx` adds the Account section. It had been a module-level
+  constant defaulting to `oedevai2@gmail.com`, which `tok setup` deleted from the pool — so the
+  header alert was firing on every healthy session, comparing the live credential against an account
+  that no longer existed. `PUT` is separate from `POST` because `POST` rewrites the Keychain and kills
+  running sessions; choosing a target must not do that. Verified live on :3001 — valid write pins and
+  flips `offPreferred`, a non-pool address and an empty body both 400 and leave the file untouched.
+  *Reported by user: "set the minami dashboard email token cli to oedevai5@gmail.com" → "change the
+  minami dashboard so I can switch it inside the setting"*
 - **The flow strip stops being a row** (§5e, §5f) — it is a chip on the control row at every density
   tier, next to Plan/Code and the approval chips, and the full-width variant is deleted. It cost ~42px
   of every pane permanently: the wide form folded to a chip only when cramped, which was fine while the
