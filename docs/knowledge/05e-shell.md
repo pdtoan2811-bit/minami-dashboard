@@ -1,0 +1,484 @@
+# The shell — panel, panes, density, bento
+
+Part of the [Minami Bento knowledge record](../KNOWLEDGE.md) — the index lists every doc and
+which `§` ids live where. Section numbers are stable: code comments cite them.
+
+---
+
+## 5e. The shell — `app/page.tsx`, `components/BentoRail.tsx`, `components/Composer.tsx`, `lib/density.ts`
+
+### Density tiers — chrome is rationed by measured room, not by breakpoint
+
+Four chats in one panel is the layout this app exists for, and it was the layout it was worst at.
+Measured on a 1455×820 window with the bento railed, each pane came to ~689×354 CSS px, of which
+**chrome took ~200px**: header 46 (two lines — title *and* goal), flow strip 42, mode row 34, composer
+50, padding 24. The transcript — the only reason the pane is open — got **146px, about three lines**.
+
+`lib/density.ts` measures a box with `ResizeObserver` and names the result: **roomy · snug · tight ·
+micro**. Everything inside reads that one name.
+
+- **Media queries cannot express this.** None of it is about the *window*: the same 27" display gives a
+  roomy pane at one chat and a cramped one at four, and dragging the divider changes it again with no
+  breakpoint firing. Container queries get closer, but half of what has to give way is a decision about
+  *what to render at all* — a control row folding into one pill, a side panel that must not open — not
+  about styling something that renders anyway. `FilePanel`/`BrowserPanel` still use `@container` for
+  their own width, and correctly: that part *is* pure CSS.
+- **Both axes, tightest wins.** A pane can be 900px wide and still hold two lines of transcript. Height
+  is the axis that hurts; width mostly decides whether a control row fits on one line.
+- **Growing back costs +28px of hysteresis.** Without it a box parked on a threshold oscillates:
+  showing a control row shortens the transcript, which can push the box back under the line that
+  revealed it. Same one-way-hysteresis discipline as the divider's 260/170 snap above. Shrinking is
+  immediate — overflowing chrome is a visible bug, and half a second of it is worse than an eager
+  reflow.
+- **A `display:none` box measures 0×0 and is ignored**, or every collapsed pane (see focus mode below)
+  would demote to `micro` and re-promote on reveal.
+
+What each tier gives up, in order: the header's **goal subtitle** (the pane's category — true all
+session, read once, and the tab strip and bento tile both still say it) → **the mode row folds into a
+`code · bypass` pill** → padding and gaps → at `micro`, the utility bar itself, the project icon and the
+📎. Net effect at four panes: **transcript 146px → ~232px**.
+
+**The flow strip is no longer part of that ladder — it is a chip at every tier.** It used to have a
+full-width form that took its own row (~42px with its margin) and folded to a chip only when cramped,
+which was affordable while the 2×2 grid was the default view: the wide form only appeared in a large
+pane. Tabs-first inverted that. The pane you are reading is now *always* `roomy`, so "the roomy
+treatment" stopped meaning "occasionally" and started meaning "always" — a permanent row, in every pane,
+for a label. The chip sits on the control row beside Plan/Code and the approval chips, and the wide
+variant is deleted rather than left unreachable.
+
+The one thing the wide form carried that the chip can't is `detail`, the running step's title. That is
+already said by the activity line at the other end of the same row, so it moved to the tooltip instead
+of being lost, and the chip's label tints while a step is in progress. The rule this control must not
+break is still met: **the door is visible at rest** — v1's only appeared on hover, on a tile, in another
+view, which is the whole reason nobody found it.
+
+**The folded pill and the full row are one component** (`ModeControls`). The approval level is the most
+dangerous thing in this UI to be wrong about — two renderings of it, drifting, is the failure worth
+spending a component to make impossible. `PERM_LABEL` exists for the same reason: one spelling of
+"bypass". Held and bypass keep their colour even folded, because what survives a fold must still be
+readable at a glance.
+
+### Embody — the pane you're typing in gets a tier back
+
+`dc = composing ? looser(d) : d`. Focus the composer and the pane spends one tier more: the folded pill
+unfolds into the real Plan/Code and approval controls. That is the one moment before Enter when the
+mode is the thing you most need to see, and the moment you are demonstrably not reading the transcript.
+
+- **Focus, not hover.** Hover fires on the way to somewhere else; a control row that flickers past the
+  cursor is worse than one that stays folded.
+- **Scoped to the composer row, not the whole footer.** The mode pill sits *outside* it deliberately —
+  inside, clicking the pill would expand the footer out from under its own popover, which is exactly
+  what the first revision did (the popover state was set and the compact branch it lived in had already
+  been swapped away).
+- **`onBlurCapture` tests `relatedTarget`**, or tabbing from the textarea to the send button beside it
+  collapses the controls mid-gesture and moves that button out from under the cursor.
+- **The composer's max height is a share of the pane** (`MAX_H` per tier, 220 → 72). 220px is right in a
+  full-width pane and a catastrophe in a 250px one: a fifteen-line draft grew over the entire
+  conversation, so you were typing a message about a reply you could no longer see. This is the one
+  consumer of `DensityContext` — a leaf that can't take the tier as a prop and is rationing the *pane's*
+  height, not its own width.
+
+### Tabs is the default view; the grid is the alternate
+
+The first cut had this the other way round — grid at rest, one pane promotable out of it — and that was
+the wrong default for the same reason the chrome had to fold: four transcripts at once is a glanceable
+state, not a readable one. The resting state should be the one you can *read*.
+
+- **One view switch for the panel, not a maximise button per pane.** The per-pane ⤢ asked "do you want
+  THIS one bigger?" once per pane, when the decision is made once for the whole panel. The switch lives
+  in the tab row; the tab itself is how you choose a pane. What stayed per-pane is ✕, which genuinely is.
+- **The tabs render in both views.** In grid view none is lit, and clicking one is how you drop back into
+  reading that pane. One row that never moves beats two rows that swap places.
+- **`Escape` closes the panel again, unconditionally.** It briefly meant "step out of focus first", which
+  was right while focus was a mode you could get stuck in. With tabs as the resting state there's nothing
+  to step out of, so the key and the label on the button (`esc ✕`) agree again.
+- **`focusPane` is derived and clamped in the render**, not stored: `paneView === "tabs" ? min(activePane,
+  panes.length - 1) : null`. Storing it meant a close could leave it pointing past the array for the one
+  render before its effect ran.
+- **Grid view is tighter than tabs view** (`gap-1 p-1` vs `gap-2 p-2`). Grid exists to show all four at
+  once, so every px of gap is px not spent on the thing it's for — 8px gaps plus 8px of panel padding
+  cost ~24px of each column in a 2×2, about a line of transcript per pane, spent on air.
+
+### The panel header hides, and comes back on hover
+
+The identity header — icon, project name, repo path, tech icons, counts — is read once a session and
+then holds ~46px forever. It collapses to nothing and slides back on hover, keyboard focus, or a pin.
+
+- **`grid-rows-[0fr]` → `[1fr]`, not `max-height`.** It animates to the content's real height, so the
+  header can't be clipped by a guessed maximum nor leave dead space under a short one.
+- **The hover target is the whole chrome block**, header *and* tab row, as one `group`. Aiming at a
+  0px-tall element would be a joke; the tab row sits directly beneath and is always there.
+- **Pinning is the escape hatch**, persisted. Auto-hiding chrome is only tolerable if you can stop it —
+  "I'm reading this repo path and it keeps sliding away" is the failure mode that makes people hate it.
+- **`pr-14` moved to the tab row too.** The notification bell is fixed to the viewport's top-right, and
+  with the header collapsed the tab row is what's under it.
+
+### Focus mode — four panes is a glanceable state, not a readable one
+
+`⌥1–4` (or the pane's ⤢) gives one pane the whole panel; the other three fold into a tab strip that
+keeps their live phase dot. `Esc` steps back to the grid, `⌥0` or ⊞ grid likewise.
+
+- **The collapsed panes are `display:none`, never unmounted.** Unmounting would tear down four live
+  `EventSource`s and their streamed turns every time you zoom into one. `ChatColumn`'s React key already
+  documents that a remount mid-stream is a bug, not a nicety.
+- **…which means saving and restoring `scrollTop` by hand.** A `display:none` box has no layout and the
+  browser does not restore its scroll offset when it returns. Left alone, every trip in and out dumped
+  the other three at the top of their rendered window *and* unpinned them, because `atBottom()` then
+  reads false. `pinned` wins over the saved offset on the way back in — a pane that was following the
+  reply has almost certainly grown while it was hidden.
+- **`Escape` is layered, innermost first.** It used to close the whole panel unconditionally, which from
+  a focused pane would throw away the panel to undo a zoom.
+- **`e.code`, not `e.key`, for the chord.** Option+1 on a Mac layout produces `¡`, and on a Vietnamese
+  layout something else again. The physical key is the only stable name. It fires while the composer has
+  focus on purpose: switching panes mid-draft is the point, and drafts are persisted per session.
+- **Focus is an index into `panes`**, so it's re-clamped whenever that array changes — closing the
+  focused pane would otherwise leave the panel showing a different conversation than the one zoomed in.
+- **A focused pane is `roomy`, so its side slot opens on its own.** Below `snug` the browser/file slot
+  doesn't open at all: a preview docked beside a 380px transcript is two unreadable columns instead of
+  one readable one. The header's reopen button then reads "expand this chat to show…" and *takes* the
+  room rather than pretending there is some. Nothing is silently dropped — the button still carries the
+  error/file count.
+- **Crossing into 3+ panes auto-rails the bento, latched.** Un-rail it by hand at three panes and it
+  stays un-railed until you drop under three and come back up. The heuristic never outlives an explicit
+  choice.
+
+### The bento collapses to a rail, it doesn't just shrink
+Dragging the chat panel out to 85–90% leaves no room for a 3-column grid — but there's still room for
+*navigation*, and losing the project switcher entirely is what forces you to drag the divider back and
+forth all day. So past a threshold the grid changes **state** rather than size: a 56px vertical rail of
+project chips.
+
+The rail is the same information at a lower resolution, not a different widget. Every encoding the
+tiles use is preserved: opacity is the same recency decay, plus the project accent, the live/review/
+recent dot, and a pulsing ring for a folder with a live dashboard run.
+
+**Chip height is a share of the measured column height**, so the strip is always exactly full — which
+is why it's measured (`ResizeObserver`) rather than assumed: the height changes with the window and
+with whether a chat panel is even open. Raw weight can't drive that share directly. `weight` is
+`reqs + tokens/5000`, which spans three orders of magnitude across real projects — a busy repo is
+~360× a fresh one — so proportional heights would render everything except the biggest as a 2px
+sliver. `log1p` compression keeps the ordering and the *sense* of relative size (~3× across that same
+range) while leaving every project big enough to hit.
+
+**Hovering the strip slides the names out over the chat**, and that's the actual context-switching
+move: at 56px an icon identifies a project only if you already know its icon, and a per-chip tooltip
+makes you hunt one at a time. Opening once shows the whole list. It costs no layout — the strip keeps
+its 56px footprint and the panel overlays — because a hover that shoves the chat sideways is worse
+than no hover at all. Opening is delayed ~140ms and closing is not: a cursor travelling to the chat
+shouldn't drag the list out behind it.
+
+- **`bentoRail` is explicit persisted state, not a width derivation.** It has to survive a reload, and
+  a percentage-of-viewport means a different thing on a 13" laptop than on a 32" display.
+- **The drag never routes through React.** Every mousemove writes `--lw`/`--rw` straight to the shell's
+  inline style and only `mouseup` commits to state. Going through `setPanelW` per pixel re-rendered the
+  whole bento — every tile is a `motion.button` with `layout`, so each pixel re-ran a spring layout
+  animation — and the divider visibly lagged the cursor. The variables it writes are the same ones the
+  render sets, so the two can't disagree: the next render simply overwrites them.
+- **The in-flight width lives in a ref, not the effect's closure** — see the post-mortem below.
+- **The snap is immediate and hysteretic** — cross 260px and the bento becomes the rail on that frame;
+  coming back out needs 170px. With one shared edge the divider chatters between states on a single
+  pixel of mouse jitter.
+- **The chat panel is `flex-1` when railed**, not a second percentage: the rail's width is in px, and
+  `100% − a percentage` can't express "whatever the rail didn't take".
+- **The rail's hover flyout is `fixed`, positioned off a measured rect.** The chip list scrolls on Y,
+  and CSS forces `overflow-x` to clip whenever `overflow-y` does — anything drawn inside it is cut off
+  at the rail's edge no matter what `overflow-x` says. It's a flyout rather than a `title` because the
+  native tooltip's ~1s delay is far too slow for something you scan down a list of.
+- **The bento header is `@container`-scoped too.** At a 60% chat panel that column is ~500px on a wide
+  display: plenty of window, nowhere near enough column, and the old `md:` breakpoints happily
+  overflowed it.
+
+### Project icons — inferred, de-collided, assignable
+The big 3D glyph on a tile is what you aim at without reading, in the grid and even more so in a 56px
+rail. Three sources, in order: an explicit `icon` in `~/.minami-bento/icons.json` (served through
+`/api/bento/attach`, maintained by the `bento-icons` skill) → a keyword match on the folder name → a
+deterministic pick from a pool of distinct glyphs.
+
+**Assignment happens for the whole visible set at once** (`assignIcons`), not per tile, because
+distinctness is the entire point and a per-tile function can't see siblings: `ownego-growth` and
+`ownegoCentral` both hit the `growth|central → rocket` rule and rendered identically — precisely when
+you're trying to tell two projects apart. A collision falls through to the next matching rule, then to
+the pool. Iteration is name-sorted so a glyph doesn't reshuffle when the grid's sort order changes.
+
+> 🐛 **Every unrecognised project got the same icon.** The fallback was a flat `return "cube"`, so any
+> name that didn't contain one of ~40 English keywords — which is most new topics, and every name in
+> another language — got the identical grey box. A tile you can't tell from its neighbour is worse
+> than an arbitrary one. Now the fallback hashes the name into a pool of ~27 distinct glyphs (`cube`
+> deliberately excluded: it reads as "the icon this project didn't get"), the keyword table is roughly
+> twice the size, and the store carries a hand-assignable override.
+> *Reported by user: "the skill to semantically assign icon for topic is not working, new topic get
+> default icon that is hard for context recognize and switching for human".*
+
+> 🐛 **A resize that silently didn't take.** `useSetting`'s setter was recreated on every render, so
+> the divider's drag effect — which lists it in its deps — tore down and re-subscribed whenever any
+> state changed. Collapsing to the rail mid-gesture is exactly such a change, and the width in flight
+> was a local inside that effect, so it reset to the pre-drag value and `mouseup` committed the wrong
+> number. Fixed on both sides: the setter is `useCallback`-stable (an unstable setter is a trap for
+> every effect that depends on one), and the pending width moved to a ref that survives re-subscription.
+> Caught while verifying the drag, not reported.
+
+### The ask card — one question at a time, and one visible answer
+
+`AskUserQuestion` arrives through the same `canUseTool` hook as a permission prompt (§3) and renders as
+a wizard. Three rules, each of them a bug that was reported:
+
+- **"Other" is an option, not a side channel.** It is the last row of the same list, it selects like any
+  other row, and typing in it selects it. Previously the free text and the chips were independent state
+  that both lit up — and single-select resolved by taking the chip and **silently discarding what you
+  typed**. Now the sentinel `OTHER` lives in the same selection array as the real labels, so single- vs
+  multi-select semantics are written once: picking a chip in single-select clears Other, and typing in
+  Other clears the chip, in front of you.
+- **The control's shape states the arity.** Radios for one, checkboxes for many, plus the words
+  "Select all that apply" (with a live count) or "Select one" under the question. A multi-select
+  question that looks identical to a single-select one is unanswerable by anyone who doesn't already
+  know — the previous hint was 10px grey text in the footer corner.
+- **One option per row.** The old `flex-wrap` chip row put option 3 above option 2 at some pane widths,
+  so the same list reordered itself as the panel resized.
+
+The footer states the outcome rather than the rules: `sending: <the exact strings that will be sent>`.
+Anything the card can't answer honestly (an empty Other row) is dropped rather than sent as `""`.
+
+### Motion, scroll and render cost
+
+The interaction layer has three rules, and each replaced something ad hoc.
+
+**One motion vocabulary.** `--dur-1..4` and two curves (`--ease-out`, `--ease-spring`) in
+`globals.css`, with Tailwind's own `--default-transition-duration`/`-timing-function` retuned to match
+so a bare `transition-colors` inherits the house curve. Before, the app used 150/200/300/500/700ms and
+four different easings picked per call site — the thing that makes an interface feel assembled rather
+than designed. The rule for choosing: anything the pointer is *on* (hover, press, focus) gets `--dur-1`
+and must stay under ~120ms or it stops feeling attached to the input; state changing underneath you
+gets `--dur-2`; only the layout-mode width transitions earn `--dur-4`.
+
+- **Retune Tailwind's defaults, don't blanket-style `*`.** Setting `transition-duration` on `*` looks
+  equivalent and is a trap: `transition-property`'s initial value is `all`, so every element would
+  animate every property change, width and height included.
+- **`transition-all` is banned** (zero left in the tree). It animates layout properties by accident and
+  defeats the compositor; name the properties that actually change.
+- **`prefers-reduced-motion` is honoured globally.** It was absent everywhere but one component. Large
+  motion is genuinely painful with a vestibular disorder, and the OS toggle is the user saying so.
+  Durations drop to 1ms rather than 0 — some engines skip `transitionend` at 0s, and anything awaiting
+  it would hang.
+- **`:focus-visible` exists at all now.** The UI is built from `<button>`s with custom borders, several
+  setting `outline-none`, so keyboard focus was invisible. Defined with `:where()` so specificity stays
+  at zero and a component can still opt out.
+
+**Scroll is pinned, not forced.** `pinned` is state the reader owns: they leave it by scrolling away,
+return by scrolling back or with the "jump to latest" button that only exists while unpinned. The
+follow-the-stream effect no-ops unless pinned, and uses a straight `scrollTop` assignment — a smooth
+scroll restarted 30×/second never arrives anywhere, so `behavior: "smooth"` belongs only to the
+deliberate jump.
+
+**Drags never route through React, and never through storage.** Both splitters now paint the frame
+straight to the DOM and commit once on `mouseup`.
+
+> 🐛 **The transcript yanked you back down mid-read.** The follow effect ran
+> `scrollTop = scrollHeight` on every token with no pin check, so scrolling up to re-read something
+> during a live turn pulled you to the bottom milliseconds later, every time, with no way to opt out
+> short of stopping the turn.
+
+> 🐛 **The browser splitter wrote to localStorage on every pixel of travel.** It called `setBrowserW`
+> (a `useSetting`) from the mousemove handler, so each pixel re-rendered the whole pane *and* did a
+> synchronous storage write inside a pointer handler — the textbook way to make a drag stutter.
+
+**Turn rows are memoised.** A streaming reply mutates only the last turn, but the transcript was one
+inline `.map`, so every token re-rendered every earlier turn's tool rows, badges and images.
+`Markdown` was already memoised, which hid how much cost sat *around* it. `TurnRow` takes the volatile
+props (`notices`/`activity`/`elapsed`/`busy`) only when it is the live row, so every other row is
+prop-identical between renders. Measured on a 4-pane window with 310 rows mounted: 12 scroll-driven
+state changes produced **20** row renders instead of ~900.
+
+### Continuing a conversation — `claude --continue` parity
+
+Opening a topic restores its recent sessions as panes, so those carry their own context. A **blank**
+pane didn't: `＋ add chat`, a new topic, or a project with no remembered layout all spawned a session
+that could see none of the project's history, so a follow-up asked there landed on a model with no idea
+what it referred to.
+
+A blank pane now offers to continue the topic's most recent conversation. Three things make it
+predictable rather than magic:
+
+- **It says so before you type.** Whether Claude can see the earlier conversation changes how you'd
+  word the message, so the empty state names the chat it will pick up and how long ago it ran, with
+  `Start fresh instead` next to it. The choice is per pane — `＋ add chat` still means "new" if you say so.
+- **It draws a seam once it has.** A resumed pane adopts that session id, and `reconcile()` then pulls
+  the whole transcript in from disk — so without a marker you'd be reading messages you never sent in
+  this pane. `resumedFrom` is state, not derived: the moment the turn goes live `isNew` flips false and
+  any derived value would vanish exactly when the marker is meant to appear.
+- **It refuses to fork a transcript.** `resume` makes the CLI append to that conversation's JSONL, so
+  two panes on one id means two subprocesses interleaving writes into one file. The pane skips ids
+  already open elsewhere, and `sendMessage` **throws** if the id is live under another key — the client
+  check races (a pane can go live between the render that offered the id and the send that uses it).
+  It fails loudly on purpose: silently dropping `resume` would hand back a context-less session that
+  looks like it worked, which is the exact failure this feature exists to remove.
+
+**The candidate is scoped to `s.cwd === cwd`, and that is not redundant with "same topic."** A topic is
+keyed on `basename(cwd)`, so `~/work/api` and `~/personal/api` are one topic whose `cwd` is whichever
+session sorted first — without the test, a pane could resume a conversation recorded in one directory
+and run it in another. Note also that the candidate pool is already filtered by the date-window chip and
+`isTrivial`, so the target is the most recent chat *among those shown*, not necessarily the latest one
+that exists. The UI names the chat and its age rather than claiming "your last chat", because that
+phrasing would be false whenever the window excludes something newer.
+
+**The SDK has a native `continue: boolean`** ("continue the most recent conversation in the current
+directory", mutually exclusive with `resume`) that this deliberately does not use: it's opaque — you
+can't name the target before sending — and it would happily grab a conversation that's live in another
+pane, which is the corruption case below. `forkSession` defaults false, which is why `resume` appends to
+the same file rather than branching; `forkSession: true` is the alternative design, trading split
+history for immunity to two writers.
+
+> 🐛 **The two-writers guard had a 1–2 second hole — in the exact window that mattered.** It consults
+> the `live:<id>` alias, but that alias was only registered when the SDK's `init` message arrived, which
+> is *after* the ~1-2s cold start the code elsewhere narrates as `spawning`. Two blank panes offering the
+> same chat (neither has a session id yet, so neither appears in the other's `openSids`) that sent within
+> that window both measured `cold`, both found no owner, and both spawned a subprocess appending to one
+> JSONL — the precise corruption the guard exists to prevent. The id is now claimed at spawn time in
+> `ensureSession`. `init` drops the claim if the SDK returns a *different* id: teardown only deletes the
+> final `sessionId`, so an orphaned alias would outlive the session and make the guard reject that
+> conversation as "already open" forever.
+
+> 🐛 **A refused resume kept the id it had just been refused — and the first fix only half-worked.**
+> `send()` adopts `opts.resume` before the POST (that's what lets the pane stream and reconcile as that
+> conversation) but never gave it back on error, so a rejected continue left the message undelivered
+> while the pane silently re-pointed itself at the very conversation it had been refused, with an
+> optimistic user turn on screen implying otherwise.
+>
+> Undoing it in `use-agent` alone was **not enough**, which only running it revealed: `onLive` is
+> one-way — it fires only on a *truthy* id — so the parent had already latched `pane.sid` and kept it.
+> Measured on the preview: the pane retitled itself to the target chat while displaying
+> `folder does not exist: /private/tmp/minami-permtest`. The release is now explicit, `onLive("")`,
+> scoped by a ref to adoptions the pane made via continue so a pane opened directly on a session is
+> never reset by it. `resumedFrom` is cleared with it — otherwise the seam would go on claiming context
+> that was never loaded.
+>
+> The general lesson, and the reason this one is written up rather than quietly fixed: **optimistic
+> state that flows outward needs a symmetric way back.** A rollback that only touches the local copy
+> leaves every consumer that already latched it out of sync.
+
+### The Autopilot tile — making the automation visible
+
+Autopilot could merge, resolve and deploy on its own from the moment it shipped, and it recorded every
+one of those in the event log. What it had no surface for was the *promise*: work landing without being
+asked for is indistinguishable from work not happening, and the only places to check were a Settings
+panel you had to go looking for and a bell that mixes it in with deploys, builds and everything else.
+For the user this feature exists for — someone who cannot go and read `git log` — that gap is the whole
+feature.
+
+So it gets a tile, in the grid, sized and shaped like the things they already click. It answers four
+questions in the order they get asked: **is it on** (state pill, plus the switch right there — making a
+nervous user hunt through Settings for the one control they might need in a hurry is the wrong shape),
+**is it doing something** (merging / resolving / deploying, live), **what did it just do** (the last
+completed action in plain words, with a time), and **does it need me** (blocked work, amber, never
+behind a click). The full log is one click away rather than on the tile, because a tile that tries to
+be a feed stops being scannable.
+
+Two translation rules make it readable, and both are load-bearing:
+- **Titles are rewritten for outcome.** The log says "Autopilot merged idle-unpin"; the tile says
+  "Combined idle-unpin into the main copy".
+- **Only actions appear.** The runner emits standing-state notices ("waiting — uncommitted changes in
+  the main checkout") once per process start; with a day's restarts, a log titled *what it has done*
+  filled up with ten copies of what it did **not** do. Those still reach the bell, which is the right
+  home for "FYI, blocked". Machine-generated bodies are dropped too — a successful deploy's body is a
+  table of pids, BUILD_IDs and status codes, which is the exact register the tile exists to avoid. A
+  *failed* deploy's body explains itself, so that one stays.
+
+Server-side it needed two facts `status()` didn't expose: `deploying` (read from the deploy lock, so it
+survives the restart the deploy itself causes — the exact window a user is most likely to be watching)
+and `lastTickAt`.
+
+> 🐛 **The log rendered near-black on near-black.** The modal portals to `document.body` so that
+> `fixed inset-0` isn't trapped by the pane's `backdrop-blur` containing block (§5b) — but a portal
+> escapes the app shell's inherited `text-neutral-100` as well, and body has no colour of its own. Every
+> unstyled string in it was invisible. Any portalled surface has to state its own colour; the same trap
+> as the lightbox, a different property.
+
+### Composer
+A `<textarea>` that grows to `MAX_H` (220px) and then scrolls, with a pixel-aligned mirror layer behind
+it that tints markdown syntax without touching metrics (that constraint is why bold renders as dimmed
+`**` rather than actual bold — a weight change would shift the text off the caret).
+
+> 🐛 **An empty chat input rendered as a tall, oddly-wrapped box.** `scrollHeight` on an empty
+> `<textarea>` reports the height of the wrapped **placeholder** — the browser lays that text out for
+> real — so the auto-grow was sizing the composer to a string the user hadn't typed. "Message Claude in
+> minami-dashboard…" wraps to three lines in a 150px pane (measured: `scrollHeight` 68px with an empty
+> value), so in a 4-pane grid every idle composer sat there as a tall empty box whose shape changed
+> with the project's name and the pane's width. The measurement is now skipped entirely while the value
+> is empty, handing sizing back to `rows={1}`: 68px → 23px, exactly one line.
+> *Reported by user: "weird box wrap in chat input".*
+
+> 🐛 **Wrapped code chips were sliced in half.** An inline background that breaks across lines is
+> `box-decoration-break: slice` by default: the first fragment's box runs to the edge of the line, both
+> fragments get square inner corners, and horizontal padding lands only on the outermost ends. Both the
+> composer's syntax tint and the message renderer's `<code>` hit it. `.chip-wrap` (globals.css) applies
+> `clone` so each fragment draws a whole box. It's deliberately a metrics-free property — the
+> composer's mirror must wrap identically to the textarea beneath it, so a tint may change how a glyph
+> looks but never where it sits.
+
+> 🐛 **Shift+Enter inserted a line you couldn't see.** The auto-grow measures by setting
+> `height: auto`, which makes the box briefly tall enough to hold everything — and that zeroes
+> `scrollTop`, which the browser does **not** restore when the height snaps back. So a newline at the
+> bottom of a long draft was inserted correctly and then the view jumped elsewhere, and you had to
+> scroll by hand to find your own caret. Fixed by saving `scrollTop` across the measurement and then
+> scrolling the caret back into view. Finding the caret needs the mirror: nothing in the textarea API
+> reports a caret's pixel position, and counting `\n`s is wrong the moment a line soft-wraps — which,
+> in a 220px box, is most of them. The mirror holds the same characters at the same metrics, so a
+> collapsed `Range` over its text nodes lands exactly where the caret is.
+> *Reported by user: "the Shift enter combo didnt show me the new line, I have to scroll manually".*
+
+> 🐛 **Clicking any chat pane drew a pink rectangle around its composer** — shipped by the very
+> `:focus-visible` ring added to *improve* accessibility, in the same deploy as the three fixes above.
+> Two things had to be true at once. First, **`:focus-visible` matches a text field on a plain mouse
+> click**: the spec treats a typing target as always warranting an indicator, so the "keyboard only"
+> intuition behind the rule is simply wrong for `input`/`textarea`/`select`. Second, the composer's own
+> `outline-none` **could not override it** — `:where()` had been used to keep specificity at zero
+> precisely so components could opt out, but the ring was unlayered while Tailwind's utilities live in
+> `@layer utilities`, and **unlayered styles beat layered ones at any specificity**. Specificity was the
+> wrong lever, so the documented escape hatch never worked. Fixed by dropping text fields from the
+> selector: a caret already announces focus, and the composer's pill was *already* doing it properly
+> with `focus-within:border-[var(--sakura)]/60`. Removed `border-radius: inherit` in the same pass — an
+> outline follows the element's own corners anyway, while inheriting *replaces* them with the parent's
+> for as long as focus lasts, squaring off a `rounded-full` button in a square container.
+> *Reported by user: "when I click on chat panel - a pink rectangle show up".*
+
+> ⚠ **Iterating from a dashboard pane needs `NODE_ENV=development` explicitly.** Every chat session is
+> a child of the production `next-server`, so it inherits `NODE_ENV=production` — and `next dev` under
+> that mis-compiles `globals.css` ("Module parse failed: Unexpected character '@'") and 500s every
+> route. Run `NODE_ENV=development npm run dev:iterate`.
+
+### Reclaiming the panel — four cuts, one theme
+
+Tab view made three pieces of older chrome redundant at once, and each was still being paid for. The
+theme: **a control that restates something already on screen is not chrome, it's noise** — and the
+oldest of them was actively fighting the user.
+
+**1. The auto-rail heuristic outlived its premise.** Crossing 3 panes railed the bento to buy the panel
+width. That was written when 3 panes meant 3 transcripts side by side. It keys off `panes.length` —
+chats **open** — but tab view shows exactly one however many are open, so opening a topic with four
+remembered chats railed the board instantly, every time, for panes that were never on screen. You
+clicked a tile and the thing you clicked disappeared. Now gated on `paneView === "grid"`, where the
+premise still holds.
+*Reported by user: "when I click on it ... it automatically open the bento strip view - which is not okay".*
+
+**2. The hover-reveal header displaced the row you were aiming at.** The identity header collapsed to
+0px and expanded on hover — *above* the tab row, so every reveal pushed the tabs down by its full
+height. Hovering a tab therefore moved that tab out from under the cursor, at exactly the moment the
+hover triggered the reveal. The fix is ordering, not timing: tabs are the part you operate, so they
+take the fixed position and the reveal opens **below** them, `absolute` so it displaces nothing and
+floats over the first rows of transcript instead. Pinned stays static — pinning is a decision to keep
+the header, and it must not then sit on the text you pinned it to read alongside.
+Measured before/after: tab row `top: 0` and first tab `top: 6` both with and without hover.
+*Reported by user: "the hovering title appearance make it akward to click on tab because it shift the tab navigation down".*
+
+**3. The per-pane header restated the lit tab.** Icon + title + goal line, ~30px under a tab carrying
+the same title. Collapsed to the bare `⌄` switcher when `focused` (tabs view, single visible pane).
+Grid view keeps the full title — there is no lit tab there, and an unlabelled cell in a 2×2 can't be
+identified.
+
+**4. Measure, not width.** A maximised chat on a wide display ran prose the full column: past ~75
+characters the eye loses its place on the return sweep. `[&>*]:max-w-3xl` caps the **children**, so the
+scroll area and scrollbar stay full-bleed at the pane edge and only the content centres. Deliberately
+unconditional — it can only bind where there is excess width, so grid view and side-panel-open columns
+are already narrower and it does nothing.
+*Reported by user: "for chat log in full focus view, it should be like centered ... rather run full screen - having awful readability".*
+
+---

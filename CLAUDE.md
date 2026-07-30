@@ -70,6 +70,14 @@ it. `bin/deploy.sh` is allowed to do this because it restarts the server in the 
 
 ## Keeping the record
 
-`docs/KNOWLEDGE.md` is the living reasoning record and `public/kb/` the visual explainer. The
-`minami-kb` skill enforces the rule: **any turn that changes a subsystem updates the record in the same
-turn.** Bug found or fixed → add a post-mortem. Module added/renamed → update the graph.
+`docs/KNOWLEDGE.md` is an **index**; the reasoning lives in `docs/knowledge/`, one file per subsystem,
+plus `docs/knowledge/CHANGELOG.md`. `public/kb/` is the visual explainer. Read the index (~2.4k tokens)
+and then only the file you need — the record used to be one 2,500-line file that cost ~46k tokens to
+open, which is why nobody opened it.
+
+Section numbers (`§5e`, `§8`, `§12`) are **stable ids** cited from code comments, and the index maps each
+one to its file. Never recycle a number.
+
+The `minami-kb` skill enforces the rule: **any turn that changes a subsystem updates that subsystem's
+file in the same turn.** Bug found or fixed → add a `> 🐛` post-mortem. Module added/renamed → update
+`lib/module-graph.ts`. New doc → add a row to the index's directory.
