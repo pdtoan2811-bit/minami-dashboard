@@ -141,7 +141,10 @@ export default function FilePanel({
   const canToggleRaw = meta?.kind === "markdown" || meta?.kind === "notebook";
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-l border-white/10 bg-neutral-900/60">
+    // `@container`: everything below sizes off THIS PANEL's width, not the window's. A pane in a 2×2
+    // grid is roughly a quarter of the screen, and at that size a 144px file rail leaves so little room
+    // that prose wrapped one character per line — measured, not hypothetical.
+    <div className="@container flex min-h-0 flex-1 flex-col overflow-hidden border-l border-white/10 bg-neutral-900/60">
       {/* chrome */}
       <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-2.5 py-1.5">
         <FileText className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
@@ -149,6 +152,15 @@ export default function FilePanel({
           {meta?.name || "files"}
           {meta && <span className="ml-1.5 text-[9.5px] text-neutral-600">{fmtSize(meta.size)}{meta.lines ? ` · ${meta.lines} lines` : ""}</span>}
         </span>
+        {/* The rail's stand-in below 340px. A native <select> because it costs one line of chrome and
+            opens over the pane instead of inside it — a custom dropdown in a panel this narrow would
+            have the same problem the rail has. Mirrored, not duplicated state: both write onPick. */}
+        {files.length > 1 && (
+          <select value={path || ""} onChange={(e) => onPick(e.target.value)} title="Switch file"
+            className="max-w-[7.5rem] shrink-0 rounded-md border border-white/10 bg-neutral-900 px-1 py-0.5 text-[10px] text-neutral-300 outline-none @min-[340px]:hidden">
+            {files.map((f) => <option key={f.path} value={f.path}>{f.name}</option>)}
+          </select>
+        )}
         {canToggleRaw && (
           <button onClick={() => setRaw((v) => !v)} title={raw ? "Show rendered" : "Show source"}
             className="shrink-0 rounded-md border border-white/10 px-1.5 py-0.5 text-[9.5px] text-neutral-400 transition-colors hover:border-white/30 hover:text-neutral-200">
@@ -169,7 +181,7 @@ export default function FilePanel({
         {/* The rail of touched files. Vertical, not a filmstrip: file names are long and horizontal
             truncation would leave every entry reading "…/components/Bro…". */}
         {files.length > 1 && (
-          <div className="w-36 shrink-0 overflow-y-auto border-r border-white/10 py-1">
+          <div className="hidden w-36 shrink-0 overflow-y-auto border-r border-white/10 py-1 @min-[340px]:block">
             {files.map((f) => {
               const on = f.path === path;
               const Icon = iconFor(kindGuess(f.name));

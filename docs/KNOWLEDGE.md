@@ -49,6 +49,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
 | Shell (bento · rail · composer) | `app/page.tsx` + `components/BentoRail.tsx` | **shipped** | grid collapses to a rail — see §5e |
 | Flow view | `components/FlowPanel.tsx` + `lib/flow-model.ts` | **shipped** | per-topic ⚙; plan as a graph you can pause and steer — see §5f |
+| File preview | `components/FilePanel.tsx` + `lib/file-view.ts` + `app/api/fs/file` | **shipped** | any file type, paged; shares the side slot with the browser — see §5g |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
 | KB standalone server | `public/kb/serve.mjs` | **shipped** | `npm run kb` → :4400, zero deps |
 | Runbook | `public/kb/operations.html` | **shipped** | deploy · identity · symptom table |
@@ -1045,6 +1046,89 @@ canvas is never empty.
 
 ---
 
+## 5g. File preview — `components/FilePanel.tsx`, `lib/file-view.ts`, `app/api/fs/file`
+
+Before this, the dashboard could preview exactly one thing: images. A `Read`/`Edit` target was a path
+inside a collapsed JSON blob, and Flow's "files touched" listed names with nothing behind them.
+
+**The brief was explicitly "not just code" — think of a marketer or a designer using it.** That is what
+makes this a *kind-routed* viewer rather than a text box with syntax colouring: a PNG, a PDF, a CSV and
+a `.tsx` are four different reading experiences, and `.ipynb` is JSON on disk but a notebook to a
+human. Routing on kind is the feature; highlighting is one branch of it.
+
+### It shares the browser's slot, it doesn't add a second one
+Both panels want the same place — docked beside the chat, drag-resizable — and a pane can already be a
+quarter of the window. Two independently-openable side panels would leave the transcript unreadable and
+give one drag handle two meanings. So there is **one slot, one width**, and a tab strip that only
+appears when both have something to show. `activeSlot` falls back rather than trusting the persisted
+choice: a session that only touched files never shows a blank browser panel just because `"browser"`
+was the stored default.
+
+### created vs changed comes from the RESULT, not the tool name
+`Write` both creates files and silently overwrites existing ones, so keying off the tool name labels
+every overwrite "created" and lies about a file that already had contents. The CLI's own result text
+distinguishes them exactly — `File created successfully at: <path>` vs `The file <path> has been
+updated successfully` — so `verbOf()` reads that, falling back to the tool name only while a call is
+still in flight. Same trick as parsing `Task #N` out of `TaskCreate`'s result in §5f.
+
+Verbs never downgrade: re-reading a file after editing it doesn't turn it back into a read.
+
+### Robustness is in the route, not the component
+`/api/fs/file` is the load-bearing piece, and every limit is there for a measured reason:
+
+- **Text is a bounded slice (256 KB/request), never a whole file.** This server is single-threaded and
+  shared by every open pane, so one careless read of a minified bundle stalls everyone. Verified: a
+  3.3 MB log returns 262 KB with `truncated: true` and a `nextOffset`.
+- **A slice is trimmed back to the last newline**, so `nextOffset` is a clean boundary and paging never
+  splits a line of code across two fetches. Verified: page 2 resumes at exactly the next line, no gap,
+  no overlap.
+- **Binary is detected by a NUL byte in the first 8 KB** — the same test `grep -I` and git use. It
+  costs one small read and never mistakes UTF-8 prose for binary the way an entropy heuristic can.
+  Verified: a copy of `/bin/ls` renamed to `.txt` is still refused, so a mislabelled file can't reach
+  the client as mojibake.
+- **`raw=1` is an allow-list**, not a mime guess — only types a browser *displays* (pdf, image, video,
+  audio). An open-ended raw endpoint is a data-exfiltration shape. Verified: `raw=1` on a `.ts` and on
+  `/etc/passwd` both 400.
+- **`no-cache` on raw**, unlike `/api/fs/image`'s hard cache. A pasted screenshot is immutable; a
+  source file changes under you, and a stale preview of a file Claude just rewrote is exactly wrong.
+
+The unconfined-`path` argument is unchanged from `/api/fs/list` and `/api/fs/image`, and per CLAUDE.md
+is deliberately **not** gated on `Host` or `x-forwarded-for` (forgeable; neither proves locality).
+
+> 🐛 **The chips rendered zero times, and the panel made it worse.** Putting them outside the
+> `showTools` gate wasn't enough: `allVisible` drops turns with no assistant text, and a turn that only
+> writes a file usually has none. Measured on a real 63-turn session — 5 files written, **0 of those
+> turns carried text**, so every one was filtered out before `TurnRow` ever saw it. The side panel still
+> listed all 5, so the transcript and the panel disagreed about whether anything had happened.
+>
+> Fix: a turn now survives the filter if it *said* something **or** *changed* something
+> (`t.tools.some(writtenBy)`). Only findable by running it — the component was correct in isolation.
+
+### Gotchas
+- **The chips are outside the `showTools` gate**, and the visibility filter knows about them (above).
+  Which files changed is the *outcome* of a turn, not tool noise. They de-duplicate per path within a
+  turn, because Claude routinely applies several `Edit`s to one file in one turn — but not across
+  turns, since a chip marks what *that* message did.
+- **The panel is an `@container`.** A pane in a 2×2 grid is a quarter of the screen; at that width the
+  144px rail left so little room that prose wrapped one character per line. Below 340px the rail is
+  replaced by a native `<select>` in the header — a custom dropdown would hit the same wall.
+- **`onOpenFile` must be a `useCallback`.** `TurnRow` is memoised; a fresh closure defeats it for every
+  row on every render.
+- **The rail is vertical, not a filmstrip** like BrowserPanel's. File names are long, and horizontal
+  truncation would leave every entry reading `…/components/Bro…`.
+- **CSV is parsed, not split on commas** — a quoted field containing a comma is the normal case in
+  exported data. Rows are capped at 500 rendered; a 50k-row export would otherwise mount 50k `<tr>`s.
+- A truncated slice of a big `.ipynb` is invalid JSON, so the notebook renderer says so and offers the
+  source toggle instead of rendering blank.
+
+> ⚠ **Concurrent builds collide through the dist dir.** Two agents running `npm run build:check` in the
+> same checkout both write `.next-verify`, and the loser fails in *Collecting build traces* with a
+> baffling `ENOENT … instrumentation.js.nft.json` — nothing to do with the code being checked. Same
+> class as a `task.mjs preview` server holding `.next-task` while a merge builds into it (§5f). When
+> the tree is busy, build into a private dir: `NEXT_DIST_DIR=.next-<something> npx next build`.
+
+---
+
 ## 6. Account identity — `app/api/accounts`
 
 **Never trust `token-slayer status`'s `active` field.** It echoes a label written on the last switch
@@ -1684,6 +1768,19 @@ on a timer is just a slower way to fail.
   like me wont need to ask minami dashboard to merge, deploy etc".*
 
 ### 2026-07-29
+- **A handle on the seam itself, so switching views needs no prior knowledge** (§5e) — every existing
+  route between board and strip was something you had to already know: drag a 6px divider to an
+  invisible threshold, double-click that same strip, learn ⌘B, or recognise a header icon. The handle
+  sits on the boundary between the two things it swaps, always visible (dim, brightening on approach)
+  rather than hover-only — hover-only would have hidden it behind the very 6px target that was too
+  small to find. Three details are load-bearing: `stopPropagation` on pointer-down and double-click
+  (else a click also starts the parent's drag, and a double-click fires the parent's toggle a second
+  time, undoing it); it unmounts mid-drag (it sits exactly where the cursor is); and `z-20` puts it
+  *under* the rail's `z-30` hover overlay, so the expanded strip covers it instead of a chevron floating
+  across the project chips — no state plumbed between components. It grows rightward from the seam
+  rather than straddling it: centred, a 20px pill spanned 49–69px while the collapsed strip owns 0–56,
+  clipping its left third. Verified in both modes — no clipping, centre clickable, no drag triggered,
+  toggles both ways. Transitions only, never an animation (KNOWLEDGE.md §12).
 - **Rail ⇄ grid is now one control with two states, plus ⌘B** (§5e) — it used to be a bare `⇤` glyph in
   the page header and a 🌸 logo in the rail: two glyphs, two locations, two metaphors, nothing saying
   they were the same idea. Both are now `PanelLeftClose`/`PanelLeftOpen` with the shortcut in the

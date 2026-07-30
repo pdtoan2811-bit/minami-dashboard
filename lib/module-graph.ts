@@ -123,6 +123,11 @@ export const NODES: ModuleNode[] = [
   { id: "x/autopilotcfg", label: "~/.minami/autopilot.json", sub: "its switch — on disk, because a\ntimer in the server reads it", layer: "runtime", row: 6 },
   { id: "x/events", label: "~/.minami/events.jsonl", sub: "alert log · deploy.sh + task.mjs write", layer: "runtime", row: 5 },
 
+  // ── File preview (KNOWLEDGE.md §5g) ─────────────────────────────────────
+  { id: "c/FilePanel", label: "FilePanel", sub: "any file type, paged\n(shares the browser's slot)", layer: "component", row: 22, pipeline: "live" },
+  { id: "l/fileview", label: "file-view.ts", sub: "transcript → files touched\n(created vs changed)", layer: "core", row: 18, pipeline: "live" },
+  { id: "r/fsfile", label: "/api/fs/file", sub: "sliced text · binary sniff\n· raw allow-list", layer: "route", row: 15 },
+
   // ── Flow view: the step graph + its brake (KNOWLEDGE.md §5f) ────────────
   { id: "c/FlowStrip", label: "FlowStrip", sub: "the in-chat door", layer: "component", row: 22, pipeline: "live" },
   { id: "c/FlowCanvas", label: "FlowCanvas", sub: "step graph in the bento\n(React Flow, no minimap)", layer: "component", row: 21, pipeline: "live" },
@@ -245,6 +250,14 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/sessions", to: "x/bentocache", kind: "http" },
   { from: "l/enrich", to: "x/bentocache", kind: "http" },
   { from: "r/accounts", to: "x/slayer", kind: "http", label: "execFile" },
+
+  // File preview. The panel fetches CONTENT from the route rather than reading it out of the
+  // transcript, because a transcript records that a file was written, not what is in it now.
+  { from: "app/page", to: "c/FilePanel", kind: "import" },
+  { from: "app/page", to: "l/fileview", kind: "import" },
+  { from: "c/FilePanel", to: "r/fsfile", kind: "http", label: "slice / raw" },
+  { from: "c/FilePanel", to: "r/fsimage", kind: "http", label: "images" },
+  { from: "c/FilePanel", to: "c/Markdown", kind: "import" },
 
   // Flow view. The brake is drawn as a full round trip on purpose: the button is in the component,
   // but the only place it can be ENFORCED is canUseTool inside the manager — see KNOWLEDGE.md §5f.
