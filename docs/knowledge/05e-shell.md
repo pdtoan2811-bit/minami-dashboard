@@ -281,6 +281,29 @@ the pool. Iteration is name-sorted so a glyph doesn't reshuffle when the grid's 
 > every effect that depends on one), and the pending width moved to a ref that survives re-subscription.
 > Caught while verifying the drag, not reported.
 
+> 🐛 **A setting that changed nothing until you reloaded.** *Reported by user: "I already found bug on
+> the setting toggle omg".* Flipping **Agent view** in Settings wrote `bento:agentMode` and updated
+> the Settings page — while the `Nav` two inches away kept showing the old menu. `useSetting` gave
+> every call site a private `useState`, so a write only re-rendered the component that made it; other
+> readers of the same key stayed stale until they happened to remount, which meant a reload or a route
+> change. The toggle wasn't broken, it was invisible, and that's worse: you flip it twice, see nothing
+> either time, and conclude the feature is dead.
+>
+> The fix is a module-level registry of every mounted reader per key, plus a `storage` listener for
+> the cross-**tab** half of the same hole (two open dashboards drifted apart, and the stale one's next
+> write reverted the other's change). Not a Context: these keys are read on different pages and inside
+> panes that mount constantly, and a provider high enough to cover them all would re-render that whole
+> tree on every keystroke — `draft:live:<id>` goes through this hook too.
+>
+> Worth noting what the class of bug is, because one toggle was only where it surfaced: **every key
+> read in two places at once had it.** `showToolLogs` is written in Settings and read by every open
+> pane; it had exactly the same lag and nobody had noticed, because you rarely watch both at once.
+>
+> Second-order fix in the same pass: the setter now resolves an updater function against a ref instead
+> of React's functional form. It has to write storage and notify siblings, and doing either inside a
+> state updater is illegal — updaters must be pure, StrictMode may invoke them twice, and calling
+> setState on another component from inside one warns.
+
 ### The ask card — one question at a time, and one visible answer
 
 `AskUserQuestion` arrives through the same `canUseTool` hook as a permission prompt (§3) and renders as

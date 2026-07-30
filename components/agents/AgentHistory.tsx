@@ -5,6 +5,7 @@
 // a session in a shared repo is only its own if a task record says so. Showing which is which stops
 // the history from quietly overclaiming work that belonged to another pane in the same folder.
 import { ago, fetchHistory, shortPath, type AgentDef } from "@/lib/agents/client";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 type Row = Awaited<ReturnType<typeof fetchHistory>>["sessions"][number];
@@ -45,7 +46,7 @@ export default function AgentHistory({ agent }: { agent: AgentDef }) {
       </p>
       <div className="space-y-1">
         {rows.map((s) => (
-          <a key={s.id} href={`/?session=${s.id}`}
+          <Link key={s.id} href={`/agents/${agent.id}/session/${s.id}`}
             className="flex items-center gap-2 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-1.5 text-[11.5px] hover:border-white/15">
             <span className={`shrink-0 rounded px-1 text-[9px] uppercase tracking-wider ${
               s.via === "task" ? "bg-amber-400/15 text-amber-300/80" : "bg-white/5 text-neutral-500"}`}>
@@ -54,7 +55,7 @@ export default function AgentHistory({ agent }: { agent: AgentDef }) {
             <span className="truncate text-neutral-300">{s.run?.title || s.task || s.title}</span>
             <span className="ml-auto shrink-0 text-[10px] text-neutral-600">{s.tier}</span>
             <span className="shrink-0 tabular-nums text-[10px] text-neutral-600">{ago(s.lastActivity)}</span>
-          </a>
+          </Link>
         ))}
       </div>
     </div>

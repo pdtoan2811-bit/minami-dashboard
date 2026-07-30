@@ -1,7 +1,7 @@
 import { liveStats } from "@/lib/agent/manager";
 import { chatKey, taskKey } from "@/lib/agents/runner";
 import { inspect, scaffold } from "@/lib/agents/scaffold";
-import { createAgent, DASHBOARD_URL, listAgents } from "@/lib/agents/store";
+import { agentAtHome, brokenAgentFiles, createAgent, DASHBOARD_URL, expandHome, isPlausibleModel, listAgents } from "@/lib/agents/store";
 import { listTasks } from "@/lib/agents/tasks";
 import type { AgentDef } from "@/lib/agents/types";
 import os from "node:os";
@@ -28,7 +28,12 @@ export async function GET() {
     const rows = agents.map((a) => {
       const mine = live.filter((d) => d.key === chatKey(a.id) || d.key.startsWith(`agent:${a.id}:`));
       const busy = mine.find((d) => d.busy) || null;
-      const running = tasks.find((t) => t.agentId === a.id && t.status === "running") || null;
+      // ALL of them, not the first. An agent can legitimately be running several assigned tasks at
+      // once (nothing serialises them), and reporting one made the other invisible — the tile showed
+      // "↻ B" while A was running too, so a box with four live subprocesses looked like one.
+      const running = tasks.filter(
+        (t) => t.agentId === a.id && t.status === "running" && live.some((d) => d.key === taskKey(a.id, t.id)),
+      );
       const recent = tasks.filter((t) => t.agentId === a.id).slice(0, 3);
       return {
         ...a,
@@ -36,12 +41,16 @@ export async function GET() {
         busy: !!busy,
         phase: busy?.phase || mine[0]?.phase || "idle",
         label: busy?.label || "",
-        // Only report a running task the manager can still see — see the note above.
-        runningTask: running && live.some((d) => d.key === taskKey(a.id, running.id)) ? running : null,
+        // Only tasks the manager can still see — see the note above.
+        runningTask: running[0] || null,
+        runningCount: running.length,
         recentTasks: recent,
       };
     });
-    return Response.json({ agents: rows });
+    // The roster's "Recent work" strip used to re-fetch every agent's tasks separately, which is an
+    // N+1 on a 4s poll — eleven agents meant ~24 requests every nine seconds, each one re-reading and
+    // re-parsing the whole task file. They're already in hand here, so send them.
+    return Response.json({ agents: rows, recent: tasks.slice(0, 12), broken: brokenAgentFiles() });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e), agents: [] }, { status: 500 });
   }
@@ -59,12 +68,23 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const name = String(body?.name || "").trim();
-    const home = String(body?.home || "").trim();
+    // Expanded through the same helper the inspect route uses, so the folder the dialog reported on
+    // is exactly the folder that gets created — see expandHome().
+    const home = expandHome(String(body?.home || ""));
     if (!name) return Response.json({ error: "name is required" }, { status: 400 });
     if (!home || !path.isAbsolute(home)) return Response.json({ error: "home must be an absolute path" }, { status: 400 });
+    if (body?.model !== undefined && !isPlausibleModel(String(body.model))) {
+      return Response.json({ error: `not a Claude model id: ${body.model}` }, { status: 400 });
+    }
 
     const before = inspect(home, PROJECTS);
     if (before.exists && !before.isDir) return Response.json({ error: `not a folder: ${home}` }, { status: 400 });
+    const squatter = agentAtHome(home);
+    if (squatter) {
+      return Response.json({
+        error: `${squatter.name} already lives in ${home}. Two agents can't share one home — they'd claim each other's history and write over each other's memory.`,
+      }, { status: 409 });
+    }
 
     const draft: Partial<AgentDef> & { name: string; home: string } = {
       name, home,
@@ -80,7 +100,14 @@ export async function POST(req: Request) {
     };
 
     const agent = createAgent(draft);
-    const result = scaffold(agent, { dashboardUrl: DASHBOARD_URL });
+    // The note structure is imposed only on a brain we are CREATING, or on a folder already shaped
+    // that way. Adopting a code repo used to litter it with four empty vault directories
+    // ("00-09 System/", "10-19 Projects/", …) that nothing in that project wanted — and in a git repo
+    // they show up as untracked noise on the user's next status. An adopted folder keeps its own
+    // shape; what an agent actually needs from it is CLAUDE.md and somewhere to write memory, and
+    // both of those are written either way.
+    const notes = before.suggests === "scaffold" || before.hasNotes;
+    const result = scaffold(agent, { dashboardUrl: DASHBOARD_URL, notes });
     return Response.json({ ok: true, agent, scaffold: result, adopted: before.suggests === "adopt" });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e) }, { status: 500 });

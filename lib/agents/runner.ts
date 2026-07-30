@@ -13,9 +13,9 @@
 import { isBusy, liveActivity, liveStats, sendMessage, stop } from "../agent/manager";
 import { getSession } from "../claude-sessions";
 import { taskPrompt, wrapUpPrompt } from "./onboard";
-import { ACTIVITY_FILE } from "./scaffold";
+import { activityFileFor } from "./scaffold";
 import { allowedCwds, getAgent } from "./store";
-import { addTask, listTasks, patchTask, reapOrphans } from "./tasks";
+import { addTask, getTask, listTasks, patchTask, reapOrphans } from "./tasks";
 import type { AgentDef, AgentTask, AssignInput } from "./types";
 import fs from "node:fs";
 import path from "node:path";
@@ -79,7 +79,7 @@ function harvest(sessionId: string | null): string {
  * "what has this agent actually been doing".
  */
 function logActivity(a: AgentDef, t: AgentTask, outcome: string): void {
-  const file = path.join(a.home, ACTIVITY_FILE);
+  const file = path.join(a.home, activityFileFor(a.home));
   const when = new Date(t.endedAt || Date.now()).toISOString().slice(0, 16).replace("T", " ");
   const where = t.cwd === a.home ? "home" : t.cwd;
   const line = `- ${when} — **${t.title}** · ${where} · ${outcome}${t.from ? ` · from ${t.from}` : ""}\n`;
@@ -139,6 +139,20 @@ async function drive(a: AgentDef, task: AgentTask): Promise<void> {
     const sessionId = sessionIdFor(key) || task.sessionId || null;
     if (sessionId && sessionId !== task.sessionId) patchTask(task.id, { sessionId });
 
+    // Did a human end this run while we were watching? `stopTask` interrupts the turn, which makes
+    // `busy` go false — indistinguishable from a natural finish from inside awaitTurn(). Without this
+    // check the run was reported as a SUCCESS: the status flipped from `stopped` back to `done`, the
+    // activity log recorded "done" directly beneath the agent's own note saying it was interrupted,
+    // and the "result" harvested from the transcript was whatever the agent had said before doing any
+    // work ("I'll count from 1 to 40..."), which reads exactly like a completed summary. Worse, the
+    // wrap-up below was then sent into the session you had just stopped, so it started working again.
+    // The task record is the only place that knows a stop happened, so it is what gets consulted.
+    const current = getTask(task.id);
+    if (current?.status === "stopped") {
+      logActivity(a, current, "stopped by you");
+      return;
+    }
+
     if (why !== "done") {
       const error = {
         timeout: `Ran past the ${Math.round(MAX_RUN_MS / 60000)}-minute limit and was stopped.`,
@@ -160,6 +174,9 @@ async function drive(a: AgentDef, task: AgentTask): Promise<void> {
       sendMessage({ key, cwd: task.cwd, message: wrapUpPrompt(a, task.cwd), mode: a.permissionMode, model: a.model });
       await awaitTurn(key, Date.now() + Math.min(MAX_RUN_MS, 10 * 60 * 1000));
     } catch { /* the run stands; only its memory note is missing */ }
+
+    // Re-checked, because the wrap-up is a whole turn during which Stop is still on screen.
+    if (getTask(task.id)?.status === "stopped") { logActivity(a, task, "stopped by you"); return; }
 
     const done = finish("done", { sessionId, result }, "done");
 

@@ -9,6 +9,20 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-30
+- **Five-round audit of the agents view; 18 findings, 14 fixed** (§14, §5e) — run as five MECE passes:
+  view-state plumbing, registry CRUD, scaffold/adopt, the task runner, and attribution/UI. The three
+  that mattered: a **setting toggle that did nothing until you reloaded** (`useSetting` had no
+  cross-component subscription — a class bug, not one toggle), **Stop reporting a run as `done`** and
+  re-sending the wrap-up into the session it had just interrupted, and the **chat pane opening
+  scrolled to the top** so the onboarding interview's question card sat below the fold under a
+  "waiting on your answer" header. Also: dead `/?session=` links replaced with a real transcript
+  viewer, adoption no longer imposing a vault structure on a code repo, two agents no longer able to
+  share one home, config input rejected rather than coerced, corrupt state reported rather than
+  silently emptied, and the roster's N+1 poll collapsed to one request.
+  *Reported by user: "I already found bug on the setting toggle omg".*
+- **Duplicate reply while a turn is parked** (§3, §14) — attaching to a session waiting on a question
+  rendered the assistant's message twice, because the in-flight message is already on disk while
+  `partial` still holds it. Pre-existing in `lib/use-agent.ts`; the interview made it the normal case.
 - **Standing agents shipped** (§14) — a new opt-in view (Settings → Agents) where an agent is an
   identity plus a *home folder* it thinks and remembers in, separate from the workspaces it does work
   in. Create scaffolds a brain or adopts an existing one (`~/secondBrain` inherits its 33 sessions as

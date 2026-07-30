@@ -1,4 +1,5 @@
 import { inspect } from "@/lib/agents/scaffold";
+import { expandHome } from "@/lib/agents/store";
 import os from "node:os";
 import path from "node:path";
 
@@ -18,7 +19,8 @@ export async function GET(req: Request) {
   try {
     const p = new URL(req.url).searchParams.get("path") || "";
     if (!p) return Response.json({ error: "path is required" }, { status: 400 });
-    return Response.json({ report: inspect(p.replace(/^~(?=\/|$)/, os.homedir()), PROJECTS) });
+    // Same helper the create route uses, so what's reported here is what would actually be created.
+    return Response.json({ report: inspect(expandHome(p), PROJECTS) });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e) }, { status: 500 });
   }

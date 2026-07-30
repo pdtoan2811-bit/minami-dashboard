@@ -13,6 +13,8 @@ export type AgentRow = AgentDef & {
   phase: string;
   label: string;
   runningTask: AgentTask | null;
+  /** How many assigned tasks are running right now — `runningTask` is only the newest of them. */
+  runningCount: number;
   recentTasks: AgentTask[];
 };
 
@@ -25,7 +27,9 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return d as T;
 }
 
-export const fetchAgents = () => json<{ agents: AgentRow[] }>("/api/agents");
+// `recent` rides along so the roster's strip needs no second request per agent — see the route.
+export const fetchAgents = () =>
+  json<{ agents: AgentRow[]; recent: AgentTask[]; broken: { file: string; reason: string }[] }>("/api/agents");
 
 export const fetchAgent = (id: string) =>
   json<{ agent: AgentDef; stats: { sessions: number; tokensIn: number; tokensOut: number; cost: number; lastActivity: number }; home: FolderReport; tasks: AgentTask[] }>(

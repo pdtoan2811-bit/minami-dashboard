@@ -221,7 +221,35 @@ export function useAgent(paneKey: string) {
               setTurns((prev) => {
                 const liveTurn = prev.find((t) => t.streaming);
                 const staleAfterOutage = !liveTurn || lastDeltaAtRef.current <= resyncStartedAt;
-                return [...seed, ...(liveTurn && !staleAfterOutage ? [liveTurn] : overlay)];
+                const tail = liveTurn && !staleAfterOutage ? [liveTurn] : overlay;
+                // The in-flight message is often ALREADY on disk. A turn that stops at a tool call —
+                // a permission prompt, or an AskUserQuestion — has had its assistant message written
+                // out (that's the message carrying the tool_use), while `partial` still holds the same
+                // text because the turn hasn't ended. Concatenating seed + tail therefore rendered the
+                // reply twice, once above the reasoning block and once below it. Attaching to a parked
+                // turn is the normal case for an agent's onboarding interview, so this is not an edge:
+                // it's what you see every time you open one. Compare by prefix in either direction —
+                // whichever side is further along, they are the same message.
+                // NOT simply `seed[seed.length - 1]`: the CLI splits one reply across two assistant
+                // rows when it ends in a tool call — the prose lands in one, and the tool_use in a
+                // second whose text is empty. So the copy that duplicates `partial` is the last
+                // assistant turn WITH TEXT, which is usually the second-to-last row, and comparing
+                // against the final row silently matched nothing.
+                // Explicit reverse loop rather than findLastIndex: `target` is ES2017 here, so that
+                // method is a runtime-lib call TypeScript will happily accept and older engines won't
+                // have. Nothing else in this codebase relies on it, and this is not the file to start.
+                let dupAt = -1;
+                if (tail[0]?.role === "assistant" && tail[0].text.trim()) {
+                  for (let i = seed.length - 1; i >= 0; i--) {
+                    const t = seed[i];
+                    if (t.role !== "assistant" || !t.text.trim()) continue;
+                    if (tail[0].text.startsWith(t.text) || t.text.startsWith(tail[0].text)) { dupAt = i; }
+                    break; // only the LAST texted assistant turn can be the in-flight one
+                  }
+                }
+                return dupAt < 0
+                  ? [...seed, ...tail]
+                  : [...seed.slice(0, dupAt), ...seed.slice(dupAt + 1), ...tail];
               });
             }).catch(() => setTurns(overlay));
           } else setTurns(overlay);

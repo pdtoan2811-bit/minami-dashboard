@@ -22,6 +22,22 @@ export const NOTE_DIRS = [
 
 export const MEMORY_FILE = "MEMORY.md";
 export const ACTIVITY_FILE = path.join("00-09 System", "activity.md");
+/** Where the run log goes in a folder that doesn't use the vault's note structure. */
+export const ACTIVITY_FILE_FLAT = path.join(".claude", "agent-activity.md");
+
+/**
+ * The activity log's path for a specific home, relative to it.
+ *
+ * Not a constant, because the constant forced its own directory into existence: `writeIfAbsent` mkdirs
+ * the parent, so even with the note structure switched off an adopted code repo grew a "00-09 System/"
+ * folder to hold one log file. A repo gets `.claude/agent-activity.md` instead — beside the settings
+ * and skills that are already agent-owned — and a vault-shaped brain keeps the note-structure path.
+ * Resolved per call rather than stored on the agent so that a folder which GAINS a note structure
+ * later starts using it without a migration.
+ */
+export function activityFileFor(home: string): string {
+  return fs.existsSync(path.join(home, "00-09 System")) ? ACTIVITY_FILE : ACTIVITY_FILE_FLAT;
+}
 
 export type FolderReport = {
   path: string;
@@ -114,7 +130,7 @@ This folder is your memory, and it is yours to maintain:
 
 ${dirs}
 - \`${MEMORY_FILE}\` — durable facts and the *why* behind decisions. Curated: merge, don't append forever.
-- \`${ACTIVITY_FILE}\` — an append-only log of your runs. The dashboard writes to it; you read it.
+- \`${activityFileFor(a.home)}\` — an append-only log of your runs. The dashboard writes to it; you read it.
 
 **Every session, before you finish: write down what changed.** A decision, an open loop, a lesson, a
 fact that will be true next week — put it in \`${MEMORY_FILE}\` or the matching note under
@@ -212,7 +228,7 @@ export type ScaffoldResult = { created: string[]; skipped: string[] };
 export function scaffold(a: AgentDef, opts: { dashboardUrl: string; notes?: boolean }): ScaffoldResult {
   const created: string[] = [];
   const before = new Set<string>();
-  for (const f of ["CLAUDE.md", MEMORY_FILE, ACTIVITY_FILE]) {
+  for (const f of ["CLAUDE.md", MEMORY_FILE, activityFileFor(a.home)]) {
     if (fs.existsSync(path.join(a.home, f))) before.add(f);
   }
   fs.mkdirSync(a.home, { recursive: true });
@@ -226,7 +242,7 @@ export function scaffold(a: AgentDef, opts: { dashboardUrl: string; notes?: bool
 
   writeIfAbsent(path.join(a.home, "CLAUDE.md"), personaFor(a) + (a.hq ? hqAppendix(opts.dashboardUrl) : ""), created);
   writeIfAbsent(path.join(a.home, MEMORY_FILE), memorySeedFor(a), created);
-  writeIfAbsent(path.join(a.home, ACTIVITY_FILE), activitySeedFor(a), created);
+  writeIfAbsent(path.join(a.home, activityFileFor(a.home)), activitySeedFor(a), created);
   writeIfAbsent(path.join(a.home, ".claude", "skills", "README.md"), skillsReadme(a), created);
   // An empty permissions object, on purpose: it's the file the interview edits, and an absent file is
   // one more thing to discover. `deny` first so the shape of a restriction is visible before it's needed.

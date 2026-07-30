@@ -8,7 +8,7 @@
 // Kept as a prompt rather than a skill deliberately: skills load by cwd, and this has to run in a
 // folder that doesn't have any yet.
 import path from "node:path";
-import { ACTIVITY_FILE, MEMORY_FILE, NOTE_DIRS } from "./scaffold";
+import { activityFileFor, MEMORY_FILE, NOTE_DIRS } from "./scaffold";
 import type { AgentDef } from "./types";
 
 export function onboardingPrompt(a: AgentDef, opts: { adopted: boolean }): string {
@@ -61,7 +61,7 @@ Two rules while you write:
   paraphrase.
 
 Finish by showing me what you wrote — the file list plus your \`CLAUDE.md\` in full — and telling me
-what you'd still like to know. Append a line to \`${ACTIVITY_FILE}\` noting that you were set up today.`;
+what you'd still like to know. Append a line to \`${activityFileFor(a.home)}\` noting that you were set up today.`;
 }
 
 /**
@@ -120,7 +120,7 @@ ${away ? `You were working in \`${cwd}\`, which is not your home. The work stays
 LEARNED goes back to \`${a.home}\`. Write to the absolute paths under your home folder — don't write
 memory into the workspace.` : `You were working in your own folder.`}
 
-Append one line to \`${path.join(a.home, ACTIVITY_FILE)}\`: the date, where you worked, what the task
+Append one line to \`${path.join(a.home, activityFileFor(a.home))}\`: the date, where you worked, what the task
 was, and how it ended.
 
 Then, only if there's something durable: add it to \`${path.join(a.home, MEMORY_FILE)}\` or the

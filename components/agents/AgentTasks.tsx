@@ -5,6 +5,7 @@
 // tab opened it. That's stated in the UI because the instinct is to sit and watch — and a run that
 // takes twenty minutes will outlive your patience before it outlives itself.
 import { ago, assignTask, fetchTasks, stopTask, type AgentDef, type AgentRow, type AgentTask } from "@/lib/agents/client";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 const TINT: Record<string, string> = {
@@ -101,7 +102,7 @@ export default function AgentTasks({ agent, peers }: { agent: AgentDef; peers: A
                     <button onClick={() => stopTask(t.id).then(load)} className="rounded-md bg-white/10 px-2 py-0.5 text-[10.5px] text-neutral-300">Stop</button>
                   )}
                   {t.sessionId && (
-                    <a href={`/?session=${t.sessionId}`} className="rounded-md bg-white/10 px-2 py-0.5 text-[10.5px] text-neutral-300">Open transcript</a>
+                    <Link href={`/agents/${agent.id}/session/${t.sessionId}`} className="rounded-md bg-white/10 px-2 py-0.5 text-[10.5px] text-neutral-300">Open transcript</Link>
                   )}
                 </div>
               </div>

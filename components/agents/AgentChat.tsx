@@ -35,11 +35,36 @@ export default function AgentChat({ agent, cwd }: { agent: AgentDef; cwd?: strin
 
   // Follow the tail only while already near it, so scrolling back to re-read something isn't yanked
   // forward by the next streamed token.
+  //
+  // …with one exception: the FIRST paint after a transcript arrives must jump to the bottom outright.
+  // "Near the tail" is false at scrollTop 0 on a tall transcript, so without this the pane opened at
+  // the very top of the conversation. On the onboarding interview that was close to fatal: the header
+  // read "waiting on your answer", the composer read "waiting on your answer", and the question card
+  // itself sat ~1000px below the fold with nothing on screen suggesting you should scroll. The
+  // feature's centrepiece looked like a hang.
+  const landed = useRef(false);
   useEffect(() => {
     const el = scroller.current;
-    if (!el) return;
+    if (!el || !a.turns.length) return;
+    if (!landed.current) {
+      landed.current = true;
+      // After paint: the transcript's markdown, code blocks and any ask card are still being laid out
+      // when this effect runs, so scrollHeight is not yet final. Two frames is the cheap, reliable
+      // version of "once it has settled" — one frame still lands short on a long interview prompt.
+      requestAnimationFrame(() => requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; }));
+      return;
+    }
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
   }, [a.turns]);
+
+  // A question or a permission prompt arriving is always worth showing, wherever you were reading —
+  // it's the one thing in the pane that is blocking on you.
+  useEffect(() => {
+    if (!a.ask && !a.pending) return;
+    const el = scroller.current;
+    if (!el) return;
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }, [a.ask, a.pending]);
 
   const send = () => {
     const text = draft.trim();
