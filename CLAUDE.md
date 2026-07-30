@@ -57,6 +57,12 @@ METRICS   Stop hook on every machine → server/metrics-server.js → events.jso
 
 The live and read pipelines meet only on disk. They never call each other.
 
+**Agents** (`lib/agents/*`, `/agents`, opt-in in Settings) sit on top of both rather than beside them:
+an agent is an identity plus a *home folder* it remembers in, and an assigned task is an ordinary live
+session keyed `agent:<id>:<taskId>` whose transcript the read pipeline then attributes back to it. See
+`docs/knowledge/14-agents.md` before changing anything there — particularly why its task runner polls
+instead of subscribing.
+
 ## Conventions
 
 - **Comments explain *why*, not *what*.** This codebase's comments carry hard-won reasoning (races,

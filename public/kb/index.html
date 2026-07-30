@@ -83,7 +83,12 @@ var PAGES = [
     tag:"docs/KNOWLEDGE.md → docs/knowledge/",
     makes:"The authoritative answer to “why is it like this?” KNOWLEDGE.md is now an index; the mechanics, gotchas and bug post-mortems live in one file per subsystem under docs/knowledge/, with the dated changelog split out. Read the index, then the one file you need.",
     href:"https://github.com/pdtoan2811-bit/minami-dashboard/blob/main/docs/KNOWLEDGE.md",
-    status:"ok", pill:"17 docs", where:"docs/KNOWLEDGE.md" },
+    status:"ok", pill:"18 docs", where:"docs/KNOWLEDGE.md" },
+
+  { group:"system", icon:"🜂", title:"Agents", tint:"agent",
+    tag:"live in the app · opt-in",
+    makes:"The roster: an agent is an identity plus a home folder it thinks and remembers in, separate from the workspaces it works in. Chat with one, assign it unattended work, chain a handoff. Turn it on in Settings → Agents.",
+    href:"/agents", status:"ok", pill:"§14", needsApp:true, where:"app/agents" },
 
   { group:"deep", icon:"▦", title:"The transcript pipeline", tint:"disk",
     tag:"pipeline 1 of 3",

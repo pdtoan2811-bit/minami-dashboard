@@ -125,6 +125,20 @@ export const NODES: ModuleNode[] = [
   { id: "x/autopilotcfg", label: "~/.minami/autopilot.json", sub: "its switch — on disk, because a\ntimer in the server reads it", layer: "runtime", row: 6 },
   { id: "x/events", label: "~/.minami/events.jsonl", sub: "alert log · deploy.sh + task.mjs write", layer: "runtime", row: 5 },
 
+  // ── Standing agents (KNOWLEDGE.md §14) ──────────────────────────────────
+  // The agent layer meets the live pipeline at exactly one point — l/agents-runner → l/manager — and
+  // the read pipeline at one more — l/agents-history → l/sessions. Everything else here is its own.
+  { id: "app/agents", label: "app/agents", sub: "roster + agent detail\n(opt-in view)", layer: "surface", row: 6 },
+  { id: "c/AgentChat", label: "agents/AgentChat", sub: "one pane per agent\n(key: agent:<id>:chat)", layer: "component", row: 24, pipeline: "live" },
+  { id: "c/AgentTile", label: "agents/AgentTile", sub: "bento tile, grouped by who", layer: "component", row: 25 },
+  { id: "l/agents-store", label: "agents/store.ts", sub: "the registry · HQ uniqueness\n· realpath resolution", layer: "core", row: 21 },
+  { id: "l/agents-runner", label: "agents/runner.ts", sub: "unattended runs · write-back\n· handoffs (polls, never subscribes)", layer: "core", row: 22 },
+  { id: "l/agents-history", label: "agents/history.ts", sub: "attribution: home vs task", layer: "core", row: 23, pipeline: "read" },
+  { id: "l/agents-scaffold", label: "agents/scaffold.ts", sub: "scaffold or adopt a brain\n(never overwrites)", layer: "core", row: 24 },
+  { id: "r/agents", label: "/api/agents/**", sub: "roster · create · patch\n· inspect · onboard · tasks", layer: "route", row: 16 },
+  { id: "x/agentsdir", label: "~/.minami/agents/*.json", sub: "the roster — on disk, because the\nrunner spawns without a browser", layer: "runtime", row: 7 },
+  { id: "x/agenthome", label: "an agent's home folder", sub: "CLAUDE.md · MEMORY.md · notes\n— the substance, not the registry", layer: "runtime", row: 8 },
+
   // ── File preview (KNOWLEDGE.md §5g) ─────────────────────────────────────
   { id: "c/FilePanel", label: "FilePanel", sub: "any file type, paged\n(shares the browser's slot)", layer: "component", row: 22, pipeline: "live" },
   { id: "l/fileview", label: "file-view.ts", sub: "transcript → files touched\n(created vs changed)", layer: "core", row: 18, pipeline: "live" },
@@ -178,6 +192,23 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/autopilot", to: "x/autopilotcfg", kind: "import" },
   { from: "l/autopilot", to: "l/manager", kind: "import" },
   { from: "l/autopilot", to: "x/events", kind: "import" },
+
+  // Standing agents. `l/agents-runner → l/manager` is the whole of the join to the live pipeline:
+  // an assigned task is an ordinary session with an `agent:<id>:<taskId>` key.
+  { from: "app/agents", to: "c/AgentChat", kind: "import" },
+  { from: "app/agents", to: "c/AgentTile", kind: "import" },
+  { from: "app/agents", to: "r/agents", kind: "http", label: "poll 4s" },
+  { from: "c/AgentChat", to: "l/useagent", kind: "import" },
+  { from: "r/agents", to: "l/agents-store", kind: "import" },
+  { from: "r/agents", to: "l/agents-runner", kind: "import" },
+  { from: "r/agents", to: "l/agents-history", kind: "import" },
+  { from: "r/agents", to: "l/agents-scaffold", kind: "import" },
+  { from: "l/agents-store", to: "x/agentsdir", kind: "import" },
+  { from: "l/agents-scaffold", to: "x/agenthome", kind: "import" },
+  { from: "l/agents-runner", to: "l/manager", kind: "import" },
+  { from: "l/agents-runner", to: "l/sessions", kind: "import" },
+  { from: "l/agents-runner", to: "x/agenthome", kind: "import", label: "activity log" },
+  { from: "l/agents-history", to: "l/sessions", kind: "import" },
   { from: "app/page", to: "c/ProjectIcon", kind: "import" },
   { from: "c/BentoRail", to: "c/ProjectIcon", kind: "import" },
   { from: "app/page", to: "c/FolderPicker", kind: "import" },

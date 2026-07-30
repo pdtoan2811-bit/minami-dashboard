@@ -361,6 +361,50 @@ export function listSessions(): SessionMeta[] {
   return out.sort((a, b) => b.lastActivity - a.lastActivity).slice(0, 60);
 }
 
+/**
+ * Every session recorded under a specific set of working directories, newest first.
+ *
+ * Deliberately NOT listSessions() with a filter. That one exists to paint the bento grid: it windows
+ * to the ~150 most recently touched transcripts box-wide and then cuts to 60, which is right for "what
+ * am I working on" and wrong for "everything this agent has ever done" — an agent whose folder went
+ * quiet for a fortnight would show an empty history while its transcripts sat on disk untouched. Here
+ * the cwd set is the filter, applied to the DIRECTORY rather than to a global recency window, so the
+ * cost scales with the folders asked for instead of with the box's total session count.
+ */
+export function listSessionsIn(cwds: string[], limit = 200): SessionMeta[] {
+  loadDiskCache();
+  const seen = new Set<string>();
+  const candidates: { file: string; id: string; mtime: number }[] = [];
+  for (const cwd of cwds) {
+    // The CLI's own encoding: every non-alphanumeric byte of the path becomes a dash.
+    const dir = path.join(PROJECTS, cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    let files: string[];
+    try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
+    for (const f of files) {
+      const id = f.replace(/\.jsonl$/, "");
+      if (seen.has(id)) continue; // two cwds can encode to one dir (e.g. `a/b` and `a-b`)
+      seen.add(id);
+      const file = path.join(dir, f);
+      touchLRU(idIndex, id, file, ID_INDEX_MAX);
+      try { candidates.push({ file, id, mtime: fs.statSync(file).mtimeMs }); } catch { /* gone mid-scan */ }
+    }
+  }
+  candidates.sort((a, b) => b.mtime - a.mtime);
+  const out: SessionMeta[] = [];
+  for (const { file, id } of candidates.slice(0, limit)) {
+    try {
+      const meta = summarize(file, id);
+      if (meta.messages === 0) continue;
+      if (meta.cwd.includes(ENRICH_MARKER)) continue;
+      out.push(meta);
+    } catch { /* skip unreadable */ }
+  }
+  saveDiskCache();
+  const enr = getEnrichment();
+  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; m.review = e.review; } }
+  return out.sort((a, b) => b.lastActivity - a.lastActivity);
+}
+
 export type ToolCallRecord = { name: string; input: any; id?: string; output?: ToolOutput; ok?: boolean };
 // `off` is the byte offset of the JSONL line that started this turn. It's what makes history pageable:
 // a window's lower bound is exactly turns[0].off, so "give me what came before" is a precise byte

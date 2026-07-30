@@ -307,7 +307,12 @@ async function* inputGen(s: Session): AsyncGenerator<any> {
   }
 }
 
-function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string): Session {
+// `model` overrides DEFAULT_MODEL for this session only, and is honoured just once — at creation,
+// where `query()` is built. A warm session keeps the model it was born with, exactly as a running CLI
+// session does (the same caveat lib/model-pins.ts states about account switching). The only caller
+// that passes it is the agent layer, where each agent pins its own tier; everything else omits it and
+// gets the box pin.
+function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string, model?: string): Session {
   const existing = store.get(key);
   if (existing && !existing.closed) return existing;
 
@@ -396,7 +401,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // raw chain of thought is never returned on current models.
       thinking: { type: "adaptive", display: "summarized" },
       settingSources: ["user", "project", "local"], // mirror the user's own CLAUDE.md / permissions / MCP
-      model: DEFAULT_MODEL,
+      model: model || DEFAULT_MODEL,
       // Only set effort if explicitly pinned via env — omitting it lets the SDK/model default apply
       // (see the DEFAULT_EFFORT comment above; "default effort" was the explicit ask, not "high").
       ...(DEFAULT_EFFORT ? { effort: DEFAULT_EFFORT } : {}),
@@ -773,7 +778,7 @@ function handleSystem(s: Session, m: any) {
 }
 
 // Send a user message; creates the session on first call (with resume/mode) or feeds the live one.
-export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; hold?: boolean; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
+export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; hold?: boolean; model?: string; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
   // A session object existing (and not closed) means its SDK process is already warm — this is just
   // the next turn. Otherwise ensureSession() below is about to spin up a brand-new `query()`, which is
   // the actual ~1-2s cold start `spawning` narrates; a resumed (on-disk) conversation still pays this
@@ -795,7 +800,7 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   }
   // An absent mode means "whatever this install defaults to"; an explicit one always wins.
   const wanted = opts.mode === undefined ? DEFAULT_PERMISSION_MODE : safeMode(opts.mode);
-  const s = ensureSession(opts.key, opts.cwd, wanted, opts.resume);
+  const s = ensureSession(opts.key, opts.cwd, wanted, opts.resume, opts.model);
   // ensureSession only applies `mode` when it CREATES the session, so a warm one would otherwise keep
   // whatever it was born with forever. Re-applying per turn means the composer's pill is authoritative
   // even if the change-mode request never happened (a pane that reloaded, a dropped fetch).

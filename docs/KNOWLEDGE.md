@@ -45,6 +45,7 @@ recycle one.
 | [`11-images.md`](knowledge/11-images.md) | §11 | ~1,100 | Pasted screenshots: the path is the payload, so it survives a reload. |
 | [`12-rendering-cost.md`](knowledge/12-rendering-cost.md) | §12 | ~1,400 | Why the dashboard made the machine hot: idle GPU 31% → 14%, and never animate inside a `backdrop-filter`. |
 | [`13-autopilot.md`](knowledge/13-autopilot.md) | §13 | ~1,200 | Always-on merge · resolve · deploy, off by default. Was a second `§12`; renumbered. |
+| [`14-agents.md`](knowledge/14-agents.md) | §14 | ~3,000 | Standing agents: identity + home folder ≠ cwd, scaffold vs adopt, the onboarding interview, the unattended task runner (and why it polls), attribution rules, HQ and `bin/agent.mjs`. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~9,400 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -110,6 +111,9 @@ The live and read pipelines meet only on disk. They never call each other.
 | Out-of-pane alerts | `bin/minami-event.mjs` + `lib/events.ts` | **shipped** | disk-backed, survives the deploy that produces them — see §10 |
 | Images in a message | `lib/agent/images.ts` + `app/api/fs/paste` | **shipped** | paste a screenshot; path is the payload, so it survives a reload — see §11 |
 | Rendering cost | `app/globals.css`, `ProjectIcon.tsx` | **shipped** | idle GPU 31% → 14%; never animate inside a backdrop-blur — see §12 |
+| Standing agents | `lib/agents/*` + `app/agents/*` | **shipped** | opt-in roster; identity + home folder, not cwd. Verified end-to-end 2026-07-30 — see §14 |
+| Agent task runner | `lib/agents/runner.ts` | **shipped** | unattended runs, write-back, handoffs; polls rather than subscribes — see §14.3 |
+| Agent CLI | `bin/agent.mjs` | **shipped** | how HQ delegates; thin wrapper over `/api/agents` — see §14.5 |
 
 ---
 
