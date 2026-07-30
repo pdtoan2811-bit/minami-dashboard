@@ -937,8 +937,14 @@ export default function BentoHome() {
                     className="rounded-lg border border-[var(--sakura)]/40 px-2 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋</button>
                   {addMenu && (
                     <>
-                      <div className="fixed inset-0 z-10" onClick={() => setAddMenu(false)} />
-                      <div className="absolute right-0 top-full z-20 mt-1 max-h-96 w-72 overflow-y-auto rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
+                      <div className="fixed inset-0 z-20" onClick={() => setAddMenu(false)} />
+                      {/* z-30, above the hiding header's z-20. This menu lives INSIDE `group/chrome`, so
+                          moving the pointer onto it counts as hovering the chrome and unfurls the header
+                          panel — which, at the same z-20 and later in DOM order, painted over the menu's
+                          top 57px. That is the first row ("New blank chat"), so the menu opened with its
+                          most-used item already unclickable. The suppression below stops the unfurl; this
+                          raise is what makes the stacking correct regardless of it. */}
+                      <div className="absolute right-0 top-full z-30 mt-1 max-h-96 w-72 overflow-y-auto rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
                         <button onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane()] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"><span className="text-[var(--sakura)]">＋</span> New blank chat</button>
                         {proj.sessions.some((s) => !panes.some((pn) => pn.sid === s.id)) && <div className="my-1 border-t border-white/10" />}
                         {[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id)).map((s) => (
@@ -963,7 +969,13 @@ export default function BentoHome() {
                   decision to keep it: static, so it reserves its own space and never sits on the text
                   you pinned it in order to read alongside. */}
               <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${
-                headerPinned ? "grid-rows-[1fr]" : "absolute inset-x-0 top-full z-20 grid-rows-[0fr] group-hover/chrome:grid-rows-[1fr] group-focus-within/chrome:grid-rows-[1fr]"}`}>
+                headerPinned ? "grid-rows-[1fr]"
+                  // While the add-chat menu is open, the hover peek is OFF. The menu is a descendant of
+                  // `group/chrome`, so opening it and reaching for a row is itself a hover of the chrome
+                  // — the peek would unfurl behind the menu every single time you used it. A peek is for
+                  // when you want the header; here you have already said you want the chat list, and
+                  // `focus-within` has to go too or focusing the menu re-triggers it.
+                  : `absolute inset-x-0 top-full z-20 grid-rows-[0fr] ${addMenu ? "" : "group-hover/chrome:grid-rows-[1fr] group-focus-within/chrome:grid-rows-[1fr]"}`}`}>
                 <div className="overflow-hidden">
                   {/* pr-14, not px-4: the notification bell is fixed to the viewport's top-right corner
                       and would otherwise sit on top of these controls. Reserving the gutter keeps the

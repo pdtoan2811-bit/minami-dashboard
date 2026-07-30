@@ -113,6 +113,20 @@ then holds ~46px forever. It collapses to nothing and slides back on hover, keyb
 - **`pr-14` moved to the tab row too.** The notification bell is fixed to the viewport's top-right, and
   with the header collapsed the tab row is what's under it.
 
+> 🐛 **The add-chat menu opened with its first row already unclickable.** The `＋` dropdown is a
+> *descendant* of `group/chrome`, so moving the pointer onto it counts as hovering the chrome and
+> unfurls the peek — and the peek is `absolute inset-x-0 top-full z-20` while the menu was
+> `absolute right-0 top-full z-20`. Equal `z-index`, and the peek comes later in DOM order, so it
+> painted over the menu's top **57px**: measured `overlapPx: 57`, with the topmost element at 20px into
+> the menu belonging to the header, not the list. That top row is "New blank chat", the most-used item.
+>
+> Two changes, because either alone leaves something wrong. The menu is now `z-30` so the stacking is
+> correct whatever hovers; and the peek's `group-hover`/`group-focus-within` variants are dropped while
+> `addMenu` is open, because a peek unfurling *behind* the list you deliberately opened is noise even
+> when it isn't occluding. The click-away backdrop went `z-10` → `z-20` so it still sits above the peek.
+> Verified: `overlapPx` 57 → 0, every probe point inside the menu owned by the menu, and the peek still
+> opens to 57px with title, repo and icons once the menu is closed.
+
 ### Focus mode — four panes is a glanceable state, not a readable one
 
 `⌥1–4` (or the pane's ⤢) gives one pane the whole panel; the other three fold into a tab strip that

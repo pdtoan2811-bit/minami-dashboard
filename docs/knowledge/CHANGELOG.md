@@ -9,6 +9,11 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-30
+- **The add-chat menu's first row was unclickable** (§5e) — the `＋` dropdown sits inside
+  `group/chrome`, so reaching for it unfurled the header peek, which at equal `z-20` and later DOM order
+  covered the menu's top 57px. Menu raised to `z-30`, peek suppressed while the menu is open, backdrop
+  to `z-20`. Verified `overlapPx` 57 → 0 with the peek still working when closed.
+  *Reported by user: "add chat popup dropdown hidden by the hover effect".*
 - **The ask card's "Other" answer could be typed but not sent** (§5e) — typing selected the Other row,
   but clicking that row ran the plain toggle and deselected it, stranding the typed text on screen
   behind a disabled Send; focus still chased the row the click had switched off, so it read as a dead
