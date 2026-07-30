@@ -23,7 +23,7 @@ import { type FlowTurn } from "@/lib/flow-model";
  *  It also stays put while a turn is running but has produced no steps yet, so the control lives in
  *  one place your eye can learn rather than appearing and vanishing mid-turn.
  */
-export function FlowStrip({ turn, busy, onOpen }: { turn: FlowTurn | undefined; busy: boolean; onOpen: () => void }) {
+export function FlowStrip({ turn, busy, compact, onOpen }: { turn: FlowTurn | undefined; busy: boolean; compact?: boolean; onOpen: () => void }) {
   const steps = turn?.steps ?? [];
   if (!steps.length && !busy) return null;
 
@@ -39,6 +39,22 @@ export function FlowStrip({ turn, busy, onOpen }: { turn: FlowTurn | undefined; 
     : !steps.length ? "starting…"
     : planned && done === steps.length ? "all steps done"
     : actions ? `${actions} action${actions === 1 ? "" : "s"}` : "";
+
+  // Cramped, the strip gives up its own row and becomes a chip in the pane's utility bar (see the
+  // density tiers in lib/density.ts). It keeps the count — "flow · 19 steps" is the part that tells you
+  // whether opening it is worth the room — and drops the running-step detail, which is already said by
+  // the activity line two inches to the right. Same button, same handler, same one door.
+  if (compact) {
+    return (
+      <button onClick={onOpen}
+        title={detail ? `${label} — ${detail}` : "Open the flow — review each step, pause and steer"}
+        className="flex shrink-0 items-center gap-1 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-300">
+        <ListChecks className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+        <span className="whitespace-nowrap">{label}</span>
+        <ChevronRight className="h-2.5 w-2.5 shrink-0" />
+      </button>
+    );
+  }
 
   return (
     <button onClick={onOpen}

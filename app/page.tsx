@@ -24,9 +24,10 @@ import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildFlow } from "@/lib/flow-model";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
+import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
 import { motion } from "motion/react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, ChevronLeft, ChevronRight, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Bot, ChevronLeft, ChevronRight, Chrome, FileText, Globe, Grid2x2, HelpCircle, ListChecks, Maximize2, Minimize2, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -161,12 +162,19 @@ const WINDOWS: { label: string; days: number | null }[] = [
   { label: "24h", days: 1 }, { label: "3d", days: 3 }, { label: "7d", days: 7 }, { label: "30d", days: 30 }, { label: "All", days: null },
 ];
 const MAX_PANES = 4;
+// useLayoutEffect is a no-op (and warns) during Next's server prerender.
+const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const MODE_HINT: Record<AgentMode, string> = {
   default: "Ask before running tools that need approval",
   acceptEdits: "Auto-approve file edits; still ask for other tools",
   plan: "Plan only — propose changes without applying them",
   bypassPermissions: "⚠ Auto-approve EVERY tool with no prompt — including destructive ones",
+};
+// One name per approval level, used by the chips AND by the folded mode pill that replaces them in a
+// cramped pane. Two spellings of "bypass" in one UI is how a badge starts describing the wrong thing.
+const PERM_LABEL: Record<Exclude<AgentMode, "plan">, string> = {
+  default: "ask", acceptEdits: "auto-edits", bypassPermissions: "bypass",
 };
 const fmtElapsed = (ms: number) => {
   const s = Math.floor(ms / 1000);
@@ -328,6 +336,15 @@ export default function BentoHome() {
   const [project, setProject] = useState<string | null>(null);
   const [panes, setPanes] = useState<Pane[]>([]);
   const [addMenu, setAddMenu] = useState(false); // "add a chat to the mix" picker
+  // Which pane, if any, has the whole panel to itself. Four transcripts at once is a glanceable state,
+  // not a readable one — you watch four and read one. null = the grid; an index = that pane is the
+  // screen and the rest collapse to the tab strip above it (they stay MOUNTED, see the grid below).
+  const [focusPane, setFocusPane] = useState<number | null>(null);
+  // Read inside the window key handler, which deliberately doesn't re-subscribe per keystroke.
+  const focusRef = useRef<number | null>(null);
+  focusRef.current = focusPane;
+  const panesRef = useRef(0); // same reason: how many panes ⌥1–4 may address, read without re-subscribing
+  panesRef.current = panes.length;
   const [openPanesMap, setOpenPanesMap] = useSetting<Record<string, Pane[]>>("openPanes", {}); // remembered per topic
   // The currently-open panel, persisted so a page refresh reopens it exactly (with its panes).
   const [openPanel, setOpenPanel] = useSetting<{ name: string; cwd: string; topic: boolean; panes: Pane[] } | null>("openPanel", null);
@@ -450,7 +467,23 @@ export default function BentoHome() {
     setNewTopic({ name, sessions: [], cwd, reqs: 0, tokens: 0, last: Date.now(), active: false, review: false, goals: [], latest: "", weight: 0 });
     setPanes([mkPane()]); // one fresh blank chat in the chosen folder (or home, for a folderless CLI)
   };
-  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); };
+  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); setFocusPane(null); };
+  // Focus is an index into `panes`, so it has to be re-checked whenever that array changes — closing
+  // the focused pane (or any pane before it) would otherwise leave the panel showing a different
+  // conversation than the one the user zoomed into, or nothing at all.
+  useEffect(() => {
+    setFocusPane((f) => (f == null ? null : f < panes.length ? f : panes.length ? panes.length - 1 : null));
+  }, [panes.length]);
+  // Crossing into 3+ panes, the bento column stops being worth its width: the panel is where all the
+  // room needs to go, and the rail still shows every project's live state. Latched, so this is a nudge
+  // and not a fight — un-rail it by hand at three panes and it stays un-railed until you drop back
+  // under three and come up again. The user's explicit choice always outlives the heuristic.
+  const autoRailed = useRef(false);
+  useEffect(() => {
+    if (panes.length < 3) { autoRailed.current = false; return; }
+    if (!autoRailed.current && !rail) { autoRailed.current = true; setRail(true); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panes.length]);
   // Remember the open panel + its layout so a refresh (or re-opening the topic) restores it exactly.
   useEffect(() => {
     const name = project || newTopic?.name || null;
@@ -487,7 +520,20 @@ export default function BentoHome() {
   }, [projSig]);
 
   const onKey = useCallback((e: KeyboardEvent) => {
-    if (e.key === "Escape") { closePanel(); return; }
+    // Escape is layered, innermost first — the conventional shape. It used to close the whole panel
+    // unconditionally, which from a focused pane would have thrown away the panel to undo a zoom.
+    if (e.key === "Escape") { if (focusRef.current != null) setFocusPane(null); else closePanel(); return; }
+    // ⌥1–4 jumps straight to a pane, ⌥0 back to the grid — and deliberately NOT while the composer has
+    // focus... it fires there too, on purpose: switching panes mid-draft is the whole point, and each
+    // pane's draft is persisted per session (see `draft:` in ChatColumn), so nothing is lost.
+    //
+    // `e.code`, not `e.key`: Option+1 on a Mac layout produces "¡", and on a Vietnamese layout something
+    // else again. The physical key is the only stable name for this chord.
+    if (e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[0-9]$/.test(e.code) && panesRef.current > 0) {
+      const n = Number(e.code.slice(5));
+      if (n === 0) { e.preventDefault(); setFocusPane(null); return; }
+      if (n <= panesRef.current) { e.preventDefault(); setFocusPane(n - 1); return; }
+    }
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || project) return;
     if (!projects.length) return;
@@ -809,7 +855,9 @@ export default function BentoHome() {
                 </button>
                 <AttachBar inline cwd={proj.cwd} project={proj.name} />
               </div>
-              <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>
+              {/* Once the tab strip below is on screen it says how many panes are open, by showing them.
+                  Two counts of the same thing is one more than the header has room for. */}
+              {focusPane == null && <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>}
               {/* Add a chat to the mix: a blank one, or any of the topic's other sessions. */}
               <div className="relative shrink-0">
                 <button onClick={() => setAddMenu((v) => !v)} disabled={panes.length >= MAX_PANES}
@@ -832,14 +880,47 @@ export default function BentoHome() {
               </div>
               <button onClick={closePanel} className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
             </div>
-            {/* Up to 4 chats in a 2×2 grid — like managing windows on a foldable. */}
-            <div className="grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
+            {/* The other three, while one of them is the screen. Not a nav bar bolted on — it's the
+                2×2 grid folded down to one line, and it has to carry the one thing the grid was
+                actually giving you: whether the panes you're NOT reading are still working. Hence the
+                live phase dot per tab, straight off the same `liveAct` poll the bento tiles read. */}
+            {focusPane != null && panes.length > 1 && (
+              <div className="flex items-center gap-1 overflow-x-auto border-b border-white/10 px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {panes.map((pn, i) => {
+                  const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
+                  const la = pn.sid ? liveAct[pn.sid] : undefined;
+                  const on = i === focusPane;
+                  return (
+                    <button key={pn.key} onClick={() => setFocusPane(i)} title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})`}
+                      className={`flex min-w-0 shrink items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
+                        on ? "border-[var(--sakura)]/60 bg-[var(--sakura)]/10 text-neutral-100" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>
+                      <span className="shrink-0 tabular-nums text-[9px] text-neutral-600">⌥{i + 1}</span>
+                      {/* Only a genuinely running turn animates — same rule as the bento tiles, and for
+                          the same measured reason (a permanent pulse costs a frame loop forever). */}
+                      {la?.busy && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--sakura)]" />}
+                      <span className="truncate">{s ? titleOf(s) : "New chat"}</span>
+                    </button>
+                  );
+                })}
+                <button onClick={() => setFocusPane(null)} title="Back to the grid  (esc)"
+                  className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-300">
+                  <Grid2x2 className="h-3 w-3" /> grid
+                </button>
+              </div>
+            )}
+            {/* Up to 4 chats in a 2×2 grid — like managing windows on a foldable. With one focused it
+                becomes a single cell: the others are still HERE, just `display:none` (see `collapsed`),
+                which keeps their EventSource attached and their streamed turns intact. Unmounting them
+                would tear down four live connections every time you zoomed into one. */}
+            <div className="grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: focusPane != null || panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
               {panes.map((pane, idx) => (
                 // Keyed by pane.key PLUS switchGen (not sessionId): the "own live turn just got a real
                 // session id" transition (onLive below) must NOT remount — that would tear down the
                 // in-flight EventSource/turns mid-stream for no reason. An explicit user pick of a
                 // DIFFERENT existing session (onPick below) SHOULD remount — see onPick's comment.
                 <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools} agentsHere={cwdAgentCount[proj.cwd] || 0}
+                  collapsed={focusPane != null && focusPane !== idx} focused={focusPane === idx}
+                  onFocus={() => setFocusPane((f) => (f === idx ? null : idx))}
                   // Opening the flow from a chat raises the canvas in the BENTO column, and un-rails the
                   // bento if it was collapsed — otherwise the click would appear to do nothing at all.
                   onOpenFlow={(sid) => { if (!sid) return; setRail(false); setFlowFor({ project: proj.name, sid }); }}
@@ -947,6 +1028,55 @@ const FileChips = memo(function FileChips({ tools, onOpen }: { tools: AgentToolC
 });
 
 /** The shared side slot's tab strip. Only rendered when both panels have something to show. */
+/** The three session controls — the brake, Plan vs Code, and the approval level.
+ *
+ *  Extracted for exactly one reason: a cramped pane folds this whole row into a single `code · bypass`
+ *  pill, and the pill's fold-out has to be THE controls, not a second set of them. The approval level
+ *  is the most dangerous thing in this UI to be wrong about (see `perm` in ChatColumn); two renderings
+ *  of it, drifting apart, is the failure mode worth spending a component to make impossible.
+ */
+function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm }: {
+  hold: boolean; onHold: (v: boolean) => void;
+  planning: boolean; onPlan: (v: boolean) => void;
+  perm: Exclude<AgentMode, "plan">; onPerm: (m: Exclude<AgentMode, "plan">) => void;
+}) {
+  return (
+    <>
+      {/* The brake. It lived in the flow panel's header, which is gone — and it is a SESSION control
+          (like Plan/Code and the approval level), not a property of a view, so this row is where it
+          always belonged. Armed, the server parks the next tool call instead of auto-approving it;
+          the pane's own permission prompt is then what you answer. */}
+      <button onClick={() => onHold(!hold)}
+        title={hold ? "Release — stop parking tool calls at the gate" : "Pause after the current step — park the next tool call for review"}
+        className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors ${
+          hold ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]" : "border-white/10 text-neutral-500 hover:text-neutral-300"}`}>
+        {hold ? "▶ release" : "⏸ pause"}
+      </button>
+      {/* Plan vs Code — default Code. Plan proposes without applying. */}
+      <div className="flex items-center rounded-lg border border-white/10 p-0.5" title="Plan proposes changes first; Code executes">
+        {([["code", false], ["plan", true]] as const).map(([label, on]) => (
+          <button key={label} onClick={() => onPlan(on)}
+            className={`rounded-md px-2 py-0.5 text-[10px] font-medium capitalize transition-colors ${planning === on ? "bg-[var(--sakura)] text-white" : "text-neutral-500 hover:text-neutral-300"}`}>{label}</button>
+        ))}
+      </div>
+      {/* Approval level (only meaningful in Code mode). "bypass" auto-runs everything — danger. */}
+      <div className={`flex items-center gap-1 transition-opacity ${planning ? "pointer-events-none opacity-30" : ""}`}>
+        {(["default", "acceptEdits", "bypassPermissions"] as const).map((m) => {
+          const on = perm === m;
+          const bypass = m === "bypassPermissions";
+          return (
+            <button key={m} onClick={() => onPerm(m)} title={MODE_HINT[m]}
+              className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${on
+                ? (bypass ? "border-green-500/60 bg-green-500/15 text-green-400" : "border-[var(--sakura)]/60 bg-[var(--sakura)]/15 text-[var(--sakura)]")
+                : (bypass ? "border-green-500/25 text-green-500/70 hover:text-green-400" : "border-white/10 text-neutral-500 hover:text-neutral-300")}`}>
+              {PERM_LABEL[m]}</button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 function SlotTabs({ slot, onPick, fileCount }: { slot: "browser" | "file"; onPick: (s: "browser" | "file") => void; fileCount: number }) {
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-white/10 bg-black/20 px-1.5 py-1">
@@ -1064,12 +1194,13 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
 // construction, so the two views can't drift on the things that actually execute code. That is also
 // why Flow isn't its own route: a second copy of the send/steer/stop wiring is a second place for the
 // permission model to be subtly wrong.
-function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, openSids, onOpenFlow, onPick, onLive, onClose }: {
-  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; onOpenFlow: (sid: string) => void; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, openSids, collapsed, focused, onFocus, onOpenFlow, onPick, onLive, onClose }: {
+  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; collapsed?: boolean; focused?: boolean; onFocus: () => void; onOpenFlow: (sid: string) => void; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
 }) {
   // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
   const [menu, setMenu] = useState(false);
+  const [modeOpen, setModeOpen] = useState(false); // the folded session-controls pill, in a cramped pane
   // Key the agent by the SESSION (once it has an id), not the pane. That's what lets ANY pane showing a
   // running session stream it live — and lets a pane reattach after a project switch / refresh — rather
   // than streaming only in the exact pane that started it. Blank chats use their pane key until they get
@@ -1285,6 +1416,21 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     // scroll that restarts 30×/second never arrives anywhere. Smooth belongs to the deliberate jump.
     el.scrollTop = el.scrollHeight;
   }, [visible.length, source[source.length - 1]?.text.length, agent.pending, agent.busy]);
+  // Focus mode hides the other panes with `display:none` rather than unmounting them (so their streams
+  // survive) — but a display:none box has no layout, and the browser does NOT restore its scrollTop
+  // when it comes back. Left alone, every trip into a focused pane and out again would dump the other
+  // three at the top of their rendered window and unpin them, because atBottom() then reads false.
+  // Save on the way out, restore on the way in — and honour `pinned` over the saved offset, since a
+  // pane that was following the reply has almost certainly grown while it was hidden.
+  const parkedScroll = useRef<number | null>(null);
+  useIsoLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (collapsed) { parkedScroll.current = el.scrollTop; return; }
+    if (parkedScroll.current == null) return;
+    el.scrollTop = pinnedRef.current ? el.scrollHeight : parkedScroll.current;
+    parkedScroll.current = null;
+  }, [collapsed]);
 
   // The turn, folded into steps — ONE derivation, read by both the strip and the panel so they cannot
   // disagree about what exists. Was two: the strip scanned raw TodoWrite input while the panel called
@@ -1318,6 +1464,21 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const [browserW, setBrowserW] = useSetting("browserWidth", 42);
   const [browserDrag, setBrowserDrag] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
+  // How much room this pane actually has — the S and the H of the revamp. Everything below reads `d`
+  // (what's true of the box) or `dc` (what the box may SPEND on chrome right now). See lib/density.ts.
+  const d = useDensity(paneRef);
+  // ...and E: the pane you are typing in is the one you're in, so it gets a tier back. Cramped, that's
+  // the difference between a folded mode pill and the full Plan/Code + approval row — the controls
+  // reappear exactly when you reach for them, and recede the moment you go back to reading. Focus, not
+  // hover: hover fires on the way to somewhere else, and a control row that flickers past the cursor is
+  // worse than one that stays folded.
+  const [composing, setComposing] = useState(false);
+  const dc = composing ? looser(d) : d;
+  const roomy = atLeast(dc, "snug"); // chrome gets its own rows
+  // The pill and its fold-out only exist in the cramped branch. Growing out of that branch (resize, or
+  // focusing the composer) must take the fold-out with it, or `modeOpen` sits latched true and the next
+  // return to a cramped size pops a menu nobody asked for.
+  useEffect(() => { if (roomy) setModeOpen(false); }, [roomy]);
   const browserPaneRef = useRef<HTMLDivElement>(null); // the panel whose width the drag paints
   const pendingBrowserW = useRef(browserW);
   useEffect(() => {
@@ -1369,7 +1530,12 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     slot === "file" && canShowFile ? "file"
     : slot === "browser" && canShowBrowser ? "browser"
     : canShowFile ? "file" : canShowBrowser ? "browser" : null;
-  const showSidePanel = !!activeSlot && !browserPanelHidden;
+  // A browser preview or a file diff docked beside a 380px-wide transcript is two unreadable columns
+  // instead of one readable one, so below `snug` the slot doesn't open at all — and the header's reopen
+  // button (see below) becomes "expand this pane", which is the only place the panel CAN fit. Nothing is
+  // lost or silently dropped: the button still shows the error/file count, and one click gets you there.
+  const roomForSlot = atLeast(d, "snug");
+  const showSidePanel = !!activeSlot && !browserPanelHidden && roomForSlot;
   const showBrowserPanel = showSidePanel && activeSlot === "browser";
   // Toolbar controls can't touch the browser directly (there's no server-side handle on it — see
   // browser-view.ts), so they ask the agent, exactly the way Claude Code models navigation as a tool
@@ -1421,32 +1587,71 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     }
   }, [agent.ask, proj]);
 
+  // What this pane is doing, in one line — the same content whether it sits in the full control row or
+  // in the folded utility bar. Derived once so the two layouts can't disagree about a live session.
+  const statusEl = agent.stopping ? <span className="flex items-center gap-1 text-red-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />stopping…</span>
+    : agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
+    : agent.busy || agent.activity.phase !== "idle" ? <ActivityLine compact busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
+    : agent.live ? <><span className="h-1.5 w-1.5 rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</> : <>ready</>;
+
+  // The slot is reachable from the header whenever it isn't showing — either because it was hidden by
+  // hand, or because this pane is too small to hold it. The two cases need different buttons: one
+  // reopens, the other has to make room first.
+  const slotHidden = !!activeSlot && (browserPanelHidden || !roomForSlot);
+  const openSlot = (which: "browser" | "file") => {
+    setSlot(which);
+    setBrowserPanelHidden(false);
+    if (!roomForSlot) onFocus(); // no room here — take the panel, which is where the room is
+  };
+
   return (
-    <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/40 ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 ? "col-span-2" : ""}`}>
-      <div className="relative flex items-center gap-2 border-b border-white/[0.07] px-4 py-2">
-        <ProjectIcon name={proj} />
-        <button onClick={() => setMenu((v) => !v)} className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/10">
-          <span className="min-w-0"><span className="block truncate text-[13px] font-semibold">{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span><span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span></span>
+    // `collapsed` is display:none, NOT unmounted — see the grid in BentoHome. A collapsed pane keeps
+    // streaming, keeps its draft, keeps its scroll position, and costs one style bit.
+    <DensityContext.Provider value={d}>
+    <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-neutral-900/40 ${collapsed ? "hidden " : ""}${focused ? "border-[var(--sakura)]/30" : "border-white/10"} ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 && !focused ? "col-span-2" : ""}`}>
+      {/* The header is chrome about the pane, not content in it, so it is the first thing to thin out.
+          Sized off `d` rather than `dc`: the title bar must not twitch every time the composer takes
+          focus — only the footer, which is what you're reaching for, is allowed to move. */}
+      <div className={`relative flex items-center gap-2 border-b border-white/[0.07] ${atLeast(d, "snug") ? "px-4 py-2" : atLeast(d, "tight") ? "px-3 py-1.5" : "px-2 py-1"}`}>
+        {atLeast(d, "tight") && <ProjectIcon name={proj} />}
+        <button onClick={() => setMenu((v) => !v)} className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-white/10">
+          <span className="min-w-0">
+            <span className={`block truncate font-semibold ${atLeast(d, "snug") ? "text-[13px]" : "text-[12px]"}`}>{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span>
+            {/* The goal line goes first. It's the pane's *category* — true all session, read once, and
+                the tab strip and the bento tile both still say it. Two lines of title above a
+                three-line transcript was the single worst ratio in the four-pane layout. */}
+            {atLeast(d, "snug") && <span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span>}
+          </span>
           <span className="text-neutral-500">⌄</span>
         </button>
         {/* Reopen the shared side slot. Two buttons rather than one, because "show the browser" and
             "show the files" are different intents and the slot has to know which one you meant. */}
-        {canShowBrowser && browserPanelHidden && (
-          <button onClick={() => { setSlot("browser"); setBrowserPanelHidden(false); }} title="Show browser view"
+        {canShowBrowser && slotHidden && (
+          <button onClick={() => openSlot("browser")} title={roomForSlot ? "Show browser view" : "Expand this chat to show the browser view"}
             className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 && !canShowFile ? "ml-auto" : ""}`}>
             <Chrome className="h-3.5 w-3.5" />
             {/* A hidden panel shouldn't hide a broken page — surface the error count on the reopen button. */}
             {browser.consoleErrors > 0 && <span className="text-[9px] tabular-nums text-[#ef7c7c]">{browser.consoleErrors}</span>}
           </button>
         )}
-        {canShowFile && browserPanelHidden && (
-          <button onClick={() => { setSlot("file"); setBrowserPanelHidden(false); }} title="Show files touched in this chat"
+        {canShowFile && slotHidden && (
+          <button onClick={() => openSlot("file")} title={roomForSlot ? "Show files touched in this chat" : "Expand this chat to show the files it touched"}
             className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
             <FileText className="h-3.5 w-3.5" />
             <span className="text-[9px] tabular-nums">{files.files.length}</span>
           </button>
         )}
-        {count > 1 && <button onClick={onClose} className="ml-auto rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
+        {count > 1 && (
+          <div className="ml-auto flex shrink-0 items-center">
+            {/* Visible at rest, deliberately. The lesson from v1's hidden flow gear (see FlowStrip):
+                a feature you can only reach by knowing a chord is a feature nobody has. */}
+            <button onClick={onFocus} title={focused ? "Back to the grid  (esc)" : `Give this chat the whole panel  (⌥${idx + 1})`}
+              className="rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200">
+              {focused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </button>
+            <button onClick={onClose} className="rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>
+          </div>
+        )}
         {menu && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />
@@ -1468,7 +1673,14 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
       <div ref={scrollRef}
         // Passive by default in React 19; this only reads geometry, so it never blocks the scroll.
         onScroll={(e) => { const on = atBottom(e.currentTarget); if (on !== pinnedRef.current) setPinned(on); }}
-        className="relative min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 [scrollbar-gutter:stable]">
+        // Padding and the gap between turns are chrome too — 24px of dead margin around a 146px
+        // transcript is a tenth of the pane spent on nothing. They shrink with the box, never to zero:
+        // messages still need a gutter to read as separate messages.
+        className={`relative min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] ${
+          atLeast(d, "roomy") ? "space-y-6 px-5 py-5"
+          : atLeast(d, "snug") ? "space-y-5 px-4 py-4"
+          : atLeast(d, "tight") ? "space-y-4 px-3.5 py-3"
+          : "space-y-3 px-3 py-2"}`}>
         {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
             <p className="text-2xl">{continueTarget && continueOn ? "⟲" : "✳"}</p>
@@ -1613,61 +1825,80 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         </button>
       )}
 
-      <div className="border-t border-white/10 px-4 py-3">
-        {/* Two doors, ONE destination — the canvas in the bento column. The strip is the in-chat door
-            (you're reading a reply and want to see the shape of what it's doing); the switch on the
-            tile is the from-the-grid one. Both raise the same expanded tile on the left, so there is no
-            second flow surface to keep in sync with this one. */}
-        <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          {/* The brake. It lived in the flow panel's header, which is gone — and it is a SESSION control
-              (like Plan/Code and the approval level), not a property of a view, so this row is where it
-              always belonged. Armed, the server parks the next tool call instead of auto-approving it;
-              the pane's own permission prompt is then what you answer. */}
-          <button onClick={() => agent.setHold(!agent.hold)}
-            title={agent.hold ? "Release — stop parking tool calls at the gate" : "Pause after the current step — park the next tool call for review"}
-            className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors ${
-              agent.hold ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]" : "border-white/10 text-neutral-500 hover:text-neutral-300"}`}>
-            {agent.hold ? "▶ release" : "⏸ pause"}
-          </button>
-          {/* Plan vs Code — default Code. Plan proposes without applying. */}
-          <div className="flex items-center rounded-lg border border-white/10 p-0.5" title="Plan proposes changes first; Code executes">
-            {([["code", false], ["plan", true]] as const).map(([label, on]) => (
-              <button key={label} onClick={() => setPlan(on)}
-                className={`rounded-md px-2 py-0.5 text-[10px] font-medium capitalize transition-colors ${planning === on ? "bg-[var(--sakura)] text-white" : "text-neutral-500 hover:text-neutral-300"}`}>{label}</button>
-            ))}
+      {/* The footer is the half of the pane the revamp is really about: header + flow strip + mode row
+          + composer came to ~160px of the ~354px a four-pane grid gives each column.
+          `onFocusCapture`/`onBlurCapture` are what make it breathe — see `composing` above. */}
+      <div className={`border-t border-white/10 ${roomy ? "px-4 py-3" : "px-3 py-2"}`}>
+        {roomy ? (
+          <>
+            {/* Two doors, ONE destination — the canvas in the bento column. The strip is the in-chat door
+                (you're reading a reply and want to see the shape of what it's doing); the switch on the
+                tile is the from-the-grid one. Both raise the same expanded tile on the left, so there is no
+                second flow surface to keep in sync with this one. */}
+            <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} />
+              <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
+            </div>
+          </>
+        ) : atLeast(dc, "tight") ? (
+          // Cramped: the flow strip's row and the control row become ONE 22px bar. Nothing is removed —
+          // the strip becomes a chip and the six controls fold into a pill that states the two things
+          // you'd actually check at a glance (plan-vs-code, and the approval level) and opens the real
+          // controls on click. ~54px of the pane handed back to the transcript.
+          <div className="relative mb-1.5 flex items-center gap-1.5">
+            <FlowStrip turn={flowTurn} busy={agent.busy} compact onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
+            <button onClick={() => setModeOpen((v) => !v)} title="Session controls — pause, Plan vs Code, approval level"
+              className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
+                modeOpen ? "border-white/25 text-neutral-200" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>
+              {/* Held and bypass keep their colour even folded. A pane that is parking every tool call,
+                  or auto-approving every one of them, may not say so in the same grey as everything
+                  else — the whole point of folding is that what stays must still be readable at a
+                  glance, and those two are the states you must never misread. */}
+              {agent.hold && <span className="text-[#c47f18]">⏸</span>}
+              <span className={planning ? "text-[var(--sakura)]" : ""}>{planning ? "plan" : "code"}</span>
+              {!planning && <span className={perm === "bypassPermissions" ? "text-green-400" : ""}>· {PERM_LABEL[perm]}</span>}
+              <span className="text-neutral-600">⌄</span>
+            </button>
+            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
+            {modeOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setModeOpen(false)} />
+                {/* Opens UPWARD: it hangs off the composer, which is already at the bottom of the pane,
+                    so downward would render it outside the pane's `overflow-hidden` box. */}
+                <div className="absolute bottom-full left-0 z-20 mb-1 flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900 p-2 shadow-2xl">
+                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} />
+                </div>
+              </>
+            )}
           </div>
-          {/* Approval level (only meaningful in Code mode). "bypass" auto-runs everything — danger. */}
-          <div className={`flex items-center gap-1 transition-opacity ${planning ? "pointer-events-none opacity-30" : ""}`}>
-            {(["default", "acceptEdits", "bypassPermissions"] as const).map((m) => {
-              const on = perm === m;
-              const bypass = m === "bypassPermissions";
-              return (
-                <button key={m} onClick={() => setPermLevel(m)} title={MODE_HINT[m]}
-                  className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${on
-                    ? (bypass ? "border-green-500/60 bg-green-500/15 text-green-400" : "border-[var(--sakura)]/60 bg-[var(--sakura)]/15 text-[var(--sakura)]")
-                    : (bypass ? "border-green-500/25 text-green-500/70 hover:text-green-400" : "border-white/10 text-neutral-500 hover:text-neutral-300")}`}>
-                  {m === "default" ? "ask" : m === "acceptEdits" ? "auto-edits" : "bypass"}</button>
-              );
-            })}
-          </div>
-          <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">
-            {agent.stopping ? <span className="flex items-center gap-1 text-red-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />stopping…</span>
-              : agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
-              : agent.busy || agent.activity.phase !== "idle" ? <ActivityLine compact busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
-              : agent.live ? <><span className="h-1.5 w-1.5 rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</> : "ready"}
-          </span>
-        </div>
+        ) : null /* micro: even the bar goes. Focusing the composer brings it straight back (`dc`), and
+                    a turn in flight still animates in the transcript, so "is it working" is never lost. */}
         {/* Preview what's attached BEFORE sending. Same component, same path-detection as the
             transcript — so a pasted screenshot, a picked file, and the message you eventually send all
             agree by construction rather than by three code paths staying in sync. */}
         <div className="px-1"><ImageRefs text={input} /></div>
-        <div className={`flex items-end gap-2 rounded-xl border bg-white/[0.03] px-3 py-2 transition-colors ${agent.busy ? "border-white/10 opacity-70" : "border-white/15 focus-within:border-[var(--sakura)]/60"}`}>
-          <button onClick={() => setAttachOpen(true)} disabled={!cwd} title="Attach a file (inserts its path for Claude to read)"
-            className="shrink-0 self-end rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
+        {/* The E in SHE, and it is scoped to THIS row on purpose. Focus here — you are about to send
+            something — and the pane spends a tier back: the folded pill unfolds into the real Plan/Code
+            and approval controls, which is the one moment before Enter when what mode you're in is the
+            thing you most need to see. The mode pill itself is deliberately NOT inside this row, or
+            clicking it would expand the footer out from under its own popover. */}
+        <div className={`flex items-end gap-2 rounded-xl border bg-white/[0.03] transition-colors ${roomy ? "px-3 py-2" : "px-2.5 py-1.5"} ${agent.busy ? "border-white/10 opacity-70" : "border-white/15 focus-within:border-[var(--sakura)]/60"}`}
+          onFocusCapture={() => setComposing(true)}
+          // relatedTarget is where focus is GOING. Without this test, tabbing from the textarea to the
+          // send button beside it would collapse the controls mid-gesture and move that button out from
+          // under the cursor.
+          onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setComposing(false); }}>
+          {atLeast(dc, "tight") && (
+            <button onClick={() => setAttachOpen(true)} disabled={!cwd} title="Attach a file (inserts its path for Claude to read)"
+              className="shrink-0 self-end rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
+          )}
           <Composer
             value={input} onChange={setInput} onSubmit={submit}
-            placeholder={agent.busy ? "Claude is working…" : `Message Claude in ${proj}…`} />
+            // "Message Claude in minami-dashboard…" wraps to three lines in a narrow pane, and the
+            // composer's own comment (see Composer.tsx) records that the browser lays out the
+            // placeholder for real — so a long one isn't just ugly, it's what the empty box is sized by.
+            placeholder={agent.busy ? "Claude is working…" : atLeast(d, "snug") ? `Message Claude in ${proj}…` : "Message Claude…"} />
           {/* Same slot, two jobs: send when idle, Stop when a turn is in flight (incl. while it's
               paused on a permission/AskUserQuestion prompt — busy stays true through that too). */}
           <button onClick={agent.busy ? agent.stop : submit} disabled={agent.busy ? agent.stopping : (!input.trim() || !cwd)}
@@ -1741,6 +1972,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         // common file anyone attaches on a Mac is "Screen Shot … .png".
         onPick={(p) => { const q = /\s/.test(p) ? `"${p}"` : p; setInput((v) => (v ? v.replace(/\s*$/, " ") : "") + q + " "); setAttachOpen(false); }} />}
     </div>
+    </DensityContext.Provider>
   );
 }
 

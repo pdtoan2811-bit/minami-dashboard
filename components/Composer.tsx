@@ -12,11 +12,19 @@
 // the two layers wrap identically and stay pixel-aligned. That constraint is why bold renders as dimmed
 // `**` delimiters rather than actual bold: changing font-weight would shift the text off the caret.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useDensityTier, type Density } from "@/lib/density";
 
 // useLayoutEffect is a no-op (and warns) during Next's server prerender.
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
-const MAX_H = 220; // px — past this the composer scrolls instead of growing
+// How tall the box may grow before it scrolls instead — a share of the pane, not a constant.
+//
+// 220px is the right ceiling in a full-width pane and a catastrophe in a cramped one: a four-pane grid
+// gives each column ~250-350px of height in total, so a fifteen-line draft grew the composer over the
+// entire conversation and left the transcript with nothing. You'd be typing a message about a reply you
+// could no longer see. The tier comes from the pane that owns this composer (lib/density.ts), not from
+// the composer's own width, because it's the pane's HEIGHT this is rationing.
+const MAX_H: Record<Density, number> = { roomy: 220, snug: 180, tight: 110, micro: 72 };
 
 // A list line, split into parts. 1=indent 2=number 3=delimiter 4=bullet 5=gap 6=task box 7=body
 const LIST = /^([ \t]*)(?:(\d+)([.)])|([-*+•]))([ \t]+)(\[[ xX]\][ \t]+)?(.*)$/;
@@ -204,6 +212,7 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
+  const maxH = MAX_H[useDensityTier()];
 
   // Scroll the caret back into view. Only ever needed once the composer has hit MAX_H and started
   // scrolling — which is exactly when a Shift+Enter used to insert a line you couldn't see.
@@ -245,13 +254,15 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
     // elsewhere. Save the offset across the measurement, then follow the caret from wherever it lands.
     const prev = el.scrollTop;
     el.style.height = "auto";
-    const h = Math.min(el.scrollHeight, MAX_H);
+    const h = Math.min(el.scrollHeight, maxH);
     el.style.height = `${h}px`;
-    el.style.overflowY = el.scrollHeight > MAX_H ? "auto" : "hidden";
+    el.style.overflowY = el.scrollHeight > maxH ? "auto" : "hidden";
     el.scrollTop = prev;
     followCaret();
     if (mirror.current) mirror.current.scrollTop = el.scrollTop;
-  }, [value]);
+    // `maxH` is a dependency, not a constant read: a pane that shrinks (a fourth chat opened, the
+    // divider dragged) must re-clamp a draft that's already too tall, not keep the height it had.
+  }, [value, maxH]);
 
   // Paste an image straight into the box. The bytes go to disk and the PATH is inserted as text —
   // which keeps this composer's one invariant (the textarea is the only source of truth for what
@@ -372,7 +383,10 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
         placeholder={placeholder}
         disabled={disabled}
         spellCheck={false}
-        className="relative block max-h-[220px] w-full resize-none whitespace-pre-wrap bg-transparent text-sm leading-relaxed text-transparent caret-white outline-none [overflow-wrap:break-word] selection:bg-[var(--sakura)]/35 placeholder:text-neutral-600"
+        // Inline, not a Tailwind class: the ceiling is now a number the pane decides, and a static
+        // `max-h-[220px]` would silently overrule it for anything the layout effect above didn't set.
+        style={{ maxHeight: maxH }}
+        className="relative block w-full resize-none whitespace-pre-wrap bg-transparent text-sm leading-relaxed text-transparent caret-white outline-none [overflow-wrap:break-word] selection:bg-[var(--sakura)]/35 placeholder:text-neutral-600"
       />
       {/* An upload is a beat of dead time between Cmd-V and the path appearing; without this the
           composer looks like it ignored the paste. Absolute so it can't reflow the growing textarea. */}

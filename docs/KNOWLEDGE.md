@@ -48,6 +48,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | can create folders; cwd validated — see §5d |
 | Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
 | Shell (bento · rail · composer) | `app/page.tsx` + `components/BentoRail.tsx` | **shipped** | grid collapses to a rail — see §5e |
+| Density tiers | `lib/density.ts` | **shipped** | measured roomy/snug/tight/micro; chrome folds, focus mode, ⌥1–4 — see §5e |
 | Flow view | `components/FlowPanel.tsx` + `lib/flow-model.ts` | **shipped** | per-topic ⚙; plan as a graph you can pause and steer — see §5f |
 | File preview | `components/FilePanel.tsx` + `lib/file-view.ts` + `app/api/fs/file` | **shipped** | any file type, paged; shares the side slot with the browser — see §5g |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
@@ -593,7 +594,94 @@ broken at once, and together they made "start a new topic" look like a feature t
 
 ---
 
-## 5e. The shell — `app/page.tsx`, `components/BentoRail.tsx`, `components/Composer.tsx`
+## 5e. The shell — `app/page.tsx`, `components/BentoRail.tsx`, `components/Composer.tsx`, `lib/density.ts`
+
+### Density tiers — chrome is rationed by measured room, not by breakpoint
+
+Four chats in one panel is the layout this app exists for, and it was the layout it was worst at.
+Measured on a 1455×820 window with the bento railed, each pane came to ~689×354 CSS px, of which
+**chrome took ~200px**: header 46 (two lines — title *and* goal), flow strip 42, mode row 34, composer
+50, padding 24. The transcript — the only reason the pane is open — got **146px, about three lines**.
+
+`lib/density.ts` measures a box with `ResizeObserver` and names the result: **roomy · snug · tight ·
+micro**. Everything inside reads that one name.
+
+- **Media queries cannot express this.** None of it is about the *window*: the same 27" display gives a
+  roomy pane at one chat and a cramped one at four, and dragging the divider changes it again with no
+  breakpoint firing. Container queries get closer, but half of what has to give way is a decision about
+  *what to render at all* — a control row folding into one pill, a side panel that must not open — not
+  about styling something that renders anyway. `FilePanel`/`BrowserPanel` still use `@container` for
+  their own width, and correctly: that part *is* pure CSS.
+- **Both axes, tightest wins.** A pane can be 900px wide and still hold two lines of transcript. Height
+  is the axis that hurts; width mostly decides whether a control row fits on one line.
+- **Growing back costs +28px of hysteresis.** Without it a box parked on a threshold oscillates:
+  showing a control row shortens the transcript, which can push the box back under the line that
+  revealed it. Same one-way-hysteresis discipline as the divider's 260/170 snap above. Shrinking is
+  immediate — overflowing chrome is a visible bug, and half a second of it is worse than an eager
+  reflow.
+- **A `display:none` box measures 0×0 and is ignored**, or every collapsed pane (see focus mode below)
+  would demote to `micro` and re-promote on reveal.
+
+What each tier gives up, in order: the header's **goal subtitle** (the pane's category — true all
+session, read once, and the tab strip and bento tile both still say it) → **the flow strip and mode row
+merge into one 22px utility bar**, the strip becoming a chip and the six controls folding into a
+`code · bypass` pill → padding and gaps → at `micro`, the bar itself, the project icon and the 📎.
+Net effect at four panes: **transcript 146px → ~232px**.
+
+**The folded pill and the full row are one component** (`ModeControls`). The approval level is the most
+dangerous thing in this UI to be wrong about — two renderings of it, drifting, is the failure worth
+spending a component to make impossible. `PERM_LABEL` exists for the same reason: one spelling of
+"bypass". Held and bypass keep their colour even folded, because what survives a fold must still be
+readable at a glance.
+
+### Embody — the pane you're typing in gets a tier back
+
+`dc = composing ? looser(d) : d`. Focus the composer and the pane spends one tier more: the folded pill
+unfolds into the real Plan/Code and approval controls. That is the one moment before Enter when the
+mode is the thing you most need to see, and the moment you are demonstrably not reading the transcript.
+
+- **Focus, not hover.** Hover fires on the way to somewhere else; a control row that flickers past the
+  cursor is worse than one that stays folded.
+- **Scoped to the composer row, not the whole footer.** The mode pill sits *outside* it deliberately —
+  inside, clicking the pill would expand the footer out from under its own popover, which is exactly
+  what the first revision did (the popover state was set and the compact branch it lived in had already
+  been swapped away).
+- **`onBlurCapture` tests `relatedTarget`**, or tabbing from the textarea to the send button beside it
+  collapses the controls mid-gesture and moves that button out from under the cursor.
+- **The composer's max height is a share of the pane** (`MAX_H` per tier, 220 → 72). 220px is right in a
+  full-width pane and a catastrophe in a 250px one: a fifteen-line draft grew over the entire
+  conversation, so you were typing a message about a reply you could no longer see. This is the one
+  consumer of `DensityContext` — a leaf that can't take the tier as a prop and is rationing the *pane's*
+  height, not its own width.
+
+### Focus mode — four panes is a glanceable state, not a readable one
+
+`⌥1–4` (or the pane's ⤢) gives one pane the whole panel; the other three fold into a tab strip that
+keeps their live phase dot. `Esc` steps back to the grid, `⌥0` or ⊞ grid likewise.
+
+- **The collapsed panes are `display:none`, never unmounted.** Unmounting would tear down four live
+  `EventSource`s and their streamed turns every time you zoom into one. `ChatColumn`'s React key already
+  documents that a remount mid-stream is a bug, not a nicety.
+- **…which means saving and restoring `scrollTop` by hand.** A `display:none` box has no layout and the
+  browser does not restore its scroll offset when it returns. Left alone, every trip in and out dumped
+  the other three at the top of their rendered window *and* unpinned them, because `atBottom()` then
+  reads false. `pinned` wins over the saved offset on the way back in — a pane that was following the
+  reply has almost certainly grown while it was hidden.
+- **`Escape` is layered, innermost first.** It used to close the whole panel unconditionally, which from
+  a focused pane would throw away the panel to undo a zoom.
+- **`e.code`, not `e.key`, for the chord.** Option+1 on a Mac layout produces `¡`, and on a Vietnamese
+  layout something else again. The physical key is the only stable name. It fires while the composer has
+  focus on purpose: switching panes mid-draft is the point, and drafts are persisted per session.
+- **Focus is an index into `panes`**, so it's re-clamped whenever that array changes — closing the
+  focused pane would otherwise leave the panel showing a different conversation than the one zoomed in.
+- **A focused pane is `roomy`, so its side slot opens on its own.** Below `snug` the browser/file slot
+  doesn't open at all: a preview docked beside a 380px transcript is two unreadable columns instead of
+  one readable one. The header's reopen button then reads "expand this chat to show…" and *takes* the
+  room rather than pretending there is some. Nothing is silently dropped — the button still carries the
+  error/file count.
+- **Crossing into 3+ panes auto-rails the bento, latched.** Un-rail it by hand at three panes and it
+  stays un-railed until you drop under three and come back up. The heuristic never outlives an explicit
+  choice.
 
 ### The bento collapses to a rail, it doesn't just shrink
 Dragging the chat panel out to 85–90% leaves no room for a 3-column grid — but there's still room for
@@ -1763,6 +1851,19 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Density tiers + the SHE revamp of the chat pane** (§5e, new `lib/density.ts`) — at four panes,
+  chrome was ~200px of a ~354px column and the transcript got 146px, about three lines. Panes now
+  measure themselves (`ResizeObserver`, both axes, +28px hysteresis on the way back up) and shed chrome
+  by tier: the goal subtitle goes, the flow strip and the six mode controls merge into one 22px bar with
+  a `code · bypass` pill, padding tightens, and at `micro` the bar itself goes. Focusing the composer
+  buys a tier back, so the real Plan/Code and approval controls return exactly when you're about to
+  send. `⌥1–4` gives one pane the whole panel with the rest as a tab strip (`display:none`, never
+  unmounted — with scrollTop saved and restored by hand, since a hidden box loses it); `Esc` steps out
+  of focus before it closes the panel. The side slot won't open below `snug`, and 3+ panes auto-rails
+  the bento once. Measured after: transcript 146px → ~232px. Verified in a preview build at 1455×820 and
+  1000×620, four panes.
+  *Prompted by user: "the chat panel is really crowded with small area for agents when it comes to 3 or
+  4 … apply SHE — simplicity, Hide, Embody".*
 - **Self-audit of the flow canvas** (§5f) — found and fixed two features that could never fire (the
   held-state rendering behind a hardcoded `null`, and a `busy` flag derived from a field the on-disk
   transcript never sets), plus a 3s poll of finished sessions, an empty-session-id path, and arbitrary
