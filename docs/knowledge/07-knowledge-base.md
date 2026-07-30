@@ -71,6 +71,32 @@ Next it 404s, and that failure *is* the signal that relative links already resol
 cards marked `needsApp` get rewritten to the app's real origin, or greyed out with "needs the app
 running" if :3000 isn't listening.
 
+### `CLAUDE.md` is split by machine, and the skills ship with the repo
+
+`CLAUDE.md` is the one file Claude loads automatically in any checkout, so it is the entry point a
+stranger's agent actually gets. It used to describe only *this* machine: it addressed Thomas by name,
+opened with "you are running inside a dashboard chat pane — which you almost always are", pointed at
+`~/.minami/deploy.log` and `Redeploy Minami.command`, and named the `minami-kb` skill, which lived in
+`~/.claude/skills/` and was therefore absent from the clone. A fresh clone's Claude was told to
+follow a deploy protocol for a server that wasn't running and to use a skill that didn't exist, and
+was never told the one thing it needed — that `npm run dev` is how you start the app.
+
+It is now two parts with a one-line test at the top (`test -d ~/.minami`). **Part 1** is true in any
+clone: how to run it, `build:check`, the three pipelines, the conventions, the record. **Part 2** is
+fenced off as the author's box only: the in-process session host, `deploy.sh --detach`, the
+shared-checkout rules.
+
+The split is by *machine*, not by audience, because that is the thing that is actually different. A
+contributor and Thomas want the same conventions and the same knowledge record; what they do not
+share is a server that dies when you rebuild it.
+
+`minami-kb` now ships in `.claude/skills/` alongside `minami-flow`, `bento-icons` and
+`bento-taxonomy`, with its paths made repo-relative (the personal copy linked
+`../../../../minami-dashboard/docs/KNOWLEDGE.md`, which only resolves from `~/.claude/skills/`) and
+its `minami-sync` / vault references dropped. The rule the record depends on — *any turn that changes
+a subsystem updates that subsystem's file in the same turn* — is only enforceable if the skill
+carrying it is in the checkout.
+
 > 🐛 **The KB server quietly stole the dashboard's port.** It read `process.env.PORT`, which is
 > already spoken for here — `bin/serve.sh` sets it, and it's often exported in the shell. It bound
 > `127.0.0.1:3000` *alongside* the dashboard's IPv6 wildcard (macOS permits that pairing rather than

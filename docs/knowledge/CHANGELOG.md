@@ -9,6 +9,15 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-30
+- **`CLAUDE.md` works in a fresh clone, and `minami-kb` ships with the repo** (§7b) — the file Claude
+  auto-loads described only this machine: it addressed Thomas by name, assumed "you are running inside
+  a dashboard chat pane", pointed at `~/.minami/deploy.log` and `Redeploy Minami.command`, cited the
+  `minami-kb` skill that lived only in `~/.claude/skills/`, and never said `npm run dev`. Now two parts
+  with a `test -d ~/.minami` check at the top: Part 1 (any clone) carries running it, `build:check`, the
+  three pipelines, conventions and the record; Part 2 is fenced as the author's box only. `minami-kb`
+  added to `.claude/skills/` with repo-relative paths and its vault/`minami-sync` references dropped.
+  *Asked by user: "get me a document so it can integrate with anyone pulling minami-dashboard repo
+  using claude - where claude can find it".*
 - **The add-chat menu's first row was unclickable** (§5e) — the `＋` dropdown sits inside
   `group/chrome`, so reaching for it unfurled the header peek, which at equal `z-20` and later DOM order
   covered the menu's top 57px. Menu raised to `z-30`, peek suppressed while the menu is open, backdrop
