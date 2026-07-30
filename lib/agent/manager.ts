@@ -13,6 +13,7 @@
 // DEFAULT_PERMISSION_MODE and the comment inside canUseTool for why (the SDK's setPermissionMode()
 // accepts a mid-session change and then ignores it). safeMode() clamps any unrecognised string to
 // "default", so only an explicit, recognised value can ever widen permissions.
+import { randomUUID } from "node:crypto";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
 import { DASHBOARD_MODEL } from "../model-pins";
@@ -111,7 +112,10 @@ export type AgentEvent =
   | { t: "init"; sessionId: string; model?: string }
   | { t: "delta"; text: string } // streaming assistant text token(s)
   | { t: "thinking"; text: string } // streaming reasoning token(s) — see the `thinking` option below
-  | { t: "snapshot"; busy: boolean; partial: string; partialThinking: string; activity: ActivityState; hold: boolean } // sent on (re)subscribe: the in-flight turn's state
+  | { t: "snapshot"; busy: boolean; partial: string; partialThinking: string; activity: ActivityState; hold: boolean; queued: { uuid: string; text: string }[] } // sent on (re)subscribe: the in-flight turn's state
+  // Messages handed to the CLI while a turn was running, still awaiting their own turn. REPLACE
+  // semantics like `activity`: the whole list every time, so a dropped event self-heals on the next one.
+  | { t: "queued"; queued: { uuid: string; text: string }[] }
   | { t: "detached" } // no live session exists for this key — client should fall back to the on-disk view
   | { t: "tool"; name: string; input: unknown; id?: string } // a tool call started (live feedback)
   | { t: "tool_end"; id: string; name: string; ok: boolean; ms: number; output?: ToolOutput } // its result came back
@@ -152,6 +156,18 @@ type Session = {
   q: any | null; // the SDK Query (async generator + control methods)
   queue: any[]; // SDKUserMessage objects waiting to feed the input generator
   waiter: (() => void) | null; // resolves the generator's pending await when a message arrives
+  /** Messages handed to the CLI while a turn was already running, still waiting their own turn.
+   *
+   *  This is a MIRROR of the CLI's queue, not our own holding pen: `streamInput` writes every yielded
+   *  message straight down the pipe (it's a bare `for await … transport.write()` loop that doesn't wait
+   *  for the turn to end), so by the time a message is in `s.queue` it's already gone. The CLI keeps it
+   *  and reports its progress on the untyped `command_lifecycle` channel, keyed by the `uuid` WE stamp —
+   *  which is the only reason this list can be accurate rather than guessed. See handleCommandLifecycle. */
+  queued: { uuid: string; text: string; at: number }[];
+  /** Backstop for the one way `queued` can lie: we hold `busy` across the gap between a turn's `result`
+   *  and the next queued turn's `started` (measured at ~2ms), so a `started` that never arrives would
+   *  pin the pane busy forever with no result coming to clear it. */
+  queueTimer: ReturnType<typeof setTimeout> | null;
   closed: boolean;
   busy: boolean;
   /** The permission mode this session is CURRENTLY under. The SDK is told too, but this is the copy
@@ -296,7 +312,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   if (existing && !existing.closed) return existing;
 
   const s: Session = {
-    key, cwd, mode, hold: false, q: null, queue: [], waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
+    key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
     sessionId: resume || null, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
@@ -434,6 +450,9 @@ function handleMessage(s: Session, m: any) {
     case "system":
       handleSystem(s, m);
       break;
+    case "command_lifecycle":
+      handleCommandLifecycle(s, m);
+      break;
     case "stream_event": {
       const ev = m.event;
       if (!s.toolBufs) s.toolBufs = new Map(); // guard sessions created before this field existed (hot-reload)
@@ -558,22 +577,111 @@ function handleMessage(s: Session, m: any) {
       if (closed) settle(s);
       break;
     }
-    case "result":
-      s.busy = false;
+    case "result": {
       s.partial = "";
       s.partialThinking = "";
-      // A denied tool never produces a tool_result, so anything still open at the end of the turn is
-      // finished by definition — clear it rather than let it leak into the next turn's label.
-      resetActivity(s, "idle");
       if (Array.isArray(m.permission_denials) && m.permission_denials.length) {
         broadcast(s, { t: "notice", kind: "denied", text: `${m.permission_denials.length} tool call${m.permission_denials.length === 1 ? "" : "s"} denied` });
       }
-      broadcast(s, { t: "activity", activity: activityOf(s) });
+      // The turn is over either way, so the transcript reconciles now — but this is NOT necessarily the
+      // end of the session's work: a queued follow-up starts within ~2ms. Keeping `busy` true across
+      // that gap is what stops Stop→Send→Stop flickering on every queued message, and it's the honest
+      // state (something IS about to run). `command_lifecycle: started` takes it from here.
+      const handover = s.queued.length > 0;
       broadcast(s, { t: "result", subtype: m.subtype, costUsd: m.total_cost_usd ?? m.cost_usd });
+      if (handover) {
+        // Phase, not idle: the pane should read as still working, because it is.
+        resetActivity(s, "thinking");
+        broadcast(s, { t: "activity", activity: activityOf(s) });
+        holdForQueue(s);
+        break;
+      }
+      s.busy = false;
+      // A denied tool never produces a tool_result, so anything still open at the end of the turn is
+      // finished by definition — clear it rather than let it leak into the next turn's label.
+      resetActivity(s, "idle");
+      broadcast(s, { t: "activity", activity: activityOf(s) });
       broadcast(s, { t: "busy", busy: false });
       scheduleIdle(s);
       break;
+    }
   }
+}
+
+// The CLI's own queue, mirrored. `command_lifecycle` is an UNTYPED passthrough from the claude binary —
+// it appears in neither the SDK's typings nor its bundle — so it's feature-detected off the
+// `msg_lifecycle_v1` capability on system/init rather than assumed. Shape, confirmed by probing a live
+// session (docs/KNOWLEDGE.md §5g):
+//
+//   { type: "command_lifecycle", command_uuid: <the uuid WE stamped>, state: "queued" | "started"
+//     | "completed" | "cancelled", uuid: <event id>, session_id }
+//
+// `command_uuid` echoing our own stamp is the whole reason this feature can be honest: without it the
+// only way to know a queued message had begun would be to infer it from turn boundaries, and batch
+// coalescing (the CLI may merge several queued messages into ONE turn) makes that inference wrong.
+function handleCommandLifecycle(s: Session, m: any) {
+  const id = m?.command_uuid;
+  if (!id) return;
+  const i = s.queued.findIndex((q) => q.uuid === id);
+
+  // `started` is the real turn boundary for a queued message — the point sendMessage deliberately did
+  // NOT do its turn-start bookkeeping, because back then this message was a follow-up to a turn that
+  // still owned the streaming buffers. Do it now.
+  if (m.state === "started") {
+    if (s.queueTimer) { clearTimeout(s.queueTimer); s.queueTimer = null; }
+    // Every message flows through this channel, including the one that started its turn immediately —
+    // so only treat it as a queued handover if we were actually tracking it as queued.
+    if (i === -1) return;
+    s.queued.splice(i, 1);
+    s.busy = true;
+    s.sawText = false;
+    s.sawThinking = false;
+    s.partial = "";
+    s.partialThinking = "";
+    resetActivity(s, "thinking");
+    broadcast(s, { t: "queued", queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })) });
+    broadcast(s, { t: "busy", busy: true });
+    broadcast(s, { t: "activity", activity: activityOf(s) });
+    return;
+  }
+
+  // `cancelled` can arrive for a message we never see run (an interrupt with cancel_queued, or the CLI
+  // dropping it). `completed` for a queued id we still hold means its turn ran without us seeing
+  // `started` — coalesced into another message's turn — so drop it either way rather than leaving a
+  // phantom entry in the tray forever.
+  if ((m.state === "cancelled" || m.state === "completed") && i !== -1) {
+    s.queued.splice(i, 1);
+    broadcast(s, { t: "queued", queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })) });
+    if (!s.queued.length && !s.busy) settleQueueGap(s);
+  }
+}
+
+// Called when a turn ends with messages still queued. The CLI starts the next one within a couple of
+// milliseconds, so going idle here and back to busy on `started` would flicker Stop→Send→Stop on every
+// queued message. Hold busy instead — but arm a backstop, because if `started` never comes there is no
+// result left to arrive and clear it.
+const QUEUE_HANDOVER_MS = 20_000;
+function holdForQueue(s: Session) {
+  if (s.queueTimer) clearTimeout(s.queueTimer);
+  s.queueTimer = setTimeout(() => {
+    s.queueTimer = null;
+    if (!s.queued.length) return; // the handover happened after all
+    // The queue never started. Report it rather than sitting on a lie: the messages are gone as far as
+    // we can tell, and the pane needs to be usable again.
+    s.queued = [];
+    broadcast(s, { t: "queued", queued: [] });
+    broadcast(s, { t: "notice", kind: "aborted", text: "a queued message never started — it may have been dropped" });
+    settleQueueGap(s);
+  }, QUEUE_HANDOVER_MS);
+}
+
+// Land the session in a clean idle state after a queue handover failed or emptied out.
+function settleQueueGap(s: Session) {
+  s.busy = false;
+  resetActivity(s, "idle");
+  broadcast(s, { t: "activity", activity: activityOf(s) });
+  broadcast(s, { t: "busy", busy: false });
+  scheduleIdle(s);
 }
 
 // System messages carry the signals that otherwise make a busy pane look dead: a retry backing off
@@ -708,7 +816,26 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   const content = opts.images?.length
     ? [...opts.images, { type: "text" as const, text: opts.message }]
     : opts.message;
-  s.queue.push({ type: "user", message: { role: "user", content }, parent_tool_use_id: null });
+  // Stamp a uuid on every message, not just queued ones. It's what `command_lifecycle` echoes back as
+  // `command_uuid`, so it is the only handle we get on a message once it's down the pipe — and stamping
+  // uniformly means the queued and unqueued paths are observable the same way. It's also what
+  // interrupt()'s `still_queued` receipt lists, so Stop can name what it left running.
+  const uuid = randomUUID();
+  s.queue.push({ type: "user", message: { role: "user", content }, parent_tool_use_id: null, uuid });
+
+  // ── Queueing path ─────────────────────────────────────────────────────────────────────────────────
+  // A turn is already in flight, so this message is a follow-up the CLI will run after it. Everything
+  // below this block is TURN-START bookkeeping and must not run: resetting `partial`/`sawText` would
+  // truncate the reply currently streaming (it's the buffer a reconnecting pane replays from), and
+  // resetActivity() would wipe liveTools mid-turn so the activity line would narrate the wrong work.
+  // The real turn-start reset for this message happens when the CLI says `started`.
+  if (s.busy) {
+    s.queued.push({ uuid, text: opts.message, at: Date.now() });
+    if (s.waiter) { const w = s.waiter; s.waiter = null; w(); }
+    broadcast(s, { t: "queued", queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })) });
+    return { sessionId: s.sessionId };
+  }
+
   s.busy = true;
   s.sawText = false; // fresh turn: the next text block opens the reply, no leading separator
   s.sawThinking = false; // ...and the first thinking pass opens the reasoning, no leading seam
@@ -773,12 +900,27 @@ export async function stop(key: string): Promise<boolean> {
   // subprocess pipe, e.g.) — the Stop button is the one manual escape hatch out of a stuck turn, so it
   // must never itself hang forever waiting on the very thing it's trying to unstick. On timeout we still
   // fall through and deny whatever's pending, same as the success path.
-  await Promise.race([
+  //
+  // Deliberately the BARE interrupt(), never `cancel_queued: true`: Stop here means "abandon what's
+  // running and move on to what I just told you", which is how a change of mind actually works — you
+  // queue the correction, then stop the work it corrects. The SDK guarantees that shape: with
+  // cancel_queued absent, "queued commands survive the interrupt", and the CLI's drain loop starts the
+  // next queued turn immediately (measured: ~2ms after the interrupted turn's result).
+  const receipt = await Promise.race([
     // Promise.resolve(...) wraps the case where interrupt itself is missing (undefined) so `.catch` is
     // always safe to call — `s.q?.interrupt?.()` alone would be `undefined.catch(...)` in that case.
     Promise.resolve(s.q?.interrupt?.()).catch(() => { /* best effort — the turn may already be finishing */ }),
     new Promise((resolve) => setTimeout(resolve, 8000)),
-  ]);
+  ]) as { still_queued?: string[] } | undefined;
+  // Say what Stop did NOT stop. Silence here is the bad outcome: the user hits Stop, the pane keeps
+  // animating because a queued follow-up took over, and that reads as "Stop is broken" rather than
+  // "Stop worked and your correction is running now". Counted against OUR list, not the receipt's, since
+  // the receipt can also list ids we never sent (cron triggers, auto-resume continuations).
+  const surviving = (receipt?.still_queued || []).filter((id) => s.queued.some((q) => q.uuid === id)).length
+    || (receipt ? 0 : s.queued.length); // older CLIs send no receipt — fall back to what we're tracking
+  if (surviving > 0) {
+    broadcast(s, { t: "notice", kind: "aborted", text: `stopped — running your ${surviving === 1 ? "queued message" : `${surviving} queued messages`} next` });
+  }
   for (const [id, p] of toDeny) {
     if (s.pending.get(id) === p) { if (p.timer) clearTimeout(p.timer); p.resolve({ behavior: "deny", message: "Stopped by user." }); s.pending.delete(id); }
   }
@@ -855,7 +997,7 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
   if (s.sessionId) replay.push({ t: "init", sessionId: s.sessionId });
   // `activity` rides along so a client that refreshed mid-tool-call resumes with the real label and a
   // correctly-offset elapsed clock, instead of falling back to a generic "working…".
-  replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold });
+  replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold, queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })) });
   for (const [id, p] of s.pending) {
     if (p.toolName === "AskUserQuestion") replay.push({ t: "ask", id, questions: (p.input as { questions?: AgentQuestion[] })?.questions || [] });
     // `expiresAt` is an absolute timestamp, not a remaining duration, precisely so a client that
@@ -966,6 +1108,11 @@ export function closeSession(key: string): void {
   // pattern used by setMode() above instead of relying on that as the only backstop).
   try { Promise.resolve(s.q?.close?.()).catch(() => { /* already gone */ }); } catch { /* already gone */ }
   if (s.idleTimer) clearTimeout(s.idleTimer);
+  // The queue dies with the subprocess that held it — a queued message only ever existed inside that
+  // CLI's queue, so leaving the mirror populated would let a reattaching pane render follow-ups that
+  // nothing is going to run. Drop the handover backstop with it.
+  if (s.queueTimer) { clearTimeout(s.queueTimer); s.queueTimer = null; }
+  if (s.queued.length) { s.queued = []; broadcast(s, { t: "queued", queued: [] }); }
   // Remove BOTH the pane-key entry and the sessionId alias so neither leaks a closed session.
   store.delete(key);
   store.delete(s.key);

@@ -909,10 +909,22 @@ It exists to catch a bad step *mid-flight*, which is the one thing the transcrip
 ### Three revisions, and what each one actually got wrong
 
 **v3 (current) is what was asked for from the start:** the graph lives in the **bento column**, and a
-`flow` switch on a tile **expands that tile into the canvas** — full row, three rows tall — while every
-other tile reflows around it. The motion is free: the tile wrapper already carries framer's `layout`, so
-the span change animates and the neighbours slide. An overlay would have *covered* them; the ask was
-that they move.
+`flow` switch on a tile **expands that tile into the canvas** — no overlay, no separate route; the tile
+*becomes* the screen. The motion is free: the tile wrapper already carries framer's `layout`, so the
+change animates.
+
+**v3.1 — the flow screen is a screen, not a big tile.** Originally the expanded tile took a full row and
+three rows of height and every *other* tile reflowed around it. That read as "one tile got bigger": the
+rest of the grid stayed on screen competing for attention with the graph you opened in order to read, and
+the canvas got three fixed rows with dead space below. Now, while `flowFor` is set, the grid renders
+**only** the flowing project — the other project tiles, Autopilot and "New topic" all return `null` — and
+the grid itself becomes a single full-height cell (`h-full grid-cols-1 grid-rows-1`) so the canvas gets
+the whole column. The header stays: search, window and sort are still the way you get around.
+
+That has one consequence worth stating, because it is the kind of thing that turns into a trapped user:
+**the canvas's own ✕ is now the only control on the screen.** So there are deliberately two more ways
+out — **Escape** closes it, and if the still-visible search box filters the flowing project out of
+`projects`, the flow closes itself rather than leaving an empty screen with nothing clickable on it.
 
 React Flow is back, and here it is the right tool — this genuinely is a canvas now, with room to pan a
 wide plan. What went is the part actually complained about: the **minimap**, and the zoom controls with
@@ -1063,6 +1075,77 @@ canvas is never empty.
 - A **held** prompt is answered in the canvas drawer, so `app/page.tsx` suppresses the ordinary
   permission card for it — otherwise there'd be two Approve buttons for one decision. Every non-held
   prompt still renders normally, so a Flow pane in `default` mode is no less answerable than a Chat one.
+
+---
+
+## 5f-bis. Message queue — `sendMessage` / `handleCommandLifecycle` in `lib/agent/manager.ts`
+
+Typing into a pane mid-turn used to do nothing: `submit()` opened with
+`if (!text || agent.busy || !cwd) return;` and the send button had already become Stop. You waited out
+work you'd changed your mind about. Now a message sent during a turn is **queued** — the CLI runs it as
+its own turn when the current one ends.
+
+**Nothing in the SDK ever blocked this.** The dashboard has always run streaming-input mode
+(`inputGen`), and `Query.streamInput` is a bare `for await (…) transport.write(…)` loop that drains the
+iterable and writes each message straight to the CLI's stdin **without waiting for the turn to finish**.
+So the transport-level queueing already worked; three things in *our* code prevented it, and only the
+third was real work:
+
+1. `submit()` dropped the message outright.
+2. One button slot did double duty as Send and Stop, so there was nowhere to put "queue this".
+3. **`sendMessage()` assumed every send starts a turn.** It reset `s.partial`, `s.partialThinking`,
+   `sawText`, `sawThinking` and called `resetActivity()`. Run mid-turn, that truncates the reply
+   currently streaming (`partial` is the buffer a reconnecting pane replays from) and wipes `liveTools`,
+   so the activity line narrates the wrong work. `sendMessage` now returns early on `s.busy` after
+   queueing, and that turn-start bookkeeping moves to where the *queued* turn actually begins.
+
+### `command_lifecycle` — the undocumented channel this rests on
+
+Knowing when a queued message begins is the whole problem, and the CLI answers it on a channel that
+appears in **neither the SDK's typings nor its bundle** — an untyped passthrough from the `claude`
+binary, advertised as the `msg_lifecycle_v1` capability on `system/init`. Probed shape:
+
+```json
+{ "type": "command_lifecycle", "command_uuid": "<the uuid WE stamped>",
+  "state": "queued" | "started" | "completed" | "cancelled", "uuid": "…", "session_id": "…" }
+```
+
+`command_uuid` echoes back the `uuid` we put on the outgoing `SDKUserMessage` — which is why
+`sendMessage` stamps one on **every** message, queued or not. Without that echo the only way to know a
+queued message had started would be inferring it from turn boundaries, and that inference is wrong:
+the CLI may **coalesce several queued messages into one turn**, so `completed` for an id we never saw
+`start` is a real case (handled by dropping it rather than leaving a phantom in the tray).
+
+Because it's undocumented, it's feature-detected off the capability rather than assumed, and the
+`queued` list is treated as a *mirror* of the CLI's queue — never as our own holding pen. By the time a
+message is in `s.queue` it has already gone down the pipe.
+
+### Why `busy` is held across the handover
+
+Measured: the next queued turn's `started` arrives **~2ms** after the previous turn's `result`. Going
+idle in between and back to busy on `started` would flicker Stop→Send→Stop on every queued message, so
+`result` skips the `busy:false` broadcast when `s.queued` is non-empty. That's a lie only if `started`
+never comes — and then no result is left to clear it — so `holdForQueue()` arms a 20s backstop that
+reports the drop and settles the pane rather than pinning it busy forever.
+
+### Stop means "skip ahead", not "cancel everything"
+
+Stop deliberately uses the **bare** `interrupt()`, never `cancel_queued: true`. The SDK guarantees the
+shape we want: with `cancel_queued` absent, "queued commands survive the interrupt", and the drain loop
+starts the next queued turn immediately. That makes mid-flight correction one gesture — queue the fix,
+then stop the work it corrects. `interrupt()`'s receipt (`still_queued`, from the `interrupt_receipt_v1`
+capability) is used only to *say* what Stop didn't stop; silence there reads as "Stop is broken" when the
+pane keeps animating. Counted against our own list, since the receipt may also list ids we never sent
+(cron triggers, auto-resume continuations).
+
+> ⚠️ **Per-message cancel is not available.** `cancel_async_message` exists in the protocol and the CLI
+> advertises `interrupt_cancel_queued_v1`, but neither is exposed as a public `Query` method in SDK
+> 0.3.220 — `interrupt()` takes no arguments. So a queued message is committed once sent; the tray shows
+> it but cannot remove it. Reaching past the public API for this was rejected as not worth the coupling.
+
+The tray renders **beside the composer, not in the transcript**, because `reconcile()` rebuilds `turns`
+wholesale from the on-disk transcript on every `result` — and a message that hasn't run yet isn't on
+disk, so an inline bubble would be wiped the instant the running turn finished.
 
 ---
 
@@ -1763,6 +1846,22 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Messages can be queued mid-turn** (§5f-bis) — typing into a busy pane no longer drops the message;
+  the CLI queues it and runs it as its own turn. Streaming-input mode already supported this at the
+  transport level (`streamInput` writes straight through without waiting for the turn), so the work was
+  splitting `sendMessage`'s turn-start bookkeeping from its enqueue path — running it mid-turn had been
+  truncating the in-flight reply's `partial` buffer and wiping `liveTools`. Queue state comes from the
+  CLI's undocumented `command_lifecycle` channel, keyed by a uuid we now stamp on every outgoing message.
+  Stop keeps its meaning of "abandon this turn" but lets the queue proceed, which makes a mid-flight
+  correction one gesture. Verified end-to-end: queue-then-run, Stop-then-run-queued, and a two-deep
+  queue draining in order through the UI.
+  *Requested by user: "I want to add queue message mechanism".*
+- **The flow screen hides the rest of the bento** (§5f, v3.1) — it used to expand one tile and reflow the
+  others around it, so the grid stayed on screen competing with the graph. Now every other tile,
+  Autopilot and "New topic" are unmounted while flow is open, and the grid becomes a single full-height
+  cell so the canvas gets the whole column. Because that leaves the canvas's ✕ as the only control on
+  screen, Escape also closes it, and the flow self-closes if the search box filters its project away.
+  *Requested by user: "dont show other bento tiles in the screen where is the flow screen is open".*
 - **Self-audit of the flow canvas** (§5f) — found and fixed two features that could never fire (the
   held-state rendering behind a hardcoded `null`, and a `busy` flag derived from a field the on-disk
   transcript never sets), plus a 3s poll of finished sessions, an empty-session-id path, and arbitrary

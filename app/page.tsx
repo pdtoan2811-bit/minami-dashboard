@@ -554,6 +554,17 @@ export default function BentoHome() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [proj, setRail]);
+  // The flow canvas now replaces the whole grid, so its ONLY exit is its own ✕ — and the ✕ is inside the
+  // one tile still rendered. Two ways out are therefore mandatory rather than nice: Escape, and an
+  // auto-close if the search box filters its project away (otherwise typing in the still-visible header
+  // leaves an empty screen with no control on it).
+  useEffect(() => {
+    if (!flowFor) return;
+    if (!projects.some((p) => p.name === flowFor.project)) { setFlowFor(null); return; }
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFlowFor(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [flowFor, projects]);
   const busyCwds = useMemo(() => new Set(Object.values(liveAct).filter((x) => x.busy).map((x) => x.cwd)), [liveAct]);
   // How many live sessions sit in each working tree. Two agents in one checkout share a branch and an
   // index: one's `grep` returns code the other is halfway through rewriting, and whoever writes last
@@ -622,7 +633,9 @@ export default function BentoHome() {
             </div>
           )
           : (
-            <div className={`grid auto-rows-[10.5rem] gap-3 [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
+            // With the flow open, this becomes a single full-height cell rather than a grid: the canvas is
+            // the screen, so it should get all of it instead of three fixed rows with dead space below.
+            <div className={`grid gap-3 ${flowFor ? "h-full grid-cols-1 grid-rows-1" : `auto-rows-[10.5rem] [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}`}>
               {projects.map((p, i) => {
                 const r = p.weight / maxW;
                 const big = r >= 0.6, wide = !big && r >= 0.28;
@@ -658,12 +671,16 @@ export default function BentoHome() {
                 // exactly the bento behaviour asked for. A separate overlay would have covered them
                 // instead of moving them.
                 const flowing = flowFor?.project === p.name;
+                // The flow screen is a screen, not a big tile: while it's open every OTHER tile is gone.
+                // It used to reflow them around the expanded cell, which read as "one tile got bigger"
+                // and left the rest competing for attention with the graph you opened to read.
+                if (flowFor && !flowing) return null;
                 return (
                   // The ⚙ has to be a SIBLING of the tile, not a child: the tile is itself a <button>,
                   // and a nested button is invalid HTML that React will happily render and the browser
                   // will then handle unpredictably (the inner click also fires the outer one). Hence
                   // this wrapper — it owns the grid span and the layout animation; the tile fills it.
-                  <motion.div layout key={p.name} className={`relative ${flowing ? "col-span-full row-span-3" : span}`}
+                  <motion.div layout key={p.name} className={`relative ${flowing ? "h-full min-h-0" : span}`}
                     initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: flowing ? 1 : dim, scale: 1 }}
                     whileHover={flowing ? undefined : { y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
                   {flowing ? (
@@ -728,15 +745,16 @@ export default function BentoHome() {
                 );
               })}
               {/* Autopilot sits in the grid, not in a corner: the thing it promises is that work lands
-                  without being asked for, and a promise you have to go looking for isn't kept. */}
-              <AutopilotTile />
+                  without being asked for, and a promise you have to go looking for isn't kept.
+                  Both of these are grid tiles like any other, so the flow screen hides them too. */}
+              {!flowFor && <AutopilotTile />}
 
               {/* Blank tile: start a brand-new topic/chat in any folder. */}
-              <button onClick={() => setPicker(true)} title="Start a new topic in a folder"
+              {!flowFor && <button onClick={() => setPicker(true)} title="Start a new topic in a folder"
                 className="group flex flex-col items-center justify-center gap-1.5 rounded-[1.4rem] border border-dashed border-white/15 p-4 text-neutral-500 transition-colors hover:border-[var(--sakura)]/50 hover:text-[var(--sakura)]">
                 <span className="text-2xl leading-none transition-transform group-hover:scale-110">＋</span>
                 <span className="text-xs font-medium">New topic</span>
-              </button>
+              </button>}
             </div>
           )}
         </div>
@@ -1238,7 +1256,12 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const effectiveMode: AgentMode = planning ? "plan" : perm; // Plan overrides the approval level
   const submit = () => {
     const text = input.trim();
-    if (!text || agent.busy || !cwd) return;
+    if (!text || !cwd) return;
+    // A turn already running is no longer a reason to drop the message. The SDK's streaming-input mode
+    // exists for exactly this: the CLI accepts a message mid-turn, queues it, and runs it as its own turn
+    // when the current one ends — which is what makes "actually, also…" and mid-flight corrections
+    // possible instead of making you wait out work you've already changed your mind about.
+    if (agent.busy) { agent.queueMessage(text, { cwd, mode: effectiveMode }); setInput(""); return; }
     ensureNotifyPermission(); // lazy — a real user gesture, which browsers want for this prompt
     const continuing = !sessionId && continueOn ? continueTarget : null;
     if (continuing) adoptedViaContinueRef.current = true; // so a rejected continue can be handed back
@@ -1662,18 +1685,48 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
             transcript — so a pasted screenshot, a picked file, and the message you eventually send all
             agree by construction rather than by three code paths staying in sync. */}
         <div className="px-1"><ImageRefs text={input} /></div>
+        {/* What's waiting its turn. This sits by the composer rather than in the transcript on purpose:
+            reconcile() rebuilds `turns` wholesale from the on-disk transcript on every `result`, and a
+            message that hasn't run yet isn't on disk — so a queued bubble rendered inline would be wiped
+            the moment the running turn finished. Here it's driven purely by the server's `queued` list,
+            which is a mirror of the CLI's own queue and survives every reconcile. */}
+        {agent.queued.length > 0 && (
+          <div className="flex flex-col gap-1 px-1 pb-1">
+            {agent.queued.map((q, i) => (
+              <div key={q.uuid} className="flex items-start gap-2 rounded-lg border border-[#c47f18]/30 bg-[#c47f18]/[0.07] px-2 py-1">
+                <span className="shrink-0 pt-0.5 text-[9px] font-medium uppercase tracking-wider text-[#c47f18]">
+                  queued{agent.queued.length > 1 ? ` ${i + 1}` : ""}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[11px] text-neutral-300">{q.text}</span>
+              </div>
+            ))}
+            {/* Say what happens next, because the alternative reading is "my message didn't send". */}
+            <span className="px-0.5 text-[10px] text-neutral-600">
+              {agent.queued.length === 1 ? "runs next, when this turn ends" : "run in order, when this turn ends"} · Stop skips ahead
+            </span>
+          </div>
+        )}
         <div className={`flex items-end gap-2 rounded-xl border bg-white/[0.03] px-3 py-2 transition-colors ${agent.busy ? "border-white/10 opacity-70" : "border-white/15 focus-within:border-[var(--sakura)]/60"}`}>
           <button onClick={() => setAttachOpen(true)} disabled={!cwd} title="Attach a file (inserts its path for Claude to read)"
             className="shrink-0 self-end rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
           <Composer
             value={input} onChange={setInput} onSubmit={submit}
-            placeholder={agent.busy ? "Claude is working…" : `Message Claude in ${proj}…`} />
-          {/* Same slot, two jobs: send when idle, Stop when a turn is in flight (incl. while it's
-              paused on a permission/AskUserQuestion prompt — busy stays true through that too). */}
-          <button onClick={agent.busy ? agent.stop : submit} disabled={agent.busy ? agent.stopping : (!input.trim() || !cwd)}
-            title={agent.busy ? "Stop this turn" : "Send"}
-            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition-opacity ${agent.busy ? "bg-red-500/90 text-white enabled:hover:opacity-90 disabled:opacity-50" : "bg-[var(--sakura)] text-white enabled:hover:opacity-90 disabled:opacity-30"}`}>
-            {agent.busy ? (agent.stopping ? "⋯" : "■") : "↵"}
+            placeholder={agent.busy ? "Queue a follow-up…" : `Message Claude in ${proj}…`} />
+          {/* Stop is no longer the ONLY thing you can do mid-turn, so it stops being the button that
+              replaces Send. Two independent controls now: queue-send appears whenever there's text to
+              send (busy or not), and Stop appears whenever a turn is in flight. Both visible at once is
+              the point — mid-flight steering is "queue the correction, then stop the work it corrects",
+              and that's two clicks that must not fight over one slot. */}
+          {agent.busy && (
+            <button onClick={agent.stop} disabled={agent.stopping} title="Stop this turn (anything queued still runs)"
+              className="shrink-0 rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-50">
+              {agent.stopping ? "⋯" : "■"}
+            </button>
+          )}
+          <button onClick={submit} disabled={!input.trim() || !cwd}
+            title={agent.busy ? "Queue this for after the current turn" : "Send"}
+            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30 ${agent.busy ? "bg-[#c47f18]/90" : "bg-[var(--sakura)]"}`}>
+            {agent.busy ? "＋↵" : "↵"}
           </button>
         </div>
       </div>

@@ -24,6 +24,10 @@ export function useAgent(paneKey: string) {
   const [turns, setTurns] = useState<AgentTurn[]>([]);
   const [live, setLive] = useState(false); // has this pane started driving a session?
   const [busy, setBusy] = useState(false); // a turn is in flight
+  // Follow-ups handed to the CLI mid-turn, waiting their own turn. Server-owned (REPLACE semantics) —
+  // never derived locally, because only the CLI knows whether a queued message has started, and it says
+  // so on the command_lifecycle channel the server mirrors.
+  const [queued, setQueued] = useState<{ uuid: string; text: string }[]>([]);
   const [stopping, setStopping] = useState(false); // Stop was clicked; waiting for the turn to actually end
   const [pending, setPending] = useState<PermissionPrompt>(null);
   const [ask, setAsk] = useState<AskPrompt>(null); // Claude's AskUserQuestion prompt
@@ -180,6 +184,10 @@ export function useAgent(paneKey: string) {
           // Always adopted, for the same reason as `activity`: it's the server's truth, replace
           // semantics, and a pane that refreshed while a hold was armed must come back holding.
           setHoldState(!!ev.hold);
+          // Same contract, and the same reason it's outside the `attachingRef` guard below: the queue
+          // lives only in the server's mirror of the CLI's queue, so a refreshed pane has no local copy
+          // to preserve and adopting the server's is always right.
+          setQueued(ev.queued || []);
           // A snapshot only ever arrives for a key the server confirms is live (see subscribe() in
           // lib/agent/manager.ts) — so this is the actual proof `resume` can be safely omitted from here
           // on, whether this snapshot came from a genuine reattach or the fresh-send race above.
@@ -269,6 +277,8 @@ export function useAgent(paneKey: string) {
           setAsk({ id: ev.id, questions: ev.questions || [] }); break;
         case "busy":
           setBusy(ev.busy); if (!ev.busy) setStopping(false); break;
+        case "queued":
+          setQueued(ev.queued || []); break;
         case "result":
           setBusy(false); setStopping(false); setPending(null); setAsk(null); applyActivity(IDLE_ACTIVITY);
           setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)));
@@ -407,6 +417,31 @@ export function useAgent(paneKey: string) {
     });
   }, []);
 
+  // Queue a follow-up into the turn that's already running. Deliberately NOT a branch inside send():
+  // send()'s whole body is turn-start staging — a new user turn plus an empty `{streaming: true}`
+  // assistant bubble, `setBusy(true)`, a `thinking` activity — and every one of those is wrong here.
+  // The assistant bubble in particular would be a second, permanent ghost reply next to the real one.
+  //
+  // Nothing is staged locally at all: the server answers with a `queued` event and that list is the only
+  // copy the UI renders. Appending the queued text to `turns` optimistically would look right and then
+  // vanish, because the running turn's `result` triggers reconcile(), which rebuilds `turns` wholesale
+  // from the on-disk transcript — where a message that hasn't run yet does not appear.
+  const queueMessage = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode }) => {
+    const clean = text.trim();
+    if (!clean || !opts.cwd) return;
+    setError(null);
+    try {
+      const r = await fetch("/api/agent/send", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, hold: holdRef.current }),
+      });
+      const d = await r.json();
+      if (d?.error) setError(d.error);
+    } catch (e) {
+      setError(`Couldn't queue that message — try again (${String((e as Error)?.message || e)})`);
+    }
+  }, [paneKey]);
+
   // Send a user message. `seed` = the existing (file) transcript to preserve when going live;
   // `resume` = the Claude session id to continue on the pane's first send.
   const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[] }) => {
@@ -520,5 +555,5 @@ export function useAgent(paneKey: string) {
 
   // `elapsed` recomputes on every 1s tick above, so the caller gets a live-counting number for free.
   const elapsed = activity.phase === "idle" ? 0 : Math.max(0, Date.now() - phaseStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, error, detached, hold, send, attach, respond, answerAsk, changeMode, setHold, stop };
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, setHold, stop };
 }
