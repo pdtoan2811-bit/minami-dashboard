@@ -1,6 +1,7 @@
 "use client";
 
 import { Nav } from "@/components/Nav";
+import { Segmented } from "@/components/ui/Segmented";
 import { NotificationBell } from "@/components/NotificationBell";
 import AutopilotTile from "@/components/AutopilotTile";
 import { useSetting } from "@/lib/use-settings";
@@ -674,13 +675,10 @@ export default function BentoHome() {
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
           <div className="ml-auto flex items-center gap-2">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
-            <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 @min-[700px]:flex">{WINDOWS.map((w) => <button key={w.label} onClick={() => setWinDays(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${winDays === w.days ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{w.label}</button>)}</div>
-            {!proj && <div className="hidden items-center gap-1 rounded-lg border border-white/10 p-0.5 md:flex" title="Sort projects">
-              <span className="px-1 text-[10px] text-neutral-600">↕</span>
-              {([["recent", "Recent"], ["busy", "Busy"], ["name", "A–Z"]] as const).map(([k, label]) => (
-                <button key={k} onClick={() => setSortBy(k)} className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${sortBy === k ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{label}</button>
-              ))}
-            </div>}
+            <Segmented className="hidden @min-[700px]:flex" value={winDays} onChange={setWinDays}
+              options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
+            {!proj && <Segmented className="hidden md:flex" title="Sort projects" lead="↕" value={sortBy} onChange={setSortBy}
+              options={[{ value: "recent", label: "Recent" }, { value: "busy", label: "Busy" }, { value: "name", label: "A–Z" }] as const} />}
             {/* Collapsing is discoverable here, not just by dragging the divider to the edge.
                 This and the rail's expand button are deliberately the SAME control in two states —
                 same icon family, same hover treatment, same ⌘B — because they are one toggle. It used
@@ -748,7 +746,11 @@ export default function BentoHome() {
                   // and a nested button is invalid HTML that React will happily render and the browser
                   // will then handle unpredictably (the inner click also fires the outer one). Hence
                   // this wrapper — it owns the grid span and the layout animation; the tile fills it.
-                  <motion.div layout key={p.name} className={`relative ${flowing ? "h-full min-h-0" : span}`}
+                  // `@container` so the stats row below can drop items by TILE width rather than
+                  // viewport width. The same tile renders at ~175px in the narrow column beside an open
+                  // chat and at ~725px as the featured tile, and a viewport breakpoint can't tell those
+                  // apart — it's the same viewport.
+                  <motion.div layout key={p.name} className={`@container relative ${flowing ? "h-full min-h-0" : span}`}
                     initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: flowing ? 1 : dim, scale: 1 }}
                     whileHover={flowing ? undefined : { y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
                   {flowing ? (
@@ -790,10 +792,19 @@ export default function BentoHome() {
                         {techs.length > n && <span className="text-[10px] text-neutral-500">+{techs.length - n}</span>}
                       </div>
                     ); })()}
-                    <div className="relative mt-auto flex flex-nowrap items-baseline gap-x-3 overflow-hidden">
+                    {/* Two things keep this row off the flow switch, and both are needed.
+                        `pr-14` reserves the switch's footprint — it's `absolute bottom-3 right-3` and
+                        has to be, because it's a button and this row lives inside another button,
+                        which can't nest.
+                        Padding alone wasn't enough: these spans were `shrink-0`, so at rail width they
+                        simply overflowed the padding and ran UNDER the pill (`1.5M tok`, `8 chats`
+                        struck through by it on 6 of 8 tiles). So the two softer stats also drop by
+                        container width — request count is the one that always survives, because it's
+                        the number the tile is sorted and sized by. */}
+                    <div className="relative mt-auto flex flex-nowrap items-baseline gap-x-3 overflow-hidden pr-14">
                       <span className={`shrink-0 font-semibold tabular-nums ${big ? "text-2xl" : "text-base"}`}>{short(p.reqs)}<span className="ml-1 text-[10px] font-normal text-neutral-500">req</span></span>
-                      <span className="shrink-0 text-[11px] tabular-nums text-neutral-500">{short(p.tokens)} tok</span>
-                      <span className="shrink-0 truncate text-[11px] text-neutral-600">{p.sessions.length} chats</span>
+                      <span className="hidden shrink-0 text-[11px] tabular-nums text-neutral-500 @min-[200px]:inline">{short(p.tokens)} tok</span>
+                      <span className="hidden shrink-0 truncate text-[11px] text-neutral-600 @min-[280px]:inline">{p.sessions.length} chats</span>
                     </div>
                   </button>
 
@@ -1149,33 +1160,29 @@ function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm }: {
           (like Plan/Code and the approval level), not a property of a view, so this row is where it
           always belonged. Armed, the server parks the next tool call instead of auto-approving it;
           the pane's own permission prompt is then what you answer. */}
+      {/* Padded as `border p-0.5` around an inner `px-2 py-0.5` rather than padded directly, so its box
+          metrics are identical to a one-option Segmented. Styled the short way it sat 4px shorter than
+          the two controls beside it, which is the kind of difference you see without being able to
+          name — the row looked misaligned rather than misjudged. */}
       <button onClick={() => onHold(!hold)}
         title={hold ? "Release — stop parking tool calls at the gate" : "Pause after the current step — park the next tool call for review"}
-        className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors ${
-          hold ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]" : "border-white/10 text-neutral-500 hover:text-neutral-300"}`}>
-        {hold ? "▶ release" : "⏸ pause"}
+        className={`flex shrink-0 items-center rounded-lg border p-0.5 transition-colors ${
+          hold ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]" : "border-white/10 text-neutral-400 hover:text-neutral-200"}`}>
+        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">{hold ? "▶ release" : "⏸ pause"}</span>
       </button>
       {/* Plan vs Code — default Code. Plan proposes without applying. */}
-      <div className="flex items-center rounded-lg border border-white/10 p-0.5" title="Plan proposes changes first; Code executes">
-        {([["code", false], ["plan", true]] as const).map(([label, on]) => (
-          <button key={label} onClick={() => onPlan(on)}
-            className={`rounded-md px-2 py-0.5 text-[10px] font-medium capitalize transition-colors ${planning === on ? "bg-[var(--sakura)] text-white" : "text-neutral-500 hover:text-neutral-300"}`}>{label}</button>
-        ))}
-      </div>
-      {/* Approval level (only meaningful in Code mode). "bypass" auto-runs everything — danger. */}
-      <div className={`flex items-center gap-1 transition-opacity ${planning ? "pointer-events-none opacity-30" : ""}`}>
-        {(["default", "acceptEdits", "bypassPermissions"] as const).map((m) => {
-          const on = perm === m;
-          const bypass = m === "bypassPermissions";
-          return (
-            <button key={m} onClick={() => onPerm(m)} title={MODE_HINT[m]}
-              className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${on
-                ? (bypass ? "border-green-500/60 bg-green-500/15 text-green-400" : "border-[var(--sakura)]/60 bg-[var(--sakura)]/15 text-[var(--sakura)]")
-                : (bypass ? "border-green-500/25 text-green-500/70 hover:text-green-400" : "border-white/10 text-neutral-500 hover:text-neutral-300")}`}>
-              {PERM_LABEL[m]}</button>
-          );
-        })}
-      </div>
+      <Segmented size="sm" title="Plan proposes changes first; Code executes"
+        value={planning} onChange={onPlan}
+        options={[{ value: false, label: "Code" }, { value: true, label: "Plan" }] as const} />
+      {/* Approval level (only meaningful in Code mode). "bypass" auto-runs everything — hence `good`,
+          the one tone that isn't the accent: it must not read as an ordinary selection. These were
+          three loose bordered pills next to two bordered boxes, so one row carried three different
+          container shapes; as a segment group the row has one. */}
+      <Segmented size="sm" disabled={planning} value={perm} onChange={onPerm}
+        options={(["default", "acceptEdits", "bypassPermissions"] as const).map((m) => ({
+          value: m, label: PERM_LABEL[m], title: MODE_HINT[m],
+          tone: m === "bypassPermissions" ? ("good" as const) : undefined,
+        }))} />
     </>
   );
 }
@@ -1195,9 +1202,12 @@ function SlotTabs({ slot, onPick, fileCount }: { slot: "browser" | "file"; onPic
   );
 }
 
-const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, onOpenFile, live }: {
+const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, onOpenFile, live, sameSpeaker }: {
   turn: RenderTurn;
   showTools: boolean;
+  /** Previous row was the same role — suppress the repeated speaker label. Derived at the call site
+   *  (a plain boolean) so TurnRow's memo comparison stays shallow. */
+  sameSpeaker: boolean;
   shots: BrowserState["shots"];
   onOpenShot: (i: number) => void;
   /** Stable identity required — TurnRow is memoised, and a fresh closure here would defeat it for
@@ -1207,8 +1217,19 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
   live: LiveBits | null;
 }) {
   return (
-          <div className={`flex flex-col ${t.role === "user" ? "items-end" : "items-start"}`}>
-            <span className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">{t.role === "user" ? "You" : "Claude"}</span>
+          // Inline style, not a class: `space-y-*` on the parent writes margin-top via `& > * + *`,
+          // whose specificity beats any utility class this element could carry. An inline declaration
+          // is the only thing that reliably wins, and it's also the only place the density-derived
+          // --turn-gap can be arithmetic'd.
+          <div style={sameSpeaker ? { marginTop: "calc(var(--turn-gap, 1.5rem) * -0.55)" } : undefined}
+            className={`flex flex-col ${t.role === "user" ? "items-end" : "items-start"}`}>
+            {/* Only when the speaker CHANGES. One assistant turn commonly renders as several rows (a
+                paragraph, a tool run, another paragraph), and labelling each one stacked five
+                identical CLAUDE headers down a single reply — the label stopped separating speakers
+                and became texture. Suppressed, the run reads as one utterance, which is what it is. */}
+            {!sameSpeaker && (
+              <span className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">{t.role === "user" ? "You" : "Claude"}</span>
+            )}
             <div className={t.role === "user"
               ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[15px] leading-[1.65] text-neutral-100 [overflow-wrap:anywhere]"
               : "w-full text-[15px] leading-[1.75] text-neutral-100/95 [overflow-wrap:anywhere]"}>
@@ -1697,8 +1718,16 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
 
   // What this pane is doing, in one line — the same content whether it sits in the full control row or
   // in the folded utility bar. Derived once so the two layouts can't disagree about a live session.
+  // The streaming row in the transcript already carries a full ActivityLine, ~40px above this one and
+  // saying the identical words ("taking a screenshot · 0s" twice on screen). The control row is the
+  // FALLBACK — it matters when the transcript's copy isn't there (scrolled away, or a reattach before
+  // the first snapshot lands), which is exactly the condition the safety net below `visible.map` uses.
+  // When the transcript has it, this end of the row says the one thing the transcript doesn't: the
+  // session is live and in which mode.
+  const transcriptHasActivity = agent.busy && !!visible[visible.length - 1]?.streaming;
   const statusEl = agent.stopping ? <span className="flex items-center gap-1 text-red-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />stopping…</span>
     : agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
+    : transcriptHasActivity ? <><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</>
     : agent.busy || agent.activity.phase !== "idle" ? <ActivityLine compact busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
     : agent.live ? <><span className="h-1.5 w-1.5 rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</> : <>ready</>;
 
@@ -1800,10 +1829,14 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         // excess width. In grid view, or with the side panel open, a column is already narrower than the
         // cap and the rule does nothing at all.
         className={`relative min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-3xl ${
-          atLeast(d, "roomy") ? "space-y-6 px-5 py-5"
-          : atLeast(d, "snug") ? "space-y-5 px-4 py-4"
-          : atLeast(d, "tight") ? "space-y-4 px-3.5 py-3"
-          : "space-y-3 px-3 py-2"}`}>
+          // --turn-gap mirrors the space-y value so a row that continues the SAME speaker can pull
+          // itself back up by a fraction of it (see TurnRow). It has to be a variable rather than a
+          // second set of classes because the pull is applied by the child, which can't know which of
+          // the four density branches this element took.
+          atLeast(d, "roomy") ? "space-y-6 [--turn-gap:1.5rem] px-5 py-5"
+          : atLeast(d, "snug") ? "space-y-5 [--turn-gap:1.25rem] px-4 py-4"
+          : atLeast(d, "tight") ? "space-y-4 [--turn-gap:1rem] px-3.5 py-3"
+          : "space-y-3 [--turn-gap:0.75rem] px-3 py-2"}`}>
         {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
             <p className="text-2xl">{continueTarget && continueOn ? "⟲" : "✳"}</p>
@@ -1864,6 +1897,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         {visible.map((t, i) => (
           <TurnRow
             key={i} turn={t} showTools={showTools} shots={browser.shots} onOpenShot={setLightbox} onOpenFile={openFile}
+            sameSpeaker={i > 0 && visible[i - 1].role === t.role}
             // Only the LAST row needs the live indicator, so only it receives props that change on
             // every token. Every earlier row gets a prop set that is identical between renders, and
             // React.memo skips it entirely — which is the entire point of the extraction.

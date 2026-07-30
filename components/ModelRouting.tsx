@@ -5,7 +5,7 @@ export function ModelRouting() {
     <div className="flex flex-col gap-3">
       <p className="text-xs leading-relaxed text-neutral-500">
         Spend the least, keep the output identical. Reserve the{" "}
-        <span className="font-medium text-neutral-700 dark:text-neutral-300">top tier</span>{" "}
+        <span className="font-medium text-neutral-300">top tier</span>{" "}
         for judgement and push grunt work down to a cheaper model — the token-heavy part billed
         cheap, quality unchanged. Edit the table in <code className="text-[11px]">lib/routing.ts</code>.
       </p>
@@ -14,8 +14,8 @@ export function ModelRouting() {
         {ROUTING_RULES.map((r) => {
           const m = MODELS.find((x) => x.tier === r.tier)!;
           return (
-            <div key={r.work} className="rounded-lg border border-black/5 p-2 dark:border-white/10">
-              <p className="text-xs text-neutral-600 dark:text-neutral-300">{r.work}</p>
+            <div key={r.work} className="rounded-lg border border-white/10 p-2">
+              <p className="text-xs text-neutral-300">{r.work}</p>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: m.tint }} />
                 <span className="text-xs font-medium">{r.tier}</span>
@@ -26,9 +26,9 @@ export function ModelRouting() {
         })}
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-black/5 dark:border-white/10">
+      <div className="overflow-hidden rounded-lg border border-white/10">
         <table className="w-full text-left text-[11px]">
-          <thead className="bg-neutral-100/60 text-neutral-500 dark:bg-white/5">
+          <thead className="bg-white/5 text-neutral-500">
             <tr>
               <th className="px-2 py-1 font-medium">Model</th>
               <th className="px-2 py-1 text-right font-medium">In</th>
@@ -37,7 +37,7 @@ export function ModelRouting() {
           </thead>
           <tbody className="tabular-nums">
             {MODELS.map((m) => (
-              <tr key={m.tier} className="border-t border-black/5 dark:border-white/10">
+              <tr key={m.tier} className="border-t border-white/10">
                 <td className="px-2 py-1">
                   <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" style={{ background: m.tint }} />
                   {m.tier}

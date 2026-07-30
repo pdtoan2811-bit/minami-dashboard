@@ -1,6 +1,7 @@
 "use client";
 
 import { Nav } from "@/components/Nav";
+import { Segmented } from "@/components/ui/Segmented";
 import { useSetting } from "@/lib/use-settings";
 import AutopilotPanel from "@/components/AutopilotPanel";
 import PreferredAccountPanel from "@/components/PreferredAccountPanel";
@@ -45,11 +46,8 @@ export default function Settings() {
           <h2 className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-neutral-500">Bento</h2>
           <div className="space-y-2">
             <Row title="Default time window" desc="How far back the bento shows on open. Projects older than this are hidden until you widen it.">
-              <div className="flex items-center gap-1 rounded-lg border border-white/10 p-0.5">
-                {WINDOWS.map((w) => (
-                  <button key={w.label} onClick={() => setDefaultWindow(w.days)} className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${defaultWindow === w.days ? "bg-[var(--sakura)] text-white" : "text-neutral-400 hover:text-neutral-200"}`}>{w.label}</button>
-                ))}
-              </div>
+              <Segmented value={defaultWindow} onChange={setDefaultWindow}
+                options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
             </Row>
           </div>
         </section>
@@ -62,14 +60,15 @@ export default function Settings() {
             </Row>
             <Row title="Approval level for new chats"
               desc="Bypass auto-runs every tool with no prompt — the default here, and the reason this dashboard is local-only. Existing chats keep the level shown on their own pills.">
-              <div className="flex items-center gap-1 rounded-lg border border-white/10 p-0.5">
-                {([["default", "ask"], ["acceptEdits", "auto-edits"], ["bypassPermissions", "bypass"]] as const).map(([m, label]) => (
-                  <button key={m} onClick={() => setPermDefault(m)}
-                    className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${permDefault === m
-                      ? (m === "bypassPermissions" ? "bg-green-500/20 text-green-400" : "bg-[var(--sakura)] text-white")
-                      : "text-neutral-400 hover:text-neutral-200"}`}>{label}</button>
-                ))}
-              </div>
+              {/* Segmented is `shrink-0 whitespace-nowrap`, which is what stops "auto-edits" wrapping
+                  mid-word inside its own segment — this Row is `justify-between` next to three lines
+                  of description, and flex was shrinking the control to pay for them. */}
+              <Segmented value={permDefault} onChange={setPermDefault}
+                options={[
+                  { value: "default", label: "ask" },
+                  { value: "acceptEdits", label: "auto-edits" },
+                  { value: "bypassPermissions", label: "bypass", tone: "good" },
+                ] as const} />
             </Row>
           </div>
         </section>
