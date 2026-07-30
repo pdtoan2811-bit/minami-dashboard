@@ -570,3 +570,73 @@ are already narrower and it does nothing.
 *Reported by user: "for chat log in full focus view, it should be like centered ... rather run full screen - having awful readability".*
 
 ---
+
+### One control language — the segmented control, and committing to a single theme
+
+Nine places had independently grown the same control: a bordered box holding two to five small
+buttons, one of them tinted as "selected". Bento's time window and sort, the composer's Plan/Code and
+approval level, both of those again in `/settings`, `Nav`, the heatmap range, the slot tabs. No two
+agreed — `px-2` vs `px-1.5`, `text-[10px]` vs `[10.5px]` vs `[11px]`, `rounded-md`-inside-`rounded-lg`
+vs loose `rounded-full` pills, and three different treatments for the active segment.
+
+None of them was wrong on its own, which is exactly why they drifted: nothing ever looked broken
+enough to fix. But the composer's control row put four of the variants side by side, and a row of
+four near-misses is what makes an interface read as **assembled rather than designed**.
+
+`components/ui/Segmented.tsx` is now the one implementation. Two details in it are load-bearing:
+
+- **`shrink-0 whitespace-nowrap`.** In `/settings` these controls sit in a `justify-between` row
+  opposite three lines of description, and flex was shrinking the control to pay for the text —
+  `auto-edits` wrapped mid-word inside its own segment.
+- **`tone`.** Exactly one selected state must not look like an ordinary selection: `bypassPermissions`
+  auto-runs every tool. It gets `good` (green); everything else is the accent. The prop exists for
+  that one case, not for decoration.
+
+The lone `⏸ pause` button beside them is padded as `border p-0.5` around an inner `px-2 py-0.5` rather
+than padded directly, purely so its box metrics equal a one-option `Segmented`. Styled the obvious
+way it sat 4px shorter than its neighbours — a difference you see without being able to name.
+
+**The theme was only ever half-committed.** The bento board and `/settings` force dark with
+`.bg-bento`; `/dashboard`'s cards were the only surface carrying `dark:` variants, and the root layout
+left the choice to the OS. On a machine preferring light, `/dashboard` therefore rendered light while
+everything one click away rendered dark — and `Nav`, whose colours are hardcoded `border-white/10`,
+was nearly invisible on it. `<html className="dark">` settles it, which is what allowed 38 `light
+dark:X` pairs across ten files to collapse to `X`.
+
+> 🐛 **The tile stats ran underneath the FLOW switch.** The switch is `absolute bottom-3 right-3` and
+> has to be: it's a `<button>`, and the stats row lives inside the tile's own `<button>`, which can't
+> nest. So the row and the switch were laid out in ignorance of each other, and `1.5M tok` / `8 chats`
+> were struck through by the pill on 6 of 8 tiles at 1512px.
+>
+> `pr-14` reserves the footprint, but that alone fixed only the wide case: the stat spans were
+> `shrink-0`, so at rail width they overflowed the padding and slid under the pill anyway. The spans
+> now also drop by **container** width (`@min-[200px]`, `@min-[280px]`), with `@container` on the tile
+> wrapper — the same tile renders at ~175px beside an open chat and ~725px as the featured tile, and a
+> viewport breakpoint cannot tell those apart because it is the same viewport. Request count never
+> drops; it's the number the tile is sorted and sized by.
+
+> 🐛 **One reply rendered five `CLAUDE` headers.** An assistant turn commonly renders as several rows
+> (paragraph, tool run, paragraph), and each row labelled itself. Stacked, the label stopped separating
+> speakers and became texture. `TurnRow` now takes `sameSpeaker` — derived at the call site as a plain
+> boolean so the `memo` comparison stays shallow — and suppresses the label on a continuation.
+>
+> The gap needed to follow. `space-y-*` on the scroll container writes `margin-top` via `& > * + *`,
+> whose specificity beats any utility class the child could carry, so the pull-up is an **inline
+> style**: `calc(var(--turn-gap) * -0.55)`. `--turn-gap` is set alongside each density branch's
+> `space-y`, because the child can't know which of the four branches its parent took.
+
+> 🐛 **The live activity line rendered twice, ~40px apart, saying the same words.** The streaming row
+> carries a full `ActivityLine`; the composer control row carried a `compact` one. Both showed
+> "taking a screenshot · 0s". The control row is the **fallback** — it earns its place when the
+> transcript's copy isn't there (scrolled out, or a reattach before the first snapshot lands), which
+> is the same condition the safety net under `visible.map` already tests. When the transcript has it,
+> that end of the row now says the one thing the transcript doesn't: live, and in which mode.
+
+**`/dashboard`'s four empty panels became one.** Task log, Trace-back, Analytics and People are all
+fed by `MINAMI_PANELS_FILE`, so on an unconfigured box they were four full-height cards carrying four
+copies of one sentence — about a third of the board spent saying the same thing. Each card now renders
+only when it has data; whatever is left over collapses into a single `Personal panels` card that names
+them and gives the instruction once. Also on that page: the model grid was `grid-cols-4` against five
+`MODELS`, orphaning Fable 5 alone on a second row a quarter-card wide (it read as a rendering fault,
+not a fifth model) — the column count is now tied to `MODELS.length`, so adding a tier can't
+reintroduce it.

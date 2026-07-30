@@ -34,7 +34,7 @@ function Bar({ label, usage }: { label: string; usage: Usage }) {
         <span>{label}</span>
         <span className="tabular-nums">{usage ? `${pct}%` : "—"}</span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
         <div
           className="h-full rounded-full transition-[width]"
           style={{ width: `${pct}%`, background: hot ? "#ef4444" : "var(--sakura)" }}
@@ -101,7 +101,7 @@ export function AccountsPanel() {
       {doc.accounts.map((a) => (
         <div
           key={a.index}
-          className={`rounded-lg border p-2 ${a.active ? "border-[var(--sakura)]/50 bg-[var(--sakura)]/5" : "border-black/5 dark:border-white/10"}`}
+          className={`rounded-lg border p-2 ${a.active ? "border-[var(--sakura)]/50 bg-[var(--sakura)]/5" : "border-white/10"}`}
         >
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5 truncate text-xs font-medium">
@@ -114,7 +114,7 @@ export function AccountsPanel() {
               <button
                 onClick={() => doSwitch(a.email || a.name)}
                 disabled={switching !== null}
-                className="shrink-0 rounded-full border border-black/10 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-[var(--sakura)] hover:text-[var(--sakura)] disabled:opacity-40 dark:border-white/10"
+                className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-[var(--sakura)] hover:text-[var(--sakura)] disabled:opacity-40"
               >
                 {switching === (a.email || a.name) ? "switching…" : "switch"}
               </button>

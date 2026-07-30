@@ -18,6 +18,20 @@ this to do a piece of work; read the subsystem's own doc.
   the panel onto a different conversation, because the clamp knew the array had shrunk but not which end
   lost an element. All three close paths now route through one `closePane(i)`.
   *Asked by user: "need a way to easily close tab - like browser experience but for chat".*
+- **One control language, one theme** (§5e) — a UI-refinement pass over all four surfaces. Nine
+  hand-rolled copies of the same segmented control (bento window + sort, composer Plan/Code +
+  approval, both again in Settings, Nav, heatmap range) collapsed onto `components/ui/Segmented.tsx`,
+  which also fixes `auto-edits` wrapping mid-word in Settings. `<html className="dark">` commits the
+  app to one theme — `/dashboard` was the only surface with `dark:` variants, so on an OS preferring
+  light it rendered light with a near-invisible `Nav` while every page one click away was dark; 38
+  `light dark:X` pairs across ten files collapsed to `X`. Fixed: tile stats running under the FLOW
+  switch (`pr-14` plus container-width drops, since `shrink-0` spans overflowed the padding at rail
+  width); five stacked `CLAUDE` headers on one reply (`sameSpeaker`, with a density-aware inline
+  pull-up because `space-y-*` outranks any child class); the live activity line rendering twice ~40px
+  apart. `/dashboard`'s four identical empty panels became one `Personal panels` card, and its model
+  grid is tied to `MODELS.length` so Fable 5 stops orphaning onto its own row.
+  *Asked by user: "I want to refine all of the clunky UI component so Minami dashboard is lean but
+  still keep the aesthetic".*
 - **`CLAUDE.md` works in a fresh clone, and `minami-kb` ships with the repo** (§7b) — the file Claude
   auto-loads described only this machine: it addressed Thomas by name, assumed "you are running inside
   a dashboard chat pane", pointed at `~/.minami/deploy.log` and `Redeploy Minami.command`, cited the

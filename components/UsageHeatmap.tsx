@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Segmented } from "@/components/ui/Segmented";
 
 const METRICS_URL = (process.env.NEXT_PUBLIC_METRICS_URL || "").replace(/\/$/, "");
 const METRICS_KEY = process.env.NEXT_PUBLIC_METRICS_KEY || "";
@@ -50,11 +51,8 @@ export function UsageHeatmap() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1 rounded-lg border border-black/10 p-0.5 dark:border-white/10">
-          {RANGES.map((r) => (
-            <button key={r} onClick={() => setRange(r)} className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${range === r ? "bg-[var(--sakura)] text-white" : "text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"}`}>{r}d</button>
-          ))}
-        </div>
+        <Segmented value={range} onChange={setRange}
+          options={RANGES.map((r) => ({ value: r, label: `${r}d` }))} />
         <span className="text-[11px] text-neutral-500">{short(totalTurns)} turns · {short(totalTok)} tok</span>
       </div>
 

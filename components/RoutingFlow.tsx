@@ -123,15 +123,18 @@ export function RoutingFlow() {
         <Metric label="Saved" value={`${saved.toFixed(0)}%`} accent />
       </div>
 
-      <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-white/10">
+      <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
         <div className="h-full rounded-full transition-[width] duration-700" style={{ width: `${pct}%`, background: "var(--sakura)" }} />
       </div>
 
-      <div className="grid grid-cols-4 gap-2">
+      {/* grid-cols-5, because MODELS has five entries. At four, Fable 5 wrapped alone onto a second
+          row a quarter of the card wide, which read as a rendering fault rather than a fifth model.
+          Tied to MODELS.length so adding a tier can't silently reintroduce the orphan. */}
+      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${MODELS.length}, minmax(0, 1fr))` }}>
         {MODELS.map((m) => {
           const b = st.byTier[m.tier];
           return (
-            <div key={m.tier} className="flex flex-col items-center rounded-xl border border-black/5 py-2 dark:border-white/10">
+            <div key={m.tier} className="flex flex-col items-center rounded-xl border border-white/10 py-2">
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: m.tint }} />
               <span className="mt-1 text-[10px] font-medium">{m.tier.split(" ")[0]}</span>
               <span className="text-[11px] tabular-nums text-neutral-400">{b?.n ?? 0}</span>
@@ -150,10 +153,10 @@ export function RoutingFlow() {
         {st.feed.map((e) => (
           <div
             key={e.id}
-            className="animate-[slidein_.4s_ease] rounded-lg border-l-2 bg-neutral-100/60 py-1.5 pl-2.5 pr-2 dark:bg-white/5"
+            className="animate-[slidein_.4s_ease] rounded-lg border-l-2 bg-white/5 py-1.5 pl-2.5 pr-2"
             style={{ borderColor: e.tint }}
           >
-            <p className="line-clamp-2 text-xs leading-snug text-neutral-700 [overflow-wrap:anywhere] dark:text-neutral-200">
+            <p className="line-clamp-2 text-xs leading-snug text-neutral-200 [overflow-wrap:anywhere]">
               {e.label || `${SRC(e.source)} turn`}
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-neutral-400">
@@ -166,7 +169,7 @@ export function RoutingFlow() {
                 {e.tier.split(" ")[0]}
               </span>
               <span className="tabular-nums">{short(e.tokIn + e.tokOut)} tok</span>
-              <span className="tabular-nums text-green-600 dark:text-green-400">
+              <span className="tabular-nums text-green-400">
                 {e.opus - e.cost > 1e-9 ? `saved $${(e.opus - e.cost).toFixed(4)}` : "no saving"}
               </span>
             </div>
@@ -180,7 +183,10 @@ export function RoutingFlow() {
 
 function Metric({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
   return (
-    <div className="flex flex-col items-center rounded-xl border border-black/5 py-2 dark:border-white/10">
+    // justify-center + a floor equal to the tallest variant (the one carrying a `sub`), so a 2×2 of
+    // these is a rectangle whether or not a given cell has a sub-line. Without it the two boxes with
+    // no sub sat visibly shorter than their neighbours and the grid read as misaligned.
+    <div className="flex min-h-[4.25rem] flex-col items-center justify-center rounded-xl border border-white/10 py-2">
       <span className="text-[10px] text-neutral-500">{label}</span>
       <span className={`text-sm font-semibold tabular-nums ${accent ? "text-[var(--sakura)]" : ""}`}>{value}</span>
       {sub && <span className="mt-0.5 text-[9px] tabular-nums text-neutral-400">{sub}</span>}

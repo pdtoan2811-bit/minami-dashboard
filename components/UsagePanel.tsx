@@ -93,7 +93,7 @@ export function UsagePanel() {
         {(stats?.bySource || []).map((s) => {
           const m = sourceMeta(s.source);
           return (
-            <div key={s.source} className="rounded-lg border border-black/5 p-2 dark:border-white/10">
+            <div key={s.source} className="rounded-lg border border-white/10 p-2">
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-xs font-medium">
                   <span className="h-2 w-2 rounded-full" style={{ background: m.tint }} />
@@ -119,7 +119,7 @@ export function UsagePanel() {
 
 function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="flex flex-col items-center rounded-xl border border-black/5 py-2 dark:border-white/10">
+    <div className="flex flex-col items-center rounded-xl border border-white/10 py-2">
       <span className="text-[10px] text-neutral-500">{label}</span>
       <span className={`text-sm font-semibold tabular-nums ${accent ? "text-[var(--sakura)]" : ""}`}>{value}</span>
     </div>

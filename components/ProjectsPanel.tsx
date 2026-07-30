@@ -98,7 +98,7 @@ export function ProjectsPanel() {
   return (
     <div className="flex flex-col gap-2">
       {merged.map((p) => (
-        <div key={p.project} className="rounded-lg border border-black/5 p-2 dark:border-white/10">
+        <div key={p.project} className="rounded-lg border border-white/10 p-2">
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-xs font-medium">{p.project}</span>
             <span className="shrink-0 text-[10px] text-neutral-400">{fmtAgo(p.ts)}</span>

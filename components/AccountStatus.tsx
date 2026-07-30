@@ -111,32 +111,32 @@ const STYLE: Record<Level, {
   warn: {
     glyph: "⚠",
     dot: "bg-amber-500",
-    card: "border-amber-300/70 bg-amber-50/95 dark:border-amber-500/40 dark:bg-amber-950/90",
-    chip: "border-amber-300/70 bg-amber-50/95 text-amber-900 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-950/90 dark:text-amber-100 dark:hover:bg-amber-900/70",
-    title: "text-amber-900 dark:text-amber-100",
-    body: "text-amber-800/90 dark:text-amber-200/80",
+    card: "border-amber-500/40 bg-amber-950/90",
+    chip: "border-amber-500/40 bg-amber-950/90 text-amber-100 hover:bg-amber-900/70",
+    title: "text-amber-100",
+    body: "text-amber-200/80",
     action: "bg-amber-600 hover:bg-amber-700",
-    quiet: "text-amber-800/70 hover:bg-amber-200/50 dark:text-amber-200/60 dark:hover:bg-amber-900/40",
+    quiet: "text-amber-200/60 hover:bg-amber-900/40",
   },
   critical: {
     glyph: "✕",
     dot: "bg-red-500",
-    card: "border-red-300/70 bg-red-50/95 dark:border-red-500/40 dark:bg-red-950/90",
-    chip: "border-red-300/70 bg-red-50/95 text-red-900 hover:bg-red-100 dark:border-red-500/40 dark:bg-red-950/90 dark:text-red-100 dark:hover:bg-red-900/70",
-    title: "text-red-900 dark:text-red-100",
-    body: "text-red-800/90 dark:text-red-200/80",
+    card: "border-red-500/40 bg-red-950/90",
+    chip: "border-red-500/40 bg-red-950/90 text-red-100 hover:bg-red-900/70",
+    title: "text-red-100",
+    body: "text-red-200/80",
     action: "bg-red-600 hover:bg-red-700",
-    quiet: "text-red-800/70 hover:bg-red-200/50 dark:text-red-200/60 dark:hover:bg-red-900/40",
+    quiet: "text-red-200/60 hover:bg-red-900/40",
   },
   ok: {
     glyph: "✓",
     dot: "bg-emerald-500",
-    card: "border-emerald-300/70 bg-emerald-50/95 dark:border-emerald-500/40 dark:bg-emerald-950/90",
-    chip: "border-emerald-300/70 bg-emerald-50/95 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-950/90 dark:text-emerald-100",
-    title: "text-emerald-900 dark:text-emerald-100",
-    body: "text-emerald-800/90 dark:text-emerald-200/80",
+    card: "border-emerald-500/40 bg-emerald-950/90",
+    chip: "border-emerald-500/40 bg-emerald-950/90 text-emerald-100",
+    title: "text-emerald-100",
+    body: "text-emerald-200/80",
     action: "bg-emerald-600 hover:bg-emerald-700",
-    quiet: "text-emerald-800/70 hover:bg-emerald-200/50 dark:text-emerald-200/60 dark:hover:bg-emerald-900/40",
+    quiet: "text-emerald-200/60 hover:bg-emerald-900/40",
   },
 };
 
@@ -440,7 +440,7 @@ export function AccountStatus() {
           )}
 
           {note && (
-            <p className={`mt-1.5 rounded-md bg-black/[0.06] px-1.5 py-1 text-[10px] leading-relaxed dark:bg-white/10 ${s.title}`}>
+            <p className={`mt-1.5 rounded-md bg-white/10 px-1.5 py-1 text-[10px] leading-relaxed ${s.title}`}>
               {note}
             </p>
           )}
