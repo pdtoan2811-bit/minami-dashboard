@@ -16,6 +16,8 @@ import BentoRail, { RAIL_W } from "@/components/BentoRail";
 import AskCard from "@/components/AskCard";
 import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
+import FilePanel from "@/components/FilePanel";
+import { deriveFileState, writtenBy } from "@/lib/file-view";
 import BrowserLightbox from "@/components/BrowserLightbox";
 import { FlowStrip } from "@/components/FlowStrip";
 import { FlowCanvas } from "@/components/FlowCanvas";
@@ -24,7 +26,7 @@ import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, typ
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, ChevronLeft, ChevronRight, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -667,7 +669,7 @@ export default function BentoHome() {
                     whileHover={flowing ? undefined : { y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
                   {flowing ? (
                     <div className="h-full overflow-hidden rounded-[1.4rem] border border-[#c47f18]/40 bg-black/30">
-                      <FlowCanvas sessionId={flowFor!.sid} project={p.name} onClose={() => setFlowFor(null)} />
+                      <FlowCanvas sessionId={flowFor!.sid} project={p.name} busy={!!liveAct[flowFor!.sid]?.busy} onClose={() => setFlowFor(null)} />
                     </div>
                   ) : (
                   <>
@@ -745,7 +747,47 @@ export default function BentoHome() {
       {/* draggable divider (persists panel width, and snaps the bento to the rail) */}
       {proj && <div onMouseDown={() => { pendingW.current = panelW; setDragging(true); }} onDoubleClick={() => setRail((v) => !v)}
         title={railed ? "Drag right to bring the bento back (or double-click)" : "Drag to resize · drag left to collapse the bento"}
-        className="hidden w-1.5 shrink-0 cursor-col-resize bg-white/[0.06] transition-colors hover:bg-[var(--sakura)]/60 md:block" />}
+        className="group/div relative hidden w-1.5 shrink-0 cursor-col-resize bg-white/[0.06] transition-colors hover:bg-[var(--sakura)]/60 md:block">
+        {/* The handle. Every other way to switch views was something you had to already know: drag the
+            divider to an invisible threshold, double-click a 6px strip, find ⌘B, or recognise a header
+            icon. This is the one that's just *there*, on the seam between the two things it swaps —
+            the same place Notion/Linear/VS Code put it, so it needs no learning.
+
+            Deliberately always visible (dim), not hover-only: hover-only would hide it behind the very
+            6px target that was already too small to find. It brightens on approach instead.
+
+            stopPropagation on pointer-down is load-bearing — without it a click here also starts the
+            parent's drag, and a double-click would fire the parent's toggle a second time, undoing it.
+
+            Hidden mid-drag: it sits exactly where the cursor is, and a button flickering under a drag
+            reads as breakage. Transitions only (no infinite animation) — a permanently animating
+            element costs a fixed per-frame tax whatever its size, see KNOWLEDGE.md §12. */}
+        {!isDragging && (
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); setRail((v) => !v); }}
+            title={railed ? "Show the bento board  (⌘B)" : "Collapse to the bento strip  (⌘B)"}
+            aria-label={railed ? "Show the bento board" : "Collapse to the bento strip"}
+            // z-20, deliberately BELOW the rail's own z-30 overlay. When the strip is hovered it slides
+            // its names out to 208px — straight over this spot — and a chevron floating on top of that
+            // panel would sit across the project chips. Ordering it under means the rail simply covers
+            // it while open, which is also correct by intent: the expanded rail has its own way out, so
+            // the handle has nothing to offer until you leave. Nothing to plumb between components.
+            // Anchored at the seam's midline and extending RIGHT (no -translate-x-1/2), rather than
+            // straddling it. Centred, a 20px pill spans 49–69px while the collapsed strip owns 0–56 —
+            // so its left third rendered clipped behind the rail's own background. Growing rightward
+            // puts it on the chat side of the seam in both modes, which is also where the eye expects a
+            // panel handle, and it never underlaps the bento column at any width.
+            className="absolute left-1/2 top-1/2 z-20 flex h-9 w-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-r-full border border-l-0 border-white/15 bg-neutral-800/95 text-neutral-400 opacity-40 shadow-lg transition-[opacity,color,border-color,transform] duration-150 hover:border-[var(--sakura)]/60 hover:text-neutral-100 hover:opacity-100 group-hover/div:opacity-100"
+          >
+            {/* Points where the bento is GOING, not where it is: right = it comes back, left = it tucks
+                away. Chevron rather than the header's panel glyph because at 20px wide a direction is
+                readable and a panel pictogram is not. */}
+            {railed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
+          </button>
+        )}
+      </div>}
 
       {/* Right: chat SIDE PANEL. `flex-1` rather than a second percentage — the rail's width is in px,
           and 100%-minus-a-percentage can't express "everything the rail didn't take". */}
@@ -798,7 +840,7 @@ export default function BentoHome() {
                 <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools} agentsHere={cwdAgentCount[proj.cwd] || 0}
                   // Opening the flow from a chat raises the canvas in the BENTO column, and un-rails the
                   // bento if it was collapsed — otherwise the click would appear to do nothing at all.
-                  onOpenFlow={(sid) => { setRail(false); setFlowFor({ project: proj.name, sid }); }}
+                  onOpenFlow={(sid) => { if (!sid) return; setRail(false); setFlowFor({ project: proj.name, sid }); }}
                   openSids={panes.map((p) => p.sid).filter(Boolean)}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
@@ -855,11 +897,63 @@ const ImageRefs = memo(function ImageRefs({ text }: { text: string }) {
 // of the cost sat around it. With the volatile props confined to the live row, everything above it is
 // prop-identical between renders and React skips it outright.
 type LiveBits = { notices: Notice[]; activity: ActivityState; elapsed: number; busy: boolean };
-const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, live }: {
+// The created/changed hints under a message. Every write in the turn, de-duplicated — Claude often
+// applies several Edits to one file in a single turn, and five identical chips for one file is worse
+// than none. Reads are excluded (see writtenBy): a chip per file merely looked at would bury the ones
+// that actually changed.
+const FileChips = memo(function FileChips({ tools, onOpen }: { tools: AgentToolCall[]; onOpen: (p: string) => void }) {
+  const written = useMemo(() => {
+    const seen = new Map<string, { path: string; name: string; verb: string }>();
+    for (const t of tools) {
+      const w = writtenBy(t);
+      // First write wins the verb: created-then-edited in one turn is still a creation.
+      if (w && !seen.has(w.path)) seen.set(w.path, w);
+    }
+    return [...seen.values()];
+  }, [tools]);
+  if (!written.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {written.map((w) => {
+        const tint = w.verb === "created" ? "#1f8a5c" : "#c47f18";
+        return (
+          <button key={w.path} onClick={() => onOpen(w.path)} title={`${w.verb} · ${w.path}`}
+            className="flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors hover:bg-white/[0.06]"
+            style={{ borderColor: tint + "55", background: tint + "12" }}>
+            <FileText className="h-3 w-3 shrink-0" style={{ color: tint }} />
+            <span className="font-mono text-[10.5px]" style={{ color: tint }}>{w.verb}</span>
+            <span className="min-w-0 truncate font-mono text-[10.5px] text-neutral-300">{w.name}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+});
+
+/** The shared side slot's tab strip. Only rendered when both panels have something to show. */
+function SlotTabs({ slot, onPick, fileCount }: { slot: "browser" | "file"; onPick: (s: "browser" | "file") => void; fileCount: number }) {
+  return (
+    <div className="flex shrink-0 items-center gap-1 border-b border-white/10 bg-black/20 px-1.5 py-1">
+      {([["browser", "Browser", Chrome], ["file", "Files", FileText]] as const).map(([id, label, Icon]) => (
+        <button key={id} onClick={() => onPick(id)}
+          className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] transition-colors ${
+            slot === id ? "bg-white/10 text-neutral-100" : "text-neutral-500 hover:text-neutral-300"}`}>
+          <Icon className="h-3 w-3" />{label}
+          {id === "file" && fileCount > 0 && <span className="text-[9px] tabular-nums text-neutral-500">{fileCount}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, onOpenFile, live }: {
   turn: RenderTurn;
   showTools: boolean;
   shots: BrowserState["shots"];
   onOpenShot: (i: number) => void;
+  /** Stable identity required — TurnRow is memoised, and a fresh closure here would defeat it for
+   *  every row on every render. Supplied as a useCallback by ChatColumn. */
+  onOpenFile: (path: string) => void;
   /** Non-null only for the one row that is currently streaming. */
   live: LiveBits | null;
 }) {
@@ -878,6 +972,11 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, l
                   a pasted screenshot and a folder-picker attachment display identically, with one
                   renderer and no second source of truth. */}
               <ImageRefs text={t.text} />
+              {/* What this turn actually did to the filesystem, as chips you can open.
+                  Deliberately OUTSIDE the `showTools` gate below: "which files changed" is the
+                  outcome of a turn, not tool noise, and it's the one thing worth seeing even when
+                  the tool details are collapsed. A path in a JSON blob is not a preview. */}
+              <FileChips tools={t.tools} onOpen={onOpenFile} />
               {/* Stays visible for the WHOLE turn. It used to collapse to a 2px caret as soon as any
                   text existed, so a long tool run after the first paragraph looked like a dead pane. */}
               {live && (
@@ -1058,7 +1157,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   const fileTurns = [...olderTurns, ...(detail?.turns || [])];
   // Unified render model: on-disk history until this pane goes live, then the streamed turns.
   const source: RenderTurn[] = agent.live ? agent.turns : fileTurns;
-  const allVisible = showTools ? source : source.filter((t) => t.text.trim() || t.streaming);
+  // A turn survives the "hide tool noise" filter if it SAID something — or if it CHANGED something.
+  //
+  // The second clause is not a nicety. Measured on a real 63-turn session: 5 files were written and
+  // not one of those turns carried assistant text, so every one of them was filtered out here and the
+  // created/changed chips rendered exactly zero times. The panel still listed the files, which made it
+  // worse — the transcript silently disagreed with the panel about whether anything had happened.
+  const allVisible = showTools ? source : source.filter((t) => t.text.trim() || t.streaming || t.tools.some((x) => writtenBy(x)));
   // Lazy render: only the most recent `limit` messages (older revealed on demand). Rendering a long
   // transcript's worth of Markdown up front is a big cost; the tail is what the user actually reads.
   const [limit, setLimit] = useState(40);
@@ -1223,7 +1328,33 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   }, [browserDrag]);
   // null = closed. Index into browser.shots.
   const [lightbox, setLightbox] = useState<number | null>(null);
-  const showBrowserPanel = browser.everUsed && !browserPanelHidden;
+
+  // ---- the side slot: browser OR file, never both -----------------------------------------------
+  // Both panels want the same place (beside the chat, drag-resizable) and a pane is already as narrow
+  // as 1/4 of the window. Two independently-openable side panels would leave the transcript unreadable
+  // and give the drag handle two meanings, so they SHARE one slot and one width, and opening a file
+  // switches the slot rather than adding to it.
+  const files = useMemo(() => deriveFileState(source), [source]);
+  // Which file the panel is showing. Set by a chip in the transcript or the panel's own rail; null
+  // means "whatever was touched most recently", which is almost always what you want.
+  const [filePath, setFilePath] = useState<string | null>(null);
+  const [slot, setSlot] = useSetting<"browser" | "file">("sidePanel", "browser");
+  const openFile = useCallback((p: string) => {
+    setFilePath(p);
+    setSlot("file");
+    setBrowserPanelHidden(false); // the slot is shared, so un-hiding it is what makes the file visible
+  }, [setSlot, setBrowserPanelHidden]);
+
+  const canShowBrowser = browser.everUsed;
+  const canShowFile = files.everUsed;
+  // Fall back rather than render an empty panel: a session that only touched files should not show a
+  // blank browser slot just because "browser" is the persisted default.
+  const activeSlot: "browser" | "file" | null =
+    slot === "file" && canShowFile ? "file"
+    : slot === "browser" && canShowBrowser ? "browser"
+    : canShowFile ? "file" : canShowBrowser ? "browser" : null;
+  const showSidePanel = !!activeSlot && !browserPanelHidden;
+  const showBrowserPanel = showSidePanel && activeSlot === "browser";
   // Toolbar controls can't touch the browser directly (there's no server-side handle on it — see
   // browser-view.ts), so they ask the agent, exactly the way Claude Code models navigation as a tool
   // call. Sending while a turn is in flight would be dropped, hence the `busy` guard at the call site.
@@ -1282,12 +1413,21 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           <span className="min-w-0"><span className="block truncate text-[13px] font-semibold">{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span><span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span></span>
           <span className="text-neutral-500">⌄</span>
         </button>
-        {browser.everUsed && browserPanelHidden && (
-          <button onClick={() => setBrowserPanelHidden(false)} title="Show browser view"
-            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
+        {/* Reopen the shared side slot. Two buttons rather than one, because "show the browser" and
+            "show the files" are different intents and the slot has to know which one you meant. */}
+        {canShowBrowser && browserPanelHidden && (
+          <button onClick={() => { setSlot("browser"); setBrowserPanelHidden(false); }} title="Show browser view"
+            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 && !canShowFile ? "ml-auto" : ""}`}>
             <Chrome className="h-3.5 w-3.5" />
             {/* A hidden panel shouldn't hide a broken page — surface the error count on the reopen button. */}
             {browser.consoleErrors > 0 && <span className="text-[9px] tabular-nums text-[#ef7c7c]">{browser.consoleErrors}</span>}
+          </button>
+        )}
+        {canShowFile && browserPanelHidden && (
+          <button onClick={() => { setSlot("file"); setBrowserPanelHidden(false); }} title="Show files touched in this chat"
+            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
+            <FileText className="h-3.5 w-3.5" />
+            <span className="text-[9px] tabular-nums">{files.files.length}</span>
           </button>
         )}
         {count > 1 && <button onClick={onClose} className="ml-auto rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
@@ -1372,7 +1512,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         )}
         {visible.map((t, i) => (
           <TurnRow
-            key={i} turn={t} showTools={showTools} shots={browser.shots} onOpenShot={setLightbox}
+            key={i} turn={t} showTools={showTools} shots={browser.shots} onOpenShot={setLightbox} onOpenFile={openFile}
             // Only the LAST row needs the live indicator, so only it receives props that change on
             // every token. Every earlier row gets a prop set that is identical between renders, and
             // React.memo skips it entirely — which is the entire point of the extraction.
@@ -1462,7 +1602,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
             (you're reading a reply and want to see the shape of what it's doing); the switch on the
             tile is the from-the-grid one. Both raise the same expanded tile on the left, so there is no
             second flow surface to keep in sync with this one. */}
-        <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(sessionId)} />
+        <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           {/* The brake. It lived in the flow panel's header, which is gone — and it is a SESSION control
               (like Plan/Code and the approval level), not a property of a view, so this row is where it
@@ -1522,35 +1662,55 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         </div>
       </div>
       </div>
-      {showBrowserPanel && !browserStacked && (
+      {showSidePanel && !browserStacked && (
         <>
         <div onMouseDown={() => { pendingBrowserW.current = browserW; setBrowserDrag(true); }} title="Drag to resize"
           className="group relative w-1 shrink-0 cursor-col-resize bg-white/[0.07] transition-colors hover:bg-[#5ec8f8]/40">
           <span className="absolute inset-y-0 -left-1 -right-1" />
         </div>
         <div ref={browserPaneRef} className="flex min-h-0 shrink-0 flex-col" style={{ width: `${browserW}%` }}>
-          <BrowserPanel
-            state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
-            live={!!cwd && !agent.busy} stacked={false}
-            onOpenShot={setLightbox} onAsk={askBrowser}
-            onClose={() => setBrowserPanelHidden(true)}
-            onToggleLayout={() => setBrowserStacked(true)}
-            onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
-          />
+          {/* Tabs only when there's a genuine choice — a session that never opened a browser shouldn't
+              pay a row of chrome to be told so. */}
+          {canShowBrowser && canShowFile && <SlotTabs slot={activeSlot!} onPick={setSlot} fileCount={files.files.length} />}
+          {activeSlot === "browser" ? (
+            <BrowserPanel
+              state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
+              live={!!cwd && !agent.busy} stacked={false}
+              onOpenShot={setLightbox} onAsk={askBrowser}
+              onClose={() => setBrowserPanelHidden(true)}
+              onToggleLayout={() => setBrowserStacked(true)}
+              onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
+            />
+          ) : (
+            <FilePanel
+              state={files} cwd={cwd} stacked={false} activePath={filePath} onPick={setFilePath}
+              onClose={() => setBrowserPanelHidden(true)}
+              onToggleLayout={() => setBrowserStacked(true)}
+            />
+          )}
         </div>
         </>
       )}
       </div>
-      {showBrowserPanel && browserStacked && (
+      {showSidePanel && browserStacked && (
         <div className="flex min-h-0 shrink-0 flex-col" style={{ flexBasis: "45%" }}>
-          <BrowserPanel
-            state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
-            live={!!cwd && !agent.busy} stacked
-            onOpenShot={setLightbox} onAsk={askBrowser}
-            onClose={() => setBrowserPanelHidden(true)}
-            onToggleLayout={() => setBrowserStacked(false)}
-            onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
-          />
+          {canShowBrowser && canShowFile && <SlotTabs slot={activeSlot!} onPick={setSlot} fileCount={files.files.length} />}
+          {activeSlot === "browser" ? (
+            <BrowserPanel
+              state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
+              live={!!cwd && !agent.busy} stacked
+              onOpenShot={setLightbox} onAsk={askBrowser}
+              onClose={() => setBrowserPanelHidden(true)}
+              onToggleLayout={() => setBrowserStacked(false)}
+              onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
+            />
+          ) : (
+            <FilePanel
+              state={files} cwd={cwd} stacked activePath={filePath} onPick={setFilePath}
+              onClose={() => setBrowserPanelHidden(true)}
+              onToggleLayout={() => setBrowserStacked(false)}
+            />
+          )}
         </div>
       )}
       {lightbox !== null && browser.shots.length > 0 && (

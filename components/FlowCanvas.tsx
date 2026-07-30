@@ -27,7 +27,7 @@ import {
   type Edge, type Node, type NodeMouseHandler,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChevronRight, CircleDot, FileDiff, Pause, Sparkles, Users, X } from "lucide-react";
+import { ChevronRight, CircleDot, FileDiff, Sparkles, Users, X } from "lucide-react";
 import { buildFlow, type FlowTool, type FlowTurn } from "@/lib/flow-model";
 import { activityLabel } from "@/lib/use-agent";
 
@@ -39,7 +39,6 @@ const STATUS = {
   completed: { tint: "#1f8a5c", label: "done" },
   pending: { tint: "#4e5665", label: "queued" },
 } as const;
-const HELD_TINT = "#c47f18";
 
 const NODE_W = 300;
 const COL_X = 40;      // the spine
@@ -49,17 +48,13 @@ const ROW_GAP = 22;
 
 const clamp = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
-/** A held tool call is identified by the tool it's parked on — the model has no id for it, and the
- *  step it belongs to is simply whichever one is running. */
-function heldStepKey(turn: FlowTurn | undefined): string | null {
-  if (!turn) return null;
-  const running = turn.steps.find((s) => s.status === "in_progress");
-  return (running || turn.steps[turn.steps.length - 1])?.key ?? null;
-}
+// NOTE: v1 drew a "held for review" state here, because it had the pane's live SSE state and could
+// see a parked tool call. This component reads the transcript from disk, so it cannot — the held prompt
+// is answered in the chat pane, where that state actually lives. The rendering for it is deliberately
+// absent rather than present-but-unreachable.
 
-
-function Canvas({ turn, busy, open, toggle, heldKey }: {
-  turn: FlowTurn | undefined; busy: boolean; open: Set<string>; toggle: (k: string) => void; heldKey: string | null;
+function Canvas({ turn, busy, open, toggle }: {
+  turn: FlowTurn | undefined; busy: boolean; open: Set<string>; toggle: (k: string) => void;
 }) {
   const { fitView } = useReactFlow();
   const { nodes, edges } = useMemo(() => {
@@ -92,9 +87,8 @@ function Canvas({ turn, busy, open, toggle, heldKey }: {
     let n = 0;
     turn.steps.forEach((step) => {
       if (!step.synthetic) n++;
-      const held = step.key === heldKey;
       const st = STATUS[step.status];
-      const tint = held ? HELD_TINT : st.tint;
+      const tint = st.tint;
       const isOpen = open.has(step.key);
       const id = `s:${step.key}`;
       const childCount = step.tools.length + (step.thinking ? 1 : 0) + (step.files.length ? 1 : 0) + step.agents.length;
@@ -102,19 +96,19 @@ function Canvas({ turn, busy, open, toggle, heldKey }: {
       nodes.push({
         id,
         position: { x: COL_X, y },
+        // `live` rides on the node's data purely so the fit can find it again without re-deriving.
         data: {
+          live: step.status === "in_progress",
           label: (
             <div className="text-left leading-tight">
               <div className="flex items-center gap-1.5">
                 <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                  {step.status === "in_progress" && !held
+                  {step.status === "in_progress"
                     ? <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: tint }} />
-                    : held
-                      ? <Pause className="h-3 w-3" style={{ color: tint }} strokeWidth={2.6} />
-                      : <CircleDot className="h-3 w-3" style={{ color: tint }} strokeWidth={2.2} />}
+                    : <CircleDot className="h-3 w-3" style={{ color: tint }} strokeWidth={2.2} />}
                 </span>
                 <span className="font-mono text-[9px] uppercase tracking-[.14em]" style={{ color: tint }}>
-                  {held ? "held for review" : step.synthetic ? "step" : `${n} · ${st.label}`}
+                  {step.synthetic ? "step" : `${n} · ${st.label}`}
                 </span>
                 {childCount > 0 && (
                   <span className="ml-auto flex items-center gap-0.5 text-[9px] text-neutral-500">
@@ -137,7 +131,7 @@ function Canvas({ turn, busy, open, toggle, heldKey }: {
           width: NODE_W, padding: "9px 11px", borderRadius: 12,
           border: `1px solid ${tint}`, borderLeft: `3px solid ${tint}`,
           background: open.has(step.key) ? "#1d222d" : "#161a22",
-          boxShadow: held ? `0 0 0 3px ${tint}44` : open.has(step.key) ? `0 0 0 2px ${tint}55` : "none",
+          boxShadow: open.has(step.key) ? `0 0 0 2px ${tint}55` : "none",
           opacity: step.status === "pending" ? 0.62 : 1,
           transition: "opacity .18s, box-shadow .18s",
         },
@@ -146,7 +140,7 @@ function Canvas({ turn, busy, open, toggle, heldKey }: {
       });
       edges.push({
         id: `e:${prevId}->${id}`, source: prevId, target: id,
-        animated: step.status === "in_progress" && busy && !held,
+        animated: step.status === "in_progress" && busy,
         style: { stroke: step.status === "pending" ? "#333a47" : tint, strokeWidth: 1.6, opacity: step.status === "pending" ? 0.5 : 1 },
       });
       prevId = id;
@@ -215,13 +209,27 @@ function Canvas({ turn, busy, open, toggle, heldKey }: {
     });
 
     return { nodes, edges };
-  }, [turn, open, busy, heldKey]);
+  }, [turn, open, busy]);
   // Re-frame whenever the shape changes. This is what the minimap was standing in for, and it does the
   // job better: you never have to navigate back to the thing that just moved.
   // `minZoom` on the fit, not just on the canvas: a ten-step spine in a column this wide would
   // otherwise be scaled down until the labels are unreadable, which is a worse failure than needing to
   // scroll. Below 0.75 it stops shrinking and you pan instead.
-  useEffect(() => { const t = setTimeout(() => fitView({ padding: 0.16, duration: 260, minZoom: 0.75, maxZoom: 1 }), 60); return () => clearTimeout(t); }, [nodes.length, fitView]);
+  //
+  // And when it CAN'T fit, what it frames matters. Fitting the whole graph then landing wherever the
+  // clamped zoom happens to leave you puts the request off-screen and the live step nowhere in
+  // particular. So a too-tall graph fits around the RUNNING step instead — the one thing you opened
+  // this to look at — and only a graph that genuinely fits gets framed whole.
+  const focusIds = useMemo(() => {
+    const running = nodes.find((n) => n.id.startsWith("s:") && (n.data as { live?: boolean })?.live);
+    return running ? [{ id: running.id }] : undefined;
+  }, [nodes]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      fitView({ padding: 0.16, duration: 260, minZoom: 0.75, maxZoom: 1, ...(focusIds ? { nodes: focusIds } : {}) });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [nodes.length, focusIds, fitView]);
 
   const onNodeClick: NodeMouseHandler = useCallback((_, node) => {
     if (!node.id.startsWith("s:")) return;
@@ -241,7 +249,14 @@ function Canvas({ turn, busy, open, toggle, heldKey }: {
   );
 }
 
-export function FlowCanvas({ sessionId, project, onClose }: { sessionId: string; project: string; onClose: () => void }) {
+export function FlowCanvas({ sessionId, project, busy = false, onClose }: {
+  sessionId: string; project: string;
+  /** Whether this session is mid-turn. Supplied by the page from /api/agent/live: the on-disk
+   *  transcript has no `streaming` flag (that exists only on the live stream), so deriving it here
+   *  silently pinned it to false and the running-step edge never animated. */
+  busy?: boolean;
+  onClose: () => void;
+}) {
   const [turns, setTurns] = useState<SourceTurn[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -257,10 +272,12 @@ export function FlowCanvas({ sessionId, project, onClose }: { sessionId: string;
       finally { if (alive) setLoading(false); }
     };
     load();
-    // Slow enough not to matter, fast enough that a running plan visibly progresses.
-    const iv = setInterval(load, 3000);
+    // Fast only while something is actually running. A finished session's transcript cannot change, and
+    // re-reading its JSONL every three seconds is real work in the parser for a guaranteed-identical
+    // answer — so an idle canvas drops to a slow refresh that exists only to notice a NEW turn starting.
+    const iv = setInterval(load, busy ? 3000 : 20_000);
     return () => { alive = false; clearInterval(iv); };
-  }, [sessionId]);
+  }, [sessionId, busy]);
 
   const flow = useMemo(() => buildFlow(turns), [turns]);
   // The newest request often has no steps yet — it may not have called a tool, or the window may start
@@ -272,7 +289,6 @@ export function FlowCanvas({ sessionId, project, onClose }: { sessionId: string;
   }, [flow]);
   const shown = pinned == null ? live : Math.min(pinned, live);
   const turn = flow[shown];
-  const busy = !!turns[turns.length - 1]?.streaming;
 
   const toggle = useCallback((k: string) => setOpen((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; }), []);
 
@@ -310,7 +326,7 @@ export function FlowCanvas({ sessionId, project, onClose }: { sessionId: string;
           // it — being the same component that renders <ReactFlow> is not enough, and fails at runtime
           // with "Seems like you have not used ReactFlowProvider as an ancestor".
           <ReactFlowProvider>
-            <Canvas turn={turn} busy={busy} open={open} toggle={toggle} heldKey={null} />
+            <Canvas turn={turn} busy={busy} open={open} toggle={toggle} />
           </ReactFlowProvider>
         )}
       </div>

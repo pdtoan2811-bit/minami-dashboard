@@ -932,6 +932,26 @@ last one, because a request that hasn't called a tool yet would otherwise render
 The brake moved to the composer's control row, next to Plan/Code and the approval level, where it always
 belonged — it is a session control, not a property of a view.
 
+> 🐛 **Self-audit of v3: two features that could never fire.** v3's canvas was assembled by lifting
+> v1's node-layout code wholesale — and v1 had the pane's live SSE state, while this component reads the
+> transcript from disk. Two things came across that cannot work here, and neither failed loudly:
+> **(1)** the held-for-review rendering — `heldKey` was passed as a hardcoded `null` and `heldStepKey()`
+> was never called, so five branches, a constant and an icon import were unreachable code implying a
+> feature that wasn't there. Deleted, with a note where it used to be. **(2)** `busy` was derived from
+> `turns[last].streaming`, but `streaming` is set only on the live stream — the on-disk transcript never
+> carries it, so the running-step edge animation was pinned off. It now comes from the page, which
+> already polls `/api/agent/live` keyed by session id.
+> Three smaller ones from the same pass: the canvas re-read a *finished* session's JSONL every 3s for a
+> guaranteed-identical answer (now 20s when idle); the strip could hand it an empty session id for a
+> pane that hadn't gone live yet, fetching `/api/bento/session/` and rendering what looks like a broken
+> canvas (now prefers the live id and refuses empty); and `fitView` with a zoom floor landed wherever
+> the clamp left it, so it now frames the running step when the graph can't fit whole.
+>
+> The process lesson is the useful part: **splicing a component out of another component's source
+> carries its assumptions across silently.** Both dead features type-checked, built, and rendered — the
+> only way they surfaced was reading the assembled file back and asking what each prop was actually
+> connected to. *Prompted by user: "audit them again and revise yourself to see if you slopped".*
+
 ### v1 was wrong about the noun, and everything else followed
 
 v1 was a React Flow canvas behind a per-project **view mode**, picked from a hover-revealed ⚙ on a bento
@@ -1726,6 +1746,12 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Self-audit of the flow canvas** (§5f) — found and fixed two features that could never fire (the
+  held-state rendering behind a hardcoded `null`, and a `busy` flag derived from a field the on-disk
+  transcript never sets), plus a 3s poll of finished sessions, an empty-session-id path, and arbitrary
+  initial framing. All five came from splicing v1's source into a component with different data
+  guarantees; all five type-checked and built.
+  *Prompted by user: "audit them again and revise yourself to see if you slopped".*
 - **Flow is a canvas in the bento column again** (§5f) — a `flow` switch on each tile expands that tile
   into the React Flow graph, full-width and three rows tall, with the other tiles reflowing around it
   via the `layout` animation they already had. The minimap and zoom controls stay gone; `fitView` with a
