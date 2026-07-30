@@ -1,0 +1,106 @@
+# Deployment
+
+Part of the [Minami Bento knowledge record](../KNOWLEDGE.md) — the index lists every doc and
+which `§` ids live where. Section numbers are stable: code comments cite them.
+
+---
+
+## 8. Deployment
+
+`bin/serve.sh` builds then swaps a **production** server on `:3000`, killing only the process bound
+to that port. Production mode is deliberate: `next dev`'s Fast Refresh hot-patches the running page,
+so using the dashboard to edit the dashboard's own code would change React's hook signatures
+mid-session and crash the very tab driving the edit.
+
+**The home page is local-only.** It reads `~/.claude/projects` and drives the local `claude` login,
+so on Vercel it renders and finds nothing. Only `/dashboard` is remote-safe.
+
+### The deploy has to outlive whoever asked for it
+
+`serve.sh` alone is not usable from a chat pane, and a chat pane is where deploy requests actually come
+from. That pane's `claude` is a *grandchild* of the `next-server` the script must kill, so an inline run
+kills its own requester mid-sentence — and `serve.sh` would veto it first anyway, since the requesting
+turn is itself "busy". The deadlock is structural: the caller can never be quiet while it is calling.
+
+`bin/deploy.sh` breaks it by **detaching before waiting**. It walks its own process ancestry looking for
+the PID bound to `:3000`; finding it means "I am inside the thing I'm about to kill", so it re-execs
+itself into a new session (macOS has no `setsid` — it forks through `python3`'s `os.setsid()`, since a
+plain `&` leaves the child in a process group a group-kill can still reach), then waits for the box to
+go quiet, swaps, and verifies into `~/.minami/deploy.log`. Waiting rather than `--force` is what keeps
+the deploy polite to *other* panes: `serve.sh`'s own veto still runs after the wait.
+
+### `next build` is not a safe way to check that code compiles
+
+`npm run build` writes `.next` **in place**, and the live server keeps its manifests in memory. So a
+"harmless" verification build leaves a server handing out HTML that references CSS and JS hashes which
+no longer exist on disk: every asset 400s, the page never hydrates, and the dashboard renders as
+unstyled text stuck on "Reading local sessions…" — no tiles, no panes, no browser preview. It survives
+a reload. Only a restart clears it.
+
+Use **`npm run build:check`** (`NEXT_DIST_DIR=.next-verify next build`) instead. `deploy.sh` is the one
+thing allowed to overwrite `.next`, because it restarts the server in the same breath.
+
+> 🐛 **Verified the build, broke the dashboard — three turns running.** Each turn ended with a
+> `npm run build` to prove the change compiled, then a detached deploy. The build desynced `.next` from
+> the running server immediately; the deploy that would have repaired it waited for the box to go quiet
+> and **aborted after 300s** because other panes stayed busy — so the box sat on a broken build with
+> nothing in the log saying so. The `✋ still busy … aborting` line is not a warning that the app is
+> fine; after a bare build it means the app is broken until a deploy actually lands.
+> *Surfaced by user as "the browser preview is showing nothing".*
+
+> 🐛 **`next dev` returned 500 for every route, for a whole day.** `instrumentation.ts` starts Autopilot
+> behind `NEXT_RUNTIME === "nodejs"` — but that guard runs at *runtime* while webpack resolves imports
+> *statically*, and Next compiles instrumentation for the **edge** runtime too (verified: the webpack
+> callback fires with `nextRuntime="edge"`, with no middleware in the app). So the edge pass walked into
+> `lib/autopilot/runner.ts` and died on `node:child_process` — then, once that was patched, on
+> `node:fs`, then on the Agent SDK. Deferring the import doesn't help; webpack follows dynamic imports
+> too. `next build` tolerated all of it, so production was fine and nothing complained — the only
+> casualty was the preview workflow, silently. Fixed by cutting the graph at the ROOT of that subtree
+> (`config.externals` for the exact specifier, edge only, external type `var` because the edge target is
+> compiled as a script and `module` fails there). Scoped to edge alone, so a stray `node:` import in
+> client code still fails loudly, as it should.
+
+Two entry points, chosen by where you're standing — `docs/DEPLOY.md` is the protocol:
+
+| From | Command | Why |
+|---|---|---|
+| A dashboard chat pane | `bash bin/deploy.sh --detach` | The requester dies with the server; detaching is mandatory. |
+| Finder / Terminal | double-click `Redeploy Minami.command` | Not a child of the server, so it can run inline — and prompt `[w]ait / [f]orce / [q]uit` when panes are busy. |
+
+**Verification is on facts, not exit codes.** The requesting session is dead by the time the swap lands,
+so the log is the only witness — and "exit 0" is exactly the signal that lied in the 🐛 below. It asserts
+the **server PID changed** (the old process is gone, not merely that *a* server answers) and reports
+whether **`.next/BUILD_ID` changed** (unchanged is reported, not failed — you may have compiled no
+change), plus `GET /` and `/kb`, plus a probe list. The useful assertion for "the new route exists" is
+**anything that is not a 404** — `404` means the old build is still serving. A POST-only route answers
+`400` *or* `405` to a GET depending on whether it validates the body or rejects the method, so probes
+accept alternatives: `/api/fs/mkdir:400|405`. The defaults live in `bin/deploy.sh` itself;
+`DEPLOY_PROBES` still overrides for one-offs (see the 🐛 in §10 for why the default moved into the repo).
+
+### Gotchas
+- `INGEST_TOKEN` genuinely gates metrics writes. `READ_KEY` ships as `NEXT_PUBLIC_*`, so it is
+  compiled into the browser bundle — obscurity, not auth. Real privacy needs the deploy gated.
+- **`npm install` prunes devDependencies when `NODE_ENV=production` is set in the shell** (it is, in
+  this environment) — which silently removes `typescript` and `tailwindcss` and breaks the build.
+  Use `npm install --include=dev`.
+
+> 🐛 **A deploy can wait forever for a box that will never go quiet.** `deploy.sh --wait` polls
+> `/api/agent/health` for `busy == 0` **across every session on the machine** — correct, since the
+> restart kills all of them, but it means quiet is a property of the *box*, not the repo. A pane at
+> `phase=awaiting` (a permission prompt or `AskUserQuestion`) is busy **forever**: `s.busy` clears only
+> on a `result` message, and `canUseTool`'s promise never resolves until a human clicks. The auto-deny
+> backstop in `lib/agent/manager.ts` doesn't help — it returns early at `if (s.subs.size !== 0) return`,
+> so it only rescues panes with *no* subscribers (tab closed). An open tab sitting on a prompt is never
+> rescued. Observed 2026-07-29: a deploy launched at 16:57 waited its full window while a blocked pane
+> in `/tmp/minami-permtest` — an unrelated scratch folder — held the box busy. The deploy aborted having
+> touched nothing, which is the safe outcome but reads exactly like "nothing happened". **Lengthening
+> `--wait` makes the deadlock longer, not shorter.** Check for `phase=awaiting` *before* deploying —
+> `.claude/skills/minami-flow/orient.sh` does this — and clear those panes first.
+
+> 🐛 **serve.sh built successfully and swapped nothing.** Line 20 read `":$PORT…"`. Under a shell
+> without a valid UTF-8 locale (`LC_CTYPE=UTF-8`, which macOS doesn't recognise) bash swallowed the
+> multibyte `…` into the variable name, so `set -u` aborted the script — *after* the build, *before*
+> the swap. The old server kept serving and the failure looked like a successful deploy. Fixed by
+> bracing: `${PORT}`.
+
+---

@@ -126,7 +126,7 @@ working in a broken state, and nothing else on the box will tell them.
 **This is the one place to escalate to Thomas** — and only after aborting, so the base is clean while
 he decides.
 
-> **If Autopilot is on** (§12 of `docs/KNOWLEDGE.md`, `~/.minami/autopilot.json`), it may have already
+> **If Autopilot is on** (`docs/knowledge/13-autopilot.md`, `~/.minami/autopilot.json`), it may have already
 > tried this and given up: a task it aborted is in its `blocked` set and it will not retry. So a
 > conflict reaching you by hand has usually *already* been judged non-mechanical. Resolve it or abort
 > it yourself — do not switch Autopilot off and on hoping it will take another run at it.
