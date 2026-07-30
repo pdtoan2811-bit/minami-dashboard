@@ -1046,6 +1046,42 @@ it that tints markdown syntax without touching metrics (that constraint is why b
 > that mis-compiles `globals.css` ("Module parse failed: Unexpected character '@'") and 500s every
 > route. Run `NODE_ENV=development npm run dev:iterate`.
 
+### Reclaiming the panel — four cuts, one theme
+
+Tab view made three pieces of older chrome redundant at once, and each was still being paid for. The
+theme: **a control that restates something already on screen is not chrome, it's noise** — and the
+oldest of them was actively fighting the user.
+
+**1. The auto-rail heuristic outlived its premise.** Crossing 3 panes railed the bento to buy the panel
+width. That was written when 3 panes meant 3 transcripts side by side. It keys off `panes.length` —
+chats **open** — but tab view shows exactly one however many are open, so opening a topic with four
+remembered chats railed the board instantly, every time, for panes that were never on screen. You
+clicked a tile and the thing you clicked disappeared. Now gated on `paneView === "grid"`, where the
+premise still holds.
+*Reported by user: "when I click on it ... it automatically open the bento strip view - which is not okay".*
+
+**2. The hover-reveal header displaced the row you were aiming at.** The identity header collapsed to
+0px and expanded on hover — *above* the tab row, so every reveal pushed the tabs down by its full
+height. Hovering a tab therefore moved that tab out from under the cursor, at exactly the moment the
+hover triggered the reveal. The fix is ordering, not timing: tabs are the part you operate, so they
+take the fixed position and the reveal opens **below** them, `absolute` so it displaces nothing and
+floats over the first rows of transcript instead. Pinned stays static — pinning is a decision to keep
+the header, and it must not then sit on the text you pinned it to read alongside.
+Measured before/after: tab row `top: 0` and first tab `top: 6` both with and without hover.
+*Reported by user: "the hovering title appearance make it akward to click on tab because it shift the tab navigation down".*
+
+**3. The per-pane header restated the lit tab.** Icon + title + goal line, ~30px under a tab carrying
+the same title. Collapsed to the bare `⌄` switcher when `focused` (tabs view, single visible pane).
+Grid view keeps the full title — there is no lit tab there, and an unlabelled cell in a 2×2 can't be
+identified.
+
+**4. Measure, not width.** A maximised chat on a wide display ran prose the full column: past ~75
+characters the eye loses its place on the return sweep. `[&>*]:max-w-3xl` caps the **children**, so the
+scroll area and scrollbar stay full-bleed at the pane edge and only the content centres. Deliberately
+unconditional — it can only bind where there is excess width, so grid view and side-panel-open columns
+are already narrower and it does nothing.
+*Reported by user: "for chat log in full focus view, it should be like centered ... rather run full screen - having awful readability".*
+
 ---
 
 ## 5f. Flow — `components/FlowCanvas.tsx`, `components/FlowStrip.tsx`, `lib/flow-model.ts`
@@ -2000,6 +2036,15 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Panel compaction: four cuts that tab view made possible** (§5e) — the auto-rail heuristic no longer
+  fires in tab view (it counted chats *open*, not *visible*, so opening a 4-chat topic threw the bento
+  board away for panes that were never on screen); the hover-reveal header moved **below** the tab row
+  and went `absolute`, so revealing it no longer displaces the tab you're aiming at (measured: tab row
+  `top: 0` with and without hover); the per-pane title collapsed to a bare `⌄` when it merely restates
+  the lit tab; and the transcript caps its **measure** at `max-w-3xl` on the children, so a maximised
+  chat centres to a readable column while the scrollbar stays at the pane edge.
+  *Reported by user: "it automatically open the bento strip view", "the hovering title ... shift the tab
+  navigation down", "chat log in full focus view ... should be centered", "need more compact UI UX".*
 - **The chat panel is tab-first, and the side slot is tabbed throughout** (§5e, §5b, §5g, new
   `components/PanelTabs.tsx`) — tabs replace the 2×2 grid as the default view, with one view switch for
   the panel instead of a maximise button on every pane; the identity header (name · repo · tech icons ·

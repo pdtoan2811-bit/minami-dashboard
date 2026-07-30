@@ -489,16 +489,22 @@ export default function BentoHome() {
   useEffect(() => {
     setActivePane((i) => (panes.length ? Math.min(i, panes.length - 1) : 0));
   }, [panes.length]);
-  // Crossing into 3+ panes, the bento column stops being worth its width: the panel is where all the
-  // room needs to go, and the rail still shows every project's live state. Latched, so this is a nudge
-  // and not a fight — un-rail it by hand at three panes and it stays un-railed until you drop back
-  // under three and come up again. The user's explicit choice always outlives the heuristic.
+  // Crossing into 3+ panes in GRID view, the bento column stops being worth its width: three or four
+  // transcripts side by side is where all the room needs to go, and the rail still shows every
+  // project's live state. Latched, so this is a nudge and not a fight — un-rail it by hand and it
+  // stays un-railed until you drop back under three and come up again.
+  //
+  // Gated on grid, because the heuristic predates tab view and `panes.length` stopped meaning what it
+  // used to. It counts chats that are OPEN, not chats that are VISIBLE — and in tabs view exactly one
+  // is visible however many are open. So opening a topic with four remembered chats railed the bento
+  // instantly, every time, to buy width for three panes that were never on screen. That reads as the
+  // app throwing your board away for no reason: you clicked a tile and the thing you clicked vanished.
   const autoRailed = useRef(false);
   useEffect(() => {
-    if (panes.length < 3) { autoRailed.current = false; return; }
+    if (paneView !== "grid" || panes.length < 3) { autoRailed.current = false; return; }
     if (!autoRailed.current && !rail) { autoRailed.current = true; setRail(true); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panes.length]);
+  }, [panes.length, paneView]);
   // Remember the open panel + its layout so a refresh (or re-opening the topic) restores it exactly.
   useEffect(() => {
     const name = project || newTopic?.name || null;
@@ -877,42 +883,18 @@ export default function BentoHome() {
       <div className={`min-h-0 bg-neutral-900/50 w-full ${railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {proj && (
           <>
-            {/* ── Panel chrome: one identity header that hides, one tab row that doesn't ───────────
+            {/* ── Panel chrome: a tab row that never moves, details that reveal BENEATH it ─────────
                 The identity header — icon, project name, repo path, tech icons, counts — is read once
-                a session and then occupies ~46px forever. It now collapses to nothing and slides back
-                on hover (or on keyboard focus, or pinned). What stays is the tab row, because that is
-                the part you actually operate.
-                The two are one `group` so reaching anywhere in the chrome reveals the header: aiming at
-                a 0px-tall target would be a joke, and the tab row is directly under it. */}
+                a session and then occupies ~46px forever, so it collapses to nothing and slides back
+                on hover (or on keyboard focus, or pinned).
+                It reveals BELOW the tabs, not above them, and that ordering is the whole fix. Above,
+                every reveal pushed the tab row down by the header's full height — so the row you were
+                aiming at slid out from under the cursor at the exact moment hovering it triggered the
+                reveal, and the click landed on the wrong tab or on nothing. The tabs are the part you
+                operate, so they get the fixed position; chrome that is merely nice to have expands
+                downward into space that nothing is anchored to.
+                Still one `group`, so reaching anywhere in the chrome reveals the header. */}
             <div className="group/chrome relative shrink-0 border-b border-white/10">
-              {/* The grid-rows 0fr→1fr trick, not max-height: it animates to the content's REAL height,
-                  so the header can't be clipped by a guessed max nor leave dead space under a short one. */}
-              <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${
-                headerPinned ? "grid-rows-[1fr]" : "grid-rows-[0fr] group-hover/chrome:grid-rows-[1fr] group-focus-within/chrome:grid-rows-[1fr]"}`}>
-                <div className="overflow-hidden">
-                  {/* pr-14, not px-4: the notification bell is fixed to the viewport's top-right corner
-                      and would otherwise sit on top of these controls. Reserving the gutter keeps the
-                      two apart without the bell having to know anything about this panel. */}
-                  <div className="flex items-center gap-3 py-2 pl-4 pr-14">
-                    {/* Title, repo link (full + clickable) and tech icons — one scrollable row so a long
-                        repo path stays complete without pushing the counts off-screen. */}
-                    <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                      <button onClick={closePanel} className="group flex shrink-0 items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
-                        <ProjectIcon name={proj.name} icon={topicIcons[proj.name]} /><span className="font-semibold">{proj.name}</span>
-                      </button>
-                      <AttachBar inline cwd={proj.cwd} project={proj.name} />
-                    </div>
-                    <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>
-                    {/* Auto-hiding chrome is only tolerable if you can stop it. Pinning is the escape
-                        hatch for "I'm reading this repo path and it keeps sliding away". */}
-                    <button onClick={() => setHeaderPinned((v) => !v)} title={headerPinned ? "Unpin — let this header hide again" : "Pin this header open"}
-                      className={`shrink-0 rounded-md px-1.5 py-1 text-[11px] transition-colors ${headerPinned ? "text-[var(--sakura)]" : "text-neutral-600 hover:text-neutral-300"}`}>
-                      {headerPinned ? "📌" : "📍"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
               {/* The permanent row: every pane as a tab, then the view switch and the panel controls.
                   The tabs render in BOTH views — in grid view none is lit, and clicking one is how you
                   drop back into reading that pane. One row that never moves beats two that swap. */}
@@ -970,6 +952,42 @@ export default function BentoHome() {
                   )}
                 </div>
                 <button onClick={closePanel} title="Close this project (esc)" className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
+              </div>
+
+              {/* The grid-rows 0fr→1fr trick, not max-height: it animates to the content's REAL height,
+                  so the header can't be clipped by a guessed max nor leave dead space under a short one.
+                  Positioning depends on WHY it's open, because the two cases want opposite things.
+                  Hover is a peek: absolute, so it floats over the first rows of the transcript and its
+                  reveal moves nothing — displacing every control below it is exactly the bug this is
+                  fixing, and re-introducing it one element lower would be no better. Pinned is a
+                  decision to keep it: static, so it reserves its own space and never sits on the text
+                  you pinned it in order to read alongside. */}
+              <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+                headerPinned ? "grid-rows-[1fr]" : "absolute inset-x-0 top-full z-20 grid-rows-[0fr] group-hover/chrome:grid-rows-[1fr] group-focus-within/chrome:grid-rows-[1fr]"}`}>
+                <div className="overflow-hidden">
+                  {/* pr-14, not px-4: the notification bell is fixed to the viewport's top-right corner
+                      and would otherwise sit on top of these controls. Reserving the gutter keeps the
+                      two apart without the bell having to know anything about this panel.
+                      Opaque background + border: it now overlays the transcript rather than occupying
+                      its own space, so it has to be readable against whatever text is behind it. */}
+                  <div className="flex items-center gap-3 border-b border-white/10 bg-neutral-900 py-2 pl-4 pr-14 shadow-lg">
+                    {/* Title, repo link (full + clickable) and tech icons — one scrollable row so a long
+                        repo path stays complete without pushing the counts off-screen. */}
+                    <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <button onClick={closePanel} className="group flex shrink-0 items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
+                        <ProjectIcon name={proj.name} icon={topicIcons[proj.name]} /><span className="font-semibold">{proj.name}</span>
+                      </button>
+                      <AttachBar inline cwd={proj.cwd} project={proj.name} />
+                    </div>
+                    <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>
+                    {/* Auto-hiding chrome is only tolerable if you can stop it. Pinning is the escape
+                        hatch for "I'm reading this repo path and it keeps sliding away". */}
+                    <button onClick={() => setHeaderPinned((v) => !v)} title={headerPinned ? "Unpin — let this header hide again" : "Pin this header open"}
+                      className={`shrink-0 rounded-md px-1.5 py-1 text-[11px] transition-colors ${headerPinned ? "text-[var(--sakura)]" : "text-neutral-600 hover:text-neutral-300"}`}>
+                      {headerPinned ? "📌" : "📍"}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
             {/* Up to 4 chats in a 2×2 grid — like managing windows on a foldable. With one focused it
@@ -1689,17 +1707,29 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-neutral-900/40 ${collapsed ? "hidden " : ""}${focused ? "border-[var(--sakura)]/30" : "border-white/10"} ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 && !focused ? "col-span-2" : ""}`}>
       {/* The header is chrome about the pane, not content in it, so it is the first thing to thin out.
           Sized off `d` rather than `dc`: the title bar must not twitch every time the composer takes
-          focus — only the footer, which is what you're reaching for, is allowed to move. */}
-      <div className={`relative flex items-center gap-2 border-b border-white/[0.07] ${atLeast(d, "snug") ? "px-4 py-2" : atLeast(d, "tight") ? "px-3 py-1.5" : "px-2 py-1"}`}>
-        {atLeast(d, "tight") && <ProjectIcon name={proj} />}
-        <button onClick={() => setMenu((v) => !v)} className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-white/10">
-          <span className="min-w-0">
-            <span className={`block truncate font-semibold ${atLeast(d, "snug") ? "text-[13px]" : "text-[12px]"}`}>{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span>
-            {/* The goal line goes first. It's the pane's *category* — true all session, read once, and
-                the tab strip and the bento tile both still say it. Two lines of title above a
-                three-line transcript was the single worst ratio in the four-pane layout. */}
-            {atLeast(d, "snug") && <span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span>}
-          </span>
+          focus — only the footer, which is what you're reaching for, is allowed to move.
+
+          `focused` means tabs view with this pane as the single visible one — and in that view the lit
+          tab immediately above already carries this exact title. So the icon, the title and the goal
+          line are three restatements of something on screen 30px higher, costing a two-line row of the
+          only column showing a transcript. When focused, all of it collapses to the ⌄ switcher (which
+          is a control, not a label, and has no other home). Grid view keeps the full title: there the
+          panes have no lit tab, and an unlabelled cell in a 2×2 is unidentifiable. */}
+      <div className={`relative flex items-center gap-2 border-b border-white/[0.07] ${
+        focused ? "px-2 py-1" : atLeast(d, "snug") ? "px-4 py-2" : atLeast(d, "tight") ? "px-3 py-1.5" : "px-2 py-1"}`}>
+        {!focused && atLeast(d, "tight") && <ProjectIcon name={proj} />}
+        <button onClick={() => setMenu((v) => !v)}
+          title={focused ? `${isNew ? "New chat" : cur ? titleOf(cur) : ""} — switch chat` : undefined}
+          className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-white/10">
+          {!focused && (
+            <span className="min-w-0">
+              <span className={`block truncate font-semibold ${atLeast(d, "snug") ? "text-[13px]" : "text-[12px]"}`}>{isNew ? "New chat" : cur ? titleOf(cur) : "…"}</span>
+              {/* The goal line goes first. It's the pane's *category* — true all session, read once, and
+                  the tab strip and the bento tile both still say it. Two lines of title above a
+                  three-line transcript was the single worst ratio in the four-pane layout. */}
+              {atLeast(d, "snug") && <span className="block truncate text-[10px] text-neutral-500">{isNew ? proj : cur ? goalOf(cur) : ""}</span>}
+            </span>
+          )}
           <span className="text-neutral-500">⌄</span>
         </button>
         {/* Reopen the shared side slot. Two buttons rather than one, because "show the browser" and
@@ -1748,7 +1778,16 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
         // Padding and the gap between turns are chrome too — 24px of dead margin around a 146px
         // transcript is a tenth of the pane spent on nothing. They shrink with the box, never to zero:
         // messages still need a gutter to read as separate messages.
-        className={`relative min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] ${
+        //
+        // `[&>*]:max-w-3xl` caps the MEASURE, not the pane. A line of prose stops being readable past
+        // roughly 75 characters — the eye loses its place on the return sweep — and a single maximised
+        // chat on a 1600px display was running paragraphs the full width of the column. The cap sits on
+        // the children rather than this element so the scrollbar and the scroll area stay full-bleed at
+        // the pane's edge; only the content is centred inside them.
+        // Unconditional on purpose: it needs no view check because it can only ever bind when there IS
+        // excess width. In grid view, or with the side panel open, a column is already narrower than the
+        // cap and the rule does nothing at all.
+        className={`relative min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-3xl ${
           atLeast(d, "roomy") ? "space-y-6 px-5 py-5"
           : atLeast(d, "snug") ? "space-y-5 px-4 py-4"
           : atLeast(d, "tight") ? "space-y-4 px-3.5 py-3"
