@@ -6,7 +6,7 @@ The authoritative reasoning record for this codebase. `README.md` says how to ru
 **This file is an index.** The material lives in [`docs/knowledge/`](knowledge/), one file per
 subsystem. That split is not tidiness — this record reached 2,500 lines / ~46k tokens, and reading it
 whole cost about a quarter of a session's context to answer a question about one module. Now you read
-the index (~1.5k) plus the one file you need.
+this index (~2.4k) plus the one file you need.
 
 Kept in sync by the `minami-kb` skill: *any turn that changes a subsystem updates that subsystem's file
 in the same turn.* A doc that lags is worse than no doc, because the next session trusts it.
@@ -51,9 +51,9 @@ recycle one.
 
 ## The pattern behind the incidents
 
-Six of the eight bugs above are the same mistake in different clothes: **trusting a signal that looks
-authoritative but is only a claim.** An mtime. A CLI status label. A reported switch success. A
-connection that reopened. A build that exited 0.
+Six of the eight bugs recorded in `12-rendering-cost.md` and `06-accounts.md` are the same mistake in
+different clothes: **trusting a signal that looks authoritative but is only a claim.** An mtime. A CLI
+status label. A reported switch success. A connection that reopened. A build that exited 0.
 
 The recurring fix is to find the thing that cannot lie — a content hash, the credential itself, a
 timestamp comparison, an actual HTTP probe — and check that instead.
@@ -80,8 +80,6 @@ METRICS   Stop hook on EVERY machine → metrics-server.js (Hetzner, loopback)
 ```
 
 The live and read pipelines meet only on disk. They never call each other.
-
----
 
 ---
 
