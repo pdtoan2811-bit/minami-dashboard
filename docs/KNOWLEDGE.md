@@ -899,11 +899,37 @@ it that tints markdown syntax without touching metrics (that constraint is why b
 
 ---
 
-## 5f. Flow — `components/FlowPanel.tsx`, `lib/flow-model.ts`
+## 5f. Flow — `components/FlowCanvas.tsx`, `components/FlowStrip.tsx`, `lib/flow-model.ts`
 
 The plan you're already looking at, opened up: the same TodoWrite/TaskCreate steps the chat shows as a
 checklist, expanded so each one carries the work it did, with a brake that can stop the next tool call.
 It exists to catch a bad step *mid-flight*, which is the one thing the transcript cannot help with.
+
+### Three revisions, and what each one actually got wrong
+
+**v3 (current) is what was asked for from the start:** the graph lives in the **bento column**, and a
+`flow` switch on a tile **expands that tile into the canvas** — full row, three rows tall — while every
+other tile reflows around it. The motion is free: the tile wrapper already carries framer's `layout`, so
+the span change animates and the neighbours slide. An overlay would have *covered* them; the ask was
+that they move.
+
+React Flow is back, and here it is the right tool — this genuinely is a canvas now, with room to pan a
+wide plan. What went is the part actually complained about: the **minimap**, and the zoom controls with
+it. `fitView` re-frames on every plan change, which is what a minimap stands in for, with a `minZoom`
+floor so a ten-step spine stops shrinking before the labels go unreadable and you pan instead.
+
+Two doors, one destination: the switch on the tile, and the plan strip in the chat
+(`components/FlowStrip.tsx`) — which raises the same expanded tile and un-rails the bento first, since
+otherwise the click appears to do nothing. There is no second flow surface to keep in sync.
+
+The canvas fetches its own transcript over HTTP rather than reading a pane's live SSE state: it sits in
+page scope, panes each own their `useAgent`, and two subscribers to one session is two copies of the
+truth. It folds the JSONL with the same `buildFlow` the chat uses, so the two cannot disagree about what
+ran — at most one poll behind. It defaults to the newest turn that *has* steps rather than blindly the
+last one, because a request that hasn't called a tool yet would otherwise render an empty canvas.
+
+The brake moved to the composer's control row, next to Plan/Code and the approval level, where it always
+belonged — it is a session control, not a property of a view.
 
 ### v1 was wrong about the noun, and everything else followed
 
@@ -1616,6 +1642,13 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Flow is a canvas in the bento column again** (§5f) — a `flow` switch on each tile expands that tile
+  into the React Flow graph, full-width and three rows tall, with the other tiles reflowing around it
+  via the `layout` animation they already had. The minimap and zoom controls stay gone; `fitView` with a
+  `minZoom` floor replaces them. The in-chat list panel is retired in favour of the strip as a second
+  door to the same canvas, and the brake moved to the composer's control row.
+  *Reported by user: "I want to see flow on left side of the screen where bento UI is, by click a switch
+  on the bento tiles to expand the bento dynamically to be the canvas for react flow".*
 - **Every turn shape can now open its flow** (§5f) — the strip read raw `TodoWrite` while the panel
   used `buildFlow`, so `TaskCreate`-tracked and unplanned turns had a flow with no way in. One
   derivation now feeds both, the label tells the truth about whether Claude planned the turn or we

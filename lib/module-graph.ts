@@ -124,7 +124,8 @@ export const NODES: ModuleNode[] = [
   { id: "x/events", label: "~/.minami/events.jsonl", sub: "alert log · deploy.sh + task.mjs write", layer: "runtime", row: 5 },
 
   // ── Flow view: the step graph + its brake (KNOWLEDGE.md §5f) ────────────
-  { id: "c/FlowPanel", label: "FlowPanel", sub: "plan, grouped by status\nhold · steer · abort", layer: "component", row: 21, pipeline: "live" },
+  { id: "c/FlowStrip", label: "FlowStrip", sub: "the in-chat door", layer: "component", row: 22, pipeline: "live" },
+  { id: "c/FlowCanvas", label: "FlowCanvas", sub: "step graph in the bento\n(React Flow, no minimap)", layer: "component", row: 21, pipeline: "live" },
   { id: "l/flowmodel", label: "flow-model.ts", sub: "transcript → step graph\n(TodoWrite + TaskCreate)", layer: "core", row: 16, pipeline: "live" },
   { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
 ];
@@ -247,8 +248,10 @@ export const EDGES: ModuleEdge[] = [
 
   // Flow view. The brake is drawn as a full round trip on purpose: the button is in the component,
   // but the only place it can be ENFORCED is canUseTool inside the manager — see KNOWLEDGE.md §5f.
-  { from: "app/page", to: "c/FlowPanel", kind: "import" },
-  { from: "c/FlowPanel", to: "l/flowmodel", kind: "import" },
-  { from: "c/FlowPanel", to: "r/hold", kind: "http", label: "arm/release" },
+  { from: "app/page", to: "c/FlowCanvas", kind: "import" },
+  { from: "app/page", to: "c/FlowStrip", kind: "import" },
+  { from: "c/FlowCanvas", to: "r/session", kind: "http", label: "transcript" },
+  { from: "c/FlowCanvas", to: "l/flowmodel", kind: "import" },
+  { from: "c/FlowCanvas", to: "r/hold", kind: "http", label: "arm/release" },
   { from: "r/hold", to: "l/manager", kind: "import" },
 ];

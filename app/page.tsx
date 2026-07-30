@@ -17,13 +17,14 @@ import AskCard from "@/components/AskCard";
 import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
 import BrowserLightbox from "@/components/BrowserLightbox";
-import { FlowPanel, FlowStrip } from "@/components/FlowPanel";
+import { FlowStrip } from "@/components/FlowStrip";
+import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildFlow } from "@/lib/flow-model";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { motion } from "motion/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, Chrome, FileText, Globe, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -330,6 +331,9 @@ export default function BentoHome() {
   const [openPanel, setOpenPanel] = useSetting<{ name: string; cwd: string; topic: boolean; panes: Pane[] } | null>("openPanel", null);
   const restoredRef = useRef(false);
   const [newTopic, setNewTopic] = useState<Project | null>(null); // ad-hoc topic opened via the folder picker
+  // Which tile is currently expanded into the flow canvas, and for which session. One at a time: two
+  // canvases in a grid is two things fighting for the same attention, and the grid has room for one.
+  const [flowFor, setFlowFor] = useState<{ project: string; sid: string } | null>(null);
   const [picker, setPicker] = useState(false); // folder picker modal open
   const [techIcons, setTechIcons] = useState<Record<string, Icon>>({}); // brand icon SVGs
   const [attachMap, setAttachMap] = useState<Record<string, { tech: string[]; icon?: string }>>({}); // per-project tech + topic icon
@@ -647,13 +651,26 @@ export default function BentoHome() {
                   : age < 3 * 86400e3 ? { label: "active", tint: "#6c9cf5", pulse: false } : null;
                 const bright = activeSel || project === p.name || p.active || (p.review && age < 7 * 86400e3);
                 const dim = bright ? 1 : age < 86400e3 ? 0.9 : age < 3 * 86400e3 ? 0.72 : age < 7 * 86400e3 ? 0.56 : 0.42;
+                // Expanded, this tile IS the canvas: it takes the full row and three rows of height, and
+                // every other tile reflows around it. The motion is free — the wrapper already carries
+                // framer's `layout`, so the span change animates and the neighbours slide, which is
+                // exactly the bento behaviour asked for. A separate overlay would have covered them
+                // instead of moving them.
+                const flowing = flowFor?.project === p.name;
                 return (
                   // The ⚙ has to be a SIBLING of the tile, not a child: the tile is itself a <button>,
                   // and a nested button is invalid HTML that React will happily render and the browser
                   // will then handle unpredictably (the inner click also fires the outer one). Hence
                   // this wrapper — it owns the grid span and the layout animation; the tile fills it.
-                  <motion.div layout key={p.name} className={`relative ${span}`}
-                    initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: dim, scale: 1 }} whileHover={{ y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
+                  <motion.div layout key={p.name} className={`relative ${flowing ? "col-span-full row-span-3" : span}`}
+                    initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: flowing ? 1 : dim, scale: 1 }}
+                    whileHover={flowing ? undefined : { y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
+                  {flowing ? (
+                    <div className="h-full overflow-hidden rounded-[1.4rem] border border-[#c47f18]/40 bg-black/30">
+                      <FlowCanvas sessionId={flowFor!.sid} project={p.name} onClose={() => setFlowFor(null)} />
+                    </div>
+                  ) : (
+                  <>
                   <button data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => openProject(p)}
                     style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)` }}
                     // NO backdrop-blur here — it was measured as the single biggest CPU cost in the app.
@@ -693,7 +710,19 @@ export default function BentoHome() {
                       <span className="shrink-0 truncate text-[11px] text-neutral-600">{p.sessions.length} chats</span>
                     </div>
                   </button>
-                  
+
+                  {/* The switch. Visible at rest — the whole reason the previous two attempts went
+                      unfound is that their control only appeared on hover, or lived in another screen. */}
+                  {p.sessions.length > 0 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); const best = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity); setFlowFor({ project: p.name, sid: (best.find((x) => x.active) || best[0]).id }); }}
+                      title={`See ${p.name}'s plan as a graph`}
+                      className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-lg border border-white/15 bg-black/30 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-neutral-400 transition-colors hover:border-[#c47f18]/60 hover:text-[#c47f18]">
+                      <Workflow className="h-2.5 w-2.5" />flow
+                    </button>
+                  )}
+                  </>
+                  )}
                   </motion.div>
                 );
               })}
@@ -767,6 +796,9 @@ export default function BentoHome() {
                 // in-flight EventSource/turns mid-stream for no reason. An explicit user pick of a
                 // DIFFERENT existing session (onPick below) SHOULD remount — see onPick's comment.
                 <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools} agentsHere={cwdAgentCount[proj.cwd] || 0}
+                  // Opening the flow from a chat raises the canvas in the BENTO column, and un-rails the
+                  // bento if it was collapsed — otherwise the click would appear to do nothing at all.
+                  onOpenFlow={(sid) => { setRail(false); setFlowFor({ project: proj.name, sid }); }}
                   openSids={panes.map((p) => p.sid).filter(Boolean)}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
@@ -917,8 +949,8 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, l
 // construction, so the two views can't drift on the things that actually execute code. That is also
 // why Flow isn't its own route: a second copy of the send/steer/stop wiring is a second place for the
 // permission model to be subtly wrong.
-function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, openSids, onPick, onLive, onClose }: {
-  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, openSids, onOpenFlow, onPick, onLive, onClose }: {
+  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; onOpenFlow: (sid: string) => void; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
 }) {
   // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
@@ -1114,10 +1146,6 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   // every mature chat UI converges on: treat "pinned to the bottom" as state the user owns. They leave
   // it by scrolling away, they return by scrolling back (or with the button below) — and nothing else
   // moves the viewport for them.
-  // The flow is a lens on THIS pane's current turn, opened from the plan strip — not a mode the
-  // project is left in. Component state, deliberately: it dies with the pane, the way a disclosure
-  // should, and there is no "which view is this project in" to get out of sync with anything.
-  const [flowOpen, setFlowOpen] = useState(false);
   const [pinned, setPinned] = useState(true);
   const pinnedRef = useRef(true);
   pinnedRef.current = pinned;
@@ -1384,7 +1412,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           step that raised it — which is the whole point of holding it. Rendering this card too would
           put two Approve buttons for one decision on screen. Every other prompt still lands here, so
           a Flow pane in `default` mode is no less answerable than a Chat one. */}
-      {agent.pending && !(flowOpen && agent.pending.held) && (() => {
+      {agent.pending && (() => {
         const pendingHost = isBrowserTool(agent.pending.toolName)
           ? hostOf((agent.pending.input as { url?: string })?.url) || hostOf(browser.url)
           : null;
@@ -1430,20 +1458,22 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
       )}
 
       <div className="border-t border-white/10 px-4 py-3">
-        {/* The plan strip IS the way in: collapsed it's the checklist that was always here, and one
-            click opens the same plan with each step's work under it. No mode, no hunting for a control
-            on a tile in another screen — the flow is opened from the thing it describes. */}
-        {flowOpen ? (
-          <FlowPanel
-            // The SAME turn the strip summarises, folded from the SAME `source` the transcript renders.
-            turn={flowTurn} busy={agent.busy} hold={agent.hold} pending={agent.pending} stopping={agent.stopping}
-            onSetHold={agent.setHold} onRespond={agent.respond} onStop={agent.stop}
-            onClose={() => setFlowOpen(false)}
-          />
-        ) : (
-          <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => setFlowOpen(true)} />
-        )}
+        {/* Two doors, ONE destination — the canvas in the bento column. The strip is the in-chat door
+            (you're reading a reply and want to see the shape of what it's doing); the switch on the
+            tile is the from-the-grid one. Both raise the same expanded tile on the left, so there is no
+            second flow surface to keep in sync with this one. */}
+        <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(sessionId)} />
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          {/* The brake. It lived in the flow panel's header, which is gone — and it is a SESSION control
+              (like Plan/Code and the approval level), not a property of a view, so this row is where it
+              always belonged. Armed, the server parks the next tool call instead of auto-approving it;
+              the pane's own permission prompt is then what you answer. */}
+          <button onClick={() => agent.setHold(!agent.hold)}
+            title={agent.hold ? "Release — stop parking tool calls at the gate" : "Pause after the current step — park the next tool call for review"}
+            className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[10px] transition-colors ${
+              agent.hold ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]" : "border-white/10 text-neutral-500 hover:text-neutral-300"}`}>
+            {agent.hold ? "▶ release" : "⏸ pause"}
+          </button>
           {/* Plan vs Code — default Code. Plan proposes without applying. */}
           <div className="flex items-center rounded-lg border border-white/10 p-0.5" title="Plan proposes changes first; Code executes">
             {([["code", false], ["plan", true]] as const).map(([label, on]) => (
