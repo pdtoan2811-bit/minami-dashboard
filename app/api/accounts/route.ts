@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { checkModelPins } from "@/lib/model-pins";
+import { readPreferred, writePreferred, isPinned } from "@/lib/preferred-account";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -21,7 +22,8 @@ function run(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: str
 }
 
 // The account we WANT to be running on. Falling off it is what the alert exists to catch.
-const PREFERRED = process.env.MINAMI_PREFERRED_ACCOUNT || "oedevai2@gmail.com";
+// Chosen in Settings and stored on disk — see lib/preferred-account.ts for why it can't be a
+// `useSetting`. Read per-request so a change in the UI lands on the next 30s poll.
 
 // Ground truth for "which account is Claude Code ACTUALLY authenticated as".
 //
@@ -61,13 +63,17 @@ export async function GET() {
   try {
     const doc = JSON.parse(stdout);
     const live = liveIdentity();
+    const preferred = readPreferred();
     return Response.json({
       ...doc,
       live: {
         ...live,
-        preferred: PREFERRED,
+        preferred,
+        // Whether someone actually chose it, vs. it being the shipped fallback. Settings shows
+        // this so an unpinned default doesn't masquerade as a deliberate decision.
+        preferredPinned: isPinned(),
         // The alert's trigger: we know who we really are, and it isn't who we want to be.
-        offPreferred: live.email != null && live.email !== PREFERRED,
+        offPreferred: live.email != null && live.email !== preferred,
         // The CLI's own banner disagreeing with reality — worth surfacing separately, because it
         // means "just switch back" may report success without actually changing anything.
         claimsMismatch: live.email != null && typeof doc?.active === "string" && doc.active !== live.email,
@@ -90,4 +96,42 @@ export async function POST(req: Request) {
   const { ok, stdout, stderr } = await run(["switch", target]);
   if (!ok) return Response.json({ error: stderr || "switch failed" }, { status: 502 });
   return Response.json({ ok: true, output: stdout });
+}
+
+// PUT /api/accounts { preferred } → change which account the alert measures against.
+//
+// Deliberately separate from POST: POST *switches the live credential* (a side effect that kills
+// every running `claude` on the box), PUT only records an intention. Conflating them would mean
+// picking a target in Settings silently rewrote the Keychain and dropped your sessions.
+export async function PUT(req: Request) {
+  let preferred = "";
+  try { ({ preferred } = await req.json()); } catch { /* bad body */ }
+  if (!preferred || typeof preferred !== "string") {
+    return Response.json({ error: "missing preferred" }, { status: 400 });
+  }
+
+  // Only accept an account token-slayer actually manages. A typo'd address would otherwise pin
+  // the alert to an account that can never be live, leaving it stuck red with no way to read why.
+  const { ok, stdout } = await run(["status", "--json"]);
+  if (ok) {
+    try {
+      const doc = JSON.parse(stdout);
+      const pool: string[] = (doc?.accounts ?? [])
+        .map((a: { email?: string; name?: string }) => a.email || a.name)
+        .filter((e: unknown): e is string => typeof e === "string" && e.length > 0);
+      if (pool.length && !pool.includes(preferred)) {
+        return Response.json(
+          { error: `"${preferred}" is not in the token-slayer pool`, pool },
+          { status: 400 }
+        );
+      }
+    } catch { /* unparsable status — don't block the write on it */ }
+  }
+
+  try {
+    writePreferred(preferred);
+  } catch (e) {
+    return Response.json({ error: (e as Error).message }, { status: 500 });
+  }
+  return Response.json({ ok: true, preferred: readPreferred(), preferredPinned: isPinned() });
 }

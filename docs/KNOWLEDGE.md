@@ -43,7 +43,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Transcript CLI | `bin/transcript.mjs` | **shipped** | full history, no server, no caps — see §1 |
 | Client SSE | `lib/use-agent.ts` | **shipped** | reconnect-aware |
 | Metrics collector | `server/metrics-server.js` | **shipped** | systemd on Hetzner |
-| Account bridge | `app/api/accounts` | **shipped** | reads ground-truth identity |
+| Account bridge | `app/api/accounts` | **shipped** | ground-truth identity; preferred account set in Settings |
 | Browser panel | `lib/browser-view.ts` + `components/BrowserPanel.tsx` | **shipped** | derived from tool results; observer-only — see §5b |
 | Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | can create folders; cwd validated — see §5d |
 | Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
@@ -648,10 +648,23 @@ micro**. Everything inside reads that one name.
   would demote to `micro` and re-promote on reveal.
 
 What each tier gives up, in order: the header's **goal subtitle** (the pane's category — true all
-session, read once, and the tab strip and bento tile both still say it) → **the flow strip and mode row
-merge into one 22px utility bar**, the strip becoming a chip and the six controls folding into a
-`code · bypass` pill → padding and gaps → at `micro`, the bar itself, the project icon and the 📎.
-Net effect at four panes: **transcript 146px → ~232px**.
+session, read once, and the tab strip and bento tile both still say it) → **the mode row folds into a
+`code · bypass` pill** → padding and gaps → at `micro`, the utility bar itself, the project icon and the
+📎. Net effect at four panes: **transcript 146px → ~232px**.
+
+**The flow strip is no longer part of that ladder — it is a chip at every tier.** It used to have a
+full-width form that took its own row (~42px with its margin) and folded to a chip only when cramped,
+which was affordable while the 2×2 grid was the default view: the wide form only appeared in a large
+pane. Tabs-first inverted that. The pane you are reading is now *always* `roomy`, so "the roomy
+treatment" stopped meaning "occasionally" and started meaning "always" — a permanent row, in every pane,
+for a label. The chip sits on the control row beside Plan/Code and the approval chips, and the wide
+variant is deleted rather than left unreachable.
+
+The one thing the wide form carried that the chip can't is `detail`, the running step's title. That is
+already said by the activity line at the other end of the same row, so it moved to the tooltip instead
+of being lost, and the chip's label tints while a step is in progress. The rule this control must not
+break is still met: **the door is visible at rest** — v1's only appeared on hover, on a tile, in another
+view, which is the whole reason nobody found it.
 
 **The folded pill and the full row are one component** (`ModeControls`). The approval level is the most
 dangerous thing in this UI to be wrong about — two renderings of it, drifting, is the failure worth
@@ -1436,7 +1449,29 @@ credential it actually authenticated with. `/api/accounts` layers a `live` block
 `offPreferred` and `claimsMismatch`. `AccountStatus` triggers on it and **re-verifies after
 switching** rather than believing the CLI's reported success.
 
+### The preferred account is chosen in Settings, and lives on disk
+
+`lib/preferred-account.ts` stores it in `~/.minami/account.json` (override: `MINAMI_ACCOUNT_CONFIG`).
+It cannot be a `useSetting` — the thing that reads it is this API route inside next-server, which has
+no browser to ask, and `AccountStatus` is mounted globally in `app/layout.tsx`. Same reasoning as
+`lib/autopilot/config.ts`. Read per-request, so a change in Settings lands on the next 30s poll.
+
+Precedence is **file → `MINAMI_PREFERRED_ACCOUNT` → built-in fallback**, deliberately in that order.
+Env-var-wins is the obvious alternative and it's wrong: on any machine that sets the var, the
+Settings control would silently do nothing, which is a dead switch that costs an hour to diagnose.
+The env var is a seed for a fresh install; once you pick an account, your choice is the answer.
+`live.preferredPinned` distinguishes "someone chose this" from "nobody has, this is the fallback".
+
+**Two verbs, kept apart on purpose.** `POST` switches the live credential — a side effect that
+rewrites the shared Keychain entry and kills every running `claude` on the box. `PUT` only records
+which account *should* be live. Conflating them would mean picking a target in Settings silently
+dropped your sessions. `PUT` also rejects any address not in the token-slayer pool, because a typo
+would pin the alert to an account that can never go live, leaving it stuck red with no way to read why.
+
 ### Caveats
+- The shipped fallback in `preferred-account.ts` is **hand-synced with the pool**. `tok setup` can
+  remove an account, and a fallback naming a deleted one makes the panel flag every healthy session
+  as wrong-account. Pin a real choice in Settings rather than relying on the fallback.
 - `oauthAccount.displayName` goes stale across switches (read "OE Dev" while every UUID said
   `pdtoan2811`). Use the UUID/email fields; the display name is cosmetic.
 - token-slayer's stored slot for a pooled account can be a **degraded capture** (`oauth_account`,
@@ -2055,6 +2090,23 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Preferred account is now chosen in Settings** (§6) — new `lib/preferred-account.ts` persists it to
+  `~/.minami/account.json`, `GET /api/accounts` reads it per-request, and a new `PUT` sets it.
+  `components/PreferredAccountPanel.tsx` adds the Account section. It had been a module-level
+  constant defaulting to `oedevai2@gmail.com`, which `tok setup` deleted from the pool — so the
+  header alert was firing on every healthy session, comparing the live credential against an account
+  that no longer existed. `PUT` is separate from `POST` because `POST` rewrites the Keychain and kills
+  running sessions; choosing a target must not do that. Verified live on :3001 — valid write pins and
+  flips `offPreferred`, a non-pool address and an empty body both 400 and leave the file untouched.
+  *Reported by user: "set the minami dashboard email token cli to oedevai5@gmail.com" → "change the
+  minami dashboard so I can switch it inside the setting"*
+- **The flow strip stops being a row** (§5e, §5f) — it is a chip on the control row at every density
+  tier, next to Plan/Code and the approval chips, and the full-width variant is deleted. It cost ~42px
+  of every pane permanently: the wide form folded to a chip only when cramped, which was fine while the
+  2×2 grid was the default and the wide form was therefore rare, but tabs-first made every pane you read
+  `roomy`, so "sometimes" became "always". The running step's title moves to the tooltip — the activity
+  line at the other end of the same row already says it — and the chip tints while a step is running.
+  *Reported by user: "the flow section is still there taking extra space".*
 - **Task preview ports can no longer collide** (§9) — `portFor()` hashed a name to one of 40 slots with
   no collision check, under a comment promising there'd be no collision; `bell-anchor` and
   `resume-audit2` were both on :3024. The hash now picks a preferred slot, clashes probe forward in
