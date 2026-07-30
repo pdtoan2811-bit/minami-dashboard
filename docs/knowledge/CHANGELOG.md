@@ -9,6 +9,13 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-30
+- **Settings' toggle was being squashed by its own description** (§5e) — `Toggle` lacked the `shrink-0`
+  that `Segmented` got when the same bug hit it, so as a flex item opposite a long description it
+  shrank: Agent view's track rendered 25.4px instead of 44px, and because the knob is absolutely
+  positioned at a fixed 20px, what was left read as a bare circle rather than a switch. It toggled
+  correctly the whole time, which is why it survived every functional check.
+  *Reported by user: "the agent toggle in the setting still error - the toggle is broken, not a normal
+  toggle".*
 - **Five-round audit of the agents view; 18 findings, 14 fixed** (§14, §5e) — run as five MECE passes:
   view-state plumbing, registry CRUD, scaffold/adopt, the task runner, and attribution/UI. The three
   that mattered: a **setting toggle that did nothing until you reloaded** (`useSetting` had no

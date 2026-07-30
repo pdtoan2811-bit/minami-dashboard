@@ -8,7 +8,14 @@ import PreferredAccountPanel from "@/components/PreferredAccountPanel";
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
-    <button onClick={() => onChange(!on)} className={`relative h-6 w-11 rounded-full transition-colors ${on ? "bg-[var(--sakura)]" : "bg-white/15"}`}>
+    // shrink-0 is load-bearing, the same way it is in `Segmented`. This sits in a `justify-between`
+    // row beside a description paragraph, so as a flex item it defaults to shrink:1 — and a row whose
+    // text is long enough to overflow pays for it out of the toggle. The track collapsed from 44px to
+    // 25px on "Agent view" (two-line description) while "Show tool logs" stayed 44px, and since the
+    // knob is absolutely positioned at a fixed 20px it kept its size: what's left reads as a bare
+    // circle, not a switch. The width is the control's meaning here — there is nowhere for the knob
+    // to travel — so it must never be the thing that gives.
+    <button onClick={() => onChange(!on)} className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${on ? "bg-[var(--sakura)]" : "bg-white/15"}`}>
       <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${on ? "translate-x-[18px]" : "translate-x-0"}`} />
     </button>
   );

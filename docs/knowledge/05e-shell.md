@@ -619,6 +619,26 @@ The lone `⏸ pause` button beside them is padded as `border p-0.5` around an in
 than padded directly, purely so its box metrics equal a one-option `Segmented`. Styled the obvious
 way it sat 4px shorter than its neighbours — a difference you see without being able to name.
 
+> 🐛 **The same flex-shrink bug, in the switch nobody re-checked.** `shrink-0` was added to
+> `Segmented` when `auto-edits` wrapped mid-word, and the fix stopped there. `Toggle` in
+> `app/settings/page.tsx` sits in the *same* `justify-between` row opposite the *same* description
+> paragraph and never got it, so it kept `flex-shrink: 1`. Measured on the live build: **Agent view's
+> track rendered 25.4px against its declared `w-11` (44px)**, while `Show tool logs` — same component,
+> one-line description, row doesn't overflow — rendered a correct 44px. The knob is
+> `absolute … h-5 w-5`, so it does *not* shrink with the track; a 20px knob in a 25px track leaves
+> ~5px of visible pill and the control reads as a plain circle. It still toggled, which is why this
+> survived: every functional check passed, and `agentMode` had already been blamed once before (see
+> the invisible-write post-mortem above), so "the agent toggle is broken" looked like a repeat of a
+> bug that was actually fixed.
+>
+> *Reported by user: "the agent toggle in the setting still error … the toggle is broken - not a
+> normal toggle".*
+>
+> The general shape: **when a control's width carries its meaning, it must never be the flex item
+> that gives.** A switch has nowhere for the knob to travel once the track collapses. Audited the rest
+> — `AutopilotPanel`, `AutopilotTile` and `Segmented` all already carry `shrink-0`; settings' `Toggle`
+> was the only one missing it.
+
 **The theme was only ever half-committed.** The bento board and `/settings` force dark with
 `.bg-bento`; `/dashboard`'s cards were the only surface carrying `dark:` variants, and the root layout
 left the choice to the OS. On a machine preferring light, `/dashboard` therefore rendered light while
