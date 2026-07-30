@@ -9,6 +9,13 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-30
+- **The ask card's "Other" answer could be typed but not sent** (§5e) — typing selected the Other row,
+  but clicking that row ran the plain toggle and deselected it, stranding the typed text on screen
+  behind a disabled Send; focus still chased the row the click had switched off, so it read as a dead
+  button. The Other row now selects-and-never-deselects while it holds text, and focus only follows a
+  click that leaves it on. Matters beyond annoyance: a stranded ask card holds the pane at
+  `phase=awaiting`, which starves any deploy waiting for quiet (§8). Multi-select also de-dupes now.
+  *Reported by user: "cant send the other text detail answer option".*
 - **The knowledge record is an index over `docs/knowledge/`** — it had reached 2,507 lines / ~46k tokens,
   so opening it cost about a quarter of a session's context to answer a question about one module, and
   the rational move became not reading it. Split at `##` boundaries into 16 per-subsystem files plus this

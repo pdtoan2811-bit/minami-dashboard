@@ -220,7 +220,7 @@ the pool. Iteration is name-sorted so a glyph doesn't reshuffle when the grid's 
 ### The ask card — one question at a time, and one visible answer
 
 `AskUserQuestion` arrives through the same `canUseTool` hook as a permission prompt (§3) and renders as
-a wizard. Three rules, each of them a bug that was reported:
+a wizard. Four rules, each of them a bug that was reported:
 
 - **"Other" is an option, not a side channel.** It is the last row of the same list, it selects like any
   other row, and typing in it selects it. Previously the free text and the chips were independent state
@@ -234,9 +234,33 @@ a wizard. Three rules, each of them a bug that was reported:
   know — the previous hint was 10px grey text in the footer corner.
 - **One option per row.** The old `flex-wrap` chip row put option 3 above option 2 at some pane widths,
   so the same list reordered itself as the panel resized.
+- **The Other row follows its text.** Text in the field means the row is part of the answer, and no
+  click can withdraw it — only clearing the field can. Selection and free text are one state, so no
+  gesture can leave a typed answer on screen that Send refuses to send.
 
 The footer states the outcome rather than the rules: `sending: <the exact strings that will be sent>`.
 Anything the card can't answer honestly (an empty Other row) is dropped rather than sent as `""`.
+
+> 🐛 **You could type an answer into "Other" and then be unable to send it.** Rule 1 made typing select
+> the Other row — correct — but the row's `onClick` was still the plain `toggle`, which read a click on
+> an already-selected row as "deselect". So the sequence *type your answer → click the row* cleared the
+> selection while leaving the text sitting in the field: `answerFor()` saw an empty `sel`, returned
+> `null`, and **Send went disabled with the answer visibly on screen**. Nothing named the cause, and the
+> obvious recovery — clicking the row again — just toggled it back off on the next click. `toggle` then
+> called `otherRef.focus()` unconditionally, so the click that switched the row *off* still put the
+> caret in it, which is why it read as a dead button rather than a deselect. Easy to hit by accident
+> too: the input sits inside the row, so the padding around it is all click target.
+>
+> This one is not merely annoying. An unanswered `AskUserQuestion` holds the session at
+> `phase=awaiting`, which is busy forever (§8) — so a stranded ask card blocks the pane *and* starves
+> any deploy waiting for the box to go quiet, with `--wait` unable to win.
+>
+> Fix: while the Other field holds text, its row selects and never deselects (rule 4 above), and focus
+> only follows a click that leaves the row on. Clearing the field remains the way to withdraw.
+> *Reported by user: "cant send the other text detail answer option".*
+>
+> Found in the same audit: multi-select could send a duplicate when a typed value equalled an already
+> ticked label (`["A","A"]`); `picks` is now de-duped.
 
 ### Motion, scroll and render cost
 
