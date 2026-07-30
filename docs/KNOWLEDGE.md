@@ -1418,6 +1418,23 @@ mattering. Not built.
 
 ## 10. Out-of-pane alerts — `bin/minami-event.mjs`, `lib/events.ts`, `components/NotificationBell.tsx`
 
+### The bell is anchored to the viewport, not to the bento
+
+It used to live in the bento header with `ml-auto` — right-aligned inside a column whose width is a
+*user preference*. Measured consequences: opening a project slid it **770 px** left (x=992 → x=222),
+and collapsing the bento to a rail removed it **entirely**, because that header isn't rendered in rail
+mode at all. A standing alert surface you reach for by muscle memory cannot live in a container that
+moves, and one you cannot reach in a whole layout mode is worse than one that moves.
+
+It is now a single `fixed right-3 top-2.5 z-[60]` mount at the page root: identical coordinates
+(left 1236, top 10) in all three states, verified clickable in each with `elementFromPoint` rather than
+by eye. `z-[60]` sits above the panel/bento headers (z-20/z-30) and below the lightbox and folder
+picker (z-[90]/z-[100]), so a modal still covers it.
+
+The two headers reserve its gutter rather than the bell knowing about them: the panel header uses
+`pr-14` so `esc ✕` clears it, and the bento header uses `pr-16` **only when no project is open**, since
+that is the sole state where the bento's right edge reaches the viewport corner.
+
 **The condition:** the dashboard could already alert you — `lib/use-notify.ts` fires a native
 notification plus a flashing tab title when a pane finishes a turn, needs approval, or asks a
 question. But every one of those is produced *inside a React tree*, and the alert is deliberately
@@ -1752,6 +1769,12 @@ on a timer is just a slower way to fail.
   initial framing. All five came from splicing v1's source into a component with different data
   guarantees; all five type-checked and built.
   *Prompted by user: "audit them again and revise yourself to see if you slopped".*
+- **The notification bell no longer moves with the bento** (§10) — it lived in the bento header with
+  `ml-auto`, so opening a project slid it 770 px left (x=992 → x=222) and collapsing to a rail removed
+  it entirely. Now one viewport-fixed mount at the top-right corner: same coordinates in all three
+  states, and reachable in rail mode for the first time. Both headers reserve its gutter.
+  *Reported by user: "need a better placement and position for notification since it shift accordingly
+  to the bento size".*
 - **Flow is a canvas in the bento column again** (§5f) — a `flow` switch on each tile expands that tile
   into the React Flow graph, full-width and three rows tall, with the other tiles reflowing around it
   via the `layout` animation they already had. The minimap and zoom controls stay gone; `fitView` with a

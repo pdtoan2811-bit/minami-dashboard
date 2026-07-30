@@ -587,7 +587,9 @@ export default function BentoHome() {
       // window's. At a 60% chat panel this column is ~500px on a wide display — plenty of window,
       // nowhere near enough column, and the old `md:` breakpoints happily overflowed it.
       <div className={`@container flex min-w-0 flex-col w-full md:w-[var(--lw)] ${proj ? "hidden md:flex" : ""} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
-        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-6 pb-2 pt-5">
+        {/* Only the full-width (no project open) case needs the bell's gutter: with a panel open the
+            bento is a left column whose right edge is nowhere near the viewport corner. */}
+        <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 pb-2 pl-6 pt-5 ${proj ? "pr-6" : "pr-16"}`}>
           <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">Minami Bento</h1>
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
@@ -607,9 +609,6 @@ export default function BentoHome() {
                 nothing to tell you they were the same idea. */}
             {proj && <button onClick={() => setRail(true)} title="Collapse the bento to a rail  (⌘B)" aria-label="Collapse the bento to a rail"
               className="hidden rounded-lg border border-white/10 p-1.5 text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-200 md:block"><PanelLeftClose className="h-3.5 w-3.5" /></button>}
-            {/* Out-of-pane alerts (deploys, worktree builds). Distinct from the per-pane notify()
-                calls below, which are transient by design — these have bodies worth re-reading. */}
-            <NotificationBell />
             <Nav />
           </div>
         </header>
@@ -798,7 +797,10 @@ export default function BentoHome() {
       <div className={`min-h-0 bg-neutral-900/50 w-full ${railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {proj && (
           <>
-            <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2.5">
+            {/* pr-14, not px-4: the notification bell is fixed to the viewport's top-right corner and
+                would otherwise sit on top of `esc ✕`. Reserving the gutter here keeps the two apart
+                without the bell having to know anything about this panel. */}
+            <div className="flex items-center gap-3 border-b border-white/10 py-2.5 pl-4 pr-14">
               {/* Title, repo link (full + clickable) and tech icons — one scrollable row so a long repo
                   path stays complete without ever pushing the count / add-chat / esc controls off-screen. */}
               <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -850,6 +852,20 @@ export default function BentoHome() {
           </>
         )}
       </div>
+
+      {/* Out-of-pane alerts (deploys, worktree builds). Distinct from the per-pane notify() calls,
+          which are transient by design — these have bodies worth re-reading.
+
+          Anchored to the VIEWPORT, not to the bento. It used to sit in the bento header with
+          `ml-auto`, i.e. right-aligned inside a column whose width is a user preference — so it slid
+          770px left the moment a project opened (measured: x=992 → x=222), and vanished outright in
+          rail mode, because that header isn't rendered at all there. A control you reach for by
+          muscle memory cannot live in a container that moves; alerts belong to the app, not to the
+          panel you happen to have open.
+
+          z-[60] is deliberate: above the panel/bento headers (z-20/z-30) so it's always clickable,
+          below the lightbox and folder picker (z-[90]/z-[100]) so a modal still covers it. */}
+      <div className="fixed right-3 top-2.5 z-[60]"><NotificationBell /></div>
 
       {picker && <FolderPicker onPick={startTopic} onClose={() => setPicker(false)} />}
     </div>
