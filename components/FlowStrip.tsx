@@ -23,7 +23,7 @@ import { type FlowTurn } from "@/lib/flow-model";
  *  It also stays put while a turn is running but has produced no steps yet, so the control lives in
  *  one place your eye can learn rather than appearing and vanishing mid-turn.
  */
-export function FlowStrip({ turn, busy, compact, onOpen }: { turn: FlowTurn | undefined; busy: boolean; compact?: boolean; onOpen: () => void }) {
+export function FlowStrip({ turn, busy, onOpen }: { turn: FlowTurn | undefined; busy: boolean; onOpen: () => void }) {
   const steps = turn?.steps ?? [];
   if (!steps.length && !busy) return null;
 
@@ -40,34 +40,26 @@ export function FlowStrip({ turn, busy, compact, onOpen }: { turn: FlowTurn | un
     : planned && done === steps.length ? "all steps done"
     : actions ? `${actions} action${actions === 1 ? "" : "s"}` : "";
 
-  // Cramped, the strip gives up its own row and becomes a chip in the pane's utility bar (see the
-  // density tiers in lib/density.ts). It keeps the count — "flow · 19 steps" is the part that tells you
-  // whether opening it is worth the room — and drops the running-step detail, which is already said by
-  // the activity line two inches to the right. Same button, same handler, same one door.
-  if (compact) {
-    return (
-      <button onClick={onOpen}
-        title={detail ? `${label} — ${detail}` : "Open the flow — review each step, pause and steer"}
-        className="flex shrink-0 items-center gap-1 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-300">
-        <ListChecks className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
-        <span className="whitespace-nowrap">{label}</span>
-        <ChevronRight className="h-2.5 w-2.5 shrink-0" />
-      </button>
-    );
-  }
-
+  // It is a CHIP, and only a chip. There used to be a second, full-width form that took its own row
+  // above the composer; that was affordable while the 2×2 grid was the default view and the wide form
+  // only appeared in a large pane, but with tabs-first every pane you read is large, so "sometimes"
+  // became "always" — a permanent ~42px of the transcript, per pane, for a label.
+  //
+  // What the wide form carried and this doesn't is `detail` — the running step's title. That is already
+  // said by the activity line at the other end of the same row, so it moves to the tooltip rather than
+  // being lost. The count stays visible, because "flow · 19 steps" is the part that tells you whether
+  // opening it is worth the room.
+  //
+  // The affordance is still visible at rest, which is the one rule this control must not break: v1's
+  // door only appeared on hover, on a tile, in another view, which is the whole reason nobody found it.
   return (
     <button onClick={onOpen}
-      title="Open the flow — review each step, pause and steer"
-      className="mb-2 flex w-full items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-left transition-colors hover:border-white/25 hover:bg-white/[0.04]">
-      <ListChecks className="h-3 w-3 shrink-0 text-neutral-500" strokeWidth={2.5} />
-      <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-neutral-500">{label}</span>
-      <span className={`min-w-0 flex-1 truncate text-xs ${now ? "text-[var(--sakura)]" : "text-neutral-500"}`}>{detail}</span>
-      {/* The affordance has to be visible at rest. v1's control only appeared on hover, on a tile, in
-          another view — which is the whole reason nobody could find it. */}
-      <span className="flex shrink-0 items-center gap-0.5 rounded-md border border-white/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-neutral-500">
-        flow <ChevronRight className="h-2.5 w-2.5" />
-      </span>
+      title={detail ? `${label} — ${detail}` : "Open the flow — review each step, pause and steer"}
+      className="flex shrink-0 items-center gap-1 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-300">
+      <ListChecks className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+      {/* Tinted while a step is actually running — the one moment the flow is worth opening mid-turn. */}
+      <span className={`whitespace-nowrap ${now ? "text-[var(--sakura)]" : ""}`}>{label}</span>
+      <ChevronRight className="h-2.5 w-2.5 shrink-0" />
     </button>
   );
 }

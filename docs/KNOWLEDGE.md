@@ -648,10 +648,23 @@ micro**. Everything inside reads that one name.
   would demote to `micro` and re-promote on reveal.
 
 What each tier gives up, in order: the header's **goal subtitle** (the pane's category — true all
-session, read once, and the tab strip and bento tile both still say it) → **the flow strip and mode row
-merge into one 22px utility bar**, the strip becoming a chip and the six controls folding into a
-`code · bypass` pill → padding and gaps → at `micro`, the bar itself, the project icon and the 📎.
-Net effect at four panes: **transcript 146px → ~232px**.
+session, read once, and the tab strip and bento tile both still say it) → **the mode row folds into a
+`code · bypass` pill** → padding and gaps → at `micro`, the utility bar itself, the project icon and the
+📎. Net effect at four panes: **transcript 146px → ~232px**.
+
+**The flow strip is no longer part of that ladder — it is a chip at every tier.** It used to have a
+full-width form that took its own row (~42px with its margin) and folded to a chip only when cramped,
+which was affordable while the 2×2 grid was the default view: the wide form only appeared in a large
+pane. Tabs-first inverted that. The pane you are reading is now *always* `roomy`, so "the roomy
+treatment" stopped meaning "occasionally" and started meaning "always" — a permanent row, in every pane,
+for a label. The chip sits on the control row beside Plan/Code and the approval chips, and the wide
+variant is deleted rather than left unreachable.
+
+The one thing the wide form carried that the chip can't is `detail`, the running step's title. That is
+already said by the activity line at the other end of the same row, so it moved to the tooltip instead
+of being lost, and the chip's label tints while a step is in progress. The rule this control must not
+break is still met: **the door is visible at rest** — v1's only appeared on hover, on a tile, in another
+view, which is the whole reason nobody found it.
 
 **The folded pill and the full row are one component** (`ModeControls`). The approval level is the most
 dangerous thing in this UI to be wrong about — two renderings of it, drifting, is the failure worth
@@ -2055,6 +2068,13 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **The flow strip stops being a row** (§5e, §5f) — it is a chip on the control row at every density
+  tier, next to Plan/Code and the approval chips, and the full-width variant is deleted. It cost ~42px
+  of every pane permanently: the wide form folded to a chip only when cramped, which was fine while the
+  2×2 grid was the default and the wide form was therefore rare, but tabs-first made every pane you read
+  `roomy`, so "sometimes" became "always". The running step's title moves to the tooltip — the activity
+  line at the other end of the same row already says it — and the chip tints while a step is running.
+  *Reported by user: "the flow section is still there taking extra space".*
 - **Task preview ports can no longer collide** (§9) — `portFor()` hashed a name to one of 40 slots with
   no collision check, under a comment promising there'd be no collision; `bell-anchor` and
   `resume-audit2` were both on :3024. The hash now picks a preferred slot, clashes probe forward in
