@@ -133,11 +133,17 @@ export const NODES: ModuleNode[] = [
   { id: "c/FlowCanvas", label: "FlowCanvas", sub: "step graph in the bento\n(React Flow, no minimap)", layer: "component", row: 21, pipeline: "live" },
   { id: "l/flowmodel", label: "flow-model.ts", sub: "transcript → step graph\n(TodoWrite + TaskCreate)", layer: "core", row: 16, pipeline: "live" },
   { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
+
+  // ── Density: how much chrome a box may spend (KNOWLEDGE.md §5e) ─────────
+  { id: "l/density", label: "density.ts", sub: "measured tiers + context\n(roomy · snug · tight · micro)", layer: "core", row: 20 },
 ];
 
 export const EDGES: ModuleEdge[] = [
   // surfaces → components (static imports)
   { from: "app/page", to: "c/Composer", kind: "import" },
+  // page.tsx measures each pane and PROVIDES the tier; Composer is the one leaf that consumes it.
+  { from: "app/page", to: "l/density", kind: "import" },
+  { from: "c/Composer", to: "l/density", kind: "import" },
   { from: "app/page", to: "c/AskCard", kind: "import" },
   { from: "app/page", to: "c/BrowserPanel", kind: "import" },
   { from: "app/page", to: "c/BrowserLightbox", kind: "import" },
