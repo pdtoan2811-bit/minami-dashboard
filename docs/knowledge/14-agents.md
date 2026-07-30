@@ -51,6 +51,19 @@ turn, the workspace whitelist) is the cost of that split, and it's the whole val
 - `model` is honoured **only at session creation** (`ensureSession`). A warm session keeps the model
   it was born with — same caveat `lib/model-pins.ts` states about account switching. The config form
   says so; without that, "I changed the model and it kept using the old one" reads as a bug.
+- **Config input is rejected, not coerced.** A model id must look like one (`claude-…`), an approval
+  level must be a real one, and a workspace must be a folder that exists. Each was previously accepted
+  and each failed far from the cause: `gpt-4-turbo` sat at "running" for the full 90-second spawn
+  grace and then failed with *"The session never started — check the folder exists and the CLI is
+  logged in"*, naming two things that were both fine; an unrecognised approval level was silently
+  coerced by `safeMode()` to `default`, the one mode that makes unattended tasks impossible.
+- **`~` is expanded by `expandHome()` on every path in, both create and inspect.** They disagreed:
+  the dialog cheerfully reported on `~/brains/researcher` and then the submit failed with "home must
+  be an absolute path".
+- **A registry file that won't parse is reported on the roster**, not skipped in silence. These files
+  are documented as hand-editable, so a typo is a normal event — and its agent simply vanishing reads
+  as "the agent is gone". The task file gets the same treatment: unreadable is copied to
+  `.corrupt` and logged, because the next write replaces it wholesale.
 - Model ids live in `lib/model-catalog.ts`, re-exported from `lib/model-pins.ts`. The catalog is a
   separate leaf module *only* because `model-pins.ts` reads `~/Minami` off disk and the picker runs in
   the browser. Don't inline a model id in a component — that's the drift `model-pins.ts` exists to
@@ -94,6 +107,14 @@ home/
   that fails the moment anyone talks to it; splitting the two leaves one orphaned on every failure.
 - **The dialog inspects as you type** (`/api/agents/inspect`), so "adopting a folder with 33 past
   sessions" is visible *before* you commit, not reported after.
+- **The note structure is only imposed on a brain being created**, or on a folder already shaped that
+  way. Adopting a code repo used to add four empty vault directories to it, plus a `00-09 System/`
+  that existed solely to hold the activity log — untracked noise in someone's git status. An adopted
+  folder keeps its own shape and gets `.claude/agent-activity.md` instead; `activityFileFor()` picks
+  per call, so a folder that gains a note structure later starts using it with no migration.
+- **Two agents may not share a home** (409). Not a cosmetic duplicate: "every session in an agent's
+  home is its own" cannot be true for both, so each would claim the other's conversations as history
+  and both would write into one `MEMORY.md`. Cheap to refuse, impossible to untangle after the fact.
 - **Adoption inherits history immediately** — every transcript already in that folder becomes the
   agent's. That is the point of offering adoption at all.
 - **The interview is a real session, not a form.** `POST /api/agents/:id/onboard` sends
@@ -103,6 +124,30 @@ home/
 - The scaffolded `CLAUDE.md` is deliberately **full of TODOs**. A template of confident placeholder
   prose reads as finished and never gets filled in; holes invite the interview that closes them. The
   roster and the detail header both nag until `onboardedAt` is set.
+
+> 🐛 **The interview looked like a hang.** The pane opened scrolled to the *top* of the conversation.
+> `AgentChat` only followed the tail when already near it — sensible while streaming, wrong on mount,
+> where `scrollTop` is 0 against a tall transcript so the condition is never true. The onboarding
+> prompt is long, so the question card sat ~1000px below the fold while the header and the composer
+> both read "waiting on your answer" and nothing on screen suggested scrolling. The feature's
+> centrepiece appeared broken. Now the first paint after a transcript arrives jumps to the bottom
+> outright (after two animation frames — markdown and code blocks are still being laid out when the
+> effect runs, and one frame still lands short), and any arriving question or permission prompt
+> scrolls itself into view wherever you were reading.
+
+> 🐛 **The reply was rendered twice while a turn was parked.** Attaching to a session waiting on a
+> question showed the assistant's message, then the reasoning block, then the same message again. The
+> in-flight message is *already on disk* — a turn that stops at a tool call has had its assistant
+> message written out, that being the message carrying the `tool_use` — while `partial` still holds
+> the same text because the turn hasn't ended, so `seed + overlay` contained it twice. Pre-existing in
+> `lib/use-agent.ts` (§3) rather than introduced here, but the interview made it the *normal* case:
+> the flow is dispatch, then navigate, so you almost always attach to a parked turn.
+>
+> The first fix didn't work, and the reason is worth keeping: the duplicate is not the last seed turn.
+> The CLI splits one reply across **two** assistant rows when it ends in a tool call — prose in one,
+> the `tool_use` in a second whose text is empty — so comparing `partial` against `seed[last]` matched
+> an empty string every time and silently did nothing. It's the last assistant turn *with text* that
+> duplicates. Read the transcript JSON before trusting a model of it.
 
 ### Gotchas
 
@@ -160,6 +205,20 @@ actively misleading.
 Verified 2026-07-30: the wrap-up correctly wrote *nothing* to `MEMORY.md` for a trivial task and said
 so, which is what the prompt asks for ("an honest empty is better than padding").
 
+> 🐛 **Stopping a run reported it as a success.** Stop set the task to `stopped`; ten seconds later the
+> driver overwrote it with `done`. `stopTask` interrupts the turn, which makes `busy` go false — and
+> from inside `awaitTurn()` that is indistinguishable from a natural finish. Three consequences, each
+> worse than the last: the status flipped back to `done`; the activity log recorded "done" directly
+> beneath the agent's *own* note saying "Interrupted after 1–31; user ended run mid-task"; and the
+> harvested "result" was the agent's opening line ("I'll count from 1 to 40…"), which reads exactly
+> like a completed summary. Worst of all, the wrap-up was then sent into the session you had just
+> stopped, so the agent started working again.
+>
+> Fixed by consulting the task record — the only thing that knows a stop happened — after the turn
+> ends, and again after the wrap-up, since Stop is on screen throughout both. Found by an audit, not
+> in use: a stopped task that says "done" is not a symptom anyone reports, it's just a wrong record
+> you later trust.
+
 ### Handoffs
 
 `handoffTo` chains a second agent onto the first's result, and the chain fires **after** the
@@ -185,6 +244,15 @@ The History tab badges each row `home` or `task` so this is visible rather than 
 and cuts to 60, which is right for painting the grid and wrong for "everything this agent has ever
 done": an agent whose folder went quiet for a fortnight would show an empty history while its
 transcripts sat untouched on disk.
+
+> 🐛 **The whole History tab was links to nowhere.** Every row, and the task panel's "Open transcript",
+> pointed at `/?session=<id>` — and nothing in this app has ever read a `session` query param. The
+> board simply opened as normal, so the tab looked entirely functional while doing nothing. There was
+> no transcript page to link to, which is how it happened: the link was written for a destination that
+> was assumed rather than checked. Fixed by building the destination — a read-only viewer at
+> `/agents/<id>/session/<sid>`. Read-only deliberately: continuing one of these is what the Chat tab
+> is for, and offering "resume" here would put two live panes on one transcript, the two-writers case
+> `sendMessage` refuses.
 
 > ⚠ `AgentSession` names the joined task `run`, not `task`. `SessionMeta` already has a
 > `task?: string` (the bento's Project > Goal > Task label); intersecting the two under one name
@@ -229,6 +297,9 @@ detail view, `useAgent` (§3) for the chat, `FolderPicker` (§5d) for home and w
   is in.
 - **A ring only while genuinely busy.** "Live but idle" is a warm subprocess, not activity, and a
   permanently-lit tile teaches you to stop reading the light.
+- **The roster is one request.** The "Recent work" strip used to re-fetch every agent's tasks on each
+  4s tick — an N+1 that grows with the roster (eleven agents measured ~24 requests per nine seconds,
+  each re-reading the whole task file). `/api/agents` already had them in hand and now returns them.
 - The Settings toggle is `localStorage` (`bento:agentMode`) and hides the nav entry only. Agents on
   the roster keep working with it off — the server's roster doesn't care what one browser shows.
 

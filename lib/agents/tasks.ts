@@ -27,7 +27,18 @@ function load(): AgentTask[] {
   try {
     const raw = JSON.parse(fs.readFileSync(TASKS_FILE, "utf8"));
     cache = Array.isArray(raw) ? (raw as AgentTask[]) : [];
-  } catch { cache = []; }
+  } catch (e) {
+    // ENOENT is the ordinary first-run case and says nothing. Anything else means there IS a file and
+    // it could not be read — and since the next write replaces it wholesale, the old contents are
+    // about to be gone for good. Take a copy and say so on the server log; an empty task list that
+    // silently means "your history was unreadable" is indistinguishable from "you have no history".
+    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      const wreck = `${TASKS_FILE}.corrupt`;
+      try { fs.copyFileSync(TASKS_FILE, wreck); } catch { /* best effort */ }
+      console.error(`[agents] ${TASKS_FILE} is unreadable (${String((e as Error)?.message || e)}). A copy is at ${wreck}; starting from empty.`);
+    }
+    cache = [];
+  }
   return cache!;
 }
 

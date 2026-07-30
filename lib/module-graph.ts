@@ -138,6 +138,7 @@ export const NODES: ModuleNode[] = [
   { id: "l/agents-scaffold", label: "agents/scaffold.ts", sub: "scaffold or adopt a brain\n(never overwrites)", layer: "core", row: 24 },
   { id: "r/agents", label: "/api/agents/**", sub: "roster · create · patch\n· inspect · onboard · tasks", layer: "route", row: 16 },
   { id: "x/agentsdir", label: "~/.minami/agents/*.json", sub: "the roster — on disk, because the\nrunner spawns without a browser", layer: "runtime", row: 7 },
+  { id: "app/agentsession", label: "agents/[id]/session/[sid]", sub: "read-only transcript viewer\n(the History tab's destination)", layer: "surface", row: 7 },
   { id: "x/agenthome", label: "an agent's home folder", sub: "CLAUDE.md · MEMORY.md · notes\n— the substance, not the registry", layer: "runtime", row: 8 },
 
   // ── File preview (KNOWLEDGE.md §5g) ─────────────────────────────────────
@@ -212,6 +213,8 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/agents-runner", to: "l/sessions", kind: "import" },
   { from: "l/agents-runner", to: "x/agenthome", kind: "import", label: "activity log" },
   { from: "l/agents-history", to: "l/sessions", kind: "import" },
+  { from: "app/agents", to: "app/agentsession", kind: "import" },
+  { from: "app/agentsession", to: "r/session", kind: "http" },
   { from: "app/page", to: "c/ProjectIcon", kind: "import" },
   { from: "c/BentoRail", to: "c/ProjectIcon", kind: "import" },
   { from: "app/page", to: "c/FolderPicker", kind: "import" },

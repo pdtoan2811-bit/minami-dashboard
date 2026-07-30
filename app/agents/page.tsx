@@ -9,7 +9,7 @@ import AgentChat from "@/components/agents/AgentChat";
 import AgentTile from "@/components/agents/AgentTile";
 import NewAgent from "@/components/agents/NewAgent";
 import { Nav } from "@/components/Nav";
-import { ago, fetchAgents, fetchTasks, type AgentRow, type AgentTask } from "@/lib/agents/client";
+import { ago, fetchAgents, type AgentRow, type AgentTask } from "@/lib/agents/client";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
@@ -21,18 +21,19 @@ const STATUS_TINT: Record<string, string> = {
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentRow[] | null>(null);
   const [tasks, setTasks] = useState<AgentTask[]>([]);
+  const [broken, setBroken] = useState<{ file: string; reason: string }[]>([]);
   const [creating, setCreating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
+      // One request for the whole page. The strip used to fan out a per-agent task fetch on every
+      // 4s tick, which is an N+1 that grows with the roster; the route now returns `recent` itself.
       const d = await fetchAgents();
       setAgents(d.agents);
+      setTasks(d.recent || []);
+      setBroken(d.broken || []);
       setErr(null);
-      // Tasks are fetched per agent (the API is scoped that way so one agent's page stays cheap), then
-      // merged for the strip. Fine at roster size — this is a handful of agents, not a feed.
-      const all = await Promise.all(d.agents.map((a) => fetchTasks(a.id).then((x) => x.tasks).catch(() => [])));
-      setTasks(all.flat().sort((x, y) => y.createdAt - x.createdAt).slice(0, 12));
     } catch (e) {
       setErr(String((e as Error)?.message || e));
       setAgents([]);
@@ -62,6 +63,14 @@ export default function AgentsPage() {
 
       <main className="mx-auto max-w-6xl space-y-6 px-6 pb-16">
         {err && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-[12px] text-red-300">{err}</p>}
+
+        {/* A registry file that won't parse used to just drop its agent off the roster in silence —
+            which, for files this app tells you to hand-edit, reads as "the agent is gone". */}
+        {broken.map((b) => (
+          <p key={b.file} className="rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2 text-[11.5px] text-amber-200/90">
+            <b>{b.file}</b> couldn&apos;t be read, so its agent isn&apos;t listed — {b.reason}
+          </p>
+        ))}
 
         {agents && agents.length === 0 && (
           <div className="rounded-2xl border border-dashed border-white/15 px-6 py-14 text-center">

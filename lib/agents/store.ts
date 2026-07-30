@@ -42,6 +42,29 @@ function resolvePath(p: string): string {
   try { return fs.realpathSync(p); } catch { return p; }
 }
 
+/**
+ * Expand a leading `~`. The API's inspect route already did this while create did not, so typing
+ * `~/brains/researcher` in the New Agent dialog produced a cheerful "doesn't exist yet — it'll be
+ * created" and then failed the submit with "home must be an absolute path". One helper, used by both.
+ */
+export function expandHome(p: string): string {
+  const s = String(p || "").trim();
+  return s.replace(/^~(?=\/|$)/, os.homedir());
+}
+
+/**
+ * Is this a plausible Claude model id? Not a whitelist — a dated snapshot newer than the catalog has
+ * to remain settable — but enough to reject a typo or another vendor's id.
+ *
+ * Worth checking at all because of how the failure presents: an agent set to `gpt-4-turbo` accepts
+ * the config, accepts the task, sits at "running" for the full 90-second spawn grace, and then fails
+ * with "The session never started — check the folder exists and the CLI is logged in", which names
+ * two things that were both fine.
+ */
+export function isPlausibleModel(m: string): boolean {
+  return /^claude-[a-z0-9][a-z0-9.-]*$/.test(m.trim());
+}
+
 export function slugify(s: string): string {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 }
@@ -84,6 +107,30 @@ function normalize(raw: Partial<AgentDef>, id: string): AgentDef | null {
   };
 }
 
+/**
+ * Registry files that exist but couldn't be turned into an agent, and why.
+ *
+ * These files are documented as hand-editable, so a typo is a normal event — and the failure mode was
+ * that the agent simply vanished from the roster with nothing said. Collected here so the API can
+ * report them rather than presenting a silently shorter list as the truth.
+ */
+export function brokenAgentFiles(): { file: string; reason: string }[] {
+  let names: string[];
+  try { names = fs.readdirSync(AGENTS_DIR); } catch { return []; }
+  const out: { file: string; reason: string }[] = [];
+  for (const n of names) {
+    if (!n.endsWith(".json")) continue;
+    const id = n.replace(/\.json$/, "");
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(AGENTS_DIR, n), "utf8")) as Partial<AgentDef>;
+      if (!normalize(raw, id)) out.push({ file: n, reason: "no usable `home` — it must be an absolute path" });
+    } catch (e) {
+      out.push({ file: n, reason: String((e as Error)?.message || e) });
+    }
+  }
+  return out;
+}
+
 export function listAgents(): AgentDef[] {
   let names: string[];
   try { names = fs.readdirSync(AGENTS_DIR); } catch { return []; }
@@ -95,7 +142,7 @@ export function listAgents(): AgentDef[] {
       const raw = JSON.parse(fs.readFileSync(path.join(AGENTS_DIR, n), "utf8")) as Partial<AgentDef>;
       const a = normalize(raw, id);
       if (a) out.push(a);
-    } catch { /* unreadable or half-written — skip rather than break the whole roster */ }
+    } catch { /* unreadable or half-written — skip rather than break the whole roster (see brokenAgentFiles) */ }
   }
   // HQ first, then oldest-first so the roster doesn't reshuffle as you add agents.
   return out.sort((a, b) => Number(b.hq) - Number(a.hq) || a.createdAt - b.createdAt);
@@ -159,6 +206,20 @@ export function deleteAgent(id: string): boolean {
 
 export function hqAgent(): AgentDef | null {
   return listAgents().find((a) => a.hq) || null;
+}
+
+/**
+ * The agent already living in this folder, if any.
+ *
+ * Two agents sharing a home is not a harmless duplicate — it breaks the one attribution rule the
+ * whole subsystem rests on. "Every session in an agent's home folder is its own" cannot be true for
+ * both of them, so each would claim the other's conversations as its history, and both would write
+ * their memory into one MEMORY.md and one activity log. Cheap to prevent, impossible to untangle
+ * afterwards.
+ */
+export function agentAtHome(home: string, exceptId?: string): AgentDef | null {
+  const target = resolvePath(expandHome(home));
+  return listAgents().find((a) => a.id !== exceptId && a.home === target) || null;
 }
 
 /** Every folder an agent is allowed to run in. Home is always permitted; the API checks against this. */

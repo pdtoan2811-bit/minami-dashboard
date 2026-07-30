@@ -40,7 +40,9 @@ export default function AgentTile({ a }: { a: AgentRow }) {
       {working ? (
         <p className="truncate text-[11px] text-[var(--sakura)]">{a.label || a.phase}</p>
       ) : a.runningTask ? (
-        <p className="truncate text-[11px] text-amber-300/80">↻ {a.runningTask.title}</p>
+        <p className="truncate text-[11px] text-amber-300/80">
+          ↻ {a.runningTask.title}{a.runningCount > 1 ? ` +${a.runningCount - 1} more` : ""}
+        </p>
       ) : a.recentTasks?.[0] ? (
         <p className="truncate text-[11px] text-neutral-600">
           {a.recentTasks[0].status === "failed" ? "✗" : "✓"} {a.recentTasks[0].title}
