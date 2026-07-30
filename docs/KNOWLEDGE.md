@@ -1654,8 +1654,13 @@ nothing left to resolve. Moving integration to a merge is what converts silent l
 git can reason about and you can fix.
 
 ### Gotchas
-- **Ports are derived from the task name (FNV-1a → 3010–3049), never assigned round-robin.** A preview
+- **Ports are derived from the task name (FNV-1a → 3010–3099), never assigned round-robin.** A preview
   must land on the same port every time to be bookmarkable, and two tasks must not silently collide.
+  The hash picks a *preferred* slot only; clashes probe forward, walking names in sorted order so a
+  port depends solely on the set of live task names — not on creation order, and not on which command
+  is asking (`new`, `list` and `preview` must print the same number). Of two clashing names the
+  alphabetically earlier keeps the natural slot, so removing a task can move a port, but only one that
+  was already displaced.
 - **`node_modules` is symlinked from the base checkout**, not installed per task — a real install costs
   minutes and gigabytes, and a task is the same `package.json` by construction. The exception is a task
   that *changes dependencies*: delete the link and install for real.
@@ -1664,6 +1669,20 @@ git can reason about and you can fix.
 - **Merge refuses while an agent is live in the task** (via `/api/agent/live`), and is serialised on
   `/tmp/minami-merge.lock` so two merges can't interleave.
 - Builds go to `.next-task`, never `.next` — so a preview build can never disturb the live server.
+
+> 🐛 **The stable-port scheme had no collision check, and the comment promised one.** `portFor()`
+> returned `PORT_BASE + fnv(name) % PORT_SPAN` and stopped there, while the line above it asserted
+> "two tasks must not silently collide on one". With `PORT_SPAN = 40`, the birthday bound makes a
+> clash likely at well under a dozen tasks — and it was already real: `bell-anchor` and
+> `resume-audit2` both resolved to **:3024** with only three worktrees alive. Nothing detects this.
+> The presenting symptom would have been a `preview` that dies on `EADDRINUSE` for no visible reason,
+> or — if the first task's preview had since been stopped — the far worse quiet version: a bookmarked
+> `localhost:3024` serving *a different task's build*, which reads as "my changes didn't take".
+> Found while pruning merged worktrees, not by hitting it. Fix: the hash now picks a preferred slot
+> and collisions probe forward deterministically (sorted-name order, so the result depends only on
+> the set of names), the span widened to 90, and exhausting it throws instead of wrapping onto a
+> live port. Verified by unit-testing the allocator at full span and by checking that `new` and
+> `list` print the same port for two real worktrees.
 
 > 🐛 **Deploys had no mutual exclusion at all.** Two agents in this repo request deploys
 > independently, and `next build` replaces `.next` **in place under the running server** — so two
@@ -2036,6 +2055,11 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **Task preview ports can no longer collide** (§9) — `portFor()` hashed a name to one of 40 slots with
+  no collision check, under a comment promising there'd be no collision; `bell-anchor` and
+  `resume-audit2` were both on :3024. The hash now picks a preferred slot, clashes probe forward in
+  sorted-name order (so ports depend on the *set* of tasks, never on call order), and the span is 90.
+  Found while pruning merged worktrees.
 - **Panel compaction: four cuts that tab view made possible** (§5e) — the auto-rail heuristic no longer
   fires in tab view (it counted chats *open*, not *visible*, so opening a 4-chat topic threw the bento
   board away for panes that were never on screen); the hover-reveal header moved **below** the tab row

@@ -30,17 +30,47 @@ const ROOT = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "
 const TREES = path.join(ROOT, ".minami-worktrees");
 const LOCK = "/tmp/minami-merge.lock";
 const PORT_BASE = 3010;
-const PORT_SPAN = 40; // 3010–3049, well clear of :3000 (live) and :3001 (dev:iterate)
+const PORT_SPAN = 90; // 3010–3099, well clear of :3000 (live) and :3001 (dev:iterate)
 
 const git = (args, opts = {}) =>
   execFileSync("git", args, { encoding: "utf8", cwd: opts.cwd || ROOT, stdio: opts.stdio || "pipe" });
 const tryGit = (args, opts = {}) => { try { return { ok: true, out: git(args, opts) }; } catch (e) { return { ok: false, out: String(e.stderr || e.stdout || e.message) }; } };
 
 // Stable per-name port: same task, same port, forever. FNV-1a — short, no deps, good spread.
-function portFor(name) {
+function fnvSlot(name) {
   let h = 0x811c9dc5;
   for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
-  return PORT_BASE + (h % PORT_SPAN);
+  return h % PORT_SPAN;
+}
+
+// A good hash is not a free port. The span is small, so the birthday bound bites long before the
+// span is full — `bell-anchor` and `resume-audit2` both landed on :3024 with only three tasks alive.
+// Two tasks on one port is the one failure a *stable* port scheme must not have, and it is silent:
+// the second `preview` either fails to bind or, if the first has since stopped, quietly serves a
+// different task's build to a URL you bookmarked. So the hash only picks a *preferred* slot and
+// clashes probe forward from it.
+//
+// The probe walks names in sorted order, so a port depends solely on the SET of live task names —
+// never on creation order or on which command happens to be asking. Consequence worth knowing: of
+// two names that clash, the alphabetically earlier one keeps the natural slot and the later one
+// moves, so removing a task can shift a port — but only for a name that was displaced to begin with.
+function portsFor(names) {
+  const taken = new Set();
+  const out = new Map();
+  for (const n of [...new Set(names)].sort()) {
+    let s = fnvSlot(n);
+    for (let i = 0; i < PORT_SPAN && taken.has(s); i++) s = (s + 1) % PORT_SPAN;
+    if (taken.has(s)) throw new Error(`no free preview port: ${PORT_SPAN} slots, all taken`);
+    taken.add(s);
+    out.set(n, PORT_BASE + s);
+  }
+  return out;
+}
+
+// `list`, `new` and `preview` must agree, so all three derive from the same set: the tasks on disk
+// plus `name` itself — `new` prints the port before the worktree is fully registered.
+function portFor(name) {
+  return portsFor([...taskNames(), name]).get(name);
 }
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48);
@@ -68,10 +98,15 @@ function lastCommitTs(cwd) {
   return t ? Number(t) * 1000 : 0;
 }
 
-function listTasks() {
+// A worktree dir without .git is debris (an interrupted `new`, or a hand-deleted checkout), not a
+// task — it must not claim a port or show up in the list.
+function taskNames() {
   if (!fs.existsSync(TREES)) return [];
-  return fs.readdirSync(TREES)
-    .filter((d) => fs.existsSync(path.join(TREES, d, ".git")))
+  return fs.readdirSync(TREES).filter((d) => fs.existsSync(path.join(TREES, d, ".git")));
+}
+
+function listTasks() {
+  return taskNames()
     .map((d) => {
       const cwd = dirFor(d);
       const branch = currentBranch(cwd);
