@@ -27,7 +27,7 @@ import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
 import { motion } from "motion/react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bot, ChevronLeft, ChevronRight, Chrome, FileText, Globe, Grid2x2, HelpCircle, ListChecks, Maximize2, Minimize2, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, ChevronLeft, ChevronRight, Chrome, FileText, Globe, Grid2x2, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -339,7 +339,21 @@ export default function BentoHome() {
   // Which pane, if any, has the whole panel to itself. Four transcripts at once is a glanceable state,
   // not a readable one — you watch four and read one. null = the grid; an index = that pane is the
   // screen and the rest collapse to the tab strip above it (they stay MOUNTED, see the grid below).
-  const [focusPane, setFocusPane] = useState<number | null>(null);
+  // Tabs is the DEFAULT, and the grid is the alternate view — the inverse of the first cut, where the
+  // grid was the resting state and one pane could be promoted out of it. Four transcripts at once is a
+  // glanceable state, not a readable one: you watch four and read one, so the resting state should be
+  // the one you can read. The grid stays a keystroke away for when the question is "what are all four
+  // doing", which is a real question, just not the common one.
+  //
+  // Persisted, because it's a statement about how you want to work, not about this topic.
+  const [paneView, setPaneView] = useSetting<"tabs" | "grid">("paneView", "tabs");
+  const [activePane, setActivePane] = useState(0);
+  // The identity header hides itself and comes back on hover. Persisted, because "I want to see the
+  // repo path at all times" is a preference about the app, not about this project.
+  const [headerPinned, setHeaderPinned] = useSetting<boolean>("panelHeaderPinned", false);
+  // The pane that owns the panel right now, or null in grid view. Clamped here rather than in state so
+  // it can never point past the array even for the render between a close and its effect.
+  const focusPane = paneView === "tabs" && panes.length ? Math.min(activePane, panes.length - 1) : null;
   // Read inside the window key handler, which deliberately doesn't re-subscribe per keystroke.
   const focusRef = useRef<number | null>(null);
   focusRef.current = focusPane;
@@ -467,12 +481,13 @@ export default function BentoHome() {
     setNewTopic({ name, sessions: [], cwd, reqs: 0, tokens: 0, last: Date.now(), active: false, review: false, goals: [], latest: "", weight: 0 });
     setPanes([mkPane()]); // one fresh blank chat in the chosen folder (or home, for a folderless CLI)
   };
-  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); setFocusPane(null); };
-  // Focus is an index into `panes`, so it has to be re-checked whenever that array changes — closing
-  // the focused pane (or any pane before it) would otherwise leave the panel showing a different
-  // conversation than the one the user zoomed into, or nothing at all.
+  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); setActivePane(0); };
+  // The active tab is an index into `panes`, so it's re-clamped whenever that array shrinks — closing
+  // the active pane (or any pane before it) would otherwise leave the panel showing a different
+  // conversation than the tab that's lit. `focusPane` above clamps for the render; this one settles the
+  // stored value so the next open doesn't start on a stale index.
   useEffect(() => {
-    setFocusPane((f) => (f == null ? null : f < panes.length ? f : panes.length ? panes.length - 1 : null));
+    setActivePane((i) => (panes.length ? Math.min(i, panes.length - 1) : 0));
   }, [panes.length]);
   // Crossing into 3+ panes, the bento column stops being worth its width: the panel is where all the
   // room needs to go, and the rail still shows every project's live state. Latched, so this is a nudge
@@ -520,19 +535,20 @@ export default function BentoHome() {
   }, [projSig]);
 
   const onKey = useCallback((e: KeyboardEvent) => {
-    // Escape is layered, innermost first — the conventional shape. It used to close the whole panel
-    // unconditionally, which from a focused pane would have thrown away the panel to undo a zoom.
-    if (e.key === "Escape") { if (focusRef.current != null) setFocusPane(null); else closePanel(); return; }
-    // ⌥1–4 jumps straight to a pane, ⌥0 back to the grid — and deliberately NOT while the composer has
-    // focus... it fires there too, on purpose: switching panes mid-draft is the whole point, and each
-    // pane's draft is persisted per session (see `draft:` in ChatColumn), so nothing is lost.
+    // Escape closes the panel, full stop. It briefly meant "step out of focus first", back when focus
+    // was a mode you could get stuck in; now tabs is the resting state and there is nothing to step out
+    // of, so the label on the button (`esc ✕`) and the key agree again.
+    if (e.key === "Escape") { closePanel(); return; }
+    // ⌥1–4 selects a tab, ⌥0 flips to the grid — and it deliberately fires even while the composer has
+    // focus: switching panes mid-draft is the whole point, and each pane's draft is persisted per
+    // session (see `draft:` in ChatColumn), so nothing is lost.
     //
     // `e.code`, not `e.key`: Option+1 on a Mac layout produces "¡", and on a Vietnamese layout something
     // else again. The physical key is the only stable name for this chord.
     if (e.altKey && !e.metaKey && !e.ctrlKey && /^Digit[0-9]$/.test(e.code) && panesRef.current > 0) {
       const n = Number(e.code.slice(5));
-      if (n === 0) { e.preventDefault(); setFocusPane(null); return; }
-      if (n <= panesRef.current) { e.preventDefault(); setFocusPane(n - 1); return; }
+      if (n === 0) { e.preventDefault(); setPaneView("grid"); return; }
+      if (n <= panesRef.current) { e.preventDefault(); setPaneView("tabs"); setActivePane(n - 1); return; }
     }
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || project) return;
@@ -545,7 +561,7 @@ export default function BentoHome() {
     else if (e.key === "ArrowUp") n = Math.max(0, sel - (project ? 2 : 3));
     else return;
     setSel(n);
-  }, [sel, projects, project, openProject]);
+  }, [sel, projects, project, openProject, setPaneView]);
   useEffect(() => { window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [onKey]);
   // draggable panel divider → persists width across sessions.
   //
@@ -861,76 +877,112 @@ export default function BentoHome() {
       <div className={`min-h-0 bg-neutral-900/50 w-full ${railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {proj && (
           <>
-            {/* pr-14, not px-4: the notification bell is fixed to the viewport's top-right corner and
-                would otherwise sit on top of `esc ✕`. Reserving the gutter here keeps the two apart
-                without the bell having to know anything about this panel. */}
-            <div className="flex items-center gap-3 border-b border-white/10 py-2.5 pl-4 pr-14">
-              {/* Title, repo link (full + clickable) and tech icons — one scrollable row so a long repo
-                  path stays complete without ever pushing the count / add-chat / esc controls off-screen. */}
-              <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <button onClick={closePanel} className="group flex shrink-0 items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
-                  <ProjectIcon name={proj.name} icon={topicIcons[proj.name]} /><span className="font-semibold">{proj.name}</span>
-                </button>
-                <AttachBar inline cwd={proj.cwd} project={proj.name} />
-              </div>
-              {/* Once the tab strip below is on screen it says how many panes are open, by showing them.
-                  Two counts of the same thing is one more than the header has room for. */}
-              {focusPane == null && <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>}
-              {/* Add a chat to the mix: a blank one, or any of the topic's other sessions. */}
-              <div className="relative shrink-0">
-                <button onClick={() => setAddMenu((v) => !v)} disabled={panes.length >= MAX_PANES}
-                  className="rounded-lg border border-[var(--sakura)]/40 px-2.5 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋ add chat</button>
-                {addMenu && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setAddMenu(false)} />
-                    <div className="absolute right-0 top-full z-20 mt-1 max-h-96 w-72 overflow-y-auto rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
-                      <button onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane()] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"><span className="text-[var(--sakura)]">＋</span> New blank chat</button>
-                      {proj.sessions.some((s) => !panes.some((pn) => pn.sid === s.id)) && <div className="my-1 border-t border-white/10" />}
-                      {[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id)).map((s) => (
-                        <button key={s.id} onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane(s.id)] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/10">
-                          <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: s.active ? "#4ade80" : TIER_TINT[s.tier] }} />
-                          <span className="min-w-0 flex-1"><span className="block truncate text-xs">{titleOf(s)}</span><span className="block truncate text-[10px] text-neutral-500">{goalOf(s)} · {ago(s.lastActivity)}</span></span>
-                        </button>
-                      ))}
+            {/* ── Panel chrome: one identity header that hides, one tab row that doesn't ───────────
+                The identity header — icon, project name, repo path, tech icons, counts — is read once
+                a session and then occupies ~46px forever. It now collapses to nothing and slides back
+                on hover (or on keyboard focus, or pinned). What stays is the tab row, because that is
+                the part you actually operate.
+                The two are one `group` so reaching anywhere in the chrome reveals the header: aiming at
+                a 0px-tall target would be a joke, and the tab row is directly under it. */}
+            <div className="group/chrome relative shrink-0 border-b border-white/10">
+              {/* The grid-rows 0fr→1fr trick, not max-height: it animates to the content's REAL height,
+                  so the header can't be clipped by a guessed max nor leave dead space under a short one. */}
+              <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+                headerPinned ? "grid-rows-[1fr]" : "grid-rows-[0fr] group-hover/chrome:grid-rows-[1fr] group-focus-within/chrome:grid-rows-[1fr]"}`}>
+                <div className="overflow-hidden">
+                  {/* pr-14, not px-4: the notification bell is fixed to the viewport's top-right corner
+                      and would otherwise sit on top of these controls. Reserving the gutter keeps the
+                      two apart without the bell having to know anything about this panel. */}
+                  <div className="flex items-center gap-3 py-2 pl-4 pr-14">
+                    {/* Title, repo link (full + clickable) and tech icons — one scrollable row so a long
+                        repo path stays complete without pushing the counts off-screen. */}
+                    <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <button onClick={closePanel} className="group flex shrink-0 items-center gap-2 rounded-lg px-1 py-0.5 text-sm transition-colors hover:bg-white/10">
+                        <ProjectIcon name={proj.name} icon={topicIcons[proj.name]} /><span className="font-semibold">{proj.name}</span>
+                      </button>
+                      <AttachBar inline cwd={proj.cwd} project={proj.name} />
                     </div>
-                  </>
-                )}
-              </div>
-              <button onClick={closePanel} className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
-            </div>
-            {/* The other three, while one of them is the screen. Not a nav bar bolted on — it's the
-                2×2 grid folded down to one line, and it has to carry the one thing the grid was
-                actually giving you: whether the panes you're NOT reading are still working. Hence the
-                live phase dot per tab, straight off the same `liveAct` poll the bento tiles read. */}
-            {focusPane != null && panes.length > 1 && (
-              <div className="flex items-center gap-1 overflow-x-auto border-b border-white/10 px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {panes.map((pn, i) => {
-                  const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
-                  const la = pn.sid ? liveAct[pn.sid] : undefined;
-                  const on = i === focusPane;
-                  return (
-                    <button key={pn.key} onClick={() => setFocusPane(i)} title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})`}
-                      className={`flex min-w-0 shrink items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
-                        on ? "border-[var(--sakura)]/60 bg-[var(--sakura)]/10 text-neutral-100" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>
-                      <span className="shrink-0 tabular-nums text-[9px] text-neutral-600">⌥{i + 1}</span>
-                      {/* Only a genuinely running turn animates — same rule as the bento tiles, and for
-                          the same measured reason (a permanent pulse costs a frame loop forever). */}
-                      {la?.busy && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--sakura)]" />}
-                      <span className="truncate">{s ? titleOf(s) : "New chat"}</span>
+                    <span className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{panes.length}/{MAX_PANES} open · {proj.sessions.length} chats</span>
+                    {/* Auto-hiding chrome is only tolerable if you can stop it. Pinning is the escape
+                        hatch for "I'm reading this repo path and it keeps sliding away". */}
+                    <button onClick={() => setHeaderPinned((v) => !v)} title={headerPinned ? "Unpin — let this header hide again" : "Pin this header open"}
+                      className={`shrink-0 rounded-md px-1.5 py-1 text-[11px] transition-colors ${headerPinned ? "text-[var(--sakura)]" : "text-neutral-600 hover:text-neutral-300"}`}>
+                      {headerPinned ? "📌" : "📍"}
                     </button>
-                  );
-                })}
-                <button onClick={() => setFocusPane(null)} title="Back to the grid  (esc)"
-                  className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-300">
-                  <Grid2x2 className="h-3 w-3" /> grid
-                </button>
+                  </div>
+                </div>
               </div>
-            )}
+
+              {/* The permanent row: every pane as a tab, then the view switch and the panel controls.
+                  The tabs render in BOTH views — in grid view none is lit, and clicking one is how you
+                  drop back into reading that pane. One row that never moves beats two that swap. */}
+              <div className="flex items-center gap-1 py-1.5 pl-2 pr-14">
+                <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {panes.map((pn, i) => {
+                    const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
+                    const la = pn.sid ? liveAct[pn.sid] : undefined;
+                    const on = i === focusPane;
+                    return (
+                      <button key={pn.key} onClick={() => { setPaneView("tabs"); setActivePane(i); }} title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})`}
+                        className={`flex min-w-0 shrink items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
+                          on ? "border-[var(--sakura)]/60 bg-[var(--sakura)]/10 text-neutral-100" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>
+                        <span className="shrink-0 tabular-nums text-[9px] text-neutral-600">⌥{i + 1}</span>
+                        {/* Only a genuinely running turn animates — same rule as the bento tiles, and for
+                            the same measured reason (a permanent pulse costs a frame loop forever). */}
+                        {la?.busy && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--sakura)]" />}
+                        <span className="truncate">{s ? titleOf(s) : "New chat"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* One switch for the whole panel, replacing the per-pane ⤢. A maximise button on each
+                    pane asked "which of these do you want bigger" four times over; this asks "how do you
+                    want to read" once, which is the actual decision. */}
+                {panes.length > 1 && (
+                  <div className="flex shrink-0 items-center rounded-lg border border-white/10 p-0.5" title="Read one chat at a time (⌥1–4), or watch all of them at once (⌥0)">
+                    {([["tabs", "tabs"], ["grid", "grid"]] as const).map(([k, label]) => (
+                      <button key={k} onClick={() => setPaneView(k)}
+                        className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                          paneView === k ? "bg-[var(--sakura)] text-white" : "text-neutral-500 hover:text-neutral-300"}`}>
+                        {k === "grid" && <Grid2x2 className="h-2.5 w-2.5" />}{label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {/* Add a chat to the mix: a blank one, or any of the topic's other sessions. */}
+                <div className="relative shrink-0">
+                  <button onClick={() => setAddMenu((v) => !v)} disabled={panes.length >= MAX_PANES} title="Add a chat"
+                    className="rounded-lg border border-[var(--sakura)]/40 px-2 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋</button>
+                  {addMenu && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setAddMenu(false)} />
+                      <div className="absolute right-0 top-full z-20 mt-1 max-h-96 w-72 overflow-y-auto rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
+                        <button onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane()] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"><span className="text-[var(--sakura)]">＋</span> New blank chat</button>
+                        {proj.sessions.some((s) => !panes.some((pn) => pn.sid === s.id)) && <div className="my-1 border-t border-white/10" />}
+                        {[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id)).map((s) => (
+                          <button key={s.id} onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane(s.id)] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/10">
+                            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: s.active ? "#4ade80" : TIER_TINT[s.tier] }} />
+                            <span className="min-w-0 flex-1"><span className="block truncate text-xs">{titleOf(s)}</span><span className="block truncate text-[10px] text-neutral-500">{goalOf(s)} · {ago(s.lastActivity)}</span></span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+                <button onClick={closePanel} title="Close this project (esc)" className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
+              </div>
+            </div>
             {/* Up to 4 chats in a 2×2 grid — like managing windows on a foldable. With one focused it
                 becomes a single cell: the others are still HERE, just `display:none` (see `collapsed`),
                 which keeps their EventSource attached and their streamed turns intact. Unmounting them
                 would tear down four live connections every time you zoomed into one. */}
-            <div className="grid min-h-0 flex-1 gap-2 p-2" style={{ gridTemplateColumns: focusPane != null || panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
+            {/* Tighter in grid view, on purpose: grid view exists to show you all four at once, so every
+                px of gap and padding is px not spent on the thing it's for. 8px gaps and 8px of panel
+                padding cost ~24px of each column's width and height in a 2×2 — at four panes that was
+                most of a line of transcript per pane, spent on air. Tabs view has one pane and can
+                afford the breathing room. */}
+            <div className={`grid min-h-0 flex-1 ${focusPane != null ? "gap-2 p-2" : "gap-1 p-1"}`}
+              style={{ gridTemplateColumns: focusPane != null || panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
               {panes.map((pane, idx) => (
                 // Keyed by pane.key PLUS switchGen (not sessionId): the "own live turn just got a real
                 // session id" transition (onLive below) must NOT remount — that would tear down the
@@ -938,7 +990,10 @@ export default function BentoHome() {
                 // DIFFERENT existing session (onPick below) SHOULD remount — see onPick's comment.
                 <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools} agentsHere={cwdAgentCount[proj.cwd] || 0}
                   collapsed={focusPane != null && focusPane !== idx} focused={focusPane === idx}
-                  onFocus={() => setFocusPane((f) => (f === idx ? null : idx))}
+                  // "Give this pane the room it needs" — used by the side slot when it's too cramped to
+                  // open here. It selects the pane AND switches to tabs, since tabs view is the only
+                  // place a browser or file preview has room to be worth opening.
+                  onFocus={() => { setPaneView("tabs"); setActivePane(idx); }}
                   // Opening the flow from a chat raises the canvas in the BENTO column, and un-rails the
                   // bento if it was collapsed — otherwise the click would appear to do nothing at all.
                   onOpenFlow={(sid) => { if (!sid) return; setRail(false); setFlowFor({ project: proj.name, sid }); }}
@@ -1664,17 +1719,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
             <span className="text-[9px] tabular-nums">{files.files.length}</span>
           </button>
         )}
-        {count > 1 && (
-          <div className="ml-auto flex shrink-0 items-center">
-            {/* Visible at rest, deliberately. The lesson from v1's hidden flow gear (see FlowStrip):
-                a feature you can only reach by knowing a chord is a feature nobody has. */}
-            <button onClick={onFocus} title={focused ? "Back to the grid  (esc)" : `Give this chat the whole panel  (⌥${idx + 1})`}
-              className="rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200">
-              {focused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-            </button>
-            <button onClick={onClose} className="rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>
-          </div>
-        )}
+        {/* The maximise button that used to sit here is gone: it asked "do you want THIS one bigger"
+            once per pane, when the real decision is made once for the panel. That switch now lives in
+            the tab row (see the panel chrome), and the tab itself is how you choose a pane. What's left
+            here is close, which genuinely is per-pane. */}
+        {count > 1 && <button onClick={onClose} title="Close this chat" className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
         {menu && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />

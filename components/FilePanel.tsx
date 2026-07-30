@@ -16,6 +16,7 @@ import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
 import { FileCode2, FileText, Image as ImageIcon, Loader2, PanelBottom, PanelRight, RefreshCw, Sheet, X } from "lucide-react";
 import Markdown from "./Markdown";
+import { PanelTabs } from "./PanelTabs";
 import type { FileState, TouchedFile } from "@/lib/file-view";
 
 type Kind = "code" | "markdown" | "notebook" | "csv" | "json" | "text" | "image" | "pdf" | "video" | "audio" | "binary";
@@ -152,15 +153,6 @@ export default function FilePanel({
           {meta?.name || "files"}
           {meta && <span className="ml-1.5 text-[9.5px] text-neutral-600">{fmtSize(meta.size)}{meta.lines ? ` · ${meta.lines} lines` : ""}</span>}
         </span>
-        {/* The rail's stand-in below 340px. A native <select> because it costs one line of chrome and
-            opens over the pane instead of inside it — a custom dropdown in a panel this narrow would
-            have the same problem the rail has. Mirrored, not duplicated state: both write onPick. */}
-        {files.length > 1 && (
-          <select value={path || ""} onChange={(e) => onPick(e.target.value)} title="Switch file"
-            className="max-w-[7.5rem] shrink-0 rounded-md border border-white/10 bg-neutral-900 px-1 py-0.5 text-[10px] text-neutral-300 outline-none @min-[340px]:hidden">
-            {files.map((f) => <option key={f.path} value={f.path}>{f.name}</option>)}
-          </select>
-        )}
         {canToggleRaw && (
           <button onClick={() => setRaw((v) => !v)} title={raw ? "Show rendered" : "Show source"}
             className="shrink-0 rounded-md border border-white/10 px-1.5 py-0.5 text-[9.5px] text-neutral-400 transition-colors hover:border-white/30 hover:text-neutral-200">
@@ -177,26 +169,29 @@ export default function FilePanel({
           className="shrink-0 rounded-md p-1 text-neutral-500 transition-colors hover:text-neutral-200"><X className="h-3 w-3" /></button>}
       </div>
 
-      <div className="flex min-h-0 flex-1">
-        {/* The rail of touched files. Vertical, not a filmstrip: file names are long and horizontal
-            truncation would leave every entry reading "…/components/Bro…". */}
-        {files.length > 1 && (
-          <div className="hidden w-36 shrink-0 overflow-y-auto border-r border-white/10 py-1 @min-[340px]:block">
-            {files.map((f) => {
-              const on = f.path === path;
-              const Icon = iconFor(kindGuess(f.name));
-              return (
-                <button key={f.path} onClick={() => onPick(f.path)} title={f.path}
-                  className={`flex w-full items-center gap-1.5 px-2 py-1 text-left transition-colors ${on ? "bg-white/10" : "hover:bg-white/5"}`}>
-                  <span className="h-3 w-0.5 shrink-0 rounded-full" style={{ background: VERB_TINT[f.verb] }} />
-                  <Icon className="h-3 w-3 shrink-0 text-neutral-500" />
-                  <span className={`min-w-0 flex-1 truncate text-[10.5px] ${on ? "text-neutral-100" : "text-neutral-400"}`}>{f.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
+      {/* One tab per file touched. This replaced a 144px vertical rail AND the `<select>` that stood in
+          for it below 340px — see components/PanelTabs.tsx for why height beats width here, and why
+          having two navigation models depending on the panel's width was the worse half of it. */}
+      {files.length > 1 && (
+        <PanelTabs
+          tabs={files.map((f) => {
+            const Icon = iconFor(kindGuess(f.name));
+            return {
+              key: f.path,
+              label: f.name,
+              // The full path, because two files called `page.tsx` are the normal case in this repo and
+              // the tab can only ever show the basename.
+              title: f.path,
+              tint: VERB_TINT[f.verb],
+              icon: <Icon className="h-3 w-3 shrink-0 text-neutral-500" />,
+            };
+          })}
+          active={path || ""}
+          onPick={onPick}
+        />
+      )}
 
+      <div className="flex min-h-0 flex-1">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 overflow-auto">{body}</div>
           {meta?.truncated && (

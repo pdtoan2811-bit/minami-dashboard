@@ -30,11 +30,12 @@
 //               video controls do — instead of permanently taxing the height.
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, Camera, Chrome, Circle, ExternalLink, Globe, Monitor, PanelRightClose,
+  Camera, Chrome, Circle, ExternalLink, Globe, Monitor, PanelRightClose,
   RefreshCw, Smartphone, Square, Tablet, ArrowLeft, ArrowRight, Copy, Check, Radio,
-  MoreHorizontal, PanelBottom, Film,
+  MoreHorizontal, Film,
 } from "lucide-react";
 import type { BrowserState, Shot } from "@/lib/browser-view";
+import { PanelTabs } from "./PanelTabs";
 import { shotSrc } from "./BrowserLightbox";
 
 const TINT = "#5ec8f8"; // TOOL_TINT.browser — keep in sync with app/page.tsx
@@ -49,7 +50,11 @@ const DEVICES: { label: string; w: number; h: number; Icon: typeof Monitor }[] =
   { label: "iPhone", w: 390, h: 844, Icon: Smartphone },
 ];
 
-type Tab = "console" | "network" | "actions";
+// The page is a tab among peers, not a hero with a drawer under it — which is what makes this panel
+// and the file preview the same shape: one header, one tab row, one content area. The drawer it
+// replaces was a third layout state (bar · page · drawer) that had to be opened before you could learn
+// there was anything in it; a tab row carries its counts at rest.
+type Tab = "page" | "console" | "network" | "actions";
 
 export default function BrowserPanel({
   state, busy, actionLabel, cwd, live, stacked, onOpenShot, onAsk, onClose, onToggleLayout, onPopOut,
@@ -73,8 +78,7 @@ export default function BrowserPanel({
   const { shots, url, title, viewport, consoleErrors, consoleWarnings, network, actions, recording, staleBy, httpStatus, crashed } = state;
   // `pinned === null` means "follow the newest shot", which is what you want while watching a QA run.
   const [pinned, setPinned] = useState<number | null>(null);
-  const [tab, setTab] = useState<Tab | null>(null);
-  const [drawer, setDrawer] = useState(false);
+  const [tab, setTab] = useState<Tab>("page");
   const [menu, setMenu] = useState(false);
   const [urlDraft, setUrlDraft] = useState("");
   const [editingUrl, setEditingUrl] = useState(false);
@@ -102,9 +106,6 @@ export default function BrowserPanel({
   const consoleBody = useMemo(() => state.consoleLines.filter(() => tab === "console"), [state.consoleLines, tab]);
 
   const ask = (p: string) => { if (live) onAsk(p); };
-  // One disclosure at a time. Two panels open in a 200px-tall pane leaves no page visible at all, and
-  // "the menu is still open behind the drawer" is a state nobody can see or reason about.
-  const openDrawer = (t: Tab) => { setMenu(false); setTab(t); setDrawer(true); };
 
   return (
     // `flex-1 min-h-0` in BOTH orientations, deliberately. With `shrink-0` when stacked, this root
@@ -168,29 +169,11 @@ export default function BrowserPanel({
           )}
         </div>
 
-        {/* Console-error badge. Stays on the bar — "live debugging" (read the console, fix the code
-            that caused it) is the primary documented use case for a browser in a coding agent, and a
-            problem you have to open a menu to discover is a problem you don't discover. */}
-        {(problem || errCount > 0 || consoleWarnings > 0) && (
-          <button
-            onClick={() => { openDrawer("console"); if (live && !state.consoleLines.length && errCount) onAsk("Read the browser console messages (errors only) and tell me what's failing."); }}
-            title={`${errCount} console error${errCount === 1 ? "" : "s"}${consoleWarnings ? `, ${consoleWarnings} warning${consoleWarnings === 1 ? "" : "s"}` : ""}`}
-            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[10px] tabular-nums transition-colors ${problem
-              ? "bg-[#ef7c7c]/15 text-[#ef7c7c] hover:bg-[#ef7c7c]/25"
-              : "text-[#f0a868] hover:bg-white/10"}`}>
-            <AlertTriangle className="h-3 w-3" />
-            {/* Under ~260px the counts are what has to go: the icon alone still says "something is
-                wrong here", which is the whole job of a badge. The number is in the tooltip. */}
-            {errCount > 0 && <span className="@max-[260px]:hidden">{errCount}</span>}
-            {consoleWarnings > 0 && <span className="text-[#f0a868] @max-[260px]:hidden">{consoleWarnings}</span>}
-          </button>
-        )}
-
-        <Nav title="Console · network · actions" onClick={() => { setMenu(false); setDrawer((v) => !v); if (!tab) setTab("actions"); }}
-          className={drawer ? "bg-white/10 text-neutral-200" : ""}>
-          <PanelBottom className="h-3.5 w-3.5" />
-        </Nav>
-        <Nav title="Viewport, recording, layout" onClick={() => { setDrawer(false); setMenu((v) => !v); }}
+        {/* The console-error badge used to live here, because a problem you have to open a menu to
+            discover is a problem you don't discover. It still doesn't have to be discovered — the
+            Console tab below carries the same count, in red, at rest. Two badges for one fact is one
+            more than the bar has room for at ~160px. */}
+        <Nav title="Viewport, recording, layout" onClick={() => setMenu((v) => !v)}
           className={`relative ${menu ? "bg-white/10 text-neutral-200" : ""}`}>
           <MoreHorizontal className="h-3.5 w-3.5" />
           {/* Recording is the one hidden state that must stay visible — it writes a file and keeps
@@ -256,9 +239,33 @@ export default function BrowserPanel({
         </div>
       )}
 
-      {/* ── The hero: the page itself ─────────────────────────────────────────────────────────── */}
+      {/* ── The tab row — the same component the file preview wears ───────────────────────────── */}
+      <PanelTabs
+        tabs={[
+          { key: "page", label: "Page", icon: <Globe className="h-3 w-3 shrink-0 text-neutral-500" />, count: shots.length > 1 ? shots.length : 0 },
+          // The count is errors-or-lines, whichever we actually have: a session where Claude never read
+          // the console still knows how many errors the page reported, and that number is the reason
+          // you'd open the tab. `alert` paints it red, which is the badge this replaced.
+          { key: "console", label: "Console", count: state.consoleLines.length || errCount || consoleWarnings, alert: problem || errCount > 0 },
+          { key: "network", label: "Network", count: network.length },
+          { key: "actions", label: "Actions", count: actions.length },
+        ]}
+        active={tab}
+        // Selecting a tab NAVIGATES. Nothing else.
+        //
+        // The console badge this replaced used to send the agent a "read the console" prompt on click,
+        // and porting that onto the tab was a real mistake, caught by using it: clicking Console
+        // silently started a turn in a live session — a send, from a control that looks like a view
+        // switch. A badge you press is a verb; a tab is a place. The prompt still exists, on the button
+        // inside the empty Console tab, where it reads as the action it is.
+        onPick={(k) => { setMenu(false); setTab(k as Tab); }}
+      />
+
+      {/* ── The page ──────────────────────────────────────────────────────────────────────────── */}
       <div
-        className="group/view relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2"
+        // Hidden rather than unmounted, so switching to Console and back doesn't drop the pinned frame,
+        // the filmstrip's scroll position, or re-decode every thumbnail.
+        className={`group/view relative min-h-0 flex-1 items-center justify-center overflow-hidden p-2 ${tab === "page" ? "flex" : "hidden"}`}
         style={{ backgroundImage: "repeating-conic-gradient(rgba(255,255,255,0.03) 0% 25%, transparent 0% 50%)", backgroundSize: "16px 16px" }}
       >
         {src ? (
@@ -346,22 +353,12 @@ export default function BrowserPanel({
         )}
       </div>
 
-      {/* ── The drawer ────────────────────────────────────────────────────────────────────────── */}
-      {drawer && (
-        <div className="shrink-0 border-t border-white/[0.07]">
-          <div className="flex items-center gap-0.5 px-2 py-1">
-            {(["console", "network", "actions"] as Tab[]).map((t) => {
-              const n = t === "console" ? state.consoleLines.length || errCount : t === "network" ? network.length : actions.length;
-              return (
-                <button key={t} onClick={() => setTab(t)}
-                  className={`rounded px-1.5 py-0.5 text-[10px] capitalize transition-colors ${tab === t ? "bg-white/10 text-neutral-200" : "text-neutral-600 hover:text-neutral-400"}`}>
-                  {t}{n ? <span className="ml-1 tabular-nums text-neutral-500">{n}</span> : null}
-                </button>
-              );
-            })}
-            <button onClick={() => setDrawer(false)} title="Close" className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-neutral-600 transition-colors hover:text-neutral-300">✕</button>
-          </div>
-
+      {/* ── The other three tabs ──────────────────────────────────────────────────────────────────
+          These were a drawer pinned to a `max-h-32` strip under the page. As tabs they get the whole
+          content area, which is the actual win: reading a stack trace or a network table in 128px was
+          the reason the pop-out window existed. */}
+      {tab !== "page" && (
+        <div className="flex min-h-0 flex-1 flex-col">
           {tab === "console" && (
             <Drawer>
               {consoleBody.length ? consoleBody.map((l, i) => (
@@ -450,8 +447,10 @@ const MenuBtn = ({ title, onClick, disabled, active, children }: { title: string
   </button>
 );
 
+// The body of a non-page tab. `flex-1 min-h-0` rather than the old `max-h-32`: it is the content area
+// now, not a strip under one.
 const Drawer = ({ children }: { children: React.ReactNode }) => (
-  <div className="max-h-32 space-y-0.5 overflow-y-auto border-t border-white/[0.05] bg-black/30 px-2 py-1.5 text-[10px] leading-relaxed">{children}</div>
+  <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto bg-black/30 px-2 py-1.5 text-[10px] leading-relaxed">{children}</div>
 );
 
 const Empty = ({ children }: { children: React.ReactNode }) => (

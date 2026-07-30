@@ -48,7 +48,8 @@ The live and read pipelines meet only on disk. They never call each other.
 | Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | can create folders; cwd validated — see §5d |
 | Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
 | Shell (bento · rail · composer) | `app/page.tsx` + `components/BentoRail.tsx` | **shipped** | grid collapses to a rail — see §5e |
-| Density tiers | `lib/density.ts` | **shipped** | measured roomy/snug/tight/micro; chrome folds, focus mode, ⌥1–4 — see §5e |
+| Density tiers | `lib/density.ts` | **shipped** | measured roomy/snug/tight/micro; chrome folds, ⌥1–4 — see §5e |
+| Side-slot tabs | `components/PanelTabs.tsx` | **shipped** | one tab row worn by the file preview AND the browser — see §5b, §5g |
 | Flow view | `components/FlowPanel.tsx` + `lib/flow-model.ts` | **shipped** | per-topic ⚙; plan as a graph you can pause and steer — see §5f |
 | File preview | `components/FilePanel.tsx` + `lib/file-view.ts` + `app/api/fs/file` | **shipped** | any file type, paged; shares the side slot with the browser — see §5g |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
@@ -432,9 +433,33 @@ and the page — the thing you opened the panel to see — was the smallest part
   that slides up over the page on hover the way video controls do, and stays up while a frame is pinned
   because that's the only way back to live.
 
-Two things stay on the bar unconditionally: the **console-error badge** (a problem you must open a menu
-to discover is a problem you don't discover) and **open-in-your-own-browser**, revealed on hover of the
-address it would open — opening a localhost dev server for real is the most-reached-for thing here.
+**Open-in-your-own-browser** stays on the bar unconditionally, revealed on hover of the address it would
+open — opening a localhost dev server for real is the most-reached-for thing here.
+
+### v3 — the drawer becomes tabs, and the panel matches the file preview
+The hero-plus-drawer shape above survived one round of use and then lost to a simpler ask: *make the
+browser match the file preview*. It now wears the same three-part shape — **header bar · tab row ·
+content** — with the page as one tab among **Page · Console · Network · Actions**.
+
+- **The shared row is a component** (`components/PanelTabs.tsx`), worn by both panels. "They match" is a
+  claim a screenshot can satisfy and a codebase can't: two hand-built tab rows drift the first time
+  either is touched.
+- **The console badge left the bar.** It was there because a problem you must open a menu to discover is
+  a problem you don't discover — which is still true, and now satisfied by the Console tab carrying the
+  same count in red, at rest, without being opened. Two badges for one fact is one more than a ~160px
+  bar has room for.
+- **The three non-page tabs get the whole content area**, not the old `max-h-32` strip. Reading a stack
+  trace or a network table in 128px was most of the reason the pop-out window existed.
+- **The page is hidden, not unmounted**, when another tab is up, so switching away and back doesn't drop
+  the pinned frame, the filmstrip's scroll position, or re-decode every thumbnail.
+
+> 🐛 **A tab that sent a message.** The console badge's click used to *ask the agent* to read the
+> console — a verb, on a control that looked like one. Porting that behaviour onto the Console **tab**
+> carried it into a control that looks like a place: clicking Console silently started a turn in a live
+> session. Caught by clicking it during verification, on a real chat, which then had to be stopped by
+> hand. A tab navigates and does nothing else; the prompt lives on a button inside the empty Console
+> tab, where it reads as the action it is. The general rule this is an instance of: **when a control
+> changes shape, re-derive its behaviour from the new shape** rather than carrying the old one across.
 
 ### Gotchas
 - **The bar sizes itself with container queries, not breakpoints.** This panel is ~160px wide in a
@@ -653,6 +678,41 @@ mode is the thing you most need to see, and the moment you are demonstrably not 
   conversation, so you were typing a message about a reply you could no longer see. This is the one
   consumer of `DensityContext` — a leaf that can't take the tier as a prop and is rationing the *pane's*
   height, not its own width.
+
+### Tabs is the default view; the grid is the alternate
+
+The first cut had this the other way round — grid at rest, one pane promotable out of it — and that was
+the wrong default for the same reason the chrome had to fold: four transcripts at once is a glanceable
+state, not a readable one. The resting state should be the one you can *read*.
+
+- **One view switch for the panel, not a maximise button per pane.** The per-pane ⤢ asked "do you want
+  THIS one bigger?" once per pane, when the decision is made once for the whole panel. The switch lives
+  in the tab row; the tab itself is how you choose a pane. What stayed per-pane is ✕, which genuinely is.
+- **The tabs render in both views.** In grid view none is lit, and clicking one is how you drop back into
+  reading that pane. One row that never moves beats two rows that swap places.
+- **`Escape` closes the panel again, unconditionally.** It briefly meant "step out of focus first", which
+  was right while focus was a mode you could get stuck in. With tabs as the resting state there's nothing
+  to step out of, so the key and the label on the button (`esc ✕`) agree again.
+- **`focusPane` is derived and clamped in the render**, not stored: `paneView === "tabs" ? min(activePane,
+  panes.length - 1) : null`. Storing it meant a close could leave it pointing past the array for the one
+  render before its effect ran.
+- **Grid view is tighter than tabs view** (`gap-1 p-1` vs `gap-2 p-2`). Grid exists to show all four at
+  once, so every px of gap is px not spent on the thing it's for — 8px gaps plus 8px of panel padding
+  cost ~24px of each column in a 2×2, about a line of transcript per pane, spent on air.
+
+### The panel header hides, and comes back on hover
+
+The identity header — icon, project name, repo path, tech icons, counts — is read once a session and
+then holds ~46px forever. It collapses to nothing and slides back on hover, keyboard focus, or a pin.
+
+- **`grid-rows-[0fr]` → `[1fr]`, not `max-height`.** It animates to the content's real height, so the
+  header can't be clipped by a guessed maximum nor leave dead space under a short one.
+- **The hover target is the whole chrome block**, header *and* tab row, as one `group`. Aiming at a
+  0px-tall element would be a joke; the tab row sits directly beneath and is always there.
+- **Pinning is the escape hatch**, persisted. Auto-hiding chrome is only tolerable if you can stop it —
+  "I'm reading this repo path and it keeps sliding away" is the failure mode that makes people hate it.
+- **`pr-14` moved to the tab row too.** The notification bell is fixed to the viewport's top-right, and
+  with the header collapsed the tab row is what's under it.
 
 ### Focus mode — four panes is a glanceable state, not a readable one
 
@@ -1300,13 +1360,19 @@ is deliberately **not** gated on `Host` or `x-forwarded-for` (forgeable; neither
   Which files changed is the *outcome* of a turn, not tool noise. They de-duplicate per path within a
   turn, because Claude routinely applies several `Edit`s to one file in one turn — but not across
   turns, since a chip marks what *that* message did.
-- **The panel is an `@container`.** A pane in a 2×2 grid is a quarter of the screen; at that width the
-  144px rail left so little room that prose wrapped one character per line. Below 340px the rail is
-  replaced by a native `<select>` in the header — a custom dropdown would hit the same wall.
+- **The file rail is now a tab row** (`components/PanelTabs.tsx`), shared with the browser panel. The
+  rail was vertical for a good reason — file names are long, and horizontal truncation leaves every
+  entry reading `…/components/Bro…` — but it cost a fixed **144px of width** in a panel that is often
+  ~290px wide, which is why it had to vanish below 340px and be replaced by a native `<select>`. That
+  left the panel with *two* navigation models depending on its width, and the narrow one hid the list
+  behind a click: you couldn't see that three files had been touched without opening it. A tab row costs
+  ~24px of **height** at any width and shows every entry at once. Truncation is handled rather than
+  ignored — the row scrolls, the active tab is `scrollIntoView`'d, and each tab keeps the full path as
+  its `title`, which matters because two files called `page.tsx` is the normal case in this repo.
+- **The panel is still an `@container`** for everything else that sizes off the panel rather than the
+  window.
 - **`onOpenFile` must be a `useCallback`.** `TurnRow` is memoised; a fresh closure defeats it for every
   row on every render.
-- **The rail is vertical, not a filmstrip** like BrowserPanel's. File names are long, and horizontal
-  truncation would leave every entry reading `…/components/Bro…`.
 - **CSV is parsed, not split on commas** — a quoted field containing a comma is the normal case in
   exported data. Rows are capped at 500 rendered; a 50k-row export would otherwise mount 50k `<tr>`s.
 - A truncated slice of a big `.ipynb` is invalid JSON, so the notebook renderer says so and offers the
@@ -1934,6 +2000,19 @@ on a timer is just a slower way to fail.
 ## Changelog
 
 ### 2026-07-30
+- **The chat panel is tab-first, and the side slot is tabbed throughout** (§5e, §5b, §5g, new
+  `components/PanelTabs.tsx`) — tabs replace the 2×2 grid as the default view, with one view switch for
+  the panel instead of a maximise button on every pane; the identity header (name · repo · tech icons ·
+  counts) collapses to nothing and slides back on hover, keyboard focus or a pin; grid view tightened to
+  `gap-1 p-1` since showing all four at once is the whole reason to use it. The file preview's 144px
+  vertical rail and its `<select>` stand-in below 340px both became one shared tab row, and the browser
+  panel now wears the same header · tabs · content shape with the page as one tab among Page · Console ·
+  Network · Actions — its drawer's `max-h-32` strip becomes the full content area. Caught in
+  verification: porting the console badge's "ask the agent" click onto the Console *tab* made a tab
+  silently start a turn in a live session; tabs navigate and nothing else now.
+  *Requested by user: "Tab navigation as default please, with button to switch view rather than the full
+  screen button … also can hide and hover to show the header … files also need tab navigation instead of
+  menus and browser need to match the files preview layout".*
 - **Messages can be queued mid-turn** (§5f-bis) — typing into a busy pane no longer drops the message;
   the CLI queues it and runs it as its own turn. Streaming-input mode already supported this at the
   transport level (`streamInput` writes straight through without waiting for the turn), so the work was
