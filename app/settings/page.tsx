@@ -33,6 +33,9 @@ export default function Settings() {
   // starts from, not a retroactive change to sessions already running.
   const [permDefault, setPermDefault] = useSetting<"default" | "acceptEdits" | "bypassPermissions">("permMode", "bypassPermissions");
   const [defaultWindow, setDefaultWindow] = useSetting<number | null>("defaultWindow", 3);
+  // Same key the Nav reads. Client-only: it decides what this browser shows, not what the server runs
+  // — agents already on the roster keep working with this off.
+  const [agentMode, setAgentMode] = useSetting<boolean>("agentMode", false);
 
   return (
     <div className="bg-bento min-h-screen text-neutral-100">
@@ -49,6 +52,21 @@ export default function Settings() {
               <Segmented value={defaultWindow} onChange={setDefaultWindow}
                 options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
             </Row>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-neutral-500">Agents</h2>
+          <div className="space-y-2">
+            <Row title="Agent view"
+              desc="Adds a roster of standing agents — each with its own home folder, memory and model — alongside the session board. Off hides the nav entry; it doesn't delete anything.">
+              <Toggle on={agentMode} onChange={setAgentMode} />
+            </Row>
+            {agentMode && (
+              <a href="/agents" className="block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[11px] text-neutral-400 hover:border-[var(--sakura)]/40">
+                Open the roster →
+              </a>
+            )}
           </div>
         </section>
 

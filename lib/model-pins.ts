@@ -26,6 +26,11 @@ export const PINNED_MODEL = process.env.MINAMI_PINNED_MODEL || "claude-opus-5";
 // literal, so moving the pin moves this too — that's the whole point of the file.
 export const DASHBOARD_MODEL = process.env.MINAMI_DASHBOARD_MODEL || PINNED_MODEL;
 
+// The picker menu. Defined in lib/model-catalog.ts and re-exported here so this file stays the one
+// place code looks for "which models exist" — the catalog is a separate module only because THIS one
+// imports node:fs, and the agent config form that renders the menu runs in the browser.
+export { SELECTABLE_MODELS } from "./model-catalog";
+
 // Where Minami's bot repo lives, for reading its brain config.
 const MINAMI_DIR = process.env.MINAMI_BOT_DIR || path.join(os.homedir(), "Minami");
 

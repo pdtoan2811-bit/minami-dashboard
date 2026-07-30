@@ -9,6 +9,23 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-30
+- **Standing agents shipped** (§14) — a new opt-in view (Settings → Agents) where an agent is an
+  identity plus a *home folder* it thinks and remembers in, separate from the workspaces it does work
+  in. Create scaffolds a brain or adopts an existing one (`~/secondBrain` inherits its 33 sessions as
+  history on day one); an onboarding interview runs as a real session and writes the folder from your
+  answers. Unattended tasks, handoff chains, per-agent model and permission mode, and an HQ tile that
+  delegates via `bin/agent.mjs`. Verified end-to-end against a scratch registry, not just built.
+- **Agent history was empty for work just completed** (§14.1) — the CLI records the *resolved* cwd in
+  its transcript, but the registry stored the path as typed; on macOS `/tmp` → `/private/tmp` made the
+  two encode to different project directories, so the lookup found nothing and reported it as "no
+  sessions". The store now resolves through `realpathSync` on every read.
+- **`sendMessage` accepts an optional `model`** (§3, §14.1) — applied once at `ensureSession`, so each
+  agent can pin its own tier. Omitted everywhere else, which keeps the box pin in force. The picker's
+  list lives in the new `lib/model-catalog.ts`, re-exported from `lib/model-pins.ts` so ids still have
+  exactly one home.
+- **`listSessionsIn(cwds)` added to the transcript parser** (§1, §14.4) — a directory-scoped scan, as
+  opposed to `listSessions()`'s box-wide recency window, so an agent's history doesn't disappear when
+  its folder goes quiet for a fortnight.
 - **Chat tabs close like browser tabs** (§5e) — ✕ on the tab (always on the active one, on hover
   otherwise, width always reserved so the label can't slide out from under the cursor), middle-click,
   ⌥W to close and ⌥⇧T to reopen the last one at its original index. Not ⌘W/⌘⇧T: Chrome keeps those. The
