@@ -86,7 +86,8 @@ state, not a readable one. The resting state should be the one you can *read*.
 
 - **One view switch for the panel, not a maximise button per pane.** The per-pane ⤢ asked "do you want
   THIS one bigger?" once per pane, when the decision is made once for the whole panel. The switch lives
-  in the tab row; the tab itself is how you choose a pane. What stayed per-pane is ✕, which genuinely is.
+  in the tab row; the tab itself is how you choose a pane. What stayed per-pane is ✕, which genuinely is
+  — and it has since moved onto the tab as well; see "Closing a tab" below.
 - **The tabs render in both views.** In grid view none is lit, and clicking one is how you drop back into
   reading that pane. One row that never moves beats two rows that swap places.
 - **`Escape` closes the panel again, unconditionally.** It briefly meant "step out of focus first", which
@@ -98,6 +99,55 @@ state, not a readable one. The resting state should be the one you can *read*.
 - **Grid view is tighter than tabs view** (`gap-1 p-1` vs `gap-2 p-2`). Grid exists to show all four at
   once, so every px of gap is px not spent on the thing it's for — 8px gaps plus 8px of panel padding
   cost ~24px of each column in a 2×2, about a line of transcript per pane, spent on air.
+
+### Closing a tab — the browser's affordances, minus the browser's meaning
+
+Closing used to be one ✕ inside the pane's own header, shown only at `count > 1`. That is where a close
+button goes in a window manager, not where anyone looks for it after twenty years of browser tabs. The
+tab strip now carries the whole set: **✕ on the tab, middle-click, ⌥W to close, ⌥⇧T to reopen.**
+
+The analogy stops at what "close" *means*. A browser tab is the session; closing it ends it. Here the
+tab is a *view* of a session that lives in the server process, so closing a pane only unsubscribes it —
+the turn keeps running, the session stays on the bento board and in the ＋ menu, and `manager.ts` only
+reaps it after `IDLE_REAP_MS` with no listeners. Every close tooltip says "the session keeps running",
+because a one-keystroke close is only safe if that's legible before you press it.
+
+- **The tab is a `div` wrapping two buttons**, not a button with a nested ✕. A button inside a button is
+  invalid HTML and the browser's recovery is to drop the inner one — the close target would have
+  selected the tab instead of closing it.
+- **The ✕ is always rendered, only sometimes visible** (`opacity-0 group-hover/tab:opacity-100`, always
+  on for the active tab). Revealing it on hover alone widens the tab at the moment you reach for it and
+  slides the label out from under the cursor — the same mis-click that moved the header peek below this
+  row. Reserving the width costs 18px per tab, at a hard maximum of four.
+- **Middle-click closes on `mousedown`, not `auxclick`.** By the time `auxclick` fires the middle button
+  has already armed the scroll-anchor cursor, so it's too late to `preventDefault` it.
+- **⌥W and ⌥⇧T, not ⌘W/⌘⇧T.** Chrome reserves the ⌘ pair for its own tabs and won't yield them to a
+  page; a shortcut that sometimes closes the whole dashboard is worse than no shortcut. ⌥ also puts
+  them in the same family as ⌥1–4/⌥0. Keyed off `e.code`, since ⌥W emits "∑" on a Mac layout, and bound
+  ahead of the composer guard like the digit chords — a draft is keyed by session (or pane key, when
+  blank), so ⌥⇧T brings the pane back with what you were typing still in it.
+- **The reopen stack is per-panel and bounded to 8**, cleared whenever the panel closes or another topic
+  opens, so ⌥⇧T can't drop a chat from a project you left into the one you're in. It skips entries whose
+  session is already back on screen: two panes on one session id would share a draft key and a live
+  subscription and fight over both. A restored tab goes back at its original index — one that lands
+  somewhere new isn't an undo.
+- **The last tab takes the panel with it**, the way the last browser tab takes the window. The
+  alternative is panel chrome with nothing under it, which isn't a state you can read.
+
+> 🐛 **Closing a tab could silently swap which conversation you were reading.** `activePane` is an index
+> into `panes`, and the only thing correcting it after a close was the clamp `min(activePane,
+> panes.length - 1)`. That clamp knows the array got *shorter*; it does not know *which end* lost an
+> element. Closing a tab to the left of the active one shifts every later index down by one, so the
+> stored index kept pointing at the same slot and that slot now held a different chat: with four panes
+> open and pane 2 active, closing pane 1 left the panel reading pane 3's transcript while the tab strip
+> was lit correctly. It looked right in most tests because the arithmetic happens to agree whenever the
+> active tab is the last one — the case you reach for first.
+>
+> Closing now decrements explicitly (`setActivePane(a => (i < a ? a - 1 : a))`) so the *same
+> conversation* keeps focus; closing the active tab itself keeps the index, which lands on its
+> right-hand neighbour and clamps back if it was last, matching every browser. The clamp effect stays as
+> the backstop for the render between a close and its effect. All three close paths — the tab ✕, the
+> in-pane ✕ and ⌥W — route through one `closePane(i)`, so they can't disagree about this again.
 
 ### The panel header hides, and comes back on hover
 

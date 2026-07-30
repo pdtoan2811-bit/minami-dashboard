@@ -34,7 +34,7 @@ recycle one.
 | [`05b-browser.md`](knowledge/05b-browser.md) | §5b | ~2,900 | The headless browser's window: state derived from tool results, the header/tabs/content layout, the console-badge post-mortem. |
 | [`05c-message-render.md`](knowledge/05c-message-render.md) | §5c | ~800 | `Markdown.tsx` and `ThoughtBlock.tsx` — one parser, two tones, and the reasoning-pass seam. |
 | [`05d-topics.md`](knowledge/05d-topics.md) | §5d | ~1,000 | Creating a topic: the folder picker, `cwd` validation, `isTrivial`. |
-| [`05e-shell.md`](knowledge/05e-shell.md) | §5e | ~9,100 | The biggest one. Density tiers, Embody, tab-first panes, the hiding panel header, the bento rail, project icons, the ask card, motion/scroll cost, `--continue` parity, the composer. |
+| [`05e-shell.md`](knowledge/05e-shell.md) | §5e | ~10,300 | The biggest one, and past the length this split was meant to fix — split it before adding another section. Density tiers, Embody, tab-first panes, closing tabs, the hiding panel header, the bento rail, project icons, the ask card, motion/scroll cost, `--continue` parity, the composer. |
 | [`05f-flow.md`](knowledge/05f-flow.md) | §5f §5f-bis | ~4,500 | The step graph, three revisions of what it got wrong, the `canUseTool` brake, and mid-turn message queueing. |
 | [`05g-file-preview.md`](knowledge/05g-file-preview.md) | §5g | ~1,600 | Kind-routed file viewing, the shared side slot, the tab row. |
 | [`06-accounts.md`](knowledge/06-accounts.md) | §6 | ~800 | Ground-truth account identity, and why a reported switch is not evidence. |

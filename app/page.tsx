@@ -359,6 +359,9 @@ export default function BentoHome() {
   focusRef.current = focusPane;
   const panesRef = useRef(0); // same reason: how many panes ⌥1–4 may address, read without re-subscribing
   panesRef.current = panes.length;
+  // Closed tabs, most recent last — the ⌥⇧T stack. Declared up here with the other cross-cutting refs
+  // because both the close path and every panel-teardown path touch it. See closePane below.
+  const closedTabs = useRef<{ pane: Pane; at: number }[]>([]);
   const [openPanesMap, setOpenPanesMap] = useSetting<Record<string, Pane[]>>("openPanes", {}); // remembered per topic
   // The currently-open panel, persisted so a page refresh reopens it exactly (with its panes).
   const [openPanel, setOpenPanel] = useSetting<{ name: string; cwd: string; topic: boolean; panes: Pane[] } | null>("openPanel", null);
@@ -464,7 +467,7 @@ export default function BentoHome() {
     // Flow needs the room: a step graph in a quarter-pane is a picture of a graph, not something you
     // can review. So a Flow topic opens full-bleed — bento railed, one pane — which is the same
     // layout the divider already produces, not a second window mode to maintain.
-    setNewTopic(null); setProject(p.name); setPanes(initial); setAddMenu(false);
+    setNewTopic(null); setProject(p.name); setPanes(initial); setAddMenu(false); closedTabs.current = [];
   }, [openPanesMap]);
   // Prefetch a project's likely-open transcripts on hover so clicking it paints instantly (the fetch +
   // parse already happened). Each session is fetched once — the cache guard makes repeat hovers free.
@@ -480,8 +483,56 @@ export default function BentoHome() {
     setPicker(false); setProject(null); setAddMenu(false);
     setNewTopic({ name, sessions: [], cwd, reqs: 0, tokens: 0, last: Date.now(), active: false, review: false, goals: [], latest: "", weight: 0 });
     setPanes([mkPane()]); // one fresh blank chat in the chosen folder (or home, for a folderless CLI)
+    closedTabs.current = [];
   };
-  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); setActivePane(0); };
+  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); setActivePane(0); closedTabs.current = []; };
+  // Tabs close the way browser tabs do: an ✕ on the tab, middle-click, ⌥W — and ⌥⇧T puts the last one
+  // back. Where the analogy stops: closing a tab here is a VIEW action, not a lifecycle one. The
+  // session keeps running server-side (nothing is sent to it; the pane just unsubscribes, and the
+  // manager only reaps a session after IDLE_REAP_MS with no listeners) and it stays on the bento board
+  // and in the ＋ menu. So this is "stop showing me this", never "end this chat" — which is what makes
+  // a one-keystroke close safe enough to offer in the first place.
+  //
+  // The reopen stack is per-panel: it's cleared whenever the panel closes or another topic opens, so
+  // ⌥⇧T can't drop a chat from a project you left into the one you're in.
+  const closePane = (i: number) => {
+    const n = panesRef.current;
+    if (i < 0 || i >= n) return;
+    // The last tab takes the panel with it, the way the last browser tab takes the window — the
+    // alternative is panel chrome with nothing under it, which is not a state you can read.
+    if (n === 1) { closePanel(); return; }
+    setPanes((p) => {
+      const gone = p[i];
+      // Bounded: this is an undo affordance, not a session history. Eight is far more than the four a
+      // panel can hold, so the cap can only ever discard something long forgotten.
+      if (gone) closedTabs.current = [...closedTabs.current, { pane: gone, at: i }].slice(-8);
+      return p.filter((_, j) => j !== i);
+    });
+    // Closing a tab to the LEFT of the active one shifts every later index down by one, so the stored
+    // index has to follow or the panel silently swaps to a neighbouring conversation — you closed tab 1
+    // and tab 2's transcript is suddenly the one you're reading. The clamp effect above can't fix this:
+    // it only knows the array got shorter, not which end lost the element. Closing the ACTIVE tab keeps
+    // the index, which lands on its right-hand neighbour (clamped back if it was the last), matching
+    // what every browser does.
+    setActivePane((a) => (i < a ? a - 1 : a));
+  };
+  const reopenPane = () => {
+    if (panes.length >= MAX_PANES) return;
+    // Drop anything that's already back on screen instead of reopening a duplicate: two panes on one
+    // session id would share a draft key and a live subscription and fight over both.
+    const stack = closedTabs.current.filter((e) => !e.pane.sid || !panes.some((x) => x.sid === e.pane.sid));
+    if (!stack.length) return;
+    const entry = stack[stack.length - 1];
+    closedTabs.current = stack.slice(0, -1);
+    // Back where it was, not on the end — a restored tab that lands somewhere new isn't an undo.
+    const at = Math.min(entry.at, panes.length);
+    setPanes((p) => { const next = [...p]; next.splice(Math.min(at, p.length), 0, entry.pane); return next; });
+    setActivePane(at);
+  };
+  // Read by the window key handler, which deliberately doesn't re-subscribe per render (same pattern as
+  // focusRef/panesRef). Both handlers only ever call setters, so a render-old copy behaves identically.
+  const tabActions = useRef({ close: closePane, reopen: reopenPane });
+  tabActions.current = { close: closePane, reopen: reopenPane };
   // The active tab is an index into `panes`, so it's re-clamped whenever that array shrinks — closing
   // the active pane (or any pane before it) would otherwise leave the panel showing a different
   // conversation than the tab that's lit. `focusPane` above clamps for the render; this one settles the
@@ -555,6 +606,20 @@ export default function BentoHome() {
       const n = Number(e.code.slice(5));
       if (n === 0) { e.preventDefault(); setPaneView("grid"); return; }
       if (n <= panesRef.current) { e.preventDefault(); setPaneView("tabs"); setActivePane(n - 1); return; }
+    }
+    // ⌥W closes the tab you're reading, ⌥⇧T puts the last one back. The browser chords without the ⌘:
+    // Chrome reserves ⌘W/⌘⇧T for its own tabs and won't let a page have them, and a shortcut that
+    // sometimes closes the dashboard itself is worse than no shortcut. ⌥ also keeps them in the same
+    // family as ⌥1–4/⌥0, which is already how you move between panes.
+    //
+    // `e.code` for the same reason as the digits: ⌥W emits "∑" on a Mac layout. Fires even inside the
+    // composer, like ⌥1–4 — a draft is keyed by session (or pane key, when blank), so ⌥⇧T brings the
+    // pane back with what you were typing still in it.
+    if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === "KeyW" && !e.shiftKey && focusRef.current != null) {
+      e.preventDefault(); tabActions.current.close(focusRef.current); return;
+    }
+    if (e.altKey && !e.metaKey && !e.ctrlKey && e.shiftKey && e.code === "KeyT" && panesRef.current > 0) {
+      e.preventDefault(); tabActions.current.reopen(); return;
     }
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || project) return;
@@ -905,15 +970,33 @@ export default function BentoHome() {
                     const la = pn.sid ? liveAct[pn.sid] : undefined;
                     const on = i === focusPane;
                     return (
-                      <button key={pn.key} onClick={() => { setPaneView("tabs"); setActivePane(i); }} title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})`}
-                        className={`flex min-w-0 shrink items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
-                          on ? "border-[var(--sakura)]/60 bg-[var(--sakura)]/10 text-neutral-100" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>
-                        <span className="shrink-0 tabular-nums text-[9px] text-neutral-600">⌥{i + 1}</span>
-                        {/* Only a genuinely running turn animates — same rule as the bento tiles, and for
-                            the same measured reason (a permanent pulse costs a frame loop forever). */}
-                        {la?.busy && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--sakura)]" />}
-                        <span className="truncate">{s ? titleOf(s) : "New chat"}</span>
-                      </button>
+                      // A div wrapping two buttons, not one button with a nested ✕: a button inside a
+                      // button is invalid HTML, and the browser's recovery is to drop the inner one —
+                      // so the close target would have selected the tab instead of closing it.
+                      <div key={pn.key}
+                        className={`group/tab flex min-w-0 shrink items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] transition-colors ${
+                          on ? "border-[var(--sakura)]/60 bg-[var(--sakura)]/10 text-neutral-100" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}
+                        // Middle-click closes, as it has on every browser tab for twenty years. On
+                        // mousedown rather than auxclick: auxclick fires after the middle button has
+                        // already armed the scroll-anchor cursor, so it's too late to preventDefault it.
+                        onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); closePane(i); } }}>
+                        <button onClick={() => { setPaneView("tabs"); setActivePane(i); }} title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})`}
+                          className="flex min-w-0 flex-1 items-center gap-1.5">
+                          <span className="shrink-0 tabular-nums text-[9px] text-neutral-600">⌥{i + 1}</span>
+                          {/* Only a genuinely running turn animates — same rule as the bento tiles, and for
+                              the same measured reason (a permanent pulse costs a frame loop forever). */}
+                          {la?.busy && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--sakura)]" />}
+                          <span className="truncate">{s ? titleOf(s) : "New chat"}</span>
+                        </button>
+                        {/* Always rendered, only sometimes visible. Revealing it on hover ALONE would
+                            widen the tab at the moment you reached for it and slide the label out from
+                            under the cursor — the same mis-click that moved the header peek below this
+                            row. Reserving the width costs 18px per tab, at a hard maximum of four. */}
+                        <button onClick={() => closePane(i)}
+                          title={panes.length === 1 ? "Close this chat (⌥W) — closes the panel; the session keeps running" : "Close this chat (⌥W) — the session keeps running"}
+                          className={`shrink-0 rounded px-1 leading-none transition-opacity hover:bg-white/15 hover:text-neutral-100 ${
+                            on ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100"}`}>✕</button>
+                      </div>
                     );
                   })}
                 </div>
@@ -933,7 +1016,10 @@ export default function BentoHome() {
                 )}
                 {/* Add a chat to the mix: a blank one, or any of the topic's other sessions. */}
                 <div className="relative shrink-0">
-                  <button onClick={() => setAddMenu((v) => !v)} disabled={panes.length >= MAX_PANES} title="Add a chat"
+                  {/* The only place ⌥⇧T is named: reopen lives next to add because "put it back" and
+                      "open another" are the same reach, and a shortcut nobody is told about is one
+                      nobody uses. */}
+                  <button onClick={() => setAddMenu((v) => !v)} disabled={panes.length >= MAX_PANES} title="Add a chat — ⌥⇧T reopens the last one you closed"
                     className="rounded-lg border border-[var(--sakura)]/40 px-2 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋</button>
                   {addMenu && (
                     <>
@@ -1030,7 +1116,9 @@ export default function BentoHome() {
                   openSids={panes.map((p) => p.sid).filter(Boolean)}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
-                  onClose={() => setPanes((p) => p.filter((_, j) => j !== idx))} />
+                  // Same path as the tab's ✕ and ⌥W, so all three agree about which tab gains focus
+                  // afterwards and all three feed the ⌥⇧T stack.
+                  onClose={() => closePane(idx)} />
               ))}
             </div>
           </>
@@ -1765,7 +1853,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
             once per pane, when the real decision is made once for the panel. That switch now lives in
             the tab row (see the panel chrome), and the tab itself is how you choose a pane. What's left
             here is close, which genuinely is per-pane. */}
-        {count > 1 && <button onClick={onClose} title="Close this chat" className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
+        {count > 1 && <button onClick={onClose} title="Close this chat (⌥W) — the session keeps running; ⌥⇧T reopens it" className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
         {menu && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />

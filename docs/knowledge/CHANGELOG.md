@@ -9,6 +9,15 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-30
+- **Chat tabs close like browser tabs** (§5e) — ✕ on the tab (always on the active one, on hover
+  otherwise, width always reserved so the label can't slide out from under the cursor), middle-click,
+  ⌥W to close and ⌥⇧T to reopen the last one at its original index. Not ⌘W/⌘⇧T: Chrome keeps those. The
+  tab became a `div` around two buttons, since a nested button is dropped by the browser and the ✕ would
+  have selected the tab. Closing is a view action — the session keeps running and stays on the board —
+  and the last tab closes the panel. Fixed alongside: closing a tab **left of** the active one shifted
+  the panel onto a different conversation, because the clamp knew the array had shrunk but not which end
+  lost an element. All three close paths now route through one `closePane(i)`.
+  *Asked by user: "need a way to easily close tab - like browser experience but for chat".*
 - **`CLAUDE.md` works in a fresh clone, and `minami-kb` ships with the repo** (§7b) — the file Claude
   auto-loads described only this machine: it addressed Thomas by name, assumed "you are running inside
   a dashboard chat pane", pointed at `~/.minami/deploy.log` and `Redeploy Minami.command`, cited the
