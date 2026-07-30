@@ -171,7 +171,7 @@ async function drive(a: AgentDef, task: AgentTask): Promise<void> {
     // already done and recorded, and marking a successful run failed because its memory note didn't
     // land would be actively misleading.
     try {
-      sendMessage({ key, cwd: task.cwd, message: wrapUpPrompt(a, task.cwd), mode: a.permissionMode, model: a.model });
+      sendMessage({ key, cwd: task.cwd, message: wrapUpPrompt(a, task.cwd, task.title), mode: a.permissionMode, model: a.model });
       await awaitTurn(key, Date.now() + Math.min(MAX_RUN_MS, 10 * 60 * 1000));
     } catch { /* the run stands; only its memory note is missing */ }
 

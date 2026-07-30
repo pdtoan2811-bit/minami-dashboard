@@ -20,6 +20,13 @@ this to do a piece of work; read the subsystem's own doc.
   share one home, config input rejected rather than coerced, corrupt state reported rather than
   silently emptied, and the roster's N+1 poll collapsed to one request.
   *Reported by user: "I already found bug on the setting toggle omg".*
+- **Second audit pass** (§14) — handoff chains verified end to end for the first time (Alpha's result
+  reached Beta as a standalone brief and Beta acted on it), traversal probes on every id parameter came
+  back clean, and the rewritten settings hook survived rapid toggling, corrupt stored values and
+  foreign storage events. One new defect found and fixed: **every finished task was titled "That run
+  is finished…"** on both the transcript viewer and the main board, because a transcript takes its
+  title from the last user prompt and the wrap-up is always last. The wrap-up now leads with the task
+  title.
 - **Duplicate reply while a turn is parked** (§3, §14) — attaching to a session waiting on a question
   rendered the assistant's message twice, because the in-flight message is already on disk while
   `partial` still holds it. Pre-existing in `lib/use-agent.ts`; the interview made it the normal case.
