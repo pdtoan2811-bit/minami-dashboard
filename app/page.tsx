@@ -1941,24 +1941,28 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           `onFocusCapture`/`onBlurCapture` are what make it breathe — see `composing` above. */}
       <div className={`border-t border-white/10 ${roomy ? "px-4 py-3" : "px-3 py-2"}`}>
         {roomy ? (
-          <>
-            {/* Two doors, ONE destination — the canvas in the bento column. The strip is the in-chat door
-                (you're reading a reply and want to see the shape of what it's doing); the switch on the
-                tile is the from-the-grid one. Both raise the same expanded tile on the left, so there is no
-                second flow surface to keep in sync with this one. */}
+          // The flow door is a CHIP on the control row, never its own row.
+          //
+          // It used to be a full-width strip above this row — ~42px with its margin, permanently, in
+          // every pane. That was affordable when the grid was the default view and the strip only
+          // appeared in a large pane; with tabs-first, the pane you're reading is always `roomy`, so
+          // "the roomy treatment" stopped meaning "occasionally" and started meaning "always".
+          //
+          // Nothing is lost but the running-step title, and that is already said by the activity line
+          // at the other end of this same row. Two doors, ONE destination still holds — this chip and
+          // the switch on the bento tile raise the same canvas.
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} />
             <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
-            <div className="mb-2 flex flex-wrap items-center gap-1.5">
-              <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} />
-              <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
-            </div>
-          </>
+            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
+          </div>
         ) : atLeast(dc, "tight") ? (
           // Cramped: the flow strip's row and the control row become ONE 22px bar. Nothing is removed —
           // the strip becomes a chip and the six controls fold into a pill that states the two things
           // you'd actually check at a glance (plan-vs-code, and the approval level) and opens the real
           // controls on click. ~54px of the pane handed back to the transcript.
           <div className="relative mb-1.5 flex items-center gap-1.5">
-            <FlowStrip turn={flowTurn} busy={agent.busy} compact onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
+            <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <button onClick={() => setModeOpen((v) => !v)} title="Session controls — pause, Plan vs Code, approval level"
               className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
                 modeOpen ? "border-white/25 text-neutral-200" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>
