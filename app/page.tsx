@@ -159,6 +159,19 @@ const goalOf = (s: SessionMeta) => s.goal || "General";
 const titleOf = (s: SessionMeta) => s.task || s.title;
 
 type Project = { name: string; sessions: SessionMeta[]; cwd: string; reqs: number; tokens: number; last: number; active: boolean; review: boolean; goals: string[]; latest: string; weight: number };
+// Sessions → topics. A topic is not stored anywhere: it's `basename(cwd)`, grouped (see §5d). Pulled
+// out of the grid's useMemo so the same derivation can run over the FILTERED list (what the board
+// draws) and over the unfiltered one (what the open panel resolves against) without the two drifting.
+function groupProjects(list: SessionMeta[]): Project[] {
+  const m = new Map<string, SessionMeta[]>();
+  for (const s of list) { const a = m.get(s.project); if (a) a.push(s); else m.set(s.project, [s]); }
+  return [...m.entries()].map(([name, ss]) => {
+    const reqs = ss.reduce((a, x) => a + x.messages, 0);
+    const tokens = ss.reduce((a, x) => a + x.tokensIn + x.tokensOut, 0);
+    const latest = [...ss].sort((a, b) => b.lastActivity - a.lastActivity)[0];
+    return { name, sessions: ss, cwd: ss[0]?.cwd || "", reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), review: ss.some((x) => x.review), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
+  });
+}
 const WINDOWS: { label: string; days: number | null }[] = [
   { label: "24h", days: 1 }, { label: "3d", days: 3 }, { label: "7d", days: 7 }, { label: "30d", days: 30 }, { label: "All", days: null },
 ];
@@ -372,6 +385,12 @@ export default function BentoHome() {
   // canvases in a grid is two things fighting for the same attention, and the grid has room for one.
   const [flowFor, setFlowFor] = useState<{ project: string; sid: string } | null>(null);
   const [picker, setPicker] = useState(false); // folder picker modal open
+  // Is something layered ON TOP of the panel right now? Read by the window-level Escape handler, which
+  // deliberately doesn't re-subscribe per render (same pattern as focusRef/panesRef). Escape belongs to
+  // the nearest thing that can consume it, and both of these are dismissed by it — without this, one
+  // press closed the overlay AND the panel underneath, so leaving the flow canvas also left the chat.
+  const overlayRef = useRef(false);
+  overlayRef.current = picker || !!flowFor;
   const [techIcons, setTechIcons] = useState<Record<string, Icon>>({}); // brand icon SVGs
   const [attachMap, setAttachMap] = useState<Record<string, { tech: string[]; icon?: string }>>({}); // per-project tech + topic icon
   const [showTools] = useSetting<boolean>("showToolLogs", false);
@@ -394,9 +413,14 @@ export default function BentoHome() {
 
   const loadSessions = useCallback(
     () => fetch("/api/bento/sessions").then((r) => r.json()).then((d) => {
+      // A response without a `sessions` ARRAY is a failure, not an empty board — `{error}` from the
+      // route, or an HTML error page that happened to parse. Treating it as [] emptied the grid and,
+      // because the open panel resolves through that list, took the conversation off screen with it
+      // for one poll. Hold the last good list instead; the next tick corrects it either way.
+      if (!Array.isArray(d?.sessions)) { setLoaded(true); return; }
       // Skip the state update (and the whole grid re-render) when nothing changed since the last poll.
-      const sig = JSON.stringify(d.sessions || []);
-      if (sig !== sessionsSig.current) { sessionsSig.current = sig; setSessions(d.sessions || []); }
+      const sig = JSON.stringify(d.sessions);
+      if (sig !== sessionsSig.current) { sessionsSig.current = sig; setSessions(d.sessions); }
       setLoaded(true);
     }).catch(() => setLoaded(true)),
     [],
@@ -422,21 +446,17 @@ export default function BentoHome() {
     fetch("/api/bento/enrich", { method: "POST" }).then((r) => r.json()).then(() => loadSessions()).finally(() => { enrichLock.current = false; setEnriching(false); });
   }, [sessions, loaded, loadSessions]);
 
-  const pool = useMemo(() => sessions.filter((s) => {
-    if (isTrivial(s)) return false;
-    if (winDays != null && Date.now() - s.lastActivity > winDays * 86400000) return false;
-    return true;
-  }), [sessions, winDays]);
+  // Everything the board could ever show — `isTrivial` only. The date window is applied on top of this
+  // (below) rather than folded into it, because the two answer different questions: `pool` is "what
+  // exists", `windowed` is "what I want to look at right now". The open panel needs the first.
+  const pool = useMemo(() => sessions.filter((s) => !isTrivial(s)), [sessions]);
+  const windowed = useMemo(
+    () => (winDays == null ? pool : pool.filter((s) => Date.now() - s.lastActivity <= winDays * 86400000)),
+    [pool, winDays],
+  );
 
   const projects = useMemo<Project[]>(() => {
-    const m = new Map<string, SessionMeta[]>();
-    for (const s of pool) { const a = m.get(s.project); if (a) a.push(s); else m.set(s.project, [s]); }
-    const list = [...m.entries()].map(([name, ss]) => {
-      const reqs = ss.reduce((a, x) => a + x.messages, 0);
-      const tokens = ss.reduce((a, x) => a + x.tokensIn + x.tokensOut, 0);
-      const latest = [...ss].sort((a, b) => b.lastActivity - a.lastActivity)[0];
-      return { name, sessions: ss, cwd: ss[0]?.cwd || "", reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), review: ss.some((x) => x.review), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
-    });
+    const list = groupProjects(windowed);
     const sorters = {
       recent: (a: Project, b: Project) => b.last - a.last,
       busy: (a: Project, b: Project) => b.weight - a.weight,
@@ -445,7 +465,24 @@ export default function BentoHome() {
     list.sort(sorters[sortBy]);
     const ql = q.trim().toLowerCase();
     return ql ? list.filter((p) => `${p.name} ${p.goals.join(" ")} ${p.latest}`.toLowerCase().includes(ql)) : list;
-  }, [pool, q, sortBy]);
+  }, [windowed, q, sortBy]);
+
+  // The open project, resolved OUTSIDE the board's filters.
+  //
+  // `projects` is a view: the search box and the date chip narrow it. The panel used to read the open
+  // project straight out of that view, so anything that filtered a project off the BOARD unmounted the
+  // CONVERSATION with it — every pane in it, mid-turn, with no close action and nothing to say why.
+  // Reproduced: open a chat, type four letters in Search, and the panel is gone. Typing "24h" over an
+  // older chat did the same, as did any poll that failed to return an array (see loadSessions).
+  //
+  // Two lookups, in order: the filtered one first so `p.sessions` still respects the window everywhere
+  // it's read (the ＋ menu, the chat switcher, `continueTarget`), then the unfiltered one purely to
+  // keep what's on screen on screen.
+  const allProjects = useMemo(() => groupProjects(pool), [pool]);
+  const openProj = useMemo(
+    () => (project ? allProjects.find((p) => p.name === project) ?? null : null),
+    [allProjects, project],
+  );
 
   const openProject = useCallback((p: Project) => {
     // Default: open the recent combination (up to 4 sessions active within the date filter). If the
@@ -561,13 +598,42 @@ export default function BentoHome() {
   useEffect(() => {
     const name = project || newTopic?.name || null;
     if (!name) return;
-    const cwd = newTopic ? newTopic.cwd : (projects.find((p) => p.name === name)?.cwd || "");
+    // Same fallback chain as `proj`: a project filtered off the board must not persist `cwd: ""`, or a
+    // refresh restores a panel whose composer is disabled (`submit` requires a cwd) with no way back.
+    const cwd = newTopic ? newTopic.cwd : (projects.find((p) => p.name === name)?.cwd || openProj?.cwd || "");
     // Functional update: merge into the LATEST map, never a stale closure — otherwise a project switch
     // right after adding a pane would overwrite the just-persisted panes of the project we left.
     setOpenPanesMap((prev) => ({ ...prev, [name]: panes }));
     setOpenPanel({ name, cwd, topic: !!newTopic, panes });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panes, project, newTopic]);
+  // Hand a new topic over to the real one the moment the board has it.
+  //
+  // A topic isn't a stored object (§5d) — `newTopic` is pure client state, a name and a cwd with a
+  // permanently EMPTY `sessions` array, meant to hold the panel together only until the first chat
+  // lands on disk. Nothing ever retired it. So the board would grow a proper tile for the folder while
+  // the panel stayed in ad-hoc mode reading `sessions: []`: the chat switcher listed nothing, the ＋
+  // menu offered no existing chats, `continueTarget` was always null, and a refresh restored a topic
+  // panel with no route back to the conversation it had just started. That is the shape of the
+  // complaint "the new chat lost my history" — the transcript was on disk and reachable from the tile
+  // the whole time, but not from the panel that was actually open on it.
+  //
+  // Matched on CWD rather than name: the picker may label a topic something other than its folder
+  // ("CLI" for a folderless session in $HOME) while a topic's name is derived as basename(cwd), so
+  // adopting by name would strand exactly those. The `sessions.some` arm covers the other direction —
+  // two different folders sharing a basename collapse into one topic whose `cwd` is only whichever
+  // session sorted first (see `continueTarget`'s note on ~/work/api vs ~/personal/api).
+  //
+  // `panes` is deliberately untouched. A blank pane here is a chat the user is about to start, not a
+  // gap to be filled — replacing it with the folder's recent chats would hijack a "new chat in a folder
+  // that already has some", which is the ordinary case for the ＋ tile.
+  useEffect(() => {
+    if (!newTopic) return;
+    const real = allProjects.find((p) => p.cwd === newTopic.cwd || p.sessions.some((s) => s.cwd === newTopic.cwd));
+    if (!real) return;
+    setNewTopic(null);
+    setProject(real.name);
+  }, [newTopic, allProjects]);
   // On first load, reopen whatever panel was open before a refresh (its ChatColumns then reattach to
   // any still-running session). Runs once, after the persisted value has hydrated from localStorage.
   useEffect(() => {
@@ -593,10 +659,27 @@ export default function BentoHome() {
   }, [projSig]);
 
   const onKey = useCallback((e: KeyboardEvent) => {
-    // Escape closes the panel, full stop. It briefly meant "step out of focus first", back when focus
-    // was a mode you could get stuck in; now tabs is the resting state and there is nothing to step out
-    // of, so the label on the button (`esc ✕`) and the key agree again.
-    if (e.key === "Escape") { closePanel(); return; }
+    // Escape closes the panel — but only when nothing nearer is entitled to it. It used to fire
+    // unconditionally, above even the input/textarea guard further down, which made it the single most
+    // destructive key in the app: pressing it with the caret in the composer tore down the whole panel
+    // (measured, with a half-typed draft in the box), and `closePanel` also clears the persisted
+    // `openPanel`, so a reload afterwards came back to the board rather than the conversation. On a
+    // Vietnamese keyboard it's worse than a slip — Escape is how you dismiss an IME candidate list, so
+    // the key you press *while writing a message* threw the message's window away.
+    //
+    // Four claims outrank the panel, in this order:
+    //   defaultPrevented — a child (the lightbox's capture handler, the URL bar) already used it
+    //   isComposing      — the IME owns the keystroke; it never reaches the app as intent
+    //   a text field     — Escape means "cancel what I'm typing", never "close the window"
+    //   an open overlay  — the folder picker and the flow canvas have their own way out
+    if (e.key === "Escape") {
+      if (e.defaultPrevented || e.isComposing) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
+      if (overlayRef.current) return;
+      closePanel();
+      return;
+    }
     // ⌥1–4 selects a tab, ⌥0 flips to the grid — and it deliberately fires even while the composer has
     // focus: switching panes mid-draft is the whole point, and each pane's draft is persisted per
     // session (see `draft:` in ChatColumn), so nothing is lost.
@@ -663,7 +746,7 @@ export default function BentoHome() {
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   }, [isDragging, setPanelW, setRail]);
 
-  const proj = project ? projects.find((p) => p.name === project) : newTopic;
+  const proj = project ? (projects.find((p) => p.name === project) || openProj) : newTopic;
   const maxW = Math.max(1, ...projects.map((p) => p.weight)); // size ratio is vs the busiest project
   // The rail is only a state the bento can be *in* while a chat is open; with no panel it would just
   // be a worse grid. Every collapse path checks this, so there's one definition of "railed".

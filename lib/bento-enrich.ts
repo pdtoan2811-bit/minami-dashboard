@@ -79,8 +79,13 @@ export async function enrich(digests: Digest[]): Promise<Record<string, Entry>> 
   const known = Object.entries(goalsByProject).map(([p, g]) => `${p}: ${[...g].join(" | ")}`).join("\n") || "(none yet)";
 
   // Compact digest per session (kept short to save tokens): intent + who-spoke-last + a tail snippet.
+  // `intent` is the session's OPENING ask (d.title), with the latest prompt only as a fallback. A
+  // session is labelled once and the label is what the tile then shows for good, so it has to describe
+  // the conversation rather than whichever message happened to be last when the labeller ran — that
+  // produced tasks like "deploy the app" for a chat that was about something else for forty turns.
+  // `tail` still carries where it has got to, which is what the `review` decision needs.
   const lines = todo.map((d, i) =>
-    `${i + 1}. id=${d.id} | project=${d.project} | intent="${(d.lastPrompt || d.title).slice(0, 110)}" | lastRole=${d.lastRole} | tail="${(d.tail || "").slice(0, 140)}" | tools=${d.toolNames.slice(0, 5).join(",")}`
+    `${i + 1}. id=${d.id} | project=${d.project} | intent="${(d.title || d.lastPrompt).slice(0, 110)}" | lastRole=${d.lastRole} | tail="${(d.tail || "").slice(0, 140)}" | tools=${d.toolNames.slice(0, 5).join(",")}`
   ).join("\n");
 
   const prompt =

@@ -53,6 +53,22 @@ function cleanTitle(raw: string): string {
   return s.slice(0, 80);
 }
 
+// Does this message say enough to NAME a conversation?
+//
+// "First prompt" is the right rule for a title, but the first prompt is often not a topic: chats open
+// on "yes", "ok", "continue", "do it" — an answer to something said elsewhere, or the nudge that
+// restarts yesterday's work. Measured on a real transcript, taking the opener literally titled a
+// 46-prompt session "yes". So the seed walks forward to the first message that actually describes
+// something, and freezes there.
+//
+// The test is length, not vocabulary: a keyword list ("fix", "add", "why"…) would need maintaining and
+// would still miss the next phrasing, while "long enough to be a description" is stable across
+// languages — this box is used in English and Vietnamese, and neither gets a hand-tuned stopword list.
+function looksLikeATopic(s: string): boolean {
+  const t = s.trim();
+  return t.length >= 20 || t.split(/\s+/).length >= 4;
+}
+
 export function tierOf(model?: string): string {
   if (!model) return "Opus";
   if (model.includes("haiku")) return "Haiku";
@@ -102,6 +118,12 @@ function touchLRU<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
 type ParseAccum = {
   title: string; lastPrompt: string; model: string; cwd: string; gitBranch: string;
   firstUser: string; lastText: string; lastRole: string;
+  // The earliest user message that actually names a topic (see looksLikeATopic), and a latch saying
+  // the search is over. The latch exists for accumulators restored from a cache written before this
+  // field did — their early messages are no longer in hand, so the seed is settled once from what IS
+  // known (`firstUser`) and closed, rather than letting whatever message arrives next claim it and
+  // freeze the title on something from the middle of the conversation.
+  titleSeed: string; seedClosed: boolean;
   tin: number; tout: number; cost: number; messages: number; tools: number;
   toolSet: string[];
   lastTs: number;
@@ -111,11 +133,19 @@ type ParseAccum = {
 function freshAccum(): ParseAccum {
   return {
     title: "", lastPrompt: "", model: "", cwd: "", gitBranch: "", firstUser: "", lastText: "", lastRole: "",
+    titleSeed: "", seedClosed: false,
     tin: 0, tout: 0, cost: 0, messages: 0, tools: 0, toolSet: [], lastTs: 0, lineLeftover: "", byteLeftoverB64: "",
   };
 }
 
-type CacheEntry = { mtime: number; size: number; head: string; accum: ParseAccum; meta: SessionMeta };
+type CacheEntry = { mtime: number; size: number; head: string; accum: ParseAccum; meta: SessionMeta; dv?: number };
+
+// Bumped whenever buildMeta's DERIVATION changes rather than its inputs. An entry caches both the
+// parse state (`accum`) and the `meta` derived from it, and a transcript that never grows again is
+// never re-derived — so a change to how a title is chosen would otherwise only reach sessions that
+// happened to receive another message, leaving the board a permanent mix of the old rule and the new.
+// Re-deriving costs no file I/O at all: buildMeta is pure over state we already hold on disk.
+const META_DERIVATION_VERSION = 3;
 
 // Fingerprint of a file's first `len` bytes — cheap (len is capped small) and used ONLY to tell "this
 // file was purely appended to" apart from "this file was truncated and rewritten, but happens to have
@@ -142,6 +172,16 @@ const META_CACHE_MAX = 500; // generous vs. the 60-tile grid — bounds memory w
 const CACHE_DIR = path.join(os.homedir(), ".minami-bento");
 const META_CACHE_FILE = path.join(CACHE_DIR, "meta-cache.json");
 let cacheDirty = false;
+// Bring an accumulator written before `titleSeed` existed up to the current shape, WITHOUT re-reading
+// its transcript. Only `firstUser` survives from that session's opening, so the seed is decided from
+// it and then latched shut — the alternative, leaving the search open, would let the next message the
+// session happens to receive become its permanent title, which is a worse failure than no seed at all.
+function migrateAccum(acc: ParseAccum): void {
+  if (typeof acc.seedClosed === "boolean") return;
+  const c = cleanTitle(acc.firstUser || "");
+  acc.titleSeed = c && looksLikeATopic(c) ? c : "";
+  acc.seedClosed = true;
+}
 function loadDiskCache(): void {
   const g = globalThis as any;
   if (g.__minamiMetaCacheLoaded) return;
@@ -150,7 +190,19 @@ function loadDiskCache(): void {
     // Tolerate a pre-upgrade cache file (entries without `size`/`accum`): summarize() below treats a
     // missing `accum` as "no incremental state" and does one full reparse per file, then upgrades it.
     const obj = JSON.parse(fs.readFileSync(META_CACHE_FILE, "utf8")) as Record<string, Partial<CacheEntry>>;
-    for (const [f, v] of Object.entries(obj)) if (!cache.has(f) && v && typeof v.mtime === "number") cache.set(f, v as CacheEntry);
+    for (const [f, v] of Object.entries(obj)) {
+      if (cache.has(f) || !v || typeof v.mtime !== "number") continue;
+      const e = v as CacheEntry;
+      // Stale derivation → rebuild `meta` from the accumulator we already have, in memory. An entry
+      // with no `accum` (pre-upgrade) is left alone: summarize() gives it a full reparse on first use.
+      if (e.dv !== META_DERIVATION_VERSION && e.accum && e.meta?.id) {
+        migrateAccum(e.accum);
+        e.meta = buildMeta(e.meta.id, f, e.accum, e.mtime);
+        e.dv = META_DERIVATION_VERSION;
+        cacheDirty = true;
+      }
+      cache.set(f, e);
+    }
   } catch { /* no cache file yet — first run */ }
 }
 function saveDiskCache(): void {
@@ -214,6 +266,10 @@ function foldLine(acc: ParseAccum, line: string): void {
     if (typeof c === "string") txt = c;
     else if (Array.isArray(c)) txt = c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join(" ");
     if (txt.trim() && !acc.firstUser) acc.firstUser = txt.trim();
+    if (txt.trim() && !acc.seedClosed && !acc.titleSeed) {
+      const c = cleanTitle(txt.trim());
+      if (c && looksLikeATopic(c)) acc.titleSeed = c;
+    }
     if (txt.trim()) { acc.lastText = txt.trim(); acc.lastRole = "user"; }
   } else if (r.type === "assistant") {
     acc.messages++;
@@ -237,7 +293,21 @@ function foldLine(acc: ParseAccum, line: string): void {
 function buildMeta(id: string, file: string, acc: ParseAccum, mtime: number): SessionMeta {
   const project = acc.cwd ? acc.cwd.split("/").filter(Boolean).pop() || acc.cwd : (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
   const lastActivity = Math.max(acc.lastTs, mtime);
-  const derived = acc.title || cleanTitle(acc.lastPrompt) || cleanTitle(acc.firstUser) || project;
+  // FIRST prompt, not the last one. The CLI appends a `last-prompt` row on every message you send, so
+  // preferring it meant a conversation's NAME changed each turn — the tile, the tab and the switcher
+  // entry all renamed themselves mid-chat, and a chat you were looking for was filed under whatever
+  // you happened to say to it most recently. Measured on one real session: eight successive titles,
+  // ending on "pending them all tasks and get my app deploy…" for a chat that opened on something
+  // else entirely. A name is what a thing is about; that's fixed at the opening ask.
+  //
+  // Still ordered AFTER a `custom-title`: an explicit rename outranks any derivation.
+  //
+  // The raw first message is deliberately NOT a step in this chain — only `titleSeed`, which is the
+  // first message that carries a topic at all. A session can open on "yes", a `<local-command…>` echo
+  // or a compaction preamble, and naming it "yes" is worse than the churn this whole change removes.
+  // So a title is frozen only when there is something worth freezing; failing that we fall back to the
+  // latest prompt, which at least describes something, and accept that it moves.
+  const derived = acc.title || acc.titleSeed || cleanTitle(acc.lastPrompt) || project;
   return {
     id, project, cwd: acc.cwd, gitBranch: acc.gitBranch,
     title: derived.slice(0, 80),
@@ -281,6 +351,10 @@ function summarize(file: string, id: string, raw?: string): SessionMeta {
   const headOk = !!cached && (cached.size === 0 || cached.head === headFingerprint(file, Math.min(cached.size, HEAD_FINGERPRINT_BYTES)));
   const canIncremental = raw === undefined && !!cached && !!cached.accum && cached.size <= size && headOk;
   const acc: ParseAccum = canIncremental && cached ? cached.accum : freshAccum();
+  // Belt and braces with loadDiskCache's own pass: the cache file is shared by every process pointed at
+  // this home dir (prod, a preview build, `next dev`), so an entry can arrive carrying a version stamp
+  // this build didn't write. migrateAccum is idempotent and keyed on the FIELD, not the stamp.
+  if (canIncremental) migrateAccum(acc);
   const readStart = canIncremental && cached ? cached.size : 0;
 
   if (raw !== undefined) {
@@ -307,7 +381,7 @@ function summarize(file: string, id: string, raw?: string): SessionMeta {
   // Fingerprint AFTER parsing, over the file as it stands now — a pure append never touches these bytes,
   // so this stays stable across future polls and only changes if something rewrites the file's start.
   const head = headFingerprint(file, Math.min(size, HEAD_FINGERPRINT_BYTES));
-  touchLRU(cache, file, { mtime, size, head, accum: acc, meta }, META_CACHE_MAX);
+  touchLRU(cache, file, { mtime, size, head, accum: acc, meta, dv: META_DERIVATION_VERSION }, META_CACHE_MAX);
   cacheDirty = true;
   return meta;
 }

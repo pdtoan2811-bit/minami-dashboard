@@ -9,6 +9,22 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-31
+- **A chat keeps its name, its window, and its way back** (§1, §5d) — one report, four independent
+  causes, all reproduced against the running server before anything was touched. **Renaming:** `title`
+  preferred `lastPrompt`, and the CLI appends a `last-prompt` row on every message, so every tile and
+  tab renamed itself each turn (measured: eight successive titles for one session). It now freezes on
+  `titleSeed`, the first message that actually names a topic — chats open on "yes" or a
+  `<local-command…>` echo often enough that the literal first prompt is not it.
+  `META_DERIVATION_VERSION` makes the change reach already-cached sessions at no file-I/O cost;
+  `migrateAccum` settles and latches the seed for accumulators that predate the field. **Closing:**
+  Escape was checked *above* the input/textarea guard, so pressing it in the composer — or to dismiss
+  an IME candidate list, which is what it does on a Vietnamese keyboard — tore down the panel and
+  cleared the persisted `openPanel`; `proj` was resolved out of the *filtered* project list, so typing
+  in Search unmounted the open conversation mid-turn; and a failed `/api/bento/sessions` poll was read
+  as an empty board. **Losing history:** `newTopic` was never retired once its folder became a real
+  project, leaving a panel with an empty session list and no route back to the chat it had just
+  started. *Reported by user: "new chat … keeps changing topic title, close on its own and lose the
+  history".*
 - **No personal identity ships in the repo** (§6) — `preferred-account.ts` hardcoded the author's
   email as the built-in fallback, so a stranger's first run raised a permanent wrong-account alert
   against an address they can't log into. Fallback is now empty and `offPreferred` is guarded on it,
