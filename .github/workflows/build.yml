@@ -19,9 +19,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v5 rather than v4: v4 targets Node 20, which the runners now force onto Node 24 and warn
+      # about on every single run. A workflow that cries wolf on a green build stops being read.
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
