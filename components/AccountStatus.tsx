@@ -5,8 +5,9 @@
 //
 // Why this exists: token-slayer silently auto-fails-over to a READY slot when the active one's
 // credential dies, and nothing in the UI says so — you just quietly start burning the wrong
-// account's weekly limit for hours. Observed live on 2026-07-29: a `switch oedevai2` reported
-// success, then the session was back on pdtoan2811 minutes later with no signal anywhere.
+// account's weekly limit for hours. Observed live on 2026-07-29: a switch back to the preferred
+// account reported success, then the session was on a different one minutes later, with no signal
+// anywhere.
 //
 // Trigger comes from /api/accounts's `live` block, which reads ~/.claude.json's oauthAccount —
 // the identity Claude Code actually authenticated with — NOT token-slayer's own `active` label,
@@ -80,7 +81,7 @@ const driftedSpawners = (l: Live | null): SpawnerPin[] =>
   (l?.models?.spawners ?? []).filter((s) => s.drifted);
 
 // The episode record we remember between polls: its identity, plus enough detail to word the
-// recovery card in terms of what was actually wrong ("was pdtoan2811" vs "back on the model pin").
+// recovery card in terms of what was actually wrong ("was <the wrong account>" vs "back on the pin").
 const episodeOf = (l: Live) => ({
   key: episodeKey(l),
   account: l.offPreferred ? l.email : null,
@@ -150,7 +151,7 @@ export function AccountStatus() {
   // `critical`, because it means the usual one-click remedy is not going to save you.
   const [switchStuck, setSwitchStuck] = useState(false);
   // Collapsed = card hidden, chip still showing. Keyed by the *episode*, so collapsing a
-  // pdtoan2811 episode doesn't pre-suppress a different account — or a model drift — later.
+  // wrong-account episode doesn't pre-suppress a different account — or a model drift — later.
   const [collapsedFor, setCollapsedFor] = useState<string | null>(null);
   // Set on the unhealthy → healthy transition. Drives the green card.
   const [recovered, setRecovered] = useState<{ account: string | null; models: boolean } | null>(null);
@@ -315,8 +316,8 @@ export function AccountStatus() {
   const collapsed = unhealthy && collapsedFor === key;
   const drifted = driftedSpawners(live);
   // What the chip says. Account drift names the account you're wrongly burning; a model-only
-  // episode has no wrong account to name, so it says what IS wrong instead of a green-looking
-  // "oedevai2" that would read as all-clear.
+  // episode has no wrong account to name, so it says what IS wrong instead of naming the account
+  // you are correctly on, which would read as all-clear.
   const chipLabel = accountDrift ? shortName(live.email ?? "unknown") : "model pin";
 
   const motion = (

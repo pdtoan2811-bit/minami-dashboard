@@ -95,8 +95,8 @@ bash bin/deploy.sh --verify-only  <i># what is serving right now</i></pre>
     field only echoes a label written on the last switch <em>attempt</em>; it is not proof the switch
     took. This was verified the hard way.</p>
     <pre><i>// 2026-07-29 — these disagreed, and the CLI was the one lying</i>
-state.json      active_slot = <u>oedevai2@gmail.com</u>      <i>← a label</i>
-~/.claude.json  oauthAccount.emailAddress = <b>pdtoan2811@gmail.com</b>   <i>← the truth</i></pre>
+state.json      active_slot = <u>preferred@example.com</u>      <i>← a label</i>
+~/.claude.json  oauthAccount.emailAddress = <b>other@example.com</b>   <i>← the truth</i></pre>
     <p>So the alert reads <code>~/.claude.json</code>, which Claude Code writes from the credential it
     actually authenticated with. It also reports when the CLI's claim disagrees with reality — because
     that means "switch back" may report success and change nothing, which is why the alert

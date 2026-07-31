@@ -31,6 +31,13 @@ the board fills with your own Claude Code sessions immediately. Node 18.18+ (20+
 the Claude Code CLI logged in if you want to drive live sessions. Full walkthrough: `SETUP.md`.
 User-facing feature tour: `README.md`. Contribution norms: `CONTRIBUTING.md`.
 
+**Every knob is an env var, and `.env.example` is the complete list** — all of them optional, each
+one documented with its built-in default. Nothing in this repo is pinned to the author's machine:
+paths default relative to `$HOME`, model ids all resolve through `lib/model-pins.ts`, and no personal
+account is compiled in (the wrong-account check stays dormant until you choose one in Settings). If
+you are asked to configure something, read `.env.example` first — if a value you need isn't there,
+that's a bug in the file, not a value to hardcode.
+
 ## Checking that a change compiles
 
 ```bash

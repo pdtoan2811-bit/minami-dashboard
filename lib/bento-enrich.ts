@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CHEAP_MODEL } from "./model-pins";
 
 const DIR = path.join(os.homedir(), ".minami-bento");
 const CACHE = path.join(DIR, "cache.json");
@@ -24,7 +25,7 @@ export type Digest = { id: string; project: string; title: string; lastPrompt: s
 function runHaiku(prompt: string): Promise<string> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
-    try { child = spawn("claude", ["-p", prompt, "--model", "claude-haiku-4-5", "--output-format", "json"], { cwd: DIR }); }
+    try { child = spawn("claude", ["-p", prompt, "--model", CHEAP_MODEL, "--output-format", "json"], { cwd: DIR }); }
     catch { resolve(""); return; }
     let out = "", done = false;
     const finish = (v: string) => { if (!done) { done = true; clearTimeout(to); resolve(v); } };

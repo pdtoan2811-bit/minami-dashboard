@@ -338,8 +338,8 @@ function settle(s) {
     wrong. Its <code>active</code> field only echoes a label written on the last switch <em>attempt</em>;
     it is not evidence the switch took.</p>
     <pre><i>// verified 2026-07-29: these two disagreed, and the CLI was the liar</i>
-state.json      active_slot = <u>oedevai2@gmail.com</u>     <i>← a label</i>
-~/.claude.json  oauthAccount.emailAddress = <b>pdtoan2811@gmail.com</b>  <i>← the truth</i></pre>
+state.json      active_slot = <u>preferred@example.com</u>     <i>← a label</i>
+~/.claude.json  oauthAccount.emailAddress = <b>other@example.com</b>  <i>← the truth</i></pre>
     <p class="sql-note">Claude Code writes <code>oauthAccount</code> from the credential it actually
     authenticated with, so it cannot drift the same way.</p>
     <p>So <code>/api/accounts</code> layers a <code>live</code> block on top of the CLI output, read

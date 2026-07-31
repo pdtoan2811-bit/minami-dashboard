@@ -16,11 +16,19 @@ export const CONFIG_FILE =
   process.env.MINAMI_ACCOUNT_CONFIG || path.join(os.homedir(), ".minami", "account.json");
 
 /**
- * Shipped fallback, used only when nothing has ever been chosen and no env var is set.
- * Kept in sync with the pool by hand — as of 2026-07-30 `tok setup` replaced
- * `oedevai2@gmail.com` with `oedevai5@gmail.com`.
+ * Deliberately EMPTY, and it must stay that way: this file is checked in, so any address written
+ * here ships to every clone. It used to name the author's account, which meant a stranger's first
+ * run raised a permanent wrong-account alert measured against an email they've never heard of —
+ * an alarm nobody can clear because the "correct" account isn't theirs to log into.
+ *
+ * Empty means the check is DORMANT, not broken (see `offPreferred` in app/api/accounts/route.ts):
+ * with no preferred account there is no such thing as being off it. Pick one in Settings, or set
+ * `MINAMI_PREFERRED_ACCOUNT`, and the alert arms itself.
+ *
+ * This costs the author nothing, because a real choice was never stored here — it lives in
+ * `~/.minami/account.json`, outside the repo, which is exactly where a personal answer belongs.
  */
-export const FALLBACK = "oedevai5@gmail.com";
+export const FALLBACK = "";
 
 type Stored = { preferred?: string };
 

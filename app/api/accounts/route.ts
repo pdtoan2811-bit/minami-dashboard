@@ -29,8 +29,8 @@ function run(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: str
 //
 // This is deliberately NOT `token-slayer status`'s `active` field: that only echoes `active_slot`
 // from ~/.config/token_slayer/state.json, which is a label token-slayer writes when you ask it to
-// switch — not proof the switch took. Verified 2026-07-29: state.json said `oedevai2@gmail.com`
-// while the real OS-keychain credential belonged to `pdtoan2811@gmail.com`, so every session was
+// switch — not proof the switch took. Verified 2026-07-29: state.json named one pooled account
+// while the real OS-keychain credential belonged to a different one, so every session was
 // silently billing the wrong account while the CLI's banner claimed otherwise. ~/.claude.json's
 // `oauthAccount` block is written by Claude Code itself from the credential it actually logged in
 // with, so it can't drift the same way. See the vault's [[Token Slayer]] note.
@@ -41,8 +41,9 @@ function liveIdentity(): { email: string | null; orgUuid: string | null; display
     return {
       email: o.emailAddress ?? null,
       orgUuid: o.organizationUuid ?? null,
-      // NB: displayName is cosmetic and demonstrably goes stale across switches (it read "OE Dev"
-      // while every UUID said pdtoan2811) — never key logic off it, it's here for display only.
+      // NB: displayName is cosmetic and demonstrably goes stale across switches (observed reading
+      // the PREVIOUS account's name while every UUID said the new one) — never key logic off it,
+      // it's here for display only.
       displayName: o.displayName ?? null,
     };
   } catch {
@@ -73,7 +74,12 @@ export async function GET() {
         // this so an unpinned default doesn't masquerade as a deliberate decision.
         preferredPinned: isPinned(),
         // The alert's trigger: we know who we really are, and it isn't who we want to be.
-        offPreferred: live.email != null && live.email !== preferred,
+        //
+        // `preferred` is empty until someone chooses one (the shipped default is deliberately blank
+        // — see lib/preferred-account.ts), and with no preferred account there is no such thing as
+        // being off it. Without this guard a fresh clone alerts forever against "", which reads as
+        // "you are on the wrong account" to someone who has not yet been asked which account is right.
+        offPreferred: preferred !== "" && live.email != null && live.email !== preferred,
         // The CLI's own banner disagreeing with reality — worth surfacing separately, because it
         // means "just switch back" may report success without actually changing anything.
         claimsMismatch: live.email != null && typeof doc?.active === "string" && doc.active !== live.email,

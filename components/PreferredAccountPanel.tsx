@@ -133,7 +133,16 @@ export default function PreferredAccountPanel() {
 
           {loaded && !error && live && (
             <p className="mt-3 text-[11px] text-neutral-500">
-              {live.offPreferred ? (
+              {/* Three states, not two. "No account chosen yet" is not the same as "you match",
+                  and saying "matches the preferred account" when there is no preferred account
+                  claims an all-clear nobody asked for — the check is simply off until you pick. */}
+              {!live.preferred ? (
+                <>
+                  No preferred account chosen, so the wrong-account alert is off. Pick one above to
+                  arm it — you&rsquo;re currently on{" "}
+                  <span className="font-mono text-neutral-300">{live.email ?? "an unknown account"}</span>.
+                </>
+              ) : live.offPreferred ? (
                 <>
                   Currently running on{" "}
                   <span className="font-mono text-amber-400">{live.email}</span> — not the preferred
@@ -142,7 +151,7 @@ export default function PreferredAccountPanel() {
               ) : (
                 <>
                   Live credential matches the preferred account.
-                  {live.preferredPinned === false && " (Shipped default — not yet pinned.)"}
+                  {live.preferredPinned === false && " (From MINAMI_PREFERRED_ACCOUNT — not yet pinned.)"}
                 </>
               )}
             </p>

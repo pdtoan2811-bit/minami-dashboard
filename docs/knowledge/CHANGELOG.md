@@ -8,6 +8,36 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-07-31
+- **No personal identity ships in the repo** (§6) — `preferred-account.ts` hardcoded the author's
+  email as the built-in fallback, so a stranger's first run raised a permanent wrong-account alert
+  against an address they can't log into. Fallback is now empty and `offPreferred` is guarded on it,
+  making the check dormant until you choose an account; `PreferredAccountPanel` grew a third state so
+  "nothing chosen" stops reading as "all clear". No behaviour change for the author — the real choice
+  was always in `~/.minami/account.json`, outside the repo.
+  *Asked by user: "I saw lots of hardcodes — audit to change them all back to dynamic variable that I
+  can share this repo as opensource".*
+- **`.env.example` documents all 29 env vars** — 24 were undocumented, so another user's Claude Code
+  had no way to know what was configurable. Each entry now names its built-in default. Verified both
+  directions: nothing read by the app is missing, nothing documented is unused.
+- **Two stragglers made dynamic** — `bin/task.mjs` hardcoded `localhost:3000` for its live-agent
+  check (a dashboard on another port reported "no live agents", indistinguishable from the truth, on
+  the check that stops you deleting an occupied worktree); and `lib/bento-enrich.ts` held a literal
+  `claude-haiku-4-5` against the "model ids only in `lib/model-pins.ts`" rule — now `CHEAP_MODEL`,
+  overridable via `MINAMI_CHEAP_MODEL`, deliberately not falling through to the pin.
+- **No real account addresses anywhere in the repo** (§6) — the author's two Gmail addresses appeared
+  in ~12 places across code comments, the knowledge record and the KB pages, always as worked examples
+  ("state.json said X while the keychain said Y"). In a public repo that publishes personal addresses
+  and tells a reader nothing. Replaced with `preferred@example.com` / `other@example.com`, which are
+  self-documenting — they name the *role* the account played in the incident, which is the part that
+  carries the lesson. Quoted user reports are redacted to `[account]` rather than rewritten, so no
+  quote claims words that weren't said. The `github.com/pdtoan2811-bit/...` clone URLs stay: that's
+  the repository's actual address, not a per-user value.
+- **A dead Claude account reported `READY` for ten hours** (§6) — post-mortem recorded; `tok status`
+  derives that from `needs_reauth`, written at add-time and never revised when a refresh fails.
+  `tok sync` flips it to `REAUTH`. Diagnosis only; recovery needs an interactive login.
+  *Reported by user: "check why [account] got Failed to authenticate ... since everything is alright".*
+
 ### 2026-07-30
 - **Settings' toggle was being squashed by its own description** (§5e) — `Toggle` lacked the `shrink-0`
   that `Segmented` got when the same bug hit it, so as a flex item opposite a long description it
@@ -114,12 +144,12 @@ this to do a piece of work; read the subsystem's own doc.
 - **Preferred account is now chosen in Settings** (§6) — new `lib/preferred-account.ts` persists it to
   `~/.minami/account.json`, `GET /api/accounts` reads it per-request, and a new `PUT` sets it.
   `components/PreferredAccountPanel.tsx` adds the Account section. It had been a module-level
-  constant defaulting to `oedevai2@gmail.com`, which `tok setup` deleted from the pool — so the
+  constant defaulting to an account which `tok setup` later deleted from the pool — so the
   header alert was firing on every healthy session, comparing the live credential against an account
   that no longer existed. `PUT` is separate from `POST` because `POST` rewrites the Keychain and kills
   running sessions; choosing a target must not do that. Verified live on :3001 — valid write pins and
   flips `offPreferred`, a non-pool address and an empty body both 400 and leave the file untouched.
-  *Reported by user: "set the minami dashboard email token cli to oedevai5@gmail.com" → "change the
+  *Reported by user: "set the minami dashboard email token cli to [account]" → "change the
   minami dashboard so I can switch it inside the setting"*
 - **The flow strip stops being a row** (§5e, §5f) — it is a chip on the control row at every density
   tier, next to Plan/Code and the approval chips, and the full-width variant is deleted. It cost ~42px
@@ -513,7 +543,7 @@ this to do a piece of work; read the subsystem's own doc.
   diagrams, zero dependencies.
 - **`bin/serve.sh` fixed** — brace `${PORT}` so a non-UTF-8 locale can't abort the swap silently.
 - **Account alert shipped** — triggers on `~/.claude.json` ground truth, not the token-slayer banner.
-  *Reported by user: "alert me whenever I'm back on pdtoan2811."*
+  *Reported by user: "alert me whenever I'm back on the wrong account."*
 - **Live sessions moved to Opus 5** with effort left at the SDK default (was Opus 4.8 `--effort high`).
 
 ### 2026-07-28

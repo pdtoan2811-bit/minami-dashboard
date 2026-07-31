@@ -121,7 +121,12 @@ function listTasks() {
 // off, that being one of its points.
 async function liveCwds() {
   try {
-    const r = await fetch("http://localhost:3000/api/agent/live", { signal: AbortSignal.timeout(1500) });
+    // Same env var every other caller uses (bin/agent.mjs, lib/agents/store.ts). This was the one
+    // place that hardcoded the port, so a dashboard moved off :3000 reported "no live agents" —
+    // an answer indistinguishable from the real thing, on a check whose whole job is to stop you
+    // deleting a worktree someone is working in.
+    const base = process.env.MINAMI_DASHBOARD_URL || "http://127.0.0.1:3000";
+    const r = await fetch(`${base}/api/agent/live`, { signal: AbortSignal.timeout(1500) });
     const d = await r.json();
     return new Set(Object.values(d.activity || {}).map((x) => x.cwd));
   } catch { return null; }

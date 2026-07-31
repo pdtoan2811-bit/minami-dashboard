@@ -26,6 +26,14 @@ export const PINNED_MODEL = process.env.MINAMI_PINNED_MODEL || "claude-opus-5";
 // literal, so moving the pin moves this too — that's the whole point of the file.
 export const DASHBOARD_MODEL = process.env.MINAMI_DASHBOARD_MODEL || PINNED_MODEL;
 
+// The cheap deterministic worker: tile labels and goal/task inference (lib/bento-enrich.ts). It does
+// NOT fall through to the pin, and that asymmetry is the point — this work is mechanical
+// summarisation on a hot path, so putting it on the judgement model would multiply cost for no gain.
+// It lives here anyway, rather than as a literal at the call site, because "never hardcode a model id
+// outside this file" only holds if the deliberate exceptions are here too. Excluded from the drift
+// check below on purpose: being off the pin is this caller's correct state, not drift.
+export const CHEAP_MODEL = process.env.MINAMI_CHEAP_MODEL || "claude-haiku-4-5";
+
 // The picker menu. Defined in lib/model-catalog.ts and re-exported here so this file stays the one
 // place code looks for "which models exist" — the catalog is a separate module only because THIS one
 // imports node:fs, and the agent config form that renders the menu runs in the browser.
