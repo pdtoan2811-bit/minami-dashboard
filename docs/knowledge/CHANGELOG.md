@@ -9,6 +9,16 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-31
+- **The worktree occupancy guard had never once run** (§9) — `bin/task.mjs` tested session cwds against
+  worktree paths, but nothing ever puts a session in a worktree, so `merge`'s `agent-live` refusal and
+  autopilot's `t.live === false` gate were both unreachable and autopilot deleted trees agents were
+  writing in. New `lib/worktree-claim.ts` adds a heartbeat claim file inside each tree; occupancy is
+  now claim ∨ live-cwd, so it survives a server restart and works with the dashboard down. `cmdRm` had
+  no occupancy check at all and now has one. QA found two more before shipping: the claim file made
+  every claimed tree read as dirty (now gitignored), and `worktreeOf` resolved symlinks inconsistently
+  depending on whether the leaf existed, failing toward "unoccupied".
+  *Asked by user: "need a better way for the autopilot agent to assign chats or session with correct
+  worktree so no conflicts happens in the future, then audit and QA it".*
 - **A chat keeps its name, its window, and its way back** (§1, §5d) — one report, four independent
   causes, all reproduced against the running server before anything was touched. **Renaming:** `title`
   preferred `lastPrompt`, and the CLI appends a `last-prompt` row on every message, so every tile and

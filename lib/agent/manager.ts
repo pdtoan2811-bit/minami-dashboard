@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
 import { DASHBOARD_MODEL } from "../model-pins";
+import { releaseClaim, touchClaim } from "../worktree-claim";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
 // effort"). Opus 5 is the current top-tier model (see the claude-api skill's model table); "default
@@ -324,6 +325,12 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     toolBufs: new Map(),
   };
   store.set(key, s);
+  // Stake the worktree the moment the session exists, not on its first turn. `liveActivity()` — the
+  // other half of the occupancy signal — skips sessions that have no `sessionId` yet, and the SDK only
+  // reports one after a ~1-2s cold start. An autopilot tick landing inside that window would find the
+  // tree unoccupied by BOTH signals and merge it out from under a pane that had just opened. No-op
+  // unless `cwd` is inside a worktree; see lib/worktree-claim.ts.
+  touchClaim(cwd, key);
   // Claim the resumed id NOW, not when the SDK's `init` arrives with it. The `live:<id>` alias is what
   // sendMessage's two-writers guard consults, and init lands only after the ~1-2s cold start — so
   // registering it there left a window where a SECOND pane resuming the same conversation saw no owner,
@@ -801,6 +808,11 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   // An absent mode means "whatever this install defaults to"; an explicit one always wins.
   const wanted = opts.mode === undefined ? DEFAULT_PERMISSION_MODE : safeMode(opts.mode);
   const s = ensureSession(opts.key, opts.cwd, wanted, opts.resume, opts.model);
+  // Refresh the heartbeat every turn, not only at creation. A pane can sit warm for hours between
+  // messages, and a claim whose age is measured from `claimedAt` would expire under an owner who is
+  // demonstrably still there. `ensureSession` above already staked it on the cold path; this is the
+  // warm one. Cheap: one small write per turn, and a no-op outside a worktree.
+  touchClaim(opts.cwd, opts.key);
   // ensureSession only applies `mode` when it CREATES the session, so a warm one would otherwise keep
   // whatever it was born with forever. Re-applying per turn means the composer's pill is authoritative
   // even if the change-mode request never happened (a pane that reloaded, a dropped fetch).
@@ -1118,6 +1130,10 @@ export function closeSession(key: string): void {
   // nothing is going to run. Drop the handover backstop with it.
   if (s.queueTimer) { clearTimeout(s.queueTimer); s.queueTimer = null; }
   if (s.queued.length) { s.queued = []; broadcast(s, { t: "queued", queued: [] }); }
+  // Hand the worktree back. Only clears the file once no owner is left, so closing one of two panes
+  // on the same tree doesn't unprotect it for the other. A crash never reaches this line, which is
+  // what CLAIM_TTL_MS is for — the release is the fast path, the heartbeat expiry is the guarantee.
+  releaseClaim(s.cwd, key);
   // Remove BOTH the pane-key entry and the sessionId alias so neither leaks a closed session.
   store.delete(key);
   store.delete(s.key);

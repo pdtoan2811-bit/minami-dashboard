@@ -38,6 +38,10 @@ const RESOLVE_TIMEOUT_MS = 6 * 60_000;
 type TaskRow = {
   name: string; cwd: string; branch: string; base: string; ahead: string;
   dirty: boolean; live: boolean | null; lastCommitTs: number;
+  /** Fresh claim file in the worktree — survives a server restart and the dashboard being down. */
+  claimed?: boolean;
+  /** claim ∨ live-cwd. THE gate for anything destructive; `live` alone was structurally always false. */
+  occupied?: boolean;
 };
 type ListOut = {
   base: { root: string; branch: string; dirty: boolean; merging: boolean };
@@ -224,12 +228,22 @@ async function tick(): Promise<void> {
         "Merging into a checkout with uncommitted work risks losing it. Commit or discard what's there and autopilot will carry on.");
       return;
     }
-    // `live === null` means the dashboard couldn't be reached to ask. Unknown is not "no".
-    if (!state.liveKnown) return;
+    // `liveKnown` is no longer a precondition for acting, and that is deliberate. It used to be the
+    // only thing standing between autopilot and a bad merge, because the signal it guarded — `t.live`
+    // — could never be true: session cwds were compared against worktree paths and nothing ever put a
+    // session in a worktree, so `live === false` was a constant, not an observation. The guard read as
+    // careful while gating on a value that carried no information.
+    //
+    // `occupied` (bin/task.mjs) now answers from the claim file as well, which is on disk and readable
+    // with the dashboard down — so an unreachable dashboard no longer blinds us, it just narrows us to
+    // the durable half of the signal. `occupied` is still required to be exactly `false`: an older
+    // task.mjs that doesn't emit the field yields `undefined`, and `undefined !== false` refuses,
+    // which is the right way round for a version skew during a deploy.
+    if (!state.liveKnown && !state.tasks.length) return;
 
     const now = Date.now();
     const ready = state.tasks.filter((t) =>
-      !t.dirty && Number(t.ahead) > 0 && t.live === false &&
+      !t.dirty && Number(t.ahead) > 0 && t.occupied === false &&
       !blocked.has(t.name) && t.lastCommitTs > 0 && now - t.lastCommitTs > cfg.settleMs);
     if (!ready.length) return;
 
