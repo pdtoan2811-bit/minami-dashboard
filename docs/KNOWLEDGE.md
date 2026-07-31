@@ -46,6 +46,7 @@ recycle one.
 | [`12-rendering-cost.md`](knowledge/12-rendering-cost.md) | §12 | ~1,400 | Why the dashboard made the machine hot: idle GPU 31% → 14%, and never animate inside a `backdrop-filter`. |
 | [`13-autopilot.md`](knowledge/13-autopilot.md) | §13 | ~1,200 | Always-on merge · resolve · deploy, off by default. Was a second `§12`; renumbered. |
 | [`14-agents.md`](knowledge/14-agents.md) | §14 | ~3,000 | Standing agents: identity + home folder ≠ cwd, scaffold vs adopt, the onboarding interview, the unattended task runner (and why it polls), attribution rules, HQ and `bin/agent.mjs`. |
+| [`15-teams.md`](knowledge/15-teams.md) | §15 | ~2,600 | Teams: templates → standing agents, a product's three lifespans (run · record · repo block), the chain runner, and why a handoff is a file rather than a payload. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~9,400 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -114,6 +115,9 @@ The live and read pipelines meet only on disk. They never call each other.
 | Standing agents | `lib/agents/*` + `app/agents/*` | **shipped** | opt-in roster; identity + home folder, not cwd. Verified end-to-end 2026-07-30 — see §14 |
 | Agent task runner | `lib/agents/runner.ts` | **shipped** | unattended runs, write-back, handoffs; polls rather than subscribes — see §14.3 |
 | Agent CLI | `bin/agent.mjs` | **shipped** | how HQ delegates; thin wrapper over `/api/agents` — see §14.5 |
+| Teams | `lib/teams/*` + `app/teams/*` | **shipped** | templates → standing agents; one task, N sessions, one dossier — see §15 |
+| Chain runner | `lib/teams/run.ts` | **shipped** | each stage is an ordinary agent task; polls the task record — see §15.4 |
+| Team CLI | `bin/team.mjs` | **shipped** | what the repo's CLAUDE.md team block names — see §15.3 |
 
 ---
 

@@ -189,6 +189,26 @@ assign → sendMessage(key=agent:<id>:<taskId>, cwd, model, mode)
 - **Orphan reaping at import.** Live sessions are children of this server, so a restart killed them;
   anything left `running` from a previous process is a lie and is closed as failed on load.
 
+> 🐛 **"The dashboard restarted while this was running" — on a server that hadn't restarted.** Found
+> while smoke-testing §15 under `npm run dev`: a task dispatched, ran, and was marked failed thirty
+> seconds later with the orphan-reap message, having never stopped. `reapOrphans()` runs at **module
+> load** and treats that as equivalent to *process start* — but the two are only the same event in
+> production. `next dev` re-evaluates a module when a new route compiles, so touching any route that
+> imports `tasks.ts` reaped work that was genuinely in flight, and the reap then cascaded: the task
+> failed, so the team run driving it failed, so the chain stopped.
+>
+> Fixed by stamping `pid: process.pid` on the record at `addTask()` and reaping only what a *different*
+> pid owns. `process.pid` is stable across however many times a module is instantiated inside one
+> process, which is exactly the property the guard needed and the one module-load timing only
+> approximated. A record with no pid predates the stamp and is by definition from an older process, so
+> it still reaps.
+>
+> Worth keeping for the shape rather than the severity: production was never affected — modules load
+> once there — so the guard had been *correct by coincidence* since it was written. What it actually
+> cost was the ability to exercise any of the agents layer outside a production build, which is why
+> every verification of §14 and §15 to date has had to be done against `next start`. `lib/teams/runs.ts`
+> carries the same stamp for the same reason.
+
 ### The write-back — two halves, deliberately
 
 | Half | Who writes it | Why it exists |
