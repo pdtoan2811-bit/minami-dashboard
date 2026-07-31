@@ -86,6 +86,50 @@ git can reason about and you can fix.
 > hole exactly when a deploy is requested interactively. Until the agent host moves out of
 > `next-server` (see below), the workaround is to ask first and deploy last.
 
+### Occupancy — who is working in a worktree
+
+`lib/worktree-claim.ts` answers the question every destructive command here depends on. **Two signals,
+either sufficient:**
+
+| Signal | Source | Covers | Blind to |
+|---|---|---|---|
+| live cwd | `/api/agent/live` | anything running while the dashboard is up | the pre-`sessionId` window; a restarting server |
+| claim file | `.minami-claim.json` in the tree | restarts, the dashboard being down, brand-new panes | a claim older than `CLAIM_TTL_MS` (10 min, `MINAMI_CLAIM_TTL_MS`) |
+
+The claim lives *inside* the worktree, so removing the tree removes the claim — no orphan registry to
+reconcile. `owners` is a list because two panes on one tree is legal, and the second arriving must not
+evict the first from the record protecting it. Written by `manager.ts` at `ensureSession` (cold) and
+every `sendMessage` (warm); released on `closeSession` once the last owner leaves. The release is the
+fast path; the heartbeat TTL is the guarantee, because a killed server never reaches the release.
+
+> 🐛 **The occupancy guard had never once run.** `bin/task.mjs` computed it as
+> `liveCwds().has(worktreeDir)` — the set of **session** cwds tested against a **worktree** path. Every
+> dashboard session's cwd is the base checkout, because `task.mjs new` creates a worktree but nothing
+> ever moves a session into one: `~/.claude/projects/` contained no worktree-rooted directory at all,
+> on a box that had run this workflow for weeks. So that `.has()` could never be true, which made
+> `merge`'s `agent-live` refusal *and* the autopilot's `t.live === false` gate both unreachable code.
+> Autopilot merged and deleted worktrees while agents were writing in them — twice in one morning,
+> once mid-audit *while this fix was being written*.
+>
+> The guard was not miscomputed. The two sides spoke different vocabularies, so "is anyone working
+> here?" was structurally always "no" — and a gate that always passes reads, in review, exactly like a
+> gate that works. `cmdRm` was worse: it had **no** occupancy check at all, only a dirty check. That is
+> the most destructive command here, and "clean" is the *normal* state of an occupied worktree at the
+> moment something wants to delete it, because a merge commits immediately before removing the tree.
+>
+> Autopilot now gates on `occupied === false`, not `!== true`: an older `task.mjs` mid-deploy omits the
+> field, `undefined !== false` refuses, and version skew fails safe.
+
+> 🐛 **Two QA findings, before this shipped.** (1) The claim file made every claimed worktree
+> permanently **dirty** — untracked files count as dirt — so `rm` refused for the wrong reason and
+> autopilot would never merge a tree that had ever been claimed. It's in `.gitignore` now. (2)
+> `worktreeOf` realpath'd its whole input, and `realpathSync` throws on a missing final component: a
+> path to a file an agent was about to *create* came back unresolved while an existing one came back
+> resolved, and on macOS those differ (`/tmp` → `/private/tmp`). The same worktree yielded two strings,
+> `isOccupied`'s `===` missed, and the tree read as **free** — failing toward the dangerous answer. It
+> now parses first and resolves only the root, which exists whenever the question is meaningful. Same
+> trap as §14.1, where a typed path and a resolved one made an agent's history come back empty.
+
 ### What this does not fix
 
 Sessions are still children of `next-server`, so a deploy still ends every conversation on the box.

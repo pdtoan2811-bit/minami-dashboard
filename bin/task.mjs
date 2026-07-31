@@ -116,6 +116,38 @@ function listTasks() {
     });
 }
 
+// ── Occupancy ────────────────────────────────────────────────────────────────────────────────────
+// "Is anyone working in this worktree?" — the question every destructive command here depends on.
+//
+// It used to be answered ONLY by `liveCwds().has(t.cwd)`: the set of session cwds, tested against a
+// worktree path. That could never be true. `bin/task.mjs new` creates a worktree but nothing moves a
+// session into it, so every session's cwd is the base checkout — `~/.claude/projects/` holds no
+// worktree-rooted directory at all. The `agent-live` refusal below and the autopilot's `live === false`
+// gate were therefore both unreachable, and autopilot merged and deleted trees agents were writing in.
+//
+// Now there are two signals and either is enough. The claim file is the one that works with the
+// dashboard down, which this tool must support.
+//
+// The claim FORMAT is the contract shared with lib/worktree-claim.ts — this file is plain ESM and
+// cannot import that TypeScript module without a build step, so it reads the same JSON by hand. Keep
+// the field names and the TTL rule in step with it; there is a `_CONTRACT` export there naming both.
+const CLAIM_FILE = ".minami-claim.json";
+const CLAIM_TTL_MS = Math.max(60_000, Number(process.env.MINAMI_CLAIM_TTL_MS) || 10 * 60 * 1000);
+
+function readClaim(dir) {
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(dir, CLAIM_FILE), "utf8"));
+    if (!c || typeof c.heartbeatAt !== "number") return null;
+    return c;
+  } catch { return null; }
+}
+/** Fresh = heartbeat within the TTL. Measured from heartbeatAt, never claimedAt: a pane can sit warm
+ *  for hours between turns and is still very much the owner. */
+const claimFresh = (dir, now = Date.now()) => {
+  const c = readClaim(dir);
+  return !!c && now - c.heartbeatAt < CLAIM_TTL_MS;
+};
+
 // Which worktrees currently have a live agent, per the running dashboard. Best-effort: if :3000 is
 // down the answer is simply "unknown", which must not be fatal — this tool has to work with the app
 // off, that being one of its points.
@@ -202,17 +234,35 @@ async function cmdList({ json = false } = {}) {
     console.log(JSON.stringify({
       base: { root: ROOT, branch: currentBranch(), dirty: isDirty(ROOT), merging: isMerging(ROOT) },
       liveKnown: live !== null,
-      tasks: tasks.map((t) => ({ ...t, live: live === null ? null : live.has(t.cwd), lastCommitTs: lastCommitTs(t.cwd) })),
+      tasks: tasks.map((t) => {
+        const claimed = claimFresh(t.cwd);
+        return {
+          ...t,
+          // Kept for anything still reading it, but it is no longer the gate — see `occupied`.
+          live: live === null ? null : live.has(t.cwd),
+          claimed,
+          // The field the autopilot must gate on. `false` here means "asked both ways and nobody is
+          // home", which is a real answer even with the dashboard unreachable, because a claim is
+          // read off disk. That is the whole point: the old `live: null` made an unreachable
+          // dashboard indistinguishable from an idle one.
+          occupied: claimed || (live !== null && live.has(t.cwd)),
+          lastCommitTs: lastCommitTs(t.cwd),
+        };
+      }),
     }));
     return;
   }
   if (!tasks.length) { console.log("no tasks. create one:  node bin/task.mjs new <name>"); return; }
   console.log(`${tasks.length} task(s)   base repo: ${ROOT} (${currentBranch()}${isDirty(ROOT) ? ", dirty" : ""})\n`);
   for (const t of tasks) {
+    // Name WHY it's busy — a claim and a live cwd fail in different ways, so "occupied" alone would
+    // send you looking in the wrong place when one of the two is wrong.
+    const c = readClaim(t.cwd);
+    const held = claimFresh(t.cwd) ? `  ● claimed by ${c?.owners?.length || 1} pane(s)` : "";
     const agent = live === null ? "" : live.has(t.cwd) ? "  ● agent live" : "";
-    console.log(`${t.name.padEnd(22)} ${t.branch.padEnd(26)} +${String(t.ahead).padStart(3)} commits  :${t.port}${t.dirty ? "  ✎ uncommitted" : ""}${agent}`);
+    console.log(`${t.name.padEnd(22)} ${t.branch.padEnd(26)} +${String(t.ahead).padStart(3)} commits  :${t.port}${t.dirty ? "  ✎ uncommitted" : ""}${held}${agent}`);
   }
-  if (live === null) console.log("\n(dashboard not reachable on :3000 — live-agent column omitted)");
+  if (live === null) console.log("\n(dashboard unreachable — live-cwd column omitted; claims still read from disk)");
 }
 
 async function cmdBuild(name, { quiet = false } = {}) {
@@ -280,9 +330,15 @@ async function cmdMerge(name, keep, { json = false } = {}) {
     process.exit(2);
   }
   const live = await liveCwds();
-  if (live && live.has(dir)) {
-    say({ ok: false, reason: "agent-live", task: name });
-    console.error(`✗ an agent is live in ${name} right now — let it finish before merging.`);
+  // Either signal is enough to refuse. Previously only the live-cwd half was consulted, and it could
+  // never fire (see the Occupancy block above), so this refusal had never once run in production.
+  const claimed = claimFresh(dir);
+  if (claimed || (live && live.has(dir))) {
+    say({ ok: false, reason: claimed ? "claimed" : "agent-live", task: name, owners: readClaim(dir)?.owners || [] });
+    console.error(`✗ ${name} is occupied right now — let it finish before merging.`);
+    console.error(claimed
+      ? `   A pane claimed it ${Math.round((Date.now() - (readClaim(dir)?.heartbeatAt || 0)) / 1000)}s ago (${CLAIM_FILE}).`
+      : `   A live session has it as its cwd.`);
     process.exit(2);
   }
 
@@ -320,11 +376,24 @@ async function cmdMerge(name, keep, { json = false } = {}) {
   } finally { releaseLock(); }
 }
 
-function cmdRm(name, force) {
+async function cmdRm(name, force) {
   const dir = dirFor(name);
   if (!fs.existsSync(dir)) { console.error(`no task "${name}"`); process.exit(2); }
   if (isDirty(dir) && !force) {
     console.error(`✗ ${name} has uncommitted changes — use --force to discard them`);
+    process.exit(2);
+  }
+  // `rm` had NO occupancy check at all — only the dirty one. So the most destructive command here
+  // would happily delete a worktree an agent was working in, provided that agent had committed. That
+  // is not a hypothetical: it is what a merge does immediately before removing the tree, so "clean"
+  // is the NORMAL state of an occupied worktree at exactly the moment something wants to delete it.
+  const claimed = claimFresh(dir);
+  const live = await liveCwds();
+  if ((claimed || (live && live.has(dir))) && !force) {
+    const owners = readClaim(dir)?.owners || [];
+    console.error(`✗ ${name} is occupied — ${claimed ? `claimed by ${owners.length || 1} pane(s)` : "a live session has it as its cwd"}.`);
+    console.error(`   Removing it would delete the checkout out from under a running agent.`);
+    console.error(`   Wait for it to finish, or --force if you are certain.`);
     process.exit(2);
   }
   const branch = currentBranch(dir);
@@ -349,6 +418,6 @@ switch (cmd) {
   case "build": await cmdBuild(arg); break;
   case "preview": await cmdPreview(arg); break;
   case "merge": await cmdMerge(arg, has("--keep"), { json: has("--json") }); break;
-  case "rm": case "remove": cmdRm(arg, has("--force")); break;
+  case "rm": case "remove": await cmdRm(arg, has("--force")); break;
   default: help();
 }
