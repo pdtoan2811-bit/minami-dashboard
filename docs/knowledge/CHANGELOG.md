@@ -9,6 +9,21 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-31
+- **A running tab is legible now** (§5e) — an unfocused pane is `display:none`, so its tab is the only
+  place a background turn can announce itself, and all it had was a 6px sakura dot on `animate-pulse`.
+  Fading a 6px dot is the wrong channel (at the dim end it looks static), the tab around it stayed
+  `text-neutral-500` (reads as disabled), and the signal was binary though `liveAct` has carried
+  `phase` all along. Now: an expanding ring (`.tab-live-ring`, edge motion beats brightness for
+  peripheral vision), a phase-tinted border and wash on the whole tab, and colour that names the
+  phase. The dot slot always renders — mounting it on the first busy frame shifted the label 12px on
+  the tab you were about to click. `awaiting` stays loud and still, per `.activity-idle`. Focused tabs
+  keep sakura, and the ring is in the reduced-motion kill list.
+  *Asked by user: "need clearer indicator for tabs that's running: animation/color visual clues etc".*
+- **`paneAct` closes the pre-session-id gap** (§5e) — `liveAct` is keyed by session id, which a blank
+  chat lacks for the first second or two of its first turn, so the pane you'd just sent to showed
+  nothing. `ChatColumn` now reports its own SSE phase via `onBusy`, read **only** where `liveAct` has
+  no entry, so the server stays the single source of truth. Verified by sampling the DOM across a
+  spawn: ring and tint up while the tab still said "New chat", then `liveAct` takes over seamlessly.
 - **No personal identity ships in the repo** (§6) — `preferred-account.ts` hardcoded the author's
   email as the built-in fallback, so a stranger's first run raised a permanent wrong-account alert
   against an address they can't log into. Fallback is now empty and `offPreferred` is guarded on it,
