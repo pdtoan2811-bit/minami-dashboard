@@ -244,6 +244,10 @@ Next.js 15 (App Router, React 19) · Tailwind v4 · framer-motion · highlight.j
 
 ## License
 
-Not yet licensed — all rights reserved for now. A proper open-source license will be added; until
-then, treat the code as source-available (read and learn, but no redistribution). If you want to use
-it, open an issue.
+[MIT](LICENSE) — use it, fork it, ship it. No attribution required beyond keeping the copyright
+notice in copies of the source.
+
+One caveat that MIT does not cover: the 3D tile icons in `public/icons/` are third-party artwork,
+not original to this project. The code is yours to redistribute; the icon set carries whatever terms
+its author set. If you plan to ship this commercially, check that separately or swap the set out —
+`bin/extra-icons.json` and `public/icons/manifest.json` are the only places that name them.

@@ -2,7 +2,7 @@
   "name": "minami-dashboard",
   "version": "0.1.0",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "description": "Minami Bento — a local, real-time mission-control for your Claude Code sessions. Every session on your machine becomes a live bento tile, with an optional cross-machine usage dashboard.",
   "keywords": [
     "claude-code",

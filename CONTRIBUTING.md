@@ -3,8 +3,8 @@
 Thanks for taking a look! This is a small, focused project — a local dashboard for Claude Code
 sessions. Contributions, bug reports, and ideas are welcome.
 
-> **License note:** the project isn't formally licensed yet (see the README). If you'd like to
-> build on it, open an issue first so we can sort that out.
+> **License note:** this project is [MIT](LICENSE). By contributing you agree your work ships under
+> the same terms.
 
 ## Getting set up
 
