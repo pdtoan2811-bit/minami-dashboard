@@ -86,6 +86,25 @@ resets `start` to `turns[0].off` so a trimmed window is still a valid page and `
 - **The tool index must survive a fold.** `tool_use` and its `tool_result` sit on different lines and
   can land in different chunks, so it is rebuilt from the last 20 turns rather than started empty —
   otherwise a tool call parsed in the previous chunk never gets its output attached.
+- **`meta.cwd` is the LAUNCH cwd, not the last one.** The CLI stamps the *current* working directory on
+  every row, so a session that `cd`s into a subdirectory records several. `foldLine` freezes on the
+  first (`if (r.cwd && !acc.cwd)`), because the transcript file lives in `~/.claude/projects/<enc(launch
+  cwd)>/` — fixed at creation — and that is the only directory `--resume` can find it from.
+
+> 🐛 **"No conversation found with session ID" when continuing a chat.** *Reported by user: "fix minami
+> dashboard where it return: Claude Code returned an error result: No con…"* — the truncated text was
+> `No conversation found with session ID: <id>`, the CLI's own error surfaced through the SDK
+> (`Claude Code returned an error result: …`). `foldLine` took the **last** `cwd` row, so any session
+> that changed directory mid-run reported that subdirectory as its `cwd`. `--resume` is scoped to the
+> directory the transcript is *filed under* (= the launch cwd), so the read pipeline handed
+> `/api/agent/send` a sibling directory, the CLI computed `enc(subdir)/`, the file wasn't there, and the
+> continue died. 11 of 374 real sessions on this box had drifted this way. Confirmed by resuming one
+> drifted id from its launch cwd (found) vs. its last cwd (not found). Fix: freeze `meta.cwd` on the
+> first row, plus a `PARSE_VERSION` bump so already-cached (drifted) accumulators get one full reparse —
+> a derivation bump couldn't fix it, since the earlier `cwd` rows are already folded away. `app/page.tsx`
+> was hardened in the same turn to resume an existing pane in *that session's* own cwd rather than the
+> topic's aggregate `cwd` (topics collapse on `basename(cwd)`, so the aggregate can belong to a sibling
+> directory) — the same failure from a second angle.
 
 ### What a session is CALLED — `titleSeed`
 

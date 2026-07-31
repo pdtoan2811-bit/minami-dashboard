@@ -9,6 +9,14 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-31
+- **Continuing a chat failed with "No conversation found with session ID"** (§1) — `foldLine` took a
+  session's *last* recorded `cwd`, so any session that `cd`'d mid-run reported a subdirectory as its
+  cwd; `--resume` is scoped to the launch directory the transcript is filed under, so the CLI hunted in
+  the wrong `~/.claude/projects/` dir and errored. Froze `meta.cwd` on the first `cwd` row + added
+  `PARSE_VERSION` to force one reparse of already-drifted cache entries. Also hardened `app/page.tsx` to
+  resume an existing pane in that session's own cwd, not the topic's aggregate. 11/374 sessions were
+  affected. *Reported by user: "fix minami dashboard where it return: Claude Code returned an error
+  result: No con…"*
 - **The worktree occupancy guard had never once run** (§9) — `bin/task.mjs` tested session cwds against
   worktree paths, but nothing ever puts a session in a worktree, so `merge`'s `agent-live` refusal and
   autopilot's `t.live === false` gate were both unreachable and autopilot deleted trees agents were

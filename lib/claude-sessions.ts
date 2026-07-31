@@ -138,7 +138,7 @@ function freshAccum(): ParseAccum {
   };
 }
 
-type CacheEntry = { mtime: number; size: number; head: string; accum: ParseAccum; meta: SessionMeta; dv?: number };
+type CacheEntry = { mtime: number; size: number; head: string; accum: ParseAccum; meta: SessionMeta; dv?: number; pv?: number };
 
 // Bumped whenever buildMeta's DERIVATION changes rather than its inputs. An entry caches both the
 // parse state (`accum`) and the `meta` derived from it, and a transcript that never grows again is
@@ -146,6 +146,13 @@ type CacheEntry = { mtime: number; size: number; head: string; accum: ParseAccum
 // happened to receive another message, leaving the board a permanent mix of the old rule and the new.
 // Re-deriving costs no file I/O at all: buildMeta is pure over state we already hold on disk.
 const META_DERIVATION_VERSION = 3;
+
+// Bumped whenever a field's PARSING changes — a stronger invalidation than META_DERIVATION_VERSION.
+// A derivation change can be back-fixed from the cached `accum` (migrateAccum + re-derive, no I/O); a
+// parse change cannot, because the raw rows that fed `accum` are already folded away. So a stale `pv`
+// drops the entry entirely and forces one full reparse from offset 0. v1: meta.cwd froze on the launch
+// cwd instead of the last (fixes drifted-cwd resumes failing with "No conversation found").
+const PARSE_VERSION = 1;
 
 // Fingerprint of a file's first `len` bytes — cheap (len is capped small) and used ONLY to tell "this
 // file was purely appended to" apart from "this file was truncated and rewritten, but happens to have
@@ -193,6 +200,10 @@ function loadDiskCache(): void {
     for (const [f, v] of Object.entries(obj)) {
       if (cache.has(f) || !v || typeof v.mtime !== "number") continue;
       const e = v as CacheEntry;
+      // Stale PARSE version → the cached accum was built by parse logic this build no longer trusts and
+      // can't be repaired from (the raw rows are gone). Drop the entry so summarize() does a full reparse
+      // from offset 0. Skipped BEFORE the cheap mtime/size hit in summarize() can serve its stale meta.
+      if (e.pv !== PARSE_VERSION) continue;
       // Stale derivation → rebuild `meta` from the accumulator we already have, in memory. An entry
       // with no `accum` (pre-upgrade) is left alone: summarize() gives it a full reparse on first use.
       if (e.dv !== META_DERIVATION_VERSION && e.accum && e.meta?.id) {
@@ -254,7 +265,13 @@ function foldLine(acc: ParseAccum, line: string): void {
   if (!line.trim()) return;
   let r: Row;
   try { r = JSON.parse(line); } catch { return; }
-  if (r.cwd) acc.cwd = r.cwd;
+  // The FIRST cwd, not the last. A transcript lives in ~/.claude/projects/<enc(launch cwd)>/, fixed at
+  // creation — but a session can `cd` mid-run (the CLI stamps the current cwd on every row), so taking
+  // the last cwd made meta.cwd drift to whatever subdirectory it ended in. `--resume` is scoped to the
+  // working directory the file is filed under, so continuing a drifted session sent the CLI hunting in
+  // enc(subdir)/ — where the file isn't — and it died with "No conversation found with session ID:".
+  // The launch cwd is the one that encodes back to the file's own directory; freeze on it.
+  if (r.cwd && !acc.cwd) acc.cwd = r.cwd;
   if (r.gitBranch) acc.gitBranch = r.gitBranch;
   if (r.timestamp) { const ms = Date.parse(r.timestamp); if (ms > acc.lastTs) acc.lastTs = ms; }
   if (r.type === "custom-title" && r.customTitle) acc.title = r.customTitle;
@@ -381,7 +398,7 @@ function summarize(file: string, id: string, raw?: string): SessionMeta {
   // Fingerprint AFTER parsing, over the file as it stands now — a pure append never touches these bytes,
   // so this stays stable across future polls and only changes if something rewrites the file's start.
   const head = headFingerprint(file, Math.min(size, HEAD_FINGERPRINT_BYTES));
-  touchLRU(cache, file, { mtime, size, head, accum: acc, meta, dv: META_DERIVATION_VERSION }, META_CACHE_MAX);
+  touchLRU(cache, file, { mtime, size, head, accum: acc, meta, dv: META_DERIVATION_VERSION, pv: PARSE_VERSION }, META_CACHE_MAX);
   cacheDirty = true;
   return meta;
 }

@@ -1660,7 +1660,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     load(); const iv = setInterval(load, 2500); return () => { a = false; clearInterval(iv); };
   }, [sessionId, isNew, agent.live]);
   const cur = sessions.find((s) => s.id === sessionId);
-  const cwd = cwdProp || cur?.cwd || sessions[0]?.cwd || "";
+  // A pane resuming an EXISTING session must run in THAT session's own launch directory — `--resume` is
+  // scoped to the folder the transcript is filed under (see lib/claude-sessions.ts), so handing the CLI a
+  // sibling's cwd makes it fail with "No conversation found with session ID". `cwdProp` is the topic's
+  // aggregate cwd (whichever session sorted first), and a topic collapses on basename(cwd) — so ~/work/api
+  // and ~/personal/api share one topic whose cwd belongs to only one of them. Prefer the resumed session's
+  // own cwd; fall back to the topic cwd only for a blank/new pane that has no session of its own yet.
+  const cwd = (sessionId && cur?.cwd) || cwdProp || sessions[0]?.cwd || "";
   const proj = sessions[0]?.project || cwd.split("/").filter(Boolean).pop() || "";
   // Fetched history sits in front of the polled window. Drop anything at or past the window's lower
   // bound so a page and the tail can't double-render the same turn if the window shifted between fetches.
