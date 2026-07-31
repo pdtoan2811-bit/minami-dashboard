@@ -149,6 +149,48 @@ because a one-keystroke close is only safe if that's legible before you press it
 > the backstop for the render between a close and its effect. All three close paths — the tab ✕, the
 > in-pane ✕ and ⌥W — route through one `closePane(i)`, so they can't disagree about this again.
 
+### A tab that's working has to say so from the corner of your eye
+
+An unfocused pane is `display:none`, so its own activity line — phase, elapsed, tool — is unreadable
+while it runs. **The tab strip is the only surface a background turn has**, and for a long time it
+spent that surface on a single 6px sakura dot with Tailwind's `animate-pulse`. Three things were
+wrong with that, and they're separable:
+
+- **Brightness is the wrong channel.** `animate-pulse` fades opacity; at the dim end of its cycle a
+  6px dot is indistinguishable from one that isn't animating, so "is that tab running?" took a
+  second of staring. The dot now holds full opacity and emits an **expanding ring**
+  (`.tab-live-ring`, `globals.css`) — motion at the shape's *edge*, which peripheral vision resolves
+  far better than a brightness change, for the same one composited transform.
+- **The tab itself stayed grey.** An unfocused tab is `text-neutral-500` on a hairline border, i.e.
+  it reads as disabled — wrong for the one mid-turn. A running tab now takes a **phase-tinted border
+  and wash** (`color-mix`, not an `#rrggbbaa` concat: `PHASE_TINT.thinking` is `var(--sakura)`, and
+  appending alpha to a `var()` yields an invalid colour that silently drops the border). The focused
+  tab keeps sakura regardless — "which am I reading" must never be outshouted by "which is working".
+- **The signal was binary** where the data wasn't. `liveAct` carries `phase`, and the tile has used
+  it for ages; the tab threw it away. Colour now carries thinking / tool / responding / retrying, so
+  the row answers *what* it's doing, not just *that* it is.
+
+Two rules the indicator inherits rather than invents:
+
+- **The dot slot is always rendered**, dim grey at rest. Mounting it on the first busy frame shifted
+  the label 12px sideways every time a turn started or ended — on the tab you were about to click,
+  the same class of mis-click as the header peek and the hover-revealed ✕.
+- **`awaiting` gets the loudest colour and no motion**, matching `.activity-idle`. Animating next to
+  "waiting for your approval" claims work is happening when nothing moves until you click.
+
+Only a genuinely running turn animates, and `.tab-live-ring` is in the `prefers-reduced-motion` kill
+list — at rest the strip attaches no animation at all, which is the same bargain the bento tiles make.
+
+**`paneAct` — the gap `liveAct` cannot cover.** `liveAct` is keyed by *session id*, and a blank chat
+has none until the server assigns one a second or two into its first turn. So the freshly-sent pane —
+exactly the one you're watching — was missing from the map and its tab showed nothing. Each
+`ChatColumn` now reports its own SSE-derived phase up via `onBusy` into `paneAct` (keyed by pane key,
+pruned when the pane closes), and the strip reads it **only where `liveAct` has no entry**. That
+ordering is the point: the server stays the single source of truth everywhere it has an answer, so
+the two can't disagree — this is a fallback, not a second derivation. Measured on a blank pane: ring
+and phase tint appear while the tab still reads "New chat", then the session id lands and `liveAct`
+takes over mid-turn with no visible transition.
+
 ### The panel header hides, and comes back on hover
 
 The identity header — icon, project name, repo path, tech icons, counts — is read once a session and

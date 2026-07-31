@@ -415,6 +415,35 @@ export default function BentoHome() {
     }).catch(() => {});
     t(); const iv = setInterval(t, 1500); return () => { a = false; clearInterval(iv); };
   }, []);
+  // Per-PANE activity, keyed by pane key rather than session id — the fallback for the one window
+  // `liveAct` structurally cannot cover. A blank chat has no session id until the server assigns one a
+  // second or two into its first turn, so a just-sent pane is missing from a session-id-keyed map at
+  // exactly the moment its tab most needs to say "running". Each pane reports its own SSE-derived
+  // phase here (see ChatColumn's `onBusy`), and the tab strip reads it ONLY where `liveAct` has no
+  // entry — so the server stays the single source of truth everywhere it has an answer.
+  const [paneAct, setPaneAct] = useState<Record<string, { phase: ActivityPhase; label: string; busy: boolean }>>({});
+  const reportPaneAct = useCallback((key: string, next: { phase: ActivityPhase; label: string; busy: boolean }) => {
+    setPaneAct((p) => {
+      const cur = p[key];
+      // Return the SAME object when nothing changed: this fires on every ChatColumn render, and a fresh
+      // object each time would re-render the whole board (and every tile) at the pane's stream rate.
+      if (cur && cur.phase === next.phase && cur.busy === next.busy && cur.label === next.label) return p;
+      return { ...p, [key]: next };
+    });
+  }, []);
+  // Closed panes leave their key behind; drop it, so a long day of opening and closing chats doesn't
+  // grow a map of phases nothing reads.
+  const paneKeySig = panes.map((p) => p.key).join("|");
+  useEffect(() => {
+    setPaneAct((p) => {
+      const live = new Set(paneKeySig ? paneKeySig.split("|") : []);
+      const stale = Object.keys(p).filter((k) => !live.has(k));
+      if (!stale.length) return p;
+      const n = { ...p };
+      stale.forEach((k) => delete n[k]);
+      return n;
+    });
+  }, [paneKeySig]);
   useEffect(() => {
     if (!loaded || enrichLock.current || rounds.current >= 6) return;
     if (!sessions.some((s) => !s.task && !isTrivial(s))) return;
@@ -979,6 +1008,16 @@ export default function BentoHome() {
                   {panes.map((pn, i) => {
                     const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
                     const la = pn.sid ? liveAct[pn.sid] : undefined;
+                    // Server-keyed activity wins wherever it exists; the pane's own stream only fills the
+                    // gap before a session id exists (see `paneAct`), so the two can never disagree.
+                    const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : paneAct[pn.key];
+                    const phase = act?.phase || "idle";
+                    // `awaiting` is blocked on YOU — it gets the loudest colour and NO motion, same rule
+                    // as `.activity-idle`: animating next to "waiting for your approval" claims work is
+                    // happening when nothing moves until you click.
+                    const running = !!act?.busy && phase !== "awaiting";
+                    const wants = !!act?.busy && phase === "awaiting";
+                    const tint = PHASE_TINT[phase] || PHASE_TINT.thinking;
                     const on = i === focusPane;
                     return (
                       // A div wrapping two buttons, not one button with a nested ✕: a button inside a
@@ -986,17 +1025,41 @@ export default function BentoHome() {
                       // so the close target would have selected the tab instead of closing it.
                       <div key={pn.key}
                         className={`group/tab flex min-w-0 shrink items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] transition-colors ${
-                          on ? "border-[var(--sakura)]/60 bg-[var(--sakura)]/10 text-neutral-100" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}
+                          on ? "border-[var(--sakura)]/60 bg-[var(--sakura)]/10 text-neutral-100"
+                            // An unfocused tab is `text-neutral-500` on a hairline border — i.e. it reads
+                            // as disabled, which is wrong for the one that's mid-turn. Tinting the whole
+                            // tab (not just the dot) is what makes a running chat findable in a glance at
+                            // the row; the focused tab keeps sakura, because "which am I reading" must
+                            // never be outshouted by "which is working".
+                            : running || wants ? "text-neutral-200 hover:text-neutral-100"
+                            : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}
+                        // color-mix rather than an `#rrggbbaa` concat: PHASE_TINT holds `var(--sakura)`
+                        // for `thinking`, and appending an alpha suffix to a var() reference yields an
+                        // invalid colour that silently drops the border entirely.
+                        style={!on && (running || wants) ? {
+                          borderColor: `color-mix(in srgb, ${tint} 55%, transparent)`,
+                          background: `color-mix(in srgb, ${tint} 9%, transparent)`,
+                        } : undefined}
                         // Middle-click closes, as it has on every browser tab for twenty years. On
                         // mousedown rather than auxclick: auxclick fires after the middle button has
                         // already armed the scroll-anchor cursor, so it's too late to preventDefault it.
                         onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); closePane(i); } }}>
-                        <button onClick={() => { setPaneView("tabs"); setActivePane(i); }} title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})`}
+                        <button onClick={() => { setPaneView("tabs"); setActivePane(i); }}
+                          title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})${act?.label ? ` — ${act.label}` : ""}`}
                           className="flex min-w-0 flex-1 items-center gap-1.5">
                           <span className="shrink-0 tabular-nums text-[9px] text-neutral-600">⌥{i + 1}</span>
-                          {/* Only a genuinely running turn animates — same rule as the bento tiles, and for
-                              the same measured reason (a permanent pulse costs a frame loop forever). */}
-                          {la?.busy && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--sakura)]" />}
+                          {/* The slot is ALWAYS rendered, even at rest. Mounting the dot on the first
+                              busy frame shifted the label 12px sideways every time a turn started or
+                              ended — on the tab you were about to click.
+                              Colour carries the phase (thinking / tool / awaiting / retrying), so the
+                              row answers "what is it doing", not merely "is something happening".
+                              Only a genuinely running turn animates — same rule as the bento tiles, and
+                              for the same measured reason (a permanent pulse costs a frame loop forever);
+                              at rest this is a static grey dot with no animation attached. */}
+                          <span className="relative flex h-1.5 w-1.5 shrink-0 items-center justify-center">
+                            {running && <span className="tab-live-ring absolute inset-0 rounded-full" style={{ background: tint }} />}
+                            <span className="h-1.5 w-1.5 rounded-full transition-colors" style={{ background: tint, opacity: act?.busy ? 1 : 0.3 }} />
+                          </span>
                           <span className="truncate">{s ? titleOf(s) : "New chat"}</span>
                         </button>
                         {/* Always rendered, only sometimes visible. Revealing it on hover ALONE would
@@ -1127,6 +1190,8 @@ export default function BentoHome() {
                   openSids={panes.map((p) => p.sid).filter(Boolean)}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
+                  // Lets this pane's tab show its phase before the session id exists — see `paneAct`.
+                  onBusy={reportPaneAct}
                   // Same path as the tab's ✕ and ⌥W, so all three agree about which tab gains focus
                   // afterwards and all three feed the ⌥⇧T stack.
                   onClose={() => closePane(idx)} />
@@ -1406,8 +1471,8 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
 // construction, so the two views can't drift on the things that actually execute code. That is also
 // why Flow isn't its own route: a second copy of the send/steer/stop wiring is a second place for the
 // permission model to be subtly wrong.
-function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, openSids, collapsed, focused, onFocus, onOpenFlow, onPick, onLive, onClose }: {
-  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; collapsed?: boolean; focused?: boolean; onFocus: () => void; onOpenFlow: (sid: string) => void; onPick: (id: string) => void; onLive: (sid: string) => void; onClose: () => void;
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, openSids, collapsed, focused, onFocus, onOpenFlow, onPick, onLive, onBusy, onClose }: {
+  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; collapsed?: boolean; focused?: boolean; onFocus: () => void; onOpenFlow: (sid: string) => void; onPick: (id: string) => void; onLive: (sid: string) => void; onBusy: (key: string, act: { phase: ActivityPhase; label: string; busy: boolean }) => void; onClose: () => void;
 }) {
   // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
@@ -1469,6 +1534,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
   // When a blank chat goes live and gets a real session id, tell the parent so the pane (and its
   // persisted layout) tracks it — the next refresh then reopens the real session, not a blank.
   useEffect(() => { if (agent.sessionId && agent.sessionId !== sessionId) onLive(agent.sessionId); }, [agent.sessionId, sessionId, onLive]);
+  // Report this pane's phase up to the tab strip. Only consulted while the pane has no session id —
+  // once it has one, the 1.5s `/api/agent/live` poll is authoritative and this is ignored.
+  useEffect(() => {
+    onBusy(paneKey, { phase: agent.activity.phase, label: agent.activity.label, busy: agent.busy });
+  }, [paneKey, agent.activity.phase, agent.activity.label, agent.busy, onBusy]);
   // ...and hand it BACK if a continue was adopted optimistically and then rejected. `onLive` is
   // one-way — it only fires on a truthy id — so use-agent giving the id back on error was not enough
   // on its own: the parent kept `pane.sid`, and a refused continue still left the pane re-pointed at

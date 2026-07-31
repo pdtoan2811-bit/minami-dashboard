@@ -199,6 +199,19 @@ body {
 .activity-idle .think-dot,
 .activity-idle .activity-label { animation: none; opacity: 1; }
 
+/* The running-tab beacon. A tab is the ONLY place a background turn can announce itself — an
+   unfocused pane is display:none, so its own activity line is unreadable — and the signal it had was
+   a 6px dot on `animate-pulse`. Fading a 6px dot in and out is the wrong motion for that job: at the
+   dim end of the cycle it's indistinguishable from a dot that isn't animating at all, so "is that one
+   running?" needed a second of staring. An expanding ring moves the shape's EDGE instead of its
+   brightness, which peripheral vision reads without being looked at, and the dot itself can stay at
+   full opacity underneath. Cost is unchanged: one composited transform+opacity, only while busy. */
+@keyframes tabLiveRing {
+  0% { transform: scale(1); opacity: 0.5; }
+  70%, 100% { transform: scale(2.8); opacity: 0; }
+}
+.tab-live-ring { animation: tabLiveRing 1.8s ease-out infinite; }
+
 /* Idle icons are static; they tumble only while their card is hovered. Active boxes get an always-on
    spin via an inline style (see ProjectIcon). This keeps compositing cheap when nothing's interacting. */
 .group:hover .motion-icon {
@@ -215,6 +228,7 @@ body {
   .motion-icon,
   .think-dot,
   .activity-label,
+  .tab-live-ring,
   .animate-pulse,
   .group:hover .motion-icon {
     animation: none !important;
