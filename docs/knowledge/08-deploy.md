@@ -103,4 +103,22 @@ accept alternatives: `/api/fs/mkdir:400|405`. The defaults live in `bin/deploy.s
 > the swap. The old server kept serving and the failure looked like a successful deploy. Fixed by
 > bracing: `${PORT}`.
 
+> 🐛 **`npm install` on this box silently uninstalls the build.** The author's shell exports
+> `NODE_ENV=production` and npm is configured `omit=dev`, so a bare `npm install` / `npm ci` **prunes
+> devDependencies** — including `typescript`. Next only reads `tsconfig.json` `paths` when TypeScript
+> is installed, so with it gone every `@/…` import stops resolving and the build dies with a wall of
+> `Module not found: Can't resolve '@/components/…'`. The trap is that the files are all present and
+> the alias config is correct, so the error points nowhere near the cause; worse, webpack reports only
+> the first entrypoint's five failures, which makes a global breakage look like one bad route.
+> Observed 2026-07-31 during an open-source audit — the diagnosis burned several rebuilds and briefly
+> produced a false "this repo doesn't build from a clean clone" conclusion, because every control
+> build was run against the same pruned `node_modules`.
+>
+> **Install with `NODE_ENV=development npm ci --include=dev`; build with NODE_ENV left alone.**
+> Inverting that also fails: `NODE_ENV=development next build` trips Next's non-standard-NODE_ENV
+> warning and then dies in static generation with `<Html> should not be imported outside of
+> pages/_document` on `/404` and `/500` — a masked error that has nothing to do with the real problem.
+> The two commands want opposite values, which is exactly why this is easy to get wrong.
+> CI is unaffected: GitHub Actions runners don't set `NODE_ENV`.
+
 ---

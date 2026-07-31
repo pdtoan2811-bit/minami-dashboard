@@ -9,6 +9,18 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-07-31
+- **Open-source readiness pass** — the repo had been public for weeks with no licence at all, which
+  under default copyright makes a public clone readable and nothing else. Added `LICENSE` (MIT),
+  corrected `package.json` (`UNLICENSED` → `MIT`, kept `private: true` as an npm-publish guard) and
+  the README/CONTRIBUTING notes that claimed all rights reserved. Traced the `public/icons/` set to
+  [3dicons](https://3dicons.co) — **CC0**, so no attribution obligation and nothing to swap; credited
+  it anyway and dropped the earlier "check this before shipping commercially" warning, which was
+  wrong. Added `engines.node >= 18.18` + `.nvmrc` (the supported version was documented in prose but
+  never machine-enforced), a `@hono/node-server` override clearing 2 moderate advisories, and a
+  GitHub Actions build workflow. No lint or test job: there is no eslint config and no test files, so
+  both would pass vacuously — see `.github/workflows/build.yml` for why that's deliberate.
+- **`npm install` breaks the build on the author's box** (§8) — `NODE_ENV=production` + `omit=dev`
+  prune `typescript`, which silently disables `tsconfig` path aliases. Post-mortem in §8.
 - **Continuing a chat failed with "No conversation found with session ID"** (§1) — `foldLine` took a
   session's *last* recorded `cwd`, so any session that `cd`'d mid-run reported a subdirectory as its
   cwd; `--resume` is scoped to the launch directory the transcript is filed under, so the CLI hunted in

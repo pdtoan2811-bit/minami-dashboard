@@ -247,7 +247,12 @@ Next.js 15 (App Router, React 19) · Tailwind v4 · framer-motion · highlight.j
 [MIT](LICENSE) — use it, fork it, ship it. No attribution required beyond keeping the copyright
 notice in copies of the source.
 
-One caveat that MIT does not cover: the 3D tile icons in `public/icons/` are third-party artwork,
-not original to this project. The code is yours to redistribute; the icon set carries whatever terms
-its author set. If you plan to ship this commercially, check that separately or swap the set out —
-`bin/extra-icons.json` and `public/icons/manifest.json` are the only places that name them.
+### Third-party assets
+
+The 3D tile icons in `public/icons/` (182 icons × 2 camera angles) are from
+[3dicons](https://3dicons.co) by Vijay Verma, released under **CC0** — public domain, no attribution
+required, commercial use fine. The credit here is courtesy, not obligation, and nothing about the
+set constrains what you do with this repo.
+
+Brand/tech glyphs come from [simple-icons](https://github.com/simple-icons/simple-icons) (CC0), built
+into `public/tech-icons.json` by `bin/build-tech-icons.mjs`.

@@ -1,0 +1,35 @@
+# Verifies a clean clone still compiles — the one thing that actually breaks for a stranger.
+#
+# Deliberately NOT running `next lint` or a test job: this repo ships no eslint config and no test
+# files, so both would either fail on day one or pass vacuously. A green check that proves nothing is
+# worse than no check, because people stop reading it. Add the job when the thing it guards exists.
+#
+# `build:check` (not `build`) is used for the same reason the humans use it — it writes to
+# .next-verify instead of .next. Irrelevant in CI's throwaway container, but keeping one build
+# command everywhere means a CI failure reproduces locally with the exact same invocation.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # `npm ci` over `npm install`: it honours the lockfile exactly and fails loudly if
+      # package.json and package-lock.json have drifted, which is a real bug worth catching here.
+      - run: npm ci
+
+      # Full type check + production build. Next fails the build on a type error, so this is the
+      # typecheck gate too.
+      - run: npm run build:check
