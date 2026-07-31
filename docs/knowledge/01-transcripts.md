@@ -87,6 +87,54 @@ resets `start` to `turns[0].off` so a trimmed window is still a valid page and `
   can land in different chunks, so it is rebuilt from the last 20 turns rather than started empty —
   otherwise a tool call parsed in the previous chunk never gets its output attached.
 
+### What a session is CALLED — `titleSeed`
+
+A conversation's name is fixed at its **opening ask**, not at its latest message. `buildMeta` derives
+`title` in this order, and each step exists for a reason:
+
+| Step | Why |
+|---|---|
+| `custom-title` row | an explicit rename outranks anything derived |
+| `titleSeed` | the first user message that names a topic — the answer in almost every case |
+| `cleanTitle(lastPrompt)` | only when nothing in the session ever named one |
+| `project` | last resort |
+
+`titleSeed` is *not* simply the first message. Chats routinely open on "yes", "ok", "continue", a
+`<local-command…>` echo or a compaction preamble, so the seed walks forward to the first message that
+passes `looksLikeATopic` (≥20 chars or ≥4 words) and then latches. The test is length rather than a
+keyword list deliberately: this box is driven in English and Vietnamese, and a stopword list would
+need maintaining and would still miss the next phrasing.
+
+`bento-enrich` follows the same principle — its digest sends the session's **opening** ask as
+`intent`, because a session is labelled once and that label is what the tile then shows for good.
+
+> 🐛 **Every chat renamed itself on every message.** *Reported by user: "new chat … keeps changing
+> topic title, close on its own and lose the history."* The derivation preferred `lastPrompt` over the
+> first prompt, and the CLI appends a `last-prompt` row **on every message you send** — so the tile,
+> the tab, the chat switcher and the rail all renamed themselves each turn. Measured on one real
+> transcript: eight successive titles for one conversation, ending on "pending them all tasks and get
+> my app deploy…" for a chat that had opened on something else entirely. The practical damage is that
+> a chat cannot be *found*: it is filed under whatever you last happened to say to it, so looking for
+> the conversation you had this morning means recognising a name that no longer exists.
+>
+> Worth noting what made it invisible for so long — the field was never *wrong*, only unstable, and
+> every individual title it produced was a plausible description of that session.
+
+> ⚠️ **A derivation change reaches nothing on its own.** An entry caches both the parse state and the
+> `meta` derived from it, and a transcript that never grows again is never re-derived — so changing how
+> a title is chosen would only ever have reached sessions that happened to receive another message,
+> leaving the board a permanent mix of the old rule and the new. `META_DERIVATION_VERSION` is the
+> answer: a stamp mismatch rebuilds `meta` from the stored accumulator, which costs **no file I/O** —
+> `buildMeta` is pure over state already on disk. Bump it whenever the derivation changes rather than
+> its inputs.
+>
+> `migrateAccum` handles the other half: an accumulator written before `titleSeed` existed has lost
+> its early messages, so the seed is settled once from `firstUser` and **latched shut**. Leaving the
+> search open would let the next message that session happens to receive become its permanent title —
+> a worse failure than no seed at all. It keys on the FIELD, not the stamp, because
+> `~/.minami-bento/meta-cache.json` is shared by every process pointed at this home dir (prod, a
+> preview build, `next dev`), so an entry can arrive carrying a stamp this build never wrote.
+
 ### Reading a transcript without the app — `bin/transcript.mjs`
 
 The dashboard's windowing is right for a polled UI and wrong for "show me the whole conversation".

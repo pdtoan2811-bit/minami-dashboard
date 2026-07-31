@@ -26,6 +26,25 @@ export default function FolderPicker({ onPick, onClose, pickFiles = false, start
     return () => { a = false; };
   }, [path, pickFiles, nudge]);
 
+  // Escape dismisses the picker — and must not reach the page underneath, where the window-level
+  // handler reads Escape as "close the whole chat panel". Registered in CAPTURE so it runs before that
+  // handler whatever the mount order, and it marks the event handled (`preventDefault`) as well as
+  // stopping it, since the page also treats a defaultPrevented Escape as already spoken for. Same
+  // pattern, and the same reason, as components/BrowserLightbox.tsx.
+  //
+  // This covers the attach picker too: that's this component with `pickFiles`, mounted from inside a
+  // pane, so before this it was one keystroke from "attach a file" to "the conversation is gone".
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
   // The list route reports a missing directory by echoing the requested path back WITH an `error`, so
   // `data.path` alone never meant "this folder is real". Trusting it is what let you start a topic in a
   // folder that didn't exist: the picker closed happily, and the session died later in the SDK spawn
