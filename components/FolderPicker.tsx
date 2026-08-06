@@ -3,14 +3,39 @@
 //  • folder mode (default): choose a working directory to start a new topic → "Start chat here".
 //  • file mode (pickFiles): also lists files; clicking a file returns its path (used to attach a file
 //    to a chat message). Bento is local, so it reads the machine's filesystem via /api/fs/list.
+//
+// Folder mode opens on **Recent**, not on the filesystem. Browsing to a folder is the honest way to
+// reach a NEW topic, but it's the wrong default for the common case: nearly every "new topic" is
+// another chat in a folder you already work in, and making that a directory walk from `~` every time
+// charged the frequent case the cost of the rare one. The ranked list (lib/topic-rank.ts) answers
+// "where am I working" directly; Browse is one tab away and unchanged.
 import { useEffect, useState } from "react";
+import { ProjectIcon } from "@/components/ProjectIcon";
+import type { RecentTopic } from "@/lib/topic-rank";
 
 type Dir = { name: string; path: string; git: boolean; pkg: boolean };
 type FileEntry = { name: string; path: string };
 type Data = { path: string; parent: string | null; home: string; dirs: Dir[]; files?: FileEntry[]; error?: string };
 
-export default function FolderPicker({ onPick, onClose, pickFiles = false, start = "" }: { onPick: (p: string, label?: string) => void; onClose: () => void; pickFiles?: boolean; start?: string }) {
+// Local rather than imported: the existing copies live in `app/page.tsx` and `lib/agents/client.ts`,
+// and reaching into the agents subsystem from a core shell component would add a module-map edge that
+// misrepresents what depends on what. Six lines is the cheaper of the two prices.
+const shortPath = (p: string) => p.replace(/^\/Users\/[^/]+/, "~");
+function ago(ts: number): string {
+  if (!ts) return "";
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+export default function FolderPicker({ onPick, onClose, pickFiles = false, start = "", recents = [] }: { onPick: (p: string, label?: string) => void; onClose: () => void; pickFiles?: boolean; start?: string; recents?: RecentTopic[] }) {
   const [path, setPath] = useState<string>(start);
+  // Recent is the default only when there IS one — a fresh install, or a box whose every topic is too
+  // thin to rank, must not open on an empty panel with the real picker hidden behind a tab.
+  const showRecent = !pickFiles && recents.length > 0;
+  const [tab, setTab] = useState<"recent" | "browse">(showRecent ? "recent" : "browse");
   const [data, setData] = useState<Data | null>(null);
   const [manual, setManual] = useState(start);
   const [busy, setBusy] = useState(false);
@@ -68,12 +93,52 @@ export default function FolderPicker({ onPick, onClose, pickFiles = false, start
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[70vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
+      {/* FIXED height, not `max-h`. Sized to content, this box changed height on every tab switch and
+          every step into a different folder — and because it's centred, a height change moves it
+          vertically too, so the row under the cursor slid out from under it and the tabs you were
+          aiming at drifted. One dimension for every state: the list inside scrolls instead. Capped in
+          rem as well as vh so a tall monitor doesn't stretch it into a column of empty space. */}
+      <div onClick={(e) => e.stopPropagation()} className="flex h-[70vh] max-h-[34rem] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
         <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
           <span className="text-lg">{pickFiles ? "📎" : "📂"}</span>
           <h2 className="text-sm font-semibold text-neutral-100">{pickFiles ? "Attach a file" : "Start a new topic"}</h2>
           <button onClick={onClose} className="ml-auto rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>
         </div>
+
+        {/* Two ways to answer one question, so neither is buried in the other. Rendered only when a
+            ranked list exists — otherwise this is the plain picker it has always been. */}
+        {showRecent && (
+          <div className="flex items-center gap-1 border-b border-white/[0.07] px-3 py-2">
+            {([["recent", "Recent"], ["browse", "Browse"]] as const).map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${tab === id ? "bg-[var(--sakura)]/15 text-[var(--sakura)]" : "text-neutral-400 hover:bg-white/10 hover:text-neutral-200"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tab === "recent" ? (
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {recents.map((t) => (
+              <button key={t.cwd} onClick={() => onPick(t.cwd, t.name)}
+                className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-white/10">
+                <ProjectIcon name={t.name} icon={t.icon} size={26} active={t.active} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="min-w-0 truncate text-sm text-neutral-100">{t.name}</span>
+                    {/* A topic with a turn in flight is the one you most likely meant. */}
+                    {t.active && <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] text-emerald-300">live</span>}
+                  </span>
+                  {/* `why` is the rank made legible — "4 chats over 3 days" is the actual reason this
+                      sits above a bigger single-day folder. Without it the order looks arbitrary. */}
+                  <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{t.why} · {shortPath(t.cwd)}</span>
+                </span>
+                <span className="shrink-0 text-[10px] tabular-nums text-neutral-600">{ago(t.last)}</span>
+              </button>
+            ))}
+          </div>
+        ) : (<>
 
         <div className="flex items-center gap-2 border-b border-white/[0.07] px-3 py-2">
           <button onClick={() => data?.parent && setPath(data.parent)} disabled={!data?.parent} className="rounded-md border border-white/10 px-2 py-1 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:opacity-30">↑ up</button>
@@ -142,6 +207,7 @@ export default function FolderPicker({ onPick, onClose, pickFiles = false, start
               className="shrink-0 rounded-lg bg-[var(--sakura)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40">Start chat here</button>
           </div>
         )}
+        </>)}
       </div>
     </div>
   );

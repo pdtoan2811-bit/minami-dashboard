@@ -9,6 +9,7 @@ import path from "node:path";
 import { ENRICH_MARKER, getEnrichment } from "./bento-enrich";
 import { eventCost } from "./routing"; // single source of truth for model prices
 import { summarizeToolResult, type ToolOutput } from "./agent/labels";
+import { TREES_DIR } from "./worktree-claim";
 
 const PROJECTS = path.join(os.homedir(), ".claude", "projects");
 
@@ -80,6 +81,9 @@ export function tierOf(model?: string): string {
 export type SessionMeta = {
   id: string;
   project: string;
+  /** The task worktree this chat is running in, or null in the shared checkout. The chat still groups
+   *  under `project` — see topicOf for why isolation must not move a chat off its own tile. */
+  isolatedAs: string | null;
   cwd: string;
   gitBranch: string;
   title: string;
@@ -145,7 +149,7 @@ type CacheEntry = { mtime: number; size: number; head: string; accum: ParseAccum
 // never re-derived — so a change to how a title is chosen would otherwise only reach sessions that
 // happened to receive another message, leaving the board a permanent mix of the old rule and the new.
 // Re-deriving costs no file I/O at all: buildMeta is pure over state we already hold on disk.
-const META_DERIVATION_VERSION = 3;
+const META_DERIVATION_VERSION = 4;
 
 // Bumped whenever a field's PARSING changes — a stronger invalidation than META_DERIVATION_VERSION.
 // A derivation change can be back-fixed from the cached `accum` (migrateAccum + re-derive, no I/O); a
@@ -307,8 +311,28 @@ function foldLine(acc: ParseAccum, line: string): void {
   }
 }
 
+/**
+ * The topic a cwd belongs to. Normally the folder's own name — except inside a task worktree, where
+ * the folder is named after the task and the *repo* is two levels up.
+ *
+ * Without this fold, isolating a chat moves it off its own tile: a pane in
+ * `~/minami-dashboard/.minami-worktrees/tab-caret` would file itself under a brand-new project called
+ * `tab-caret`, so the chat you just started on minami-dashboard appears to have left the project. That
+ * is a bad enough surprise on its own; it is disqualifying when the isolation happened automatically
+ * and nobody asked for a worktree in the first place. `isolatedAs` keeps the task name so the UI can
+ * still say which checkout a chat is in — folded, not hidden.
+ */
+export function topicOf(cwd: string): { project: string; isolatedAs: string | null } {
+  const parts = cwd.split("/").filter(Boolean);
+  const i = parts.lastIndexOf(TREES_DIR);
+  // Needs BOTH a repo before it and a task name after it — `.minami-worktrees` itself is not a task.
+  if (i > 0 && i + 1 < parts.length) return { project: parts[i - 1], isolatedAs: parts[i + 1] };
+  return { project: parts[parts.length - 1] || cwd, isolatedAs: null };
+}
+
 function buildMeta(id: string, file: string, acc: ParseAccum, mtime: number): SessionMeta {
-  const project = acc.cwd ? acc.cwd.split("/").filter(Boolean).pop() || acc.cwd : (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
+  const topic = acc.cwd ? topicOf(acc.cwd) : { project: "", isolatedAs: null };
+  const project = topic.project || (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
   const lastActivity = Math.max(acc.lastTs, mtime);
   // FIRST prompt, not the last one. The CLI appends a `last-prompt` row on every message you send, so
   // preferring it meant a conversation's NAME changed each turn — the tile, the tab and the switcher
@@ -326,7 +350,7 @@ function buildMeta(id: string, file: string, acc: ParseAccum, mtime: number): Se
   // latest prompt, which at least describes something, and accept that it moves.
   const derived = acc.title || acc.titleSeed || cleanTitle(acc.lastPrompt) || project;
   return {
-    id, project, cwd: acc.cwd, gitBranch: acc.gitBranch,
+    id, project, isolatedAs: topic.isolatedAs, cwd: acc.cwd, gitBranch: acc.gitBranch,
     title: derived.slice(0, 80),
     lastPrompt: (cleanTitle(acc.lastPrompt) || cleanTitle(acc.firstUser)).slice(0, 140),
     model: acc.model, tier: tierOf(acc.model),
@@ -500,7 +524,11 @@ export type ToolCallRecord = { name: string; input: any; id?: string; output?: T
 // `off` is the byte offset of the JSONL line that started this turn. It's what makes history pageable:
 // a window's lower bound is exactly turns[0].off, so "give me what came before" is a precise byte
 // request rather than a guess, and trimming a window from the front stays self-consistent.
-export type Turn = { role: "user" | "assistant"; text: string; tools: ToolCallRecord[]; ts: number; model?: string; off?: number };
+// `cost` is this single assistant message's USD, priced by lib/routing.ts from the row's own `usage`.
+// It exists so the flow view can say what a step cost without a second pass over the file. Absent on
+// user rows, and absent on assistant rows parsed before this field was added — a turns-cache entry
+// written by an older build keeps its shape, so callers must treat missing as "unknown", not zero.
+export type Turn = { role: "user" | "assistant"; text: string; tools: ToolCallRecord[]; ts: number; model?: string; off?: number; cost?: number };
 export type SessionPage = { meta: SessionMeta | null; turns: Turn[]; start: number; hasMore: boolean };
 
 // WHY WINDOWS AND NOT A TAIL
@@ -549,7 +577,12 @@ function parseLines(lines: string[], startOff: number, turns: Turn[], toolIndex:
       }
     }
     if (text.trim() || toolz.length) {
-      turns.push({ role: r.type, text: text.trim(), tools: toolz, ts: Date.parse(r.timestamp || "") || 0, model: r.message?.model, off: lineOff });
+      const u = r.message?.usage;
+      turns.push({
+        role: r.type, text: text.trim(), tools: toolz, ts: Date.parse(r.timestamp || "") || 0,
+        model: r.message?.model, off: lineOff,
+        ...(u ? { cost: eventCost(u.input_tokens || 0, u.output_tokens || 0, u.cache_read_input_tokens || 0, r.message?.model) } : {}),
+      });
     }
   }
   return off;

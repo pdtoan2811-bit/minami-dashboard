@@ -86,6 +86,54 @@ git can reason about and you can fix.
 > hole exactly when a deploy is requested interactively. Until the agent host moves out of
 > `next-server` (see below), the workaround is to ask first and deploy last.
 
+### The last mile — the dashboard isolates a chat, because only it can
+
+For most of this subsystem's life the tooling was complete and **nothing used it**. `task.mjs` could
+create worktrees, `worktree-claim.ts` could tell you who was in one, and the autopilot could merge and
+prune them — but the step in the middle was manual: leave the dashboard, run a CLI, come back, pick the
+folder it printed. The post-mortem below is the consequence, and it is worth reading as a design
+lesson rather than a bug: a guard that has never once evaluated true is not a guard.
+
+`lib/worktree.ts` + `/api/worktree` are that middle step. **A blank second-or-later chat in a git repo
+is given its own worktree when it is created** (`addPane`, `app/page.tsx`), silently. Two facts put the
+decision there and nowhere else:
+
+- **A session's cwd is fixed at spawn.** A conversation already running cannot be moved into its own
+  checkout, so isolation happens before the first message or not at all. The autopilot ticks on a timer
+  and cannot see that moment; the thing creating the pane can.
+- **The dashboard is the only process that can see both chats.** git can't, the SDK can't, and neither
+  agent can see the other.
+
+| | |
+|---|---|
+| **What isolates** | A new **blank** chat, when the project already has a pane open, in a git repo, not already in a worktree |
+| **What never isolates** | Reopening an existing session — it carries the cwd it was born in, because `--resume` is scoped to the directory the transcript is filed under (§1) |
+| **Switch** | `MINAMI_AUTO_ISOLATE=0`. Read on the server only, so a client can't disagree with it |
+| **Backends** | `bin/task.mjs new --json` where it exists (ports, the node_modules link, the merge gates, the autopilot's view — one definition each); plain `git worktree` in any other repo |
+| **Way back** | `merge back` on the pane (`IsolatedBar`), and the autopilot for anyone who has it on |
+| **Cleanup** | Closing an isolated pane discards the tree **if it is pristine** — no commits ahead, nothing uncommitted |
+
+**Isolation must not move a chat off its own tile.** `project` is `basename(cwd)`, so without a fold a
+pane in `.minami-worktrees/chat` files itself under a new project called `chat` — the chat you just
+started appears to have left the topic. `topicOf` (`lib/claude-sessions.ts`) folds a worktree path back
+to the repo above `.minami-worktrees` and keeps the task name in `isolatedAs`, so the UI can still say
+which checkout a chat is in. Folded, not hidden. `META_DERIVATION_VERSION` was bumped so already-cached
+sessions pick it up without re-reading a byte.
+
+Three smaller things that only matter once this is automatic:
+
+- **`task new` links `node_modules` at creation**, not lazily at first build. A worktree without it has
+  no working `npm` at all, and the agent that lands in one never asked for a worktree — it should find
+  a checkout it can work in, not one it has to repair.
+- **`task new --json`**, so the dashboard reads creation the same way the autopilot reads `list` and
+  `merge` instead of screen-scraping.
+- **The pristine discard.** An auto-created tree is a *guess* about what a chat was going to do, and a
+  wrong guess has to cost nothing — otherwise opening and closing three blank chats leaves three
+  checkouts and three branches to clean up by hand, and the friction this removed comes back as mess.
+
+**What this deliberately does not do:** re-isolate chats that were already running, and merge
+automatically in repos with no `bin/task.mjs`. The autopilot stays out of repos it has no gates for.
+
 ### Occupancy — who is working in a worktree
 
 `lib/worktree-claim.ts` answers the question every destructive command here depends on. **Two signals,

@@ -12,7 +12,7 @@
 // The merge is where conflicts are supposed to surface — git can reason about them there. Overwrites
 // in a shared checkout are not conflicts; they are just losses, with nothing to resolve.
 //
-//   node bin/task.mjs new <name> [--base <branch>]   worktree + branch, ready for an agent
+//   node bin/task.mjs new <name> [--base <b>] [--json]  worktree + branch, ready for an agent
 //   node bin/task.mjs list [--json]                  every task, its branch, dirt, and preview port
 //   node bin/task.mjs build <name>                   build INSIDE the worktree, own dist dir
 //   node bin/task.mjs preview <name>                 build, then serve it on its own port
@@ -199,11 +199,29 @@ const tailOf = (sink, n = 12) =>
     .filter((l) => l.trim()).slice(-n).join("\n");
 
 // --- commands ---------------------------------------------------------------------------------------
-async function cmdNew(raw, base) {
+/** Symlink the base's node_modules into a worktree. Worktrees share git objects, never node_modules,
+ *  and a full install per task costs minutes and gigabytes while being byte-identical by construction
+ *  (the task was branched from that package.json). If a task CHANGES dependencies, delete the link and
+ *  install for real — the one case where sharing is wrong. Returns whether it linked anything. */
+function linkModules(dir, { quiet = false } = {}) {
+  if (fs.existsSync(path.join(dir, "node_modules"))) return false;
+  const src = path.join(ROOT, "node_modules");
+  if (!fs.existsSync(src)) return false;
+  fs.symlinkSync(src, path.join(dir, "node_modules"), "dir");
+  if (!quiet) console.log("   linked node_modules from the base checkout");
+  return true;
+}
+
+async function cmdNew(raw, base, { json = false } = {}) {
   const name = slug(raw || "");
-  if (!name) { console.error("usage: task new <name>"); process.exit(2); }
+  const fail = (msg, code = 2) => {
+    if (json) console.log(JSON.stringify({ ok: false, error: msg }));
+    else console.error(msg);
+    process.exit(code);
+  };
+  if (!name) return fail("usage: task new <name>");
   const dir = dirFor(name), branch = branchFor(name);
-  if (fs.existsSync(dir)) { console.error(`task "${name}" already exists at ${dir}`); process.exit(2); }
+  if (fs.existsSync(dir)) return fail(`task "${name}" already exists at ${dir}`);
   const from = base || currentBranch();
   fs.mkdirSync(TREES, { recursive: true });
 
@@ -211,11 +229,23 @@ async function cmdNew(raw, base) {
   const r = exists
     ? tryGit(["worktree", "add", dir, branch])
     : tryGit(["worktree", "add", "-b", branch, dir, from]);
-  if (!r.ok) { console.error(r.out); process.exit(1); }
+  if (!r.ok) return fail(r.out, 1);
 
   // Remember the base in the worktree's own config, so `merge` never has to guess where to land.
   tryGit(["config", "minami.base", from], { cwd: dir });
+  // Link at CREATION, not lazily at first build. A worktree without node_modules has no `npm` at all —
+  // `npm run build:check`, `npx next`, every script fails — and the agent that lands in one is usually
+  // a chat pane that was put there automatically and never asked for a worktree in the first place. It
+  // should find a checkout it can work in, not one it has to repair. `build` still links, for trees
+  // created before this and for anyone who deleted the link to install for real.
+  linkModules(dir, { quiet: json });
 
+  if (json) {
+    // The dashboard reads THIS to isolate a pane, so creation speaks the same JSON as `list`/`merge`
+    // rather than being screen-scraped — the reason those two grew `--json` in the first place.
+    console.log(JSON.stringify({ ok: true, name, dir, branch, base: from, port: portFor(name) }));
+    return;
+  }
   console.log(`✓ task ${name}`);
   console.log(`   dir    ${dir}`);
   console.log(`   branch ${branch}  (from ${from})`);
@@ -268,14 +298,7 @@ async function cmdList({ json = false } = {}) {
 async function cmdBuild(name, { quiet = false } = {}) {
   const dir = dirFor(name);
   if (!fs.existsSync(dir)) { console.error(`no task "${name}"`); process.exit(2); }
-  if (!fs.existsSync(path.join(dir, "node_modules"))) {
-    // Worktrees share git objects, never node_modules. Symlinking the base's is deliberate: a full
-    // install per task costs minutes and gigabytes, and every task is the same package.json by
-    // construction (it was branched from it). If a task CHANGES dependencies, delete the link and
-    // install for real — that is the one case where sharing is wrong.
-    const src = path.join(ROOT, "node_modules");
-    if (fs.existsSync(src)) { fs.symlinkSync(src, path.join(dir, "node_modules"), "dir"); if (!quiet) console.log("   linked node_modules from the base checkout"); }
-  }
+  linkModules(dir, { quiet });
   if (!quiet) console.log(`▸ building ${name} → .next-task (isolated dist dir, never touches .next)`);
   const sink = [];
   const started = Date.now();
@@ -413,7 +436,7 @@ const help = () => console.log(
     .filter((l) => l.startsWith("//")).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
 
 switch (cmd) {
-  case "new": await cmdNew(arg, val("--base")); break;
+  case "new": await cmdNew(arg, val("--base"), { json: has("--json") }); break;
   case "list": case "ls": await cmdList({ json: has("--json") }); break;
   case "build": await cmdBuild(arg); break;
   case "preview": await cmdPreview(arg); break;

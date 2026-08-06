@@ -91,32 +91,41 @@ export function assignIcons(names: string[], overrides: Record<string, string | 
   return out;
 }
 
-// A transparent 3D icon (static 3dicons render) with a premium default motion: it gently tilts then
-// rotates on a seamless loop (CSS `spin3d` keyframes in globals.css). Hovering the parent `.group`
-// faces it front and scales it up; active projects run the loop a touch faster.
+// A transparent 3D icon (static 3dicons render) that sits at a slight angle at rest, tumbles on a
+// seamless loop while its card is hovered or focused, and lifts toward you as it does. Active
+// projects run the loop unprompted, a touch faster.
+//
+// ── why three nested elements for one picture ────────────────────────────────────────────────────
+// The tumble, the hover lift and the press all want `transform`, and only one of them can have it:
+// an `animation` owns the property outright, so a hover transform on the same element is discarded
+// for as long as the loop is declared. That is not a theory — this used to scale the OUTER box on
+// hover and animate the img, and the two never met, so the header comment claimed a "face you on
+// hover" that no tile has ever done. Splitting them means the lift now works on a *busy* tile too,
+// which is the one it was most missing on.
+//
+// The wrapper stays untransformed because it carries the drop-shadow, and §12's measured rule is
+// that a CSS filter must never sit on a moving node (it can't be compositor-cached; the shadow is
+// recomputed from the rotated pixels every frame — moving it off the img cut `spin3d` from 45.2% to
+// 18.6% for the same seven icons). All the motion happens below it.
+//
+// The rest of the mechanics — why the loop is paused rather than removed, why the static pose has to
+// equal the 0% keyframe — are in globals.css next to the rules themselves.
 export function ProjectIcon({ name, icon: assigned, big, active, size }: { name: string; icon?: string; big?: boolean; active?: boolean; size?: number }) {
   const icon = iconOf(name, assigned);
   const s = big ? "h-14 w-14" : "h-9 w-9";
   return (
-    <div className={`relative shrink-0 [perspective:600px] drop-shadow-[0_10px_16px_rgba(0,0,0,0.5)] transition-transform duration-300 group-hover:scale-[1.16] ${size ? "" : s}`}
+    <div className={`icon-3d shrink-0 drop-shadow-[0_10px_16px_rgba(0,0,0,0.5)] ${size ? "" : s}`}
       style={size ? { height: size, width: size } : undefined}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={`/icons/${icon}.webp`} alt="" draggable={false}
-        // A hand-assigned slug that isn't in /public/icons would render as a broken image where the
-        // project's identity should be. Fall back to the inferred one instead.
-        onError={(e) => { const el = e.currentTarget; const f = `/icons/${iconOf(name)}.webp`; if (!el.src.endsWith(f)) el.src = f; }}
-        // The drop-shadow used to live HERE, on the element that rotates. A CSS filter on an animating
-        // element can never be cached by the compositor: the shadow is recomputed from the rotated
-        // pixels every single frame. Measured at ~6.5% GPU per animating icon; moving the shadow off
-        // the animated node cut `spin3d` from 45.2% to 18.6% for the same seven icons.
-        //
-        // It is now a drop-shadow on the STATIC wrapper below, which rasterises once. The shadow no
-        // longer tracks the 3D rotation — which is invisible at this size, and was never worth a
-        // permanent GPU tax on a dashboard that stays open all day.
-        className="motion-icon h-full w-full object-contain [transform-style:preserve-3d]"
-        style={active ? { animation: "spin3d 4.5s ease-in-out infinite" } : undefined}
-      />
+      <span className="icon-lift">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`/icons/${icon}.webp`} alt="" draggable={false}
+          // A hand-assigned slug that isn't in /public/icons would render as a broken image where the
+          // project's identity should be. Fall back to the inferred one instead.
+          onError={(e) => { const el = e.currentTarget; const f = `/icons/${iconOf(name)}.webp`; if (!el.src.endsWith(f)) el.src = f; }}
+          className={`motion-icon${active ? " motion-icon-live" : ""}`}
+        />
+      </span>
     </div>
   );
 }

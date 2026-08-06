@@ -125,6 +125,11 @@ export const NODES: ModuleNode[] = [
   { id: "r/autopilot", label: "/api/autopilot", sub: "the switch + what the runner sees", layer: "route", row: 12 },
   { id: "x/autopilotcfg", label: "~/.minami/autopilot.json", sub: "its switch — on disk, because a\ntimer in the server reads it", layer: "runtime", row: 6 },
   { id: "x/events", label: "~/.minami/events.jsonl", sub: "alert log · deploy.sh + task.mjs write", layer: "runtime", row: 5 },
+  // Isolation's last mile (KNOWLEDGE.md §9). The autopilot has always been able to MERGE worktrees;
+  // nothing could create one from the UI, which is why no session had ever run in one.
+  { id: "l/worktree", label: "worktree", sub: "isolate a chat · merge back ·\ndiscard an unused tree", layer: "core", row: 21 },
+  { id: "l/claim", label: "worktree-claim", sub: "who is working in a tree\n(claim file + live cwd)", layer: "core", row: 22 },
+  { id: "r/worktree", label: "/api/worktree", sub: "isolate · merge · discard", layer: "route", row: 13 },
 
   // ── Standing agents (KNOWLEDGE.md §14) ──────────────────────────────────
   // The agent layer meets the live pipeline at exactly one point — l/agents-runner → l/manager — and
@@ -146,16 +151,21 @@ export const NODES: ModuleNode[] = [
   { id: "l/fileview", label: "file-view.ts", sub: "transcript → files touched\n(created vs changed)", layer: "core", row: 18, pipeline: "live" },
   { id: "r/fsfile", label: "/api/fs/file", sub: "sliced text · binary sniff\n· raw allow-list", layer: "route", row: 15 },
 
-  // ── Flow view: the step graph + its brake (KNOWLEDGE.md §5f) ────────────
-  { id: "c/FlowStrip", label: "FlowStrip", sub: "the in-chat door", layer: "component", row: 22, pipeline: "live" },
-  { id: "c/FlowCanvas", label: "FlowCanvas", sub: "step graph in the bento\n(React Flow, no minimap)", layer: "component", row: 21, pipeline: "live" },
-  { id: "l/flowmodel", label: "flow-model.ts", sub: "transcript → step graph\n(TodoWrite + TaskCreate)", layer: "core", row: 16, pipeline: "live" },
+  // ── Flow view: the session journey + its brake (KNOWLEDGE.md §5f) ───────
+  { id: "c/FlowStrip", label: "FlowStrip", sub: "the in-chat door\n+ goals done / open loops", layer: "component", row: 22, pipeline: "live" },
+  { id: "c/FlowCanvas", label: "FlowCanvas", sub: "one spine per session\n(ask → what it did)", layer: "component", row: 21, pipeline: "live" },
+  { id: "l/flowmodel", label: "flow-model.ts", sub: "transcript → journey\n(acts · evidence · open loops)", layer: "core", row: 16, pipeline: "live" },
+  { id: "l/flownarrate", label: "flow-narrate.ts", sub: "Haiku writes the outcome\nline · cached to disk", layer: "core", row: 17, pipeline: "live" },
+  { id: "r/flow", label: "/api/flow/[id]", sub: "narratives only\nGET cached · POST writes", layer: "route", row: 14, pipeline: "live" },
   { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
 
   // ── Density: how much chrome a box may spend (KNOWLEDGE.md §5e) ─────────
   { id: "l/density", label: "density.ts", sub: "measured tiers + context\n(roomy · snug · tight · micro)", layer: "core", row: 20 },
   // Shared so "the browser matches the file preview" is a fact about the code, not a thing to re-check.
   { id: "c/PanelTabs", label: "PanelTabs", sub: "one tab row, worn by\nthe file AND browser panels", layer: "component", row: 23 },
+
+  // ── Which topics the new-topic picker offers first (KNOWLEDGE.md §5d) ─────
+  { id: "l/topic-rank", label: "topic-rank.ts", sub: "focus ranking: depth × recency\n+ did-you-come-back", layer: "core", row: 24 },
 ];
 
 export const EDGES: ModuleEdge[] = [
@@ -192,6 +202,11 @@ export const EDGES: ModuleEdge[] = [
   { from: "c/AutopilotTile", to: "r/events", kind: "http" },
   { from: "app/settings", to: "c/AutopilotPanel", kind: "import" },
   { from: "c/AutopilotPanel", to: "r/autopilot", kind: "http" },
+  { from: "app/page", to: "r/worktree", kind: "http" },
+  { from: "r/worktree", to: "l/worktree", kind: "import" },
+  { from: "l/worktree", to: "l/claim", kind: "import" },
+  { from: "l/sessions", to: "l/claim", kind: "import" },
+  { from: "l/manager", to: "l/claim", kind: "import" },
   { from: "r/autopilot", to: "l/autopilot", kind: "import" },
   { from: "l/autopilot", to: "x/autopilotcfg", kind: "import" },
   { from: "l/autopilot", to: "l/manager", kind: "import" },
@@ -218,6 +233,10 @@ export const EDGES: ModuleEdge[] = [
   { from: "app/page", to: "c/ProjectIcon", kind: "import" },
   { from: "c/BentoRail", to: "c/ProjectIcon", kind: "import" },
   { from: "app/page", to: "c/FolderPicker", kind: "import" },
+  // page.tsx ranks (it holds the sessions); FolderPicker only draws the result.
+  { from: "app/page", to: "l/topic-rank", kind: "import" },
+  { from: "c/FolderPicker", to: "l/topic-rank", kind: "import" },
+  { from: "c/FolderPicker", to: "c/ProjectIcon", kind: "import" },
   { from: "app/page", to: "c/AttachBar", kind: "import" },
   { from: "app/page", to: "c/BrandIcon", kind: "import" },
   { from: "app/page", to: "c/Nav", kind: "import" },
@@ -315,8 +334,20 @@ export const EDGES: ModuleEdge[] = [
   // but the only place it can be ENFORCED is canUseTool inside the manager — see KNOWLEDGE.md §5f.
   { from: "app/page", to: "c/FlowCanvas", kind: "import" },
   { from: "app/page", to: "c/FlowStrip", kind: "import" },
-  { from: "c/FlowCanvas", to: "r/session", kind: "http", label: "transcript" },
+  { from: "c/FlowCanvas", to: "r/session", kind: "http", label: "transcript · pages back" },
   { from: "c/FlowCanvas", to: "l/flowmodel", kind: "import" },
-  { from: "c/FlowCanvas", to: "r/hold", kind: "http", label: "arm/release" },
+  { from: "c/FlowStrip", to: "l/flowmodel", kind: "import" },
+  // The narration round trip. Deliberately a SECOND, tiny request rather than a field on the
+  // transcript response: the fold already carries every tool result, and doubling that payload to
+  // deliver a few hundred bytes of prose is the wrong trade. See KNOWLEDGE.md §5f.
+  { from: "c/FlowCanvas", to: "r/flow", kind: "http", label: "narratives" },
+  { from: "r/flow", to: "l/flownarrate", kind: "import" },
+  { from: "r/flow", to: "l/flowmodel", kind: "import" },
+  { from: "r/flow", to: "l/sessions", kind: "import" },
+  { from: "l/flownarrate", to: "l/flowmodel", kind: "import" },
+  // The brake is armed from `lib/use-agent.ts` (the composer's control row), NOT from the canvas —
+  // it is a session control, not a property of a view. The graph claimed the canvas called it until
+  // 2026-07-31, which was true only of the v1 panel that owned the pane's live state.
+  { from: "l/useagent", to: "r/hold", kind: "http", label: "arm/release" },
   { from: "r/hold", to: "l/manager", kind: "import" },
 ];

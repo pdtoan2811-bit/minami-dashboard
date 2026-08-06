@@ -91,68 +91,214 @@ function Table({ head, rows, tone = "chat" }: { head: string[]; rows: string[][]
   );
 }
 
+/* ---------------- lists ---------------- */
+// A list is a TREE, and the indentation you typed is what shapes it. The first version of this parser
+// matched `^\s*[-*•]\s+` and then threw the captured indent away, so every bullet in a message became
+// a sibling of every other one: a three-level plan came out as one flat column, and the structure the
+// writer used to carry their meaning was the exact thing that got dropped. Continuation lines fared
+// worse — an indented line under a bullet ended the list and reappeared as a paragraph *after* it.
+type LItem = { text: string; task?: boolean; done?: boolean; kids: LList[] };
+type LList = { ordered: boolean; start: number; indent: number; items: LItem[] };
+
+// Marker forms accepted on purpose: `-` `*` `+` `•` and `1.` / `1)`. `•` because people paste from
+// somewhere that already bulleted for them, and being strict there just punishes the paste.
+const LIST_LINE = /^(\s*)(?:([-*+•])|(\d+)[.)])\s+(.*)$/;
+// Tabs count as two columns. Any consistent rule works; not having one is what breaks mixed indents.
+const indentOf = (s: string) => (/^\s*/.exec(s)?.[0] || "").replace(/\t/g, "  ").length;
+
+// Consume a run of list lines starting at `from`, returning the trees and the line after the run.
+function takeList(lines: string[], from: number): { roots: LList[]; next: number } {
+  const roots: LList[] = [];
+  const stack: LList[] = [];
+  let last: LItem | null = null;
+  let i = from;
+
+  while (i < lines.length) {
+    const m = LIST_LINE.exec(lines[i]);
+    if (m) {
+      const indent = indentOf(m[1]);
+      const ordered = !!m[3];
+      let text = m[4];
+      let task: boolean | undefined, done: boolean | undefined;
+      const tm = /^\[([ xX])\]\s+(.*)$/.exec(text);
+      if (tm) { task = true; done = tm[1].toLowerCase() === "x"; text = tm[2]; }
+
+      // Close every level indented deeper than this line before placing it.
+      while (stack.length && indent < stack[stack.length - 1].indent) stack.pop();
+      let cur: LList | undefined = stack[stack.length - 1];
+
+      if (!cur || indent > cur.indent) {
+        // Deeper than the open level (or the very first item) → a child list hanging off the last item.
+        const list: LList = { ordered, start: ordered ? parseInt(m[3], 10) || 1 : 1, indent, items: [] };
+        if (cur && last) last.kids.push(list); else roots.push(list);
+        stack.push(list);
+        cur = list;
+      } else if (cur.ordered !== ordered) {
+        // Same depth, other kind — a numbered run under a bulleted one is a NEW list, not a continuation.
+        stack.pop();
+        const parent = stack[stack.length - 1];
+        const list: LList = { ordered, start: ordered ? parseInt(m[3], 10) || 1 : 1, indent, items: [] };
+        const host = parent?.items[parent.items.length - 1];
+        if (host) host.kids.push(list); else roots.push(list);
+        stack.push(list);
+        cur = list;
+      }
+
+      const item: LItem = { text, task, done, kids: [] };
+      cur.items.push(item);
+      last = item;
+      i++;
+      continue;
+    }
+
+    // A non-marker line indented past the open list belongs to the item above it — that's a wrapped
+    // sentence or a second paragraph of the same bullet, and it keeps the item's hanging indent.
+    if (lines[i].trim() && last && indentOf(lines[i]) > (stack[stack.length - 1]?.indent ?? 0)) {
+      last.text += "\n" + lines[i].trim();
+      i++;
+      continue;
+    }
+
+    // A blank line only ends the list if what follows isn't another item — otherwise this is an
+    // ordinary "loose" list with air between its entries, which is how most people write them.
+    if (!lines[i].trim()) {
+      let k = i + 1;
+      while (k < lines.length && !lines[k].trim()) k++;
+      if (k < lines.length && LIST_LINE.test(lines[k])) { i = k; continue; }
+    }
+    break;
+  }
+  return { roots, next: i };
+}
+
+function List({ L, keyBase, tone, caret }: { L: LList; keyBase: string; tone: Tone; caret?: boolean }) {
+  const T = TONE[tone];
+  const Tag = (L.ordered ? "ol" : "ul") as "ol" | "ul";
+  // `pl-5` + the default `list-outside` is what produces a real hanging indent: the marker sits in the
+  // padding and every wrapped line lands under the item's first character, not under the bullet.
+  const marker = L.ordered ? "list-decimal" : "list-disc";
+  return (
+    <Tag start={L.ordered && L.start !== 1 ? L.start : undefined} className={`my-1.5 space-y-1 pl-5 ${marker} ${T.marker}`}>
+      {L.items.map((it, i) => {
+        const lastOne = caret && i === L.items.length - 1;
+        return (
+          <li key={i} className={it.task ? "-ml-5 flex list-none items-start gap-2" : undefined}>
+            {it.task && (
+              <span className={`mt-[3px] inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[9px] ${it.done ? "border-[var(--sakura)] bg-[var(--sakura)] text-white" : "border-white/25"}`}>{it.done ? "✓" : ""}</span>
+            )}
+            <span className={`min-w-0 ${it.done ? "text-neutral-500 line-through" : ""}`}>
+              {inlineLines(it.text, `${keyBase}i${i}`, tone)}
+              {lastOne && !it.kids.length && <Caret />}
+              {it.kids.map((k, ki) => <List key={ki} L={k} keyBase={`${keyBase}i${i}k${ki}`} tone={tone} caret={lastOne} />)}
+            </span>
+          </li>
+        );
+      })}
+    </Tag>
+  );
+}
+
+const Caret = () => <span className="ml-0.5 inline-block h-[0.95em] w-[2px] animate-pulse align-[-0.13em]" style={{ background: "var(--sakura)" }} />;
+
+// A single newline is a LINE BREAK here, not a space. Strict markdown folds it into the paragraph, but
+// this is a chat panel: people press Enter to mean "new line", and rendering their address block or
+// their three short points as one run-on sentence is never what they asked for. Every chat client that
+// people compare this to (Claude Code among them) treats it the same way.
+function inlineLines(text: string, keyBase: string, tone: Tone): ReactNode[] {
+  const parts = text.split("\n");
+  const nodes: ReactNode[] = [];
+  parts.forEach((p, i) => {
+    if (i) nodes.push(<br key={`${keyBase}br${i}`} />);
+    nodes.push(...inline(p, `${keyBase}L${i}`, tone));
+  });
+  return nodes;
+}
+
 /* ---------------- block parser ---------------- */
 function renderProse(src: string, keyBase: string, tone: Tone = "chat", caret = false): ReactNode {
   const T = TONE[tone];
   const lines = src.split("\n");
-  // Index of the last line with content, so a streaming caret can ride the end of the final
-  // paragraph instead of dangling on a line of its own below the text.
+  // Index of the last line with content, so a streaming caret can ride the end of the final block
+  // instead of dangling on a line of its own below the text.
   let lastIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) if (lines[i].trim()) { lastIdx = i; break; }
   const out: ReactNode[] = [];
-  let list: { ordered: boolean; items: { text: string; task?: boolean; done?: boolean }[] } | null = null;
-  const flushList = () => {
-    if (!list) return;
-    const L = list; list = null;
-    const cls = "my-1.5 ml-4 space-y-1 " + (L.ordered ? "list-decimal" : "list-disc") + " " + T.marker;
-    out.push(
-      <ul key={`${keyBase}l${out.length}`} className={L.ordered ? cls.replace("list-disc", "") : cls} style={L.ordered ? { listStyleType: "decimal" } : undefined}>
-        {L.items.map((it, i) => it.task
-          ? <li key={i} className="list-none -ml-4 flex items-start gap-2"><span className={`mt-[3px] inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[9px] ${it.done ? "border-[var(--sakura)] bg-[var(--sakura)] text-white" : "border-white/25"}`}>{it.done ? "✓" : ""}</span><span className={it.done ? "text-neutral-500 line-through" : ""}>{inline(it.text, `${keyBase}li${i}`, tone)}</span></li>
-          : <li key={i}>{inline(it.text, `${keyBase}li${i}`, tone)}</li>)}
-      </ul>,
-    );
-  };
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const t = raw.replace(/\s+$/, "");
+
+    if (!t.trim()) continue;
+
     // table: header row + separator row
     if (/^\s*\|?.+\|.+/.test(t) && /^\s*\|?[\s:-]*-[-\s:|]*\|?\s*$/.test(lines[i + 1] || "")) {
       const head = cells(t);
       const rows: string[][] = [];
       let j = i + 2;
       while (j < lines.length && /\|/.test(lines[j]) && lines[j].trim()) { rows.push(cells(lines[j])); j++; }
-      flushList();
       out.push(<Table key={`${keyBase}t${out.length}`} head={head} rows={rows} tone={tone} />);
       i = j - 1;
       continue;
     }
-    const task = t.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)/);
-    if (task) { if (!list || list.ordered) { flushList(); list = { ordered: false, items: [] }; } list.items.push({ text: task[2], task: true, done: task[1].toLowerCase() === "x" }); continue; }
-    const ul = t.match(/^\s*[-*•]\s+(.*)/);
-    if (ul) { if (!list || list.ordered) { flushList(); list = { ordered: false, items: [] }; } list.items.push({ text: ul[1] }); continue; }
-    const ol = t.match(/^\s*\d+[.)]\s+(.*)/);
-    if (ol) { if (!list || !list.ordered) { flushList(); list = { ordered: true, items: [] }; } list.items.push({ text: ol[1] }); continue; }
-    flushList();
-    if (!t.trim()) continue;
+
+    // Tested BEFORE the list, or `- - -` would be read as a bullet holding a dash.
     if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(t)) { out.push(<hr key={`${keyBase}h${out.length}`} className={`my-2 ${T.rule}`} />); continue; }
-    const bq = t.match(/^\s*>\s?(.*)/);
-    if (bq) { out.push(<blockquote key={`${keyBase}q${out.length}`} className={`my-1 border-l-2 pl-3 ${T.quote}`}>{inline(bq[1], `${keyBase}q${out.length}`, tone)}</blockquote>); continue; }
+
+    if (LIST_LINE.test(raw)) {
+      const { roots, next } = takeList(lines, i);
+      const holds = caret && lastIdx >= i && lastIdx < next;
+      out.push(
+        <div key={`${keyBase}l${out.length}`}>
+          {roots.map((r, ri) => <List key={ri} L={r} keyBase={`${keyBase}l${out.length}r${ri}`} tone={tone} caret={holds && ri === roots.length - 1} />)}
+        </div>,
+      );
+      i = next - 1;
+      continue;
+    }
+
+    // Consecutive `>` lines are ONE quote. Rendered per-line before, a two-line quotation came out as
+    // two stacked bars, which reads as two separate quotations.
+    if (/^\s*>\s?/.test(t)) {
+      const buf: string[] = [];
+      let j = i;
+      while (j < lines.length && /^\s*>\s?/.test(lines[j])) { buf.push(lines[j].replace(/^\s*>\s?/, "")); j++; }
+      out.push(
+        <blockquote key={`${keyBase}q${out.length}`} className={`my-1 border-l-2 pl-3 ${T.quote}`}>
+          {inlineLines(buf.join("\n"), `${keyBase}q${out.length}`, tone)}
+        </blockquote>,
+      );
+      i = j - 1;
+      continue;
+    }
+
     const h = t.match(/^(#{1,4})\s+(.*)/);
     if (h) {
       const size = tone === "thought" ? "text-[12px] uppercase tracking-[0.06em]" : h[1].length <= 1 ? "text-[15px]" : "text-[13px]";
       out.push(<p key={`${keyBase}hd${out.length}`} className={`pt-0.5 font-semibold ${T.head} ${size}`}>{inline(h[2], `${keyBase}hd${out.length}`, tone)}</p>);
       continue;
     }
+
+    // Gather the whole paragraph — every following line until a blank one or the start of another
+    // block. Emitting one <p> per line meant `space-y` put a full paragraph's air between two lines of
+    // a single thought, so a wrapped sentence looked like two unrelated statements.
+    const buf: string[] = [t];
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const n = lines[j];
+      if (!n.trim()) break;
+      if (LIST_LINE.test(n) || /^\s*>\s?/.test(n) || /^(#{1,4})\s+/.test(n)) break;
+      if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(n)) break;
+      if (/^\s*\|?.+\|.+/.test(n) && /^\s*\|?[\s:-]*-[-\s:|]*\|?\s*$/.test(lines[j + 1] || "")) break;
+      buf.push(n.replace(/\s+$/, ""));
+    }
     out.push(
       <p key={`${keyBase}p${out.length}`} className={`${T.lead} [overflow-wrap:anywhere]`}>
-        {inline(t, `${keyBase}p${out.length}`, tone)}
-        {caret && i === lastIdx && <span className="ml-0.5 inline-block h-[0.95em] w-[2px] animate-pulse align-[-0.13em]" style={{ background: "var(--sakura)" }} />}
+        {inlineLines(buf.join("\n"), `${keyBase}p${out.length}`, tone)}
+        {caret && lastIdx >= i && lastIdx < j && <Caret />}
       </p>,
     );
+    i = j - 1;
   }
-  flushList();
   return <div className={T.gap}>{out}</div>;
 }
 

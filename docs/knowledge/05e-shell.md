@@ -178,8 +178,82 @@ Two rules the indicator inherits rather than invents:
 - **`awaiting` gets the loudest colour and no motion**, matching `.activity-idle`. Animating next to
   "waiting for your approval" claims work is happening when nothing moves until you click.
 
-Only a genuinely running turn animates, and `.tab-live-ring` is in the `prefers-reduced-motion` kill
-list — at rest the strip attaches no animation at all, which is the same bargain the bento tiles make.
+**The ring alone was still a six-pixel answer.** It works once you are looking at the dot, and the
+whole premise of this indicator is that you are *not* — you are reading another transcript, and in
+grid view the dot is one of a dozen small round things. So a running tab also gets an indeterminate
+**sweep** along its foot (`.tab-run-sweep`): a phase-tinted bar the width of the tab, travelling. It
+is the shape peripheral vision finds without being aimed, and it borrows the meaning every progress
+bar has already taught. Two elements, because the track has to clip the runner — clipped on the
+sweep rather than on the tab, which would also crop the ring, and the ring is *supposed* to bleed
+past the tab's rounded edge. Under `prefers-reduced-motion` the runner is dropped and the track keeps
+the tint: a static underline still marks the running tab, which is the information.
+
+Only a genuinely running turn animates, and both `.tab-live-ring` and the sweep are in the
+`prefers-reduced-motion` kill list — at rest the strip attaches no animation at all, which is the
+same bargain the bento tiles make. A second animation on a tab that is *already* animating is close
+to free; §12's measurement is that the frame loop, not its contents, is the cost.
+
+### Selection is a fill and a tail, not a colour
+
+> 🐛 **"Which tab am I reading" became unreadable, and colour could not fix it.** Selection and
+> activity were both drawn with a border colour and a background wash — two orthogonal facts sharing
+> two channels, so the tab could only ever express one of them. They also shared a *hue*:
+> `PHASE_TINT.thinking` is literally `var(--sakura)`, the accent selection uses, and `TOOL_TINT.exec`
+> and `.ask` are that same pink again. So the numbers came out at **selected = sakura @60% border /
+> 10% wash** against **thinking = sakura @55% / 9%**. Five percent of border alpha is not a
+> distinction. Adding the running sweep made it worse rather than better: the loudest tab in the row
+> was no longer the one you were reading.
+>
+> Recolouring the phase map was the wrong lever — those tints are shared with the tiles, the tool
+> chips and the transcript blocks, and any new accent would collide again. Selection moved **off
+> colour** instead:
+>
+> - **Fill means selected. Tint means working.** The selected tab is the only FILLED one
+>   (`bg-[var(--sakura)]/[0.18]`, full-strength border); a running tab is outlined and tinted and now
+>   carries **no background wash at all**. Filled versus outlined survives any hue collision.
+> - **A tail under the selected tab** (`.tab-caret`), pointing down at the transcript it belongs to.
+>   Shape is a channel nothing else in the row uses. Border-triangle, not a rotated square: a rotated
+>   square needs a background to hide its inner half, and that background is exactly the thing that
+>   changes with selection and phase.
+> - The `⌥N` badge goes sakura on the selected tab too — dim grey on the tab you are reading was the
+>   same "reads as disabled" problem the running tint was introduced to solve.
+>
+> The tail hangs 5px below the tab's border box, which is why the row's vertical padding now lives on
+> the **scroll container** rather than the row: `overflow-x-auto` clips at the padding box, so that
+> padding is the only room the tail can occupy. Symmetric, so `items-center` still lines the tabs up
+> with the ＋/esc controls, and the row's height is unchanged.
+> *Reported by user: "chat panel tab are being chosen need an indicator something like a triangle
+> arrow since the color clues are not really intuitive anymore".*
+
+### Which tab you land on, and in what order
+
+Both are decided **only when a topic opens** — `openProject`, `app/page.tsx`. Nothing re-sorts the row
+or moves the selection while you are in it, and that restraint is the design, not an omission: a tab
+that reorders itself under the cursor is the mis-click the header peek used to cause, and switching
+the panel to a background chat that just started a turn would take the transcript you are reading off
+screen mid-sentence. While you are in a topic, a working tab announces itself and stays put — that is
+what the ring and the sweep are for.
+
+- **The row is sorted newest-interaction-first.** Remembered panes (`openPanes`, per topic) used to
+  come back in insertion order, so a chat added through ＋ months ago sat at ⌥1 forever while the one
+  you actually work in was ⌥4.
+- **A remembered *blank* pane sorts last.** It is a scratch pad you kept; landing the panel on an empty
+  composer is exactly the "the chat was thrown away" shape the `allBlank` guard above exists to prevent.
+- **Recency is read from the raw session list, via a ref.** Not `p.sessions` and not `pool`: both are
+  filtered (trivial, then the date window), and a pane the user chose to keep open may be neither. Read
+  through a filtered list, every such pane dated to `0` and swept to the end of the row. The ref exists
+  because `openProject` is the onClick of every tile — depending on `sessions` or `liveAct` directly
+  would rebuild it, and re-render the whole board, on every poll.
+- **Running outranks recent for the selection.** `lastActivity` comes off the transcript on disk, and a
+  session mid-turn may not have written a line for a minute, so the chat that is *working* can easily
+  sort below one you merely opened more recently — and it is the one you crossed the board to look at.
+
+> 🐛 **Opening a topic landed you on a tab chosen by the topic you left.** `activePane` is panel-scoped
+> state that outlives a project switch, and `openProject` never touched it — so arriving anywhere put
+> you on whatever *index* you had been reading, clamped. Reading tab 4 of one project and clicking
+> another tile opened that project's fourth chat, or its first by luck. An index carried across
+> identities is not a selection. `openProject` and `startTopic` now both set it explicitly.
+> *Reported by user: "auto open and sort tab with recent interaction when navigate across tiles".*
 
 **`paneAct` — the gap `liveAct` cannot cover.** `liveAct` is keyed by *session id*, and a blank chat
 has none until the server assigns one a second or two into its first turn. So the freshly-sent pane —
@@ -314,6 +388,30 @@ the pool. Iteration is name-sorted so a glyph doesn't reshuffle when the grid's 
 > twice the size, and the store carries a hand-assignable override.
 > *Reported by user: "the skill to semantically assign icon for topic is not working, new topic get
 > default icon that is hard for context recognize and switching for human".*
+
+#### How one icon moves — three motions, three elements
+An icon has three things that want to move it: an idle **tumble** while its card is hovered, a
+**lift** toward you on hover, and a **press** dip. All three want `transform`, which is one property,
+and an `animation` owns it outright — so any two of them on the same element means one silently never
+happens. `ProjectIcon` therefore renders three nested nodes: `.icon-3d` (static box, and the
+drop-shadow, which §12 forbids putting on anything that moves) → `.icon-lift` (perspective + a
+**transitioned** transform) → `.motion-icon` (the tumble, and nothing else). Rules live in
+`app/globals.css` beside the keyframes.
+
+The tumble is **paused, not removed**, at rest, and `.motion-icon`'s static transform is the same pose
+as the `spin3d` 0%/100% keyframe. Both facts are load-bearing and both are about the same thing —
+a CSS animation always restarts at 0%, so anything that adds or drops it mid-interaction snaps. This
+costs nothing: a paused animation schedules no frames, which is the only measure §12 cares about.
+
+> 🐛 **Two snaps per hover, on every icon on the board.** Hover *added* `animation: spin3d` to an
+> untransformed icon, so it jumped 12° on enter and jumped back on leave; and the hover scale sat on
+> the same wrapper as the drop-shadow, i.e. a CSS filter on a moving node — the one thing §12 says
+> never to do. Worse, a **busy** tile got no hover response at all: `active` set the animation as an
+> *inline* shorthand, which outranks every stylesheet rule, so both the hover rule and the
+> reduced-motion kill-switch missed it. It is a class (`.motion-icon-live`) and a `--icon-spin`
+> variable now. Hover and focus (`:focus-visible` — the tiles are real buttons and keyboard users had
+> nothing) drive `animation-play-state` only.
+> *Reported by user: "more robust icon movements and hover effect".*
 
 > 🐛 **A resize that silently didn't take.** `useSetting`'s setter was recreated on every render, so
 > the divider's drag effect — which lists it in its deps — tore down and re-subscribed whenever any

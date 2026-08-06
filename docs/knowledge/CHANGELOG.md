@@ -8,7 +8,101 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-08-03
+- **A second chat in a folder now gets its own checkout** (§9, §13) — the worktree tooling had been
+  complete and unused for weeks because the middle step was manual, which is why §9's occupancy guard
+  had never once evaluated true. New `lib/worktree.ts` + `/api/worktree`: a blank second-or-later chat
+  in a git repo is silently given its own worktree at creation (`MINAMI_AUTO_ISOLATE=0` to switch off),
+  `task.mjs new` grew `--json` and now links `node_modules` at creation rather than at first build, and
+  closing an isolated pane discards the tree if it is pristine. `topicOf` folds a worktree path back to
+  its parent repo so an isolated chat stays on its own tile (`META_DERIVATION_VERSION` 3 → 4). The amber
+  "N agents are live in this folder" banner is now two-state: it reports isolation with a `merge back`
+  button, and only warns when the folder is genuinely still shared. Merge-back goes through
+  `task.mjs merge`, so the autopilot and the button share one set of gates.
+  *Requested by user: "Upgrade the auto pilot to somehow automatically create worktrees. or do
+  something that optimize the process".*
+- **The selected chat tab is a fill and a tail, not a shade of pink** (§5e) — selection and activity
+  were drawn on the same two channels *and* the same hue (`PHASE_TINT.thinking` is `var(--sakura)`),
+  so "which am I reading" was sakura @60/10% against "thinking" at sakura @55/9%. Selection moved off
+  colour: the selected tab is the only filled one, a running tab is outlined with no wash, and a
+  `.tab-caret` triangle hangs under the selected tab pointing at its transcript. The row's vertical
+  padding moved onto the scroll container so the tail isn't clipped (`overflow` clips at the padding
+  box); row height unchanged. *Reported by user: "chat panel tab are being chosen need an indicator
+  something like a triangle arrow since the color clues are not really intuitive anymore".*
+- **The deploy guard could be disabled by one unlucky poll; verification blessed a broken app** (§8) —
+  `busy_now()` in `bin/deploy.sh` returned `""` for a 403, a 500, a timeout *and* for "no server", and
+  the wait loop treated `""` as permission to proceed. It is now three-valued (count / `""` only on
+  connection-refused / `"?"` = unknown), and unknown keeps waiting then fails closed. Separately
+  `verify()` passed on `GET / -> 200` while every `/_next/static/*` asset 400'd and `BUILD_ID` was
+  empty; it now fails on both — reproduced against the live broken box, where `--verify-only` went from
+  reporting success to exit 1. The failure alert now tails the deploy log (the actual refusal) instead
+  of `prod.log` (the previous boot's success). Autopilot inherits all three, since it deploys by
+  spawning this script. *Requested by user: "audit the auto pilot and investigate the latest failed
+  deploy and fix — check with at least 5 hypo"*
+- **Chat text renders its structure again** (§5c) — the block parser threw away everything a typed
+  message used to convey shape: list indentation was matched then discarded (so nested bullets came out
+  flat), every line became its own `<p>` (so two lines of one thought got a paragraph of air), an
+  indented continuation line escaped the list, `3.` rendered as `1.`, and consecutive `>` lines drew two
+  quote bars. Lists are now parsed into a tree by indent with real hanging indents, paragraphs group
+  their lines with `<br/>` (a single newline is a line break — this is a chat panel), `<ol start>` is
+  honoured and quotes merge. Both bubbles share the renderer, so the sent prompt gained all of it too.
+  *Reported by user: "I tried to convey a list and bullet points — however the xuống dòng, lùi đầu dòng
+  is not really intuitive … I want something matching the Claude Code desktop app"*
+- **`dev:iterate` pins `NODE_ENV=development`** (§8) — the shell profile exports `NODE_ENV=production`,
+  which made the script 500 every route on the Tailwind import. Working around it by hand with a bare
+  `npx next dev` drops `NEXT_DIST_DIR` too and writes dev output into `.next` under the live server;
+  that happened here and broke `:3000` until a redeploy. Post-mortem in §8.
+- **The topic picker is one fixed size in every state** (§5d) — it was `max-h-[70vh]`, so it sized to
+  its content: switching Recent↔Browse or stepping into a differently-sized folder resized it, and
+  because it's centred it moved vertically too, sliding rows out from under the cursor. Now
+  `h-[70vh] max-h-[34rem]`; the list scrolls instead. Measured identical (544×512 at 1280×800) across
+  both tabs and a two-entry folder. *Reported by user: "consistent size of popup please"*
+- **The chat tab row: a sweep while running, and a selection that means something** (§5e) — a running
+  tab now also carries an indeterminate phase-tinted bar along its foot (`.tab-run-sweep`); the 6px
+  ring only works if you are already looking at the dot, which is the one thing you are not doing.
+  Opening a topic sorts its tabs newest-interaction-first (remembered panes came back in insertion
+  order) and lands on the running one, else the most recent — `activePane` used to survive a project
+  switch untouched, so you arrived on an index chosen by the topic you left. Nothing re-sorts or
+  re-selects while you are *in* a topic, on purpose. Verified on `:3001` against a deliberately
+  oldest-first remembered set and a stubbed busy session.
+  *Reported by user: "in the chat panel need animation for tab is running, auto open and sort tab with
+  recent interaction when navigate across tiles etc".*
+- **The new-topic picker opens on Recent, not on the filesystem** (§5d) — new `lib/topic-rank.ts` ranks
+  topics by depth × recency plus a "did you come back on another day" term, which is what separates a
+  focused project from a folder that was busy once. Floors (`MIN_REQS`, a 0.2×leader relative cut) and
+  outright exclusions (`/tmp`, `/var/folders`, `$HOME` exactly) clear the noise: on this box they
+  removed two smoke-test fixtures and `~` from the top eight. `FolderPicker` gained Recent/Browse tabs;
+  Browse and the attach picker are unchanged. Verified in the browser on `:3001` — Recent lists six real
+  projects, and clicking one opens that topic with its `--continue` offer intact.
+  *Requested by user: "a short list of top 5-10 recent topic … with a ranking to clear noise from
+  folder/topic that's not really focused … then a tab navigation to switch between that UI with actual
+  folder directory pick UI"*
+
 ### 2026-07-31
+- **Project icon motion split into three layers** (§5e, §12) — the tumble, the hover lift and the
+  press each own their own element, because `transform` is one property and an `animation` takes it
+  outright. The loop is now *paused* at rest rather than added on hover, and the static pose equals
+  the `spin3d` 0%/100% keyframe, so hovering no longer snaps in and out. Live tiles use
+  `.motion-icon-live` + `--icon-spin` instead of an inline `animation` that outranked — and so broke —
+  both the hover rule and the reduced-motion kill-switch. Hover gained `:focus-visible` parity and a
+  press state; the keyframes gained a small vertical bob so the glyph reads as an object with weight.
+  *Reported by user: "more robust icon movements and hover effect".*
+- **Flow view v4 — the session journey** (§5f) — the canvas is no longer one turn at a time with a
+  pager, and no longer draws a node per tool call. One spine per **session**, one node per **ask**,
+  each saying what was wanted and how it turned out; phases and their evidence one click in, the raw
+  tool log two. New: a nine-kind semantic act layer and `buildJourney()` in `lib/flow-model.ts`,
+  `lib/flow-narrate.ts` (Haiku writes the outcome sentence, cached to
+  `~/.minami-bento/flow-narratives.json`, `MINAMI_FLOW_NARRATE=0` to disable), `/api/flow/[id]`
+  (narratives only — never a second copy of the fold), `Turn.cost` in `lib/claude-sessions.ts` (§1),
+  and a progress meter with **open loops** — plan items started and never closed. `cleanAsk`/`isAck`
+  were derived by folding **386 real transcripts**, not guessed: they drop 204 of 1,128 phantom
+  milestones (pasted-image markers, self-loaded skill bodies, auto-resume preambles, "go"/"continue").
+  Three bugs found by driving the app, all "state that fought itself" — see the v4 post-mortem.
+  *Reported by user: "Tool use log is too much detailed and noise, which is awful. I want the semantic
+  intuitive idea of goals of each step and how AI handled it."*
+- **The module graph claimed the flow canvas armed the brake** (§5f) — stale since v3; it is armed
+  from `lib/use-agent.ts`. Found by re-running the extraction script instead of editing from memory,
+  which is exactly what that step in the `minami-kb` procedure is for.
 - **Open-source readiness pass** — the repo had been public for weeks with no licence at all, which
   under default copyright makes a public clone readable and nothing else. Added `LICENSE` (MIT),
   corrected `package.json` (`UNLICENSED` → `MIT`, kept `private: true` as an npm-publish guard) and

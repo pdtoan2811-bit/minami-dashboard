@@ -41,7 +41,14 @@ This app is open all day. Anything it does *per frame*, it does forever.
 - **Never put a CSS `filter` on an animating element.** A filter on an animating node can't be
   compositor-cached. Moving `drop-shadow` off the rotating icon onto its static wrapper cut `spin3d`
   from 45.2% to 18.6% for the same seven icons. The shadow no longer tracks the rotation — invisible
-  at this size, and not worth a permanent tax.
+  at this size, and not worth a permanent tax. This applies to *transitions* too, not just loops: the
+  icons' hover scale used to sit on the shadowed wrapper, re-rasterising the filter for the whole
+  320ms. The transform now lives on an inner node the filter doesn't wrap (§5e).
+- **Pause an animation rather than adding and removing it.** `animation-play-state: paused` is free —
+  a paused animation schedules no frames, so the idle floor is the same as having no animation at all
+  — and it is the only way to start and stop a loop *without a snap*, because a CSS animation always
+  restarts at 0%. The rule that comes with it: the element's static `transform` must equal the
+  0%/100% keyframe, or the very first hover jumps.
 - **`prefers-reduced-motion` is honoured**, which is both the accessibility answer and a real off
   switch — idle GPU goes to 0.0%. One-shot entrance animations are made instant rather than removed,
   so elements that animate *in* don't get stranded at `opacity: 0`.

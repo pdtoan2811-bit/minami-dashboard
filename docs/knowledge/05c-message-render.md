@@ -13,9 +13,49 @@ line-height, paragraph gap — and nothing else. That is the whole point: a sepa
 would drift the moment a block type is added to one and not the other, and reasoning that loses its
 lists and bold lead-ins is exactly the reasoning that becomes unreadable.
 
-`caret` parks a pulsing cursor at the **end of the last paragraph** while text is still streaming.
+`caret` parks a pulsing cursor at the **end of the last block** while text is still streaming.
 It's computed from the last non-empty line index up front, not appended as a trailing node, because a
 cursor on its own line below the text reads as a stray artifact rather than "still writing".
+
+### Blocks are grouped, and lists are a tree
+
+The parser walks lines and **consumes a whole block at a time** — a paragraph swallows following lines
+until a blank one or another block starts, consecutive `>` lines make one quote, and a run of list
+lines is parsed into nested `LList`/`LItem` trees by `takeList()`. Three rules carry most of the
+readability:
+
+- **A single newline is a line break, not a space.** Strict markdown folds it into the paragraph. This
+  is a chat panel: people press Enter meaning "new line", and their three short points must not render
+  as one run-on sentence. `inlineLines()` joins with `<br/>`; every client this gets compared to
+  (Claude Code included) behaves the same way.
+- **Indentation shapes the list.** `LIST_LINE` captures the leading whitespace and `takeList` keeps a
+  stack of open levels, so depth survives. Tabs count as two columns — any consistent rule works, but
+  *not having one* is what breaks mixed indentation.
+- **`pl-5` with the default `list-outside`** is what produces a true hanging indent: the marker sits in
+  the padding and wrapped lines land under the item's first character, not under the bullet.
+
+Also: `<ol start>` honours the first number (`3.` starts at three), a non-marker line indented past the
+open list continues the item above it, and a blank line only ends a list when the next non-blank line
+isn't another item — so an airy "loose" list stays one list.
+
+> 🐛 **Everything structural about a typed message was thrown away.** *Reported by user: "I tried to
+> convey a list and bullet points — however the xuống dòng, lùi đầu dòng is not really intuitive."*
+> Five defects, all in the block parser, all confirmed against a probe before being touched:
+> 1. **Nesting was flattened.** `^\s*[-*•]\s+` matched the indent and then discarded it, so a
+>    three-level plan rendered as one flat column — the structure the writer used to carry their
+>    meaning was the exact thing dropped.
+> 2. **Every line became its own `<p>`.** With `space-y-2/3` between them, two lines of a single
+>    thought got a full paragraph of air and read as unrelated statements.
+> 3. **Continuation lines escaped the list.** An indented line under a bullet hit `flushList()` and
+>    reappeared as a paragraph *after* the whole list, losing its hanging indent.
+> 4. **Ordered lists always restarted at 1**, so `3.` rendered as `1.`.
+> 5. **Consecutive `>` lines became separate blockquotes** — one quotation drawn as two stacked bars.
+>
+> This hit the **user's own bubble hardest**, which is why it was reported as a composer problem: both
+> roles share this renderer (that's the point of the `tone` split), and `claude-sessions.ts` preserves
+> newlines when it rebuilds a turn from disk — so the text was always intact and only the rendering
+> lost it. Verified after the fix on a real user bubble: 44 `<br/>` and 2 lists where there had been 44
+> paragraphs.
 
 ### Reasoning passes and the `---` seam
 

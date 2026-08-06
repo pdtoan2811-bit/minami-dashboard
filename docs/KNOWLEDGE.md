@@ -33,14 +33,14 @@ recycle one.
 | [`03-live-sessions.md`](knowledge/03-live-sessions.md) | §3 §4 §5 | ~2,800 | `manager.ts`: the session registry, the SDK `query()` loop, `canUseTool` as the permission gate, subprocess lifetime, restart safety. Activity labels and the client SSE hook. |
 | [`05b-browser.md`](knowledge/05b-browser.md) | §5b | ~2,900 | The headless browser's window: state derived from tool results, the header/tabs/content layout, the console-badge post-mortem. |
 | [`05c-message-render.md`](knowledge/05c-message-render.md) | §5c | ~800 | `Markdown.tsx` and `ThoughtBlock.tsx` — one parser, two tones, and the reasoning-pass seam. |
-| [`05d-topics.md`](knowledge/05d-topics.md) | §5d | ~1,000 | Creating a topic: the folder picker, `cwd` validation, `isTrivial`. |
+| [`05d-topics.md`](knowledge/05d-topics.md) | §5d | ~1,800 | Creating a topic: the folder picker's Recent/Browse tabs, the focus ranking behind Recent, `cwd` validation, `isTrivial`. |
 | [`05e-shell.md`](knowledge/05e-shell.md) | §5e | ~10,300 | The biggest one, and past the length this split was meant to fix — split it before adding another section. Density tiers, Embody, tab-first panes, closing tabs, the hiding panel header, the bento rail, project icons, the ask card, motion/scroll cost, `--continue` parity, the composer. |
-| [`05f-flow.md`](knowledge/05f-flow.md) | §5f §5f-bis | ~4,500 | The step graph, three revisions of what it got wrong, the `canUseTool` brake, and mid-turn message queueing. |
+| [`05f-flow.md`](knowledge/05f-flow.md) | §5f §5f-bis | ~6,600 | The session journey — asks, semantic acts, evidence, open loops — four revisions of what it got wrong, the `canUseTool` brake, and mid-turn message queueing. |
 | [`05g-file-preview.md`](knowledge/05g-file-preview.md) | §5g | ~1,600 | Kind-routed file viewing, the shared side slot, the tab row. |
 | [`06-accounts.md`](knowledge/06-accounts.md) | §6 | ~800 | Ground-truth account identity, and why a reported switch is not evidence. |
 | [`07-knowledge-base.md`](knowledge/07-knowledge-base.md) | §7 §7b | ~1,000 | The module map's extracted edges, and how the KB itself is built and served. |
 | [`08-deploy.md`](knowledge/08-deploy.md) | §8 | ~1,900 | The deploy protocol: why it detaches, why `next build` is not a compile check, why success is a changed PID *and* `BUILD_ID`. |
-| [`09-concurrency.md`](knowledge/09-concurrency.md) | §9 | ~1,500 | Why two chats in one checkout collide, and `bin/task.mjs` worktrees as the fix. |
+| [`09-concurrency.md`](knowledge/09-concurrency.md) | §9 | ~2,100 | Why two chats in one checkout collide; `bin/task.mjs` worktrees as the fix, and the dashboard auto-isolating a second chat so the fix actually gets used. |
 | [`10-alerts.md`](knowledge/10-alerts.md) | §10 | ~1,600 | Disk-backed out-of-pane alerts that survive the deploy that produced them. |
 | [`11-images.md`](knowledge/11-images.md) | §11 | ~1,100 | Pasted screenshots: the path is the payload, so it survives a reload. |
 | [`12-rendering-cost.md`](knowledge/12-rendering-cost.md) | §12 | ~1,400 | Why the dashboard made the machine hot: idle GPU 31% → 14%, and never animate inside a `backdrop-filter`. |
@@ -96,12 +96,13 @@ The live and read pipelines meet only on disk. They never call each other.
 | Metrics collector | `server/metrics-server.js` | **shipped** | systemd on Hetzner |
 | Account bridge | `app/api/accounts` | **shipped** | ground-truth identity; preferred account set in Settings |
 | Browser panel | `lib/browser-view.ts` + `components/BrowserPanel.tsx` | **shipped** | derived from tool results; observer-only — see §5b |
-| Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | can create folders; cwd validated — see §5d |
+| Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | Recent/Browse tabs; opens on the ranked list; cwd validated — see §5d |
+| Topic ranking | `lib/topic-rank.ts` | **shipped** | depth × recency + did-you-come-back; floors out scratch folders, `/tmp` and `$HOME` — see §5d |
 | Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
 | Shell (bento · rail · composer) | `app/page.tsx` + `components/BentoRail.tsx` | **shipped** | grid collapses to a rail — see §5e |
 | Density tiers | `lib/density.ts` | **shipped** | measured roomy/snug/tight/micro; chrome folds, ⌥1–4 — see §5e |
 | Side-slot tabs | `components/PanelTabs.tsx` | **shipped** | one tab row worn by the file preview AND the browser — see §5b, §5g |
-| Flow view | `components/FlowPanel.tsx` + `lib/flow-model.ts` | **shipped** | per-topic ⚙; plan as a graph you can pause and steer — see §5f |
+| Flow view | `components/FlowCanvas.tsx` + `lib/flow-model.ts` + `lib/flow-narrate.ts` | **shipped** | one spine per session, one node per ask: what was wanted, what it did, what's still open — see §5f |
 | File preview | `components/FilePanel.tsx` + `lib/file-view.ts` + `app/api/fs/file` | **shipped** | any file type, paged; shares the side slot with the browser — see §5g |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
 | KB standalone server | `public/kb/serve.mjs` | **shipped** | `npm run kb` → :4400, zero deps |

@@ -77,20 +77,36 @@ inside_server() {
   return 1
 }
 
-# How many turns are in flight, per the running server. "" = no server, or a build too old to answer —
-# both mean "nothing to protect".
+# How many turns are in flight, per the running server. THREE outcomes, and keeping them apart is the
+# whole point:
+#
+#   <n>  a number — this many turns are running (0 = quiet)
+#   ""   nothing is LISTENING (curl exit 7) — there is genuinely nothing to protect
+#   "?"  we could not tell — timeout, 403, 500, malformed body, no token
+#
+# "?" used to collapse into "", and that is how a deploy skipped its own wait: the health endpoint
+# answered `{"error":"unauthorized"}` / timed out for one poll, the loop read the empty string as "no
+# server", broke out, and handed a busy box straight to serve.sh — which then vetoed, having reached
+# the very same endpoint a second later. Any answer that is not a count is an answer we must not act
+# on. See §8.
 busy_now() {
-  [ -z "$TOKEN" ] && { echo ""; return; }
-  curl -s --max-time 3 -H "x-minami-drain-token: ${TOKEN}" "$HEALTH" 2>/dev/null | python3 -c '
+  [ -z "$TOKEN" ] && { echo "?"; return; }
+  local body rc
+  # 5s, not 3: `liveStats()` is served by the same event loop that parses transcripts, and §1 documents
+  # that a large one blocks it. A slow answer is not an absent server.
+  body="$(curl -s --max-time 5 -H "x-minami-drain-token: ${TOKEN}" "$HEALTH" 2>/dev/null)"; rc=$?
+  [ "$rc" = "7" ] && { echo ""; return; }   # connection refused — the only proof of "no server"
+  [ "$rc" != "0" ] && { echo "?"; return; } # timeout or transport error — unknown, never "safe"
+  printf '%s' "$body" | python3 -c '
 import json,sys
 try: d=json.load(sys.stdin)
-except Exception: print(""); raise SystemExit
-print(d.get("busy","") if isinstance(d,dict) and "busy" in d else "")' 2>/dev/null || echo ""
+except Exception: print("?"); raise SystemExit
+print(d.get("busy","?") if isinstance(d,dict) and "busy" in d else "?")' 2>/dev/null || echo "?"
 }
 
 busy_who() {
   [ -z "$TOKEN" ] && return
-  curl -s --max-time 3 -H "x-minami-drain-token: ${TOKEN}" "$HEALTH" 2>/dev/null | python3 -c '
+  curl -s --max-time 5 -H "x-minami-drain-token: ${TOKEN}" "$HEALTH" 2>/dev/null | python3 -c '
 import json,sys
 try: d=json.load(sys.stdin)
 except Exception: raise SystemExit
@@ -216,11 +232,35 @@ verify() {
     vline "  ✗ same process as before the swap — the old build is still serving"; rc=1
   fi
 
+  # An empty/absent BUILD_ID means `.next` is not a production build at all — it's dev output, or a
+  # half-written one. Printed before and ignored; it is now fatal, because every other probe here can
+  # pass while it is true.
+  if [ -z "$new_build" ] || [ "$new_build" = "?" ]; then
+    vline "  ✗ .next/BUILD_ID is empty — that is not a production build"; rc=1
+  fi
+
   for spec in / /kb; do
     local code; code="$(http_code "$spec")"
     vline "$(printf '  %-22s -> %s' "GET $spec" "$code")"
     [ "$code" = "200" ] || rc=1
   done
+
+  # THE asset check. `GET / -> 200` proves a server answers; it does NOT prove the page works, because
+  # `next start` serves HTML from manifests it holds in MEMORY. Overwrite `.next` underneath it and the
+  # HTML keeps referencing hashes that no longer exist on disk: every asset 400s, nothing hydrates, the
+  # dashboard is unstyled text — and every probe above still says 200. Measured exactly that way on
+  # 2026-08-03. So fetch the page the browser gets and demand its OWN assets resolve.
+  local assets; assets="$(curl -s --max-time 10 "http://localhost:${PORT}/" 2>/dev/null \
+    | grep -o '/_next/static/[^"]*\.\(css\|js\)' | sort -u | head -3)"
+  if [ -z "$assets" ]; then
+    vline "  ! page referenced no /_next/static assets — skipping asset check"
+  else
+    for a in $assets; do
+      local acode; acode="$(http_code "$a")"
+      vline "$(printf '  %-22s -> %s%s' "asset" "$acode $(basename "$a")" "$( [ "$acode" = "200" ] || echo '  ✗ referenced but not on disk' )")"
+      [ "$acode" = "200" ] || rc=1
+    done
+  fi
 
   # Assertions for routes that only exist in the new build. Anything that is NOT a 404 proves the
   # route exists, which is the whole question here — a POST-only handler answers 400 or 405 to a GET
@@ -257,9 +297,25 @@ if [ "$MODE" = "verify" ]; then verify "" ""; exit $?; fi
 # after this, so a turn that starts during the build is still respected.
 if [ "$MODE" = "wait" ]; then
   waited=0
+  unknown=0
   while :; do
     b="$(busy_now)"
-    if [ -z "$b" ]; then echo "▸ no server / no health endpoint — proceeding"; break; fi
+    if [ -z "$b" ]; then echo "▸ nothing listening on :${PORT} — proceeding"; break; fi
+    # Unknown is NOT quiet. Keep waiting, and say so out loud — the old code broke out here, which
+    # meant one unlucky poll disabled the guard silently. Fails CLOSED after 30s: serve.sh's own veto
+    # would refuse anyway, so pressing on can only turn a clean abort into a confusing one.
+    if [ "$b" = "?" ]; then
+      unknown=$((unknown + 1))
+      [ "$unknown" = "1" ] && echo "▸ health endpoint unreadable (timeout/403/500) — still waiting, NOT assuming quiet"
+      if [ "$unknown" -ge 15 ]; then
+        echo "✋ could not read the health endpoint for 30s — aborting rather than swapping blind. Nothing was touched."
+        printf 'The deploy could not tell whether any turn was in flight (%s consecutive unreadable health probes), so it refused to restart.\n' "$unknown" \
+          | emit_event deploy warn "Deploy aborted — could not read live state"
+        exit 1
+      fi
+      sleep 2; waited=$((waited + 2)); continue
+    fi
+    unknown=0
     if [ "$b" = "0" ]; then echo "▸ box quiet after ${waited}s — swapping"; break; fi
     if [ "$waited" -ge "$WAIT_SECS" ]; then
       echo "✋ still busy (${b} turn(s)) after ${WAIT_SECS}s — aborting. Nothing was touched:"
@@ -292,7 +348,12 @@ if [ "$rc" != "0" ]; then
   echo "✗ build/swap failed — see above and ${PROD_LOG:-$HOME/.minami/prod.log}"
   # The build tail is the only part anyone actually wants; the alert carries it so a compile error
   # doesn't require going and finding two log files.
-  printf 'serve.sh exited %s. Last lines:\n\n%s\n' "$rc" "$(tail -n 12 "${PROD_LOG:-$HOME/.minami/prod.log}" 2>/dev/null)" \
+  # serve.sh's REFUSAL (the busy veto, a compile error) goes to this script's stdout — the deploy log —
+  # while prod.log only ever holds the last server boot. Tailing prod.log alone produced an alert
+  # titled "Deploy failed" whose body was the previous deploy's cheerful "✓ Ready in 180ms", which is
+  # worse than no body: it reads like success. Lead with the deploy log and keep prod.log as context.
+  printf 'serve.sh exited %s.\n\n--- deploy log (why it stopped) ---\n%s\n\n--- prod.log (last boot) ---\n%s\n' \
+    "$rc" "$(tail -n 20 "$LOG" 2>/dev/null)" "$(tail -n 8 "${PROD_LOG:-$HOME/.minami/prod.log}" 2>/dev/null)" \
     | emit_event deploy error "Deploy failed — build or swap"
   exit $rc
 fi

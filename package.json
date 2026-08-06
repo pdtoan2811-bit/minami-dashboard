@@ -25,7 +25,7 @@
     "lint": "next lint",
     "serve": "bash bin/serve.sh",
     "deploy": "bash bin/deploy.sh",
-    "dev:iterate": "NEXT_DIST_DIR=.next-dev PORT=3001 next dev",
+    "dev:iterate": "NODE_ENV=development NEXT_DIST_DIR=.next-dev PORT=3001 next dev",
     "kb": "node public/kb/serve.mjs"
   },
   "dependencies": {

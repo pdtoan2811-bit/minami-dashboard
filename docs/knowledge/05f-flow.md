@@ -1,19 +1,146 @@
-# Flow — the step graph, its brake, its queue
+# Flow — the session journey, its brake, its queue
 
 Part of the [Minami Bento knowledge record](../KNOWLEDGE.md) — the index lists every doc and
 which `§` ids live where. Section numbers are stable: code comments cite them.
 
 ---
 
-## 5f. Flow — `components/FlowCanvas.tsx`, `components/FlowStrip.tsx`, `lib/flow-model.ts`
+## 5f. Flow — `components/FlowCanvas.tsx`, `components/FlowStrip.tsx`, `lib/flow-model.ts`, `lib/flow-narrate.ts`
 
-The plan you're already looking at, opened up: the same TodoWrite/TaskCreate steps the chat shows as a
-checklist, expanded so each one carries the work it did, with a brake that can stop the next tool call.
-It exists to catch a bad step *mid-flight*, which is the one thing the transcript cannot help with.
+**One spine per session, one node per thing you asked for, and each node says what was wanted and how
+it turned out.** It answers three questions the transcript cannot: what have I asked this session for,
+did each of those actually land, and what did I start and never close.
 
-### Three revisions, and what each one actually got wrong
+### v4 — the unit is the ask, and the content is meaning
 
-**v3 (current) is what was asked for from the start:** the graph lives in the **bento column**, and a
+v3 drew one **turn** at a time, as a spine of plan steps with every tool call hanging off it as its own
+node. Two things were wrong, and they were the same thing twice:
+
+1. **A turn is not a journey.** You could read one turn perfectly and still have no idea whether the
+   thing you asked for four turns ago ever finished. The pager (`‹ turn 7/23 ›`) made *"where am I on
+   the way to what I wanted"* impossible to even ask.
+2. **Tool calls are not steps.** `Read · Read · Grep · Bash · Edit · Bash` is a log, not an account of
+   the work — maximally detailed, minimally informative. You had to re-derive the meaning yourself,
+   which is the labour the view existed to save.
+   *Reported by user: "Tool use log is too much detailed and noise, which is awful. I want the semantic
+   intuitive idea of goals of each step and how AI handled it."*
+
+So the canvas is now **one spine for the whole session**. Tool calls still exist — two clicks deep, as
+evidence, which is the only time anyone wants them.
+
+**Three columns, three levels of disclosure:**
+
+| Column | Unit | Says |
+|---|---|---|
+| spine | one **ask** | what you wanted · verdict · goals done · duration · cost · files · checks |
+| fan right | one **phase or plan goal** | what it was for · what it did · the files and commands as evidence |
+| fan right again | one **tool call** | the raw log — v3's entire default view, demoted |
+
+Settled milestones collapse to one dense line; the live one (or, on a settled session, the newest) is
+open. Past work stays *reachable* rather than windowed away — that is the part a "last N turns" view
+would get wrong.
+
+### The semantic layer is rules, and that is deliberate
+
+`lib/flow-model.ts` maps every tool into one of nine **acts** — `changed · verified · delegated · ran ·
+browsed · asked · searched · read · other` — and phrases each group in the past tense, about the work
+rather than the tool ("changed 3 files", never "3 Edit calls"). Acts are ordered by how much they tell
+a reviewer, not by when they happened: a step that read forty files and changed one is, to the person
+reviewing it, a step that changed one file.
+
+It has to be rules, not a model: it must be right while a turn is still streaming, it must work with
+the network down, and it must never invent a fact.
+
+**Evidence is separated from claims.** A `Check` is a command whose result is a *verdict* — a build, a
+test, a commit, a deploy — matched against the whole command string, not just its head, because the
+verdict-bearing part is usually downstream of a `cd`/`&&`/pipe. "It says it built" and "here is the
+exit code of the build" are different claims, and only the second one settles an argument.
+
+### The narration is additive, never a replacement
+
+`lib/flow-narrate.ts` spawns `MINAMI_CHEAP_MODEL` (Haiku) to write the sentence rules cannot: *"rewired
+the deploy gate to refuse a busy pane; timeout left unwired"*. Three rules, in order of how much
+trouble breaking them causes:
+
+1. **It never replaces the rules.** A narrative is an *additional* field on a milestone that already
+   has a true `headline`. Narration off, model unreachable, JSON malformed, box offline — every one of
+   those degrades to a view that still says something correct.
+2. **It only narrates FINISHED milestones.** A running turn's outcome is not yet a fact, and paying for
+   a guess produces a sentence that stays wrong for as long as the turn lasts — the worst failure for a
+   view whose job is *"can I trust that this is done"*.
+3. **It is cached against content, not just identity.** A milestone that grows gets a new signature and
+   is re-narrated once; an unchanged one is never paid for twice, however many panes open the flow.
+
+One call per **batch** of up to 8 milestones (`MINAMI_FLOW_NARRATE_BATCH`), deduped per session by an
+in-flight map, cached to `~/.minami-bento/flow-narratives.json`, and spawned with `cwd` set to that
+same dir — `ENRICH_MARKER` hides sessions born there, and narrating from anywhere else would put a new
+tile on the very grid you are looking at. `MINAMI_FLOW_NARRATE=0` turns it off; the header then says
+**rules only** rather than silently getting worse.
+
+`/api/flow/[id]` returns **narratives only, never the journey**. The canvas already fetches
+`/api/bento/session/<id>` and folds it, and that fold carries every tool input and output (including
+base64 screenshots) — returning a second folded copy would double the page's heaviest fetch to deliver
+a few hundred bytes of prose. `GET` is cached-only and free; `POST` narrates. The keys line up because
+a milestone is keyed on the **byte offset** of the row that opened it, which is immutable in an
+append-only transcript, so the server folding its own copy and the browser folding its page arrive at
+the same keys without either telling the other anything.
+
+### What counts as an "ask" — measured, not imagined
+
+A user row is not just what you typed: hooks, slash-command wrappers, system reminders, pasted
+screenshots, skills the model loads for itself and the CLI's own resume/compaction preambles all arrive
+on the same channel. `cleanAsk()` strips them, and **returning `""` is load-bearing** — an ask-less row
+folds into the milestone above it, keeping the work attached to the ask that caused it.
+
+Measured by folding **386 real transcripts on this box**:
+
+| Pattern | Why it isn't an ask |
+|---|---|
+| `[Image: original 2910x1586…]` | a pasted screenshot's marker; part of the ask above it |
+| `Base directory for this skill: …` | a skill the *model* loaded, injected as a user row |
+| `Continue from where you left off.` | auto-resume |
+| `This session is being continued from…` | post-compaction preamble |
+| `<task-notification>` | a background task reporting in |
+| `go` · `continue` · `yes` · `try again` | an acknowledgement, not a new intent (`isAck`) |
+
+On one 439-turn session that is the difference between **nine** milestones — three of them titled
+`[Image: …]` or the body of a skill — and **five**, each an actual sentence the human typed with the
+work that answered it attached. Across 60 sessions it removed 204 of 1,128 phantom milestones.
+
+`isAck` is exact-match and deliberately short. Anything with a noun in it is a real ask however brief
+("push to main", "deploy") and keeps its own node: the rule is *"this message adds no new intent"*, not
+*"this message is short"*.
+
+### The progress meter counts what exists
+
+Counting plan items is the better answer, but **most sessions never write a plan** — measured, a real
+439-turn working session in this repo made zero `TodoWrite` and zero `TaskCreate` calls, so a
+goals-only meter would have read `0/0` for the entire thing. Where no plan items exist anywhere,
+`progress.unit` falls back to `"asks"` and the UI renders the word, so the number never quietly changes
+meaning. `open` stays a count of unfinished **plan** items in both units: an ask that ended in a
+question is not an open loop, it is your turn, and conflating the two would put an amber warning on
+every conversation that ever asked you something.
+
+**Open loops are the point of the rework.** A milestone that is no longer the live one but still has
+plan items unfinished is drawn amber, listed in the header, and expandable in one click. That is
+"losing the thread" made visible.
+
+### Cost and duration
+
+`Turn.cost` (§1) is priced per assistant message from the row's own `usage`, so a step can say what it
+cost without a second pass. A turn is charged to exactly one step, so summing step costs across a
+milestone cannot double-count — but `t0`/`t1` are a **span**, and spans of a revisited step legitimately
+overlap, which is why a milestone's own totals come from its source rows rather than from its steps.
+Sub-cent costs and a `0` from a transcript parsed before the field existed both render as nothing:
+unknown is not free.
+
+### Three earlier revisions, and what each one actually got wrong
+
+**v3 is where the graph landed, and v4 kept all of it** — the placement, the expand-into-the-canvas
+motion, the no-minimap decision and the two doors are unchanged. What v4 replaced is what the spine is
+*made of*, not where it lives.
+
+**v3 is what was asked for from the start:** the graph lives in the **bento column**, and a
 `flow` switch on a tile **expands that tile into the canvas** — no overlay, no separate route; the tile
 *becomes* the screen. The motion is free: the tile wrapper already carries framer's `layout`, so the
 change animates.
@@ -48,6 +175,38 @@ last one, because a request that hasn't called a tool yet would otherwise render
 
 The brake moved to the composer's control row, next to Plan/Code and the approval level, where it always
 belonged — it is a session control, not a property of a view.
+
+> 🐛 **v4: three bugs, all of them "state that fought itself".** Found by driving the real app, not by
+> reading the diff — each one type-checked and built cleanly.
+> **(1) The canvas opened collapsed and would not stay open.** `open` was reset inside the poll effect,
+> which depends on `busy` — and `busy` flaps between tool calls on a live session, so every few seconds
+> the reader's expanded nodes were silently collapsed while a seed effect raced to reopen them. Reset is
+> about *identity*, not activity, so it moved to its own effect keyed on `sessionId` alone. The seed
+> effect went too: the default open node is now **derived** (`open ?? {newest}`, with `null` meaning
+> "the reader hasn't chosen yet"), and a derived default cannot race because there is no write to lose.
+> **(2) A running session drew its newest ask as `done`.** The exact bug v3's own post-mortem records,
+> reached by a new road: the on-disk transcript carries no `streaming` flag — that exists only on the
+> live SSE stream — so a caller reading the JSONL has no way to know a turn is in flight. `buildJourney`
+> now takes `{ busy }` explicitly rather than inferring it. **The lesson repeats: any derivation over
+> the JSONL that wants liveness must be told, never left to guess.**
+> **(3) Merged continuations duplicated their phases.** A milestone is often several folded turns, and
+> each fold names its synthesized groups `t<foldIndex>-<act>` — so concatenating gave one milestone two
+> "read the code" nodes and two "ran the commands", making it look like the model had done the same
+> thing twice. `mergeSteps` keys synthetic steps on the **act**, not the fold, and plan steps on their
+> real key (never merged across keys — `reconcileKeys`/`TaskCreate` already established that identity).
+> The same pass fixed the milestone's time span, which was computed incrementally against the *first*
+> fold's `t0` and under-reported a 26-minute milestone as 20.
+>
+> Also fixed here, unrelated to the rework but in the same files: the milestone node mixed `border` and
+> `borderLeft`, which React warns about on every re-render ("can lead to styling bugs") — and a node
+> whose tint changes as a milestone settles re-renders constantly. Longhand now.
+
+> 🐛 **The module graph claimed the canvas armed the brake. It hasn't since v3.** `c/FlowCanvas →
+> r/hold` was carried over from the v1 panel, which owned the pane's live state; the brake actually
+> moved to the composer's control row and is armed from `lib/use-agent.ts`. Nothing failed — a wrong
+> edge just gets *drawn*, confidently, on `/architecture`. This is the failure mode the `minami-kb`
+> procedure's "re-run the extraction script rather than editing from memory" step exists to catch, and
+> it was found by running that script.
 
 > 🐛 **Self-audit of v3: two features that could never fire.** v3's canvas was assembled by lifting
 > v1's node-layout code wholesale — and v1 had the pane's live SSE state, while this component reads the
@@ -167,11 +326,20 @@ Turns with no plan at all (quick answers, one-file edits) synthesize a node per 
 canvas is never empty.
 
 ### Gotchas
-- **`fitView` is not used, deliberately.** It fits against the container as it is at that instant, and
-  this pane is a flex child that hasn't reached full size when nodes finish measuring — measured
-  result: zoom 0.85, column jammed left, never corrected. Chasing it with a `ResizeObserver` only moves
-  the race. And fitting is wrong anyway for a spine that grows downward without limit: a 20-step plan
-  would fit at ~0.3 zoom, where nothing is readable. A fixed viewport at zoom 1 is the review surface.
+- **`fitView` fits a TARGET, never the whole graph.** The bare version was abandoned in v2 for good
+  reasons that still hold — it fits against the container as it is at that instant, and this pane is a
+  flex child that hasn't reached full size when nodes finish measuring (measured: zoom 0.85, column
+  jammed left, never corrected); and fitting is wrong anyway for a spine that grows downward without
+  limit, where a 20-step plan lands at ~0.3 zoom and nothing is readable. A session-long journey makes
+  that ten times worse. So it is called with an explicit **node list** — the live milestone, else
+  whatever is expanded — plus a `minZoom` floor, after a 60ms settle. **The expanded milestone's
+  phases must be in that list**: framing the spine node alone put the whole fan off the bottom of the
+  canvas, which reads as "clicking it did nothing much" until you think to scroll.
+- **A default React Flow node has exactly one source handle.** Phases chain downward *and* fan their
+  raw tool log to the right, so both necessarily leave the same bottom handle. Fanning the phases from
+  the milestone instead drew eight elbows all leaving one point and travelling hundreds of pixels down
+  — visual noise carrying no information. The chain costs nothing and states something true: these
+  phases happened in this order.
 - **The ⚙ is a sibling of the tile, not a child** — the tile is itself a `<button>`, and nesting one is
   invalid HTML whose inner click also fires the outer one. Hence the wrapper `motion.div`.
 - **React Flow's stylesheet is imported from inside components**, so Next emits it *after*

@@ -40,7 +40,17 @@ Two passes. First a **stat-only** sweep over every project dir, sorted by mtime 
 `getSession()` returns a **page**, not a truncated tail: `{ meta, turns, start, hasMore }`, where
 `start` is the byte offset the window begins at and `hasMore` is simply `start > 0`. Every `Turn`
 carries `off`, the byte offset of the JSONL line that produced it — that is what makes a window
-addressable at all.
+addressable at all. `off` is also load-bearing *outside* paging: the flow view (§5f) keys a milestone
+on it, because a byte offset in an append-only file is the one identity that survives re-polling,
+paging back, and the server folding the same session independently.
+
+An assistant `Turn` also carries **`cost`** — that single message's USD, priced by `lib/routing.ts`
+from the row's own `usage`, so a caller can attribute spend per turn without a second pass over the
+file. Two caveats, and both matter to anyone reading it: it is **absent on user rows**, and absent on
+assistant rows parsed by a build older than 2026-07-31, because a `turns-cache.json` entry written then
+keeps its shape and is never invalidated by a field being added. **Treat missing as unknown, not zero** —
+`components/FlowCanvas.tsx` renders both a sub-cent cost and an unparsed one as nothing at all, since
+"free" and "we didn't record it" are different claims.
 
 | Request | Reads | Cached |
 |---|---|---|

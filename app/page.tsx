@@ -19,16 +19,17 @@ import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
 import FilePanel from "@/components/FilePanel";
 import { deriveFileState, writtenBy } from "@/lib/file-view";
+import { rankTopics, type RecentTopic } from "@/lib/topic-rank";
 import BrowserLightbox from "@/components/BrowserLightbox";
 import { FlowStrip } from "@/components/FlowStrip";
 import { FlowCanvas } from "@/components/FlowCanvas";
-import { buildFlow } from "@/lib/flow-model";
+import { buildJourney } from "@/lib/flow-model";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
 import { motion } from "motion/react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bot, ChevronLeft, ChevronRight, Chrome, FileText, Globe, Grid2x2, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, ChevronLeft, ChevronRight, Chrome, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -50,7 +51,12 @@ type RenderTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCa
 // `switchGen` bumps only when the USER explicitly picks a different existing session for this pane (the
 // chat-switcher dropdown) — see its use as part of ChatColumn's React `key` below for why this can't
 // just be `sid` itself.
-type Pane = { key: string; sid: string; switchGen?: number };
+// `cwd` is set only on an ISOLATED pane — a chat given its own git worktree so it cannot overwrite
+// another agent's files (§9). It lives on the pane rather than being derived, because a session's cwd
+// is fixed at spawn: once the chat exists, this string is the only record of where it actually runs,
+// and `--resume` is scoped to the directory the transcript is filed under (§1). Persisted with the
+// pane in `openPanes`, so a reload resumes it in its own checkout rather than in the shared one.
+type Pane = { key: string; sid: string; switchGen?: number; cwd?: string };
 let paneSeq = 0;
 const mkPane = (sid = ""): Pane => ({ key: `pane-${Date.now().toString(36)}-${paneSeq++}-${Math.random().toString(36).slice(2, 7)}`, sid });
 const asPanes = (v: unknown): Pane[] => Array.isArray(v)
@@ -439,6 +445,20 @@ export default function BentoHome() {
     }).catch(() => {});
     t(); const iv = setInterval(t, 1500); return () => { a = false; clearInterval(iv); };
   }, []);
+  // Read by `openProject`, which must NOT re-create itself every 1.5s: it is the onClick of every tile
+  // on the board, so a new identity per poll re-renders the whole grid twice a second for a value that
+  // is only ever read at the instant of a click.
+  const liveActRef = useRef(liveAct);
+  liveActRef.current = liveAct;
+  // The open project's folder, read at click time by `addPane`. A ref for the same reason as the two
+  // above: it is used inside a callback that must not be rebuilt as the board polls.
+  const projCwdRef = useRef("");
+  // Same reason, and deliberately the RAW list rather than `pool` or a project's `sessions`: those are
+  // filtered (trivial, then the date window), and `openProject` sorts panes the user chose to keep open
+  // — including ones the board itself would not show. Reading a filtered list there dated every such
+  // pane to 0 and swept them all to the end of the row.
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   // Per-PANE activity, keyed by pane key rather than session id — the fallback for the one window
   // `liveAct` structurally cannot cover. A blank chat has no session id until the server assigns one a
   // second or two into its first turn, so a just-sent pane is missing from a session-id-keyed map at
@@ -530,11 +550,40 @@ export default function BentoHome() {
     // still survives, because this only triggers when EVERY remembered pane is blank.
     const allBlank = remembered.length > 0 && remembered.every((x) => !x.sid);
     const usable = allBlank && recent.length ? [] : remembered;
-    const initial = usable.length ? usable.slice(0, MAX_PANES) : (recent.length ? recent.map((sid) => mkPane(sid)) : [mkPane()]);
+    // Each pane carries the cwd its session was actually born in. For an isolated chat that is its
+    // worktree, and `--resume` is scoped to the directory the transcript is filed under — resuming it
+    // from the shared checkout is §1's "No conversation found with session ID", not a cosmetic slip.
+    const cwdOf = (sid: string) => { const c = sessionsRef.current.find((x) => x.id === sid)?.cwd; return c && c !== p.cwd ? c : undefined; };
+    const withCwd = (pn: Pane): Pane => { const c = pn.sid ? cwdOf(pn.sid) : undefined; return c ? { ...pn, cwd: c } : pn; };
+    const initial = (usable.length ? usable.slice(0, MAX_PANES) : (recent.length ? recent.map((sid) => mkPane(sid)) : [mkPane()])).map(withCwd);
+
+    // ── which tab you land on, and in what order ───────────────────────────────────────────────
+    // Both of these are ONLY decided here, at the moment a topic opens. Nothing re-sorts the row or
+    // moves the selection while you are in it: a tab that reorders itself under the cursor is the
+    // same mis-click the header peek caused (see the chrome note below), and stealing focus to a
+    // background chat that just started a turn would take the transcript you were reading off screen
+    // mid-sentence. While you're here, a working tab announces itself and stays where it is —
+    // that's what the sweep and the ring on it are for.
+    const lastOf = (pn: Pane) => (pn.sid ? sessionsRef.current.find((s) => s.id === pn.sid)?.lastActivity ?? 0 : 0);
+    // Newest interaction first. A remembered BLANK pane sorts last (`0`): it is a scratch pad you kept,
+    // and landing the panel on an empty composer is precisely the "the chat was thrown away" shape the
+    // `allBlank` guard above exists to prevent.
+    const ordered = [...initial].sort((a, b) => lastOf(b) - lastOf(a));
+    // Running outranks recent. `lastActivity` comes off the transcript on disk and a session mid-turn
+    // may not have written a line for a minute, so the chat that is *working* can easily sort below
+    // one you merely opened more recently — and it is the one you crossed the board to look at.
+    const live = liveActRef.current;
+    const runningAt = ordered.findIndex((pn) => pn.sid && live[pn.sid]?.busy);
+
     // Flow needs the room: a step graph in a quarter-pane is a picture of a graph, not something you
     // can review. So a Flow topic opens full-bleed — bento railed, one pane — which is the same
     // layout the divider already produces, not a second window mode to maintain.
-    setNewTopic(null); setProject(p.name); setPanes(initial); setAddMenu(false); closedTabs.current = [];
+    setNewTopic(null); setProject(p.name); setPanes(ordered); setAddMenu(false); closedTabs.current = [];
+    // Explicit, not left alone: `activePane` is panel-scoped state that survives a project switch, so
+    // without this you arrive at another topic on whichever *index* you were reading in the last one —
+    // tab 3 of a project you have never opened, or tab 0 by accident. Index-carry-over is not a
+    // selection.
+    setActivePane(runningAt >= 0 ? runningAt : 0);
   }, [openPanesMap]);
   // Prefetch a project's likely-open transcripts on hover so clicking it paints instantly (the fetch +
   // parse already happened). Each session is fetched once — the cache guard makes repeat hovers free.
@@ -550,8 +599,51 @@ export default function BentoHome() {
     setPicker(false); setProject(null); setAddMenu(false);
     setNewTopic({ name, sessions: [], cwd, reqs: 0, tokens: 0, last: Date.now(), active: false, review: false, goals: [], latest: "", weight: 0 });
     setPanes([mkPane()]); // one fresh blank chat in the chosen folder (or home, for a folderless CLI)
+    setActivePane(0); // same reason as openProject: a stale index from the topic you left is not a choice
     closedTabs.current = [];
   };
+  // ── adding a chat, and the one moment isolation can happen ────────────────────────────────────
+  // Every pane that is added by hand goes through here, because the decision to isolate can only be
+  // taken now: a session's cwd is fixed at spawn, so a conversation that is already running cannot be
+  // moved into its own checkout afterwards (§9).
+  //
+  // The rule is narrow on purpose. A BLANK second-or-later chat gets its own git worktree — that is
+  // the collision the amber banner has been warning about for months, and the warning was never
+  // actionable because acting on it meant leaving the dashboard for a CLI. Reopening an EXISTING
+  // session never isolates; it carries whatever cwd that session was born in, which for a chat that
+  // was isolated earlier is its worktree. Passing that through is not a nicety: `--resume` is scoped
+  // to the directory the transcript is filed under, and resuming in the wrong one is §1's "No
+  // conversation found with session ID".
+  //
+  // The await is deliberate. Adding the tab first and patching its cwd when the worktree lands would
+  // leave a window where the pane is typable and still pointed at the shared checkout — the exact
+  // collision this exists to prevent, now with the extra insult of having claimed to prevent it.
+  // `task new` takes a few hundred ms; a click can wait that long.
+  const addPane = useCallback(async (sid?: string, sessionCwd?: string) => {
+    setAddMenu(false);
+    if (panesRef.current >= MAX_PANES) return;
+    let cwd = sid ? sessionCwd : undefined;
+    if (!sid && panesRef.current >= 1) {
+      const root = projCwdRef.current;
+      if (root) {
+        try {
+          const d = await (await fetch("/api/worktree", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "isolate", cwd: root, label: "chat" }),
+          })).json();
+          if (d?.isolated?.dir) cwd = d.isolated.dir;
+        } catch { /* isolation is an optimisation; a chat in the shared folder still works */ }
+      }
+    }
+    setPanes((p) => {
+      if (p.length >= MAX_PANES) return p;
+      const pane: Pane = { ...mkPane(sid), ...(cwd && cwd !== projCwdRef.current ? { cwd } : {}) };
+      setActivePane(p.length); // land on what you just opened, not on whatever was lit before
+      setPaneView("tabs");
+      return [...p, pane];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); setActivePane(0); closedTabs.current = []; };
   // Tabs close the way browser tabs do: an ✕ on the tab, middle-click, ⌥W — and ⌥⇧T puts the last one
   // back. Where the analogy stops: closing a tab here is a VIEW action, not a lifecycle one. The
@@ -573,6 +665,18 @@ export default function BentoHome() {
       // Bounded: this is an undo affordance, not a session history. Eight is far more than the four a
       // panel can hold, so the cap can only ever discard something long forgotten.
       if (gone) closedTabs.current = [...closedTabs.current, { pane: gone, at: i }].slice(-8);
+      // An auto-created worktree is a GUESS about what a chat was going to do, and a wrong guess has to
+      // cost nothing — otherwise opening and closing three blank chats leaves three checkouts and three
+      // branches behind forever, and the feature that was supposed to remove friction becomes a mess to
+      // clean up by hand. The server only removes it when it is genuinely untouched: no commits ahead,
+      // nothing uncommitted. Fire-and-forget, because a tab close must never wait on git — if it can't
+      // be discarded it simply stays, and `task.mjs list` still shows it.
+      if (gone?.cwd) {
+        fetch("/api/worktree", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "discard", cwd: gone.cwd }),
+        }).catch(() => {});
+      }
       return p.filter((_, j) => j !== i);
     });
     // Closing a tab to the LEFT of the active one shifts every later index down by one, so the stored
@@ -776,6 +880,7 @@ export default function BentoHome() {
   }, [isDragging, setPanelW, setRail]);
 
   const proj = project ? (projects.find((p) => p.name === project) || openProj) : newTopic;
+  projCwdRef.current = proj?.cwd || "";
   const maxW = Math.max(1, ...projects.map((p) => p.weight)); // size ratio is vs the busiest project
   // The rail is only a state the bento can be *in* while a chat is open; with no panel it would just
   // be a worse grid. Every collapse path checks this, so there's one definition of "railed".
@@ -825,6 +930,24 @@ export default function BentoHome() {
   const topicIcons = useMemo(
     () => assignIcons(projects.map((p) => p.name), Object.fromEntries(Object.entries(attachMap).map(([k, v]) => [k, v.icon]))),
     [projects, attachMap],
+  );
+  // The picker's Recent tab. Derived from `allProjects` — the UNFILTERED grouping — on purpose: the
+  // search box and the date-window chip are view state for the BOARD, and letting either decide what
+  // "where do I work" offers would mean a 24h window hid the project you opened the picker to reach.
+  // Ranking (and the noise floor) is lib/topic-rank.ts; this only flattens it for rendering.
+  const recentTopics = useMemo<RecentTopic[]>(
+    () => rankTopics(allProjects, Date.now(), 8).map(({ topic, why, last }) => ({
+      name: topic.name, cwd: topic.cwd, why, last,
+      active: topic.active,
+      // The board's assignment when the topic is on it (same glyph in both places), falling back to
+      // the explicit override for one the window filtered out; ProjectIcon derives one otherwise.
+      icon: topicIcons[topic.name] || attachMap[topic.name]?.icon,
+    })),
+    // `picker` is a dependency so the list is re-ranked when the modal OPENS rather than on a timer —
+    // the score decays with wall-clock age, and re-running it on every render would be churn for a
+    // number that can't visibly change between two frames.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allProjects, topicIcons, attachMap, picker],
   );
 
   return (
@@ -990,7 +1113,7 @@ export default function BentoHome() {
                   {p.sessions.length > 0 && (
                     <button
                       onClick={(e) => { e.stopPropagation(); const best = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity); setFlowFor({ project: p.name, sid: (best.find((x) => x.active) || best[0]).id }); }}
-                      title={`See ${p.name}'s plan as a graph`}
+                      title={`See ${p.name}'s journey — every ask, what it did, what's still open`}
                       className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-lg border border-white/15 bg-black/30 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-neutral-400 transition-colors hover:border-[#c47f18]/60 hover:text-[#c47f18]">
                       <Workflow className="h-2.5 w-2.5" />flow
                     </button>
@@ -1086,8 +1209,12 @@ export default function BentoHome() {
               {/* The permanent row: every pane as a tab, then the view switch and the panel controls.
                   The tabs render in BOTH views — in grid view none is lit, and clicking one is how you
                   drop back into reading that pane. One row that never moves beats two that swap. */}
-              <div className="flex items-center gap-1 py-1.5 pl-2 pr-14">
-                <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {/* The row's vertical padding lives on the SCROLLER, not here. `overflow-x-auto` clips at
+                  the padding box, so those 6px are the only place the selected tab's tail can hang
+                  without being cut off — and keeping it symmetric means `items-center` still aligns the
+                  tabs with the ＋/esc controls beside them. Total row height is unchanged. */}
+              <div className="flex items-center gap-1 pl-2 pr-14">
+                <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {panes.map((pn, i) => {
                     const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
                     const la = pn.sid ? liveAct[pn.sid] : undefined;
@@ -1107,13 +1234,23 @@ export default function BentoHome() {
                       // button is invalid HTML, and the browser's recovery is to drop the inner one —
                       // so the close target would have selected the tab instead of closing it.
                       <div key={pn.key}
-                        className={`group/tab flex min-w-0 shrink items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] transition-colors ${
-                          on ? "border-[var(--sakura)]/60 bg-[var(--sakura)]/10 text-neutral-100"
+                        // ── FILL means selected. TINT means working. One channel each ────────────────
+                        // These are orthogonal facts and they used to share both channels — border
+                        // colour and background wash — so the tab could only express one of them.
+                        // Worse, they shared a HUE: `PHASE_TINT.thinking` is literally `var(--sakura)`,
+                        // the accent selection uses, so "reading this one" was `sakura @60/10%` and
+                        // "thinking" was `sakura @55/9%`. Five percent of border alpha is not a
+                        // distinction, and `TOOL_TINT.exec`/`ask` are that same pink again. Recolouring
+                        // the phase map was the wrong lever — those tints are shared with the tiles and
+                        // the transcript, and would collide again on the next accent — so selection
+                        // moves off colour instead: it is the only FILLED tab, and the only one with a
+                        // tail. A working tab is outlined and tinted, never filled.
+                        className={`group/tab relative flex min-w-0 shrink items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] transition-colors ${
+                          on ? "border-[var(--sakura)] bg-[var(--sakura)]/[0.18] text-neutral-50"
                             // An unfocused tab is `text-neutral-500` on a hairline border — i.e. it reads
-                            // as disabled, which is wrong for the one that's mid-turn. Tinting the whole
-                            // tab (not just the dot) is what makes a running chat findable in a glance at
-                            // the row; the focused tab keeps sakura, because "which am I reading" must
-                            // never be outshouted by "which is working".
+                            // as disabled, which is wrong for the one that's mid-turn. Tinting the border
+                            // and the label (not just the dot) is what makes a running chat findable in a
+                            // glance at the row.
                             : running || wants ? "text-neutral-200 hover:text-neutral-100"
                             : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}
                         // color-mix rather than an `#rrggbbaa` concat: PHASE_TINT holds `var(--sakura)`
@@ -1121,7 +1258,6 @@ export default function BentoHome() {
                         // invalid colour that silently drops the border entirely.
                         style={!on && (running || wants) ? {
                           borderColor: `color-mix(in srgb, ${tint} 55%, transparent)`,
-                          background: `color-mix(in srgb, ${tint} 9%, transparent)`,
                         } : undefined}
                         // Middle-click closes, as it has on every browser tab for twenty years. On
                         // mousedown rather than auxclick: auxclick fires after the middle button has
@@ -1130,7 +1266,7 @@ export default function BentoHome() {
                         <button onClick={() => { setPaneView("tabs"); setActivePane(i); }}
                           title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})${act?.label ? ` — ${act.label}` : ""}`}
                           className="flex min-w-0 flex-1 items-center gap-1.5">
-                          <span className="shrink-0 tabular-nums text-[9px] text-neutral-600">⌥{i + 1}</span>
+                          <span className={`shrink-0 tabular-nums text-[9px] ${on ? "text-[var(--sakura)]" : "text-neutral-600"}`}>⌥{i + 1}</span>
                           {/* The slot is ALWAYS rendered, even at rest. Mounting the dot on the first
                               busy frame shifted the label 12px sideways every time a turn started or
                               ended — on the tab you were about to click.
@@ -1153,6 +1289,13 @@ export default function BentoHome() {
                           title={panes.length === 1 ? "Close this chat (⌥W) — closes the panel; the session keeps running" : "Close this chat (⌥W) — the session keeps running"}
                           className={`shrink-0 rounded px-1 leading-none transition-opacity hover:bg-white/15 hover:text-neutral-100 ${
                             on ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100"}`}>✕</button>
+                        {/* The tab-wide half of the running signal (globals.css). Outside the label
+                            button on purpose: it spans the whole tab, close box included, so it reads
+                            as a property of the chat rather than of its title. */}
+                        {running && <span className="tab-run-sweep pointer-events-none" style={{ ["--run-tint" as string]: tint }} />}
+                        {/* The tail. Only in tabs view — `focusPane` is null in grid, where nothing is
+                            lit because you are reading all four and there is no "this one" to point at. */}
+                        {on && <span className="tab-caret pointer-events-none" aria-hidden />}
                       </div>
                     );
                   })}
@@ -1188,10 +1331,10 @@ export default function BentoHome() {
                           most-used item already unclickable. The suppression below stops the unfurl; this
                           raise is what makes the stacking correct regardless of it. */}
                       <div className="absolute right-0 top-full z-30 mt-1 max-h-96 w-72 overflow-y-auto rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
-                        <button onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane()] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"><span className="text-[var(--sakura)]">＋</span> New blank chat</button>
+                        <button onClick={() => addPane()} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/10"><span className="text-[var(--sakura)]">＋</span> New blank chat</button>
                         {proj.sessions.some((s) => !panes.some((pn) => pn.sid === s.id)) && <div className="my-1 border-t border-white/10" />}
                         {[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id)).map((s) => (
-                          <button key={s.id} onClick={() => { setPanes((p) => (p.length < MAX_PANES ? [...p, mkPane(s.id)] : p)); setAddMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/10">
+                          <button key={s.id} onClick={() => addPane(s.id, s.cwd)} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/10">
                             <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: s.active ? "#4ade80" : TIER_TINT[s.tier] }} />
                             <span className="min-w-0 flex-1"><span className="block truncate text-xs">{titleOf(s)}</span><span className="block truncate text-[10px] text-neutral-500">{goalOf(s)} · {ago(s.lastActivity)}</span></span>
                           </button>
@@ -1261,7 +1404,7 @@ export default function BentoHome() {
                 // session id" transition (onLive below) must NOT remount — that would tear down the
                 // in-flight EventSource/turns mid-stream for no reason. An explicit user pick of a
                 // DIFFERENT existing session (onPick below) SHOULD remount — see onPick's comment.
-                <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={proj.cwd} idx={idx} count={panes.length} showTools={showTools} agentsHere={cwdAgentCount[proj.cwd] || 0}
+                <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={proj.sessions} cwd={pane.cwd || proj.cwd} isolated={!!pane.cwd} idx={idx} count={panes.length} showTools={showTools} agentsHere={cwdAgentCount[pane.cwd || proj.cwd] || 0}
                   collapsed={focusPane != null && focusPane !== idx} focused={focusPane === idx}
                   // "Give this pane the room it needs" — used by the side slot when it's too cramped to
                   // open here. It selects the pane AND switches to tabs, since tabs view is the only
@@ -1298,7 +1441,7 @@ export default function BentoHome() {
           below the lightbox and folder picker (z-[90]/z-[100]) so a modal still covers it. */}
       <div className="fixed right-3 top-2.5 z-[60]"><NotificationBell /></div>
 
-      {picker && <FolderPicker onPick={startTopic} onClose={() => setPicker(false)} />}
+      {picker && <FolderPicker onPick={startTopic} onClose={() => setPicker(false)} recents={recentTopics} />}
     </div>
   );
 }
@@ -1554,8 +1697,57 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
 // construction, so the two views can't drift on the things that actually execute code. That is also
 // why Flow isn't its own route: a second copy of the send/steer/stop wiring is a second place for the
 // permission model to be subtly wrong.
-function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, showTools, agentsHere, openSids, collapsed, focused, onFocus, onOpenFlow, onPick, onLive, onBusy, onClose }: {
-  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string; idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; collapsed?: boolean; focused?: boolean; onFocus: () => void; onOpenFlow: (sid: string) => void; onPick: (id: string) => void; onLive: (sid: string) => void; onBusy: (key: string, act: { phase: ActivityPhase; label: string; busy: boolean }) => void; onClose: () => void;
+/**
+ * The state line for an isolated chat: which checkout it is in, and the way back out of it.
+ *
+ * The merge button exists because the autopilot — which already merges finished worktrees, resolves
+ * the mechanical conflicts and prunes the trees (§13) — is **off by default** and rewrites git history
+ * unattended. Isolation that only works when an always-on agent is switched on would be isolation
+ * nobody can trust, so the manual path is the guarantee and the autopilot is the convenience. Both go
+ * through `bin/task.mjs merge`, so there is one definition of "ready" and one set of gates.
+ *
+ * Refusals are shown verbatim rather than translated. `task.mjs` refuses for concrete, fixable reasons
+ * — the base is dirty, the build failed, someone is working in the tree — and a paraphrase would strip
+ * exactly the part that tells you what to do next.
+ */
+function IsolatedBar({ cwd, busy }: { cwd: string; busy: boolean }) {
+  const [state, setState] = useState<"idle" | "merging" | "done">("idle");
+  const [msg, setMsg] = useState("");
+  const task = cwd.split("/").filter(Boolean).pop() || "";
+  const merge = async () => {
+    setState("merging"); setMsg("");
+    try {
+      const d = await (await fetch("/api/worktree", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "merge", cwd }),
+      })).json();
+      setState(d?.ok ? "done" : "idle");
+      setMsg(String(d?.message || (d?.ok ? "merged" : "merge refused")));
+    } catch (e) {
+      setState("idle"); setMsg(String((e as Error)?.message || e));
+    }
+  };
+  return (
+    <div className="mx-auto mb-1 flex max-w-full items-center gap-1.5 rounded-full border border-[#6cc4a1]/30 bg-[#6cc4a1]/10 px-3 py-1 text-[11px] text-[#6cc4a1]">
+      <GitBranch className="h-3 w-3 shrink-0" />
+      <span className="shrink-0">isolated in <code className="text-[10px]">{task}</code> — nothing here can overwrite another chat</span>
+      {/* Never mid-turn: `task.mjs merge` builds the tree and moves the branch, and doing that under a
+          running agent is the collision this whole feature exists to avoid. */}
+      <button onClick={merge} disabled={busy || state === "merging" || state === "done"}
+        title={busy ? "Wait for this turn to finish" : "Verify, build and merge this chat's work back into the base branch"}
+        className="ml-1 shrink-0 rounded-full border border-[#6cc4a1]/40 px-1.5 py-0.5 text-[10px] transition-colors hover:bg-[#6cc4a1]/15 disabled:opacity-40">
+        {state === "merging" ? "merging…" : state === "done" ? "merged ✓" : "merge back"}
+      </button>
+      {msg && <span className="min-w-0 truncate text-[10px] text-neutral-400" title={msg}>{msg}</span>}
+    </div>
+  );
+}
+
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx, count, showTools, agentsHere, openSids, collapsed, focused, onFocus, onOpenFlow, onPick, onLive, onBusy, onClose }: {
+  paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string;
+  /** This chat has its own git worktree (see `addPane`), so nothing it writes can collide. */
+  isolated?: boolean;
+  idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; collapsed?: boolean; focused?: boolean; onFocus: () => void; onOpenFlow: (sid: string) => void; onPick: (id: string) => void; onLive: (sid: string) => void; onBusy: (key: string, act: { phase: ActivityPhase; label: string; busy: boolean }) => void; onClose: () => void;
 }) {
   // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
@@ -1808,11 +2000,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
     parkedScroll.current = null;
   }, [collapsed]);
 
-  // The turn, folded into steps — ONE derivation, read by both the strip and the panel so they cannot
-  // disagree about what exists. Was two: the strip scanned raw TodoWrite input while the panel called
-  // buildFlow, which is how a TaskCreate-tracked turn ended up with a flow and no way to open it.
-  // Nothing server-side needed — TodoWrite's input already flows through `source` like any other tool.
-  const flowTurn = useMemo(() => { const f = buildFlow(source); return f[f.length - 1]; }, [source]);
+  // The session, folded into a journey — ONE derivation, read by both the strip and the canvas so they
+  // cannot disagree about what exists. Was two: the strip scanned raw TodoWrite input while the panel
+  // called buildFlow, which is how a TaskCreate-tracked turn ended up with a flow and no way to open
+  // it. Nothing server-side needed — TodoWrite's input already flows through `source` like any other
+  // tool. No narratives here on purpose: the strip shows counts and the live goal, both of which are
+  // rules-derived and must be right *while* a turn runs, which is exactly when narration has nothing.
+  const flowJourney = useMemo(() => buildJourney(source), [source]);
 
   // The browser tool (Playwright MCP, see manager.ts). Everything the panel shows — URL, title,
   // console counts, network rows, the screenshot filmstrip, the action log — is folded out of the tool
@@ -2084,6 +2278,27 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           : atLeast(d, "snug") ? "space-y-5 [--turn-gap:1.25rem] px-4 py-4"
           : atLeast(d, "tight") ? "space-y-4 [--turn-gap:1rem] px-3.5 py-3"
           : "space-y-3 [--turn-gap:0.75rem] px-3 py-2"}`}>
+        {/* ── which checkout is this chat writing in ────────────────────────────────────────────
+            Two agents in one folder is a silent-data-loss condition, and the dashboard is the only
+            thing on the box that can see both. It used to say exactly that and stop, which made it a
+            warning you could do nothing about without leaving for a CLI — so it fired for months and
+            changed nothing. A blank second chat now gets its own worktree the moment it is created,
+            and this line reports which of the two states you are in rather than only the bad one.
+            The warning still fires for chats that were already running, and for the shared folder,
+            which is genuinely still shared.
+
+            ABOVE the three-way body below, not inside it: an isolated chat is usually BLANK when you
+            most need to be told where it will write — the empty "New chat in …" state is the moment
+            before you type the instruction, and the old placement only rendered once a transcript
+            existed, i.e. after the first turn had already run somewhere. */}
+        {isolated ? (
+          <IsolatedBar cwd={cwdProp} busy={agent.busy} />
+        ) : agentsHere > 1 ? (
+          <div className="mx-auto mb-1 flex items-center gap-1.5 rounded-full border border-[#e0a33e]/30 bg-[#e0a33e]/10 px-3 py-1 text-[11px] text-[#e0a33e]">
+            <span>⚠</span>
+            <span>{agentsHere} agents are live in this folder — they share one branch and will overwrite each other</span>
+          </div>
+        ) : null}
         {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
             <p className="text-2xl">{continueTarget && continueOn ? "⟲" : "✳"}</p>
@@ -2110,15 +2325,6 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           agent.busy ? <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} /> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
         ) : (
         <>
-        {/* Two agents in one checkout is a silent-data-loss condition, not a warning-level one — but the
-            dashboard is the only thing on the box that can see both, so it's the only thing that can
-            say so. `bin/task.mjs new` gives each one its own worktree. */}
-        {agentsHere > 1 && (
-          <div className="mx-auto mb-1 flex items-center gap-1.5 rounded-full border border-[#e0a33e]/30 bg-[#e0a33e]/10 px-3 py-1 text-[11px] text-[#e0a33e]">
-            <span>⚠</span>
-            <span>{agentsHere} agents are live in this folder — they share one branch and will overwrite each other</span>
-          </div>
-        )}
         {/* What Claude can actually see is never left implicit. Once this pane resumes a conversation
             it adopts that session id and reconcile() pulls the whole transcript in from disk — so
             without a seam you'd be reading messages you never sent in this pane and guessing whether
@@ -2246,7 +2452,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           // the switch on the bento tile raise the same canvas.
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
             <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} />
-            <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
+            <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
           </div>
         ) : atLeast(dc, "tight") ? (
@@ -2255,7 +2461,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, idx, count, sh
           // you'd actually check at a glance (plan-vs-code, and the approval level) and opens the real
           // controls on click. ~54px of the pane handed back to the transcript.
           <div className="relative mb-1.5 flex items-center gap-1.5">
-            <FlowStrip turn={flowTurn} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
+            <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <button onClick={() => setModeOpen((v) => !v)} title="Session controls — pause, Plan vs Code, approval level"
               className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
                 modeOpen ? "border-white/25 text-neutral-200" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>

@@ -40,6 +40,61 @@ a reload. Only a restart clears it.
 Use **`npm run build:check`** (`NEXT_DIST_DIR=.next-verify next build`) instead. `deploy.sh` is the one
 thing allowed to overwrite `.next`, because it restarts the server in the same breath.
 
+**`next dev` clobbers `.next` exactly the same way — and it is the easier mistake to make.** The rule
+is not "don't run `npm run build`", it's **never let any Next command default its dist dir**. Always go
+through the npm scripts (`dev:iterate` sets `NEXT_DIST_DIR=.next-dev`, `build:check` sets
+`.next-verify`); the moment you type a bare `npx next dev` you have silently pointed a dev server at
+the live server's build output.
+
+> 🐛 **A deploy skipped its own wait, then vetoed itself — and `--verify-only` called the wreckage
+> healthy.** *Investigated at user request after a failed deploy (2026-08-03 12:21).* Five hypotheses
+> were tested against the logs and the running box; two were disproved, which is why they're recorded:
+>
+> | # | Hypothesis | Verdict |
+> |---|---|---|
+> | 1 | The drain token rotated mid-deploy, so probes 403'd | **Disproved** — token file unchanged since 2026-07-29, server booted 2026-08-03 |
+> | 2 | The failure was silent, so nobody knew | **Disproved** — a `deploy/error` event fired at 12:25:22 |
+> | 3 | `busy_now()` conflates "can't tell" with "no server" | **Confirmed — the cause** |
+> | 4 | The requesting turn counts itself as busy | **Confirmed**, self-resolving but it burns wait budget |
+> | 5 | Cross-folder sessions block the deploy | **Confirmed**, by design — they live in the same process |
+> | 6 | `verify()` passes on a broken app | **Confirmed**, independently serious |
+>
+> **The cause (3).** `busy_now()` returned `""` for *every* failure — 403, 500, timeout, malformed body —
+> and the wait loop read `""` as "no server, nothing to protect" and broke out. The log shows the whole
+> shape: `▸ 2 turn(s) in flight — waiting up to 300s`, then `▸ no health endpoint — proceeding`, then
+> serve.sh reaching that same endpoint one second later and vetoing with 2 busy. One unlucky poll
+> disabled the guard. A 403 body is `{"error":"unauthorized"}` — valid JSON, no `busy` key, indistinguishable
+> from a dead server under the old test. Now three-valued: a count, `""` **only** on curl exit 7
+> (connection refused), and `"?"` for anything else — which keeps waiting and fails *closed* after 30s.
+>
+> **The second bug (6).** `verify()` asserted `GET / -> 200`, which a broken app passes: `next start`
+> serves HTML from in-memory manifests, so after `.next` is overwritten underneath it the page still
+> returns 200 while every asset it references 400s. Measured — `--verify-only` printed
+> `✓ server on :3000 is answering` about a dashboard that was unstyled text, having *also* printed
+> `BUILD_ID ?` and ignored it. It now fails on an empty `BUILD_ID` and fetches the page's own
+> `/_next/static/*` URLs, demanding they resolve. Same lesson as everything else in this file: probe the
+> thing that cannot lie.
+>
+> **Alert body.** The failure alert tailed `prod.log`, which only holds the last server *boot* — so an
+> alert titled "Deploy failed" carried the previous deploy's `✓ Ready in 180ms`. It now leads with the
+> deploy log, where serve.sh's actual refusal is written.
+>
+> **Autopilot inherits all of this**, because `lib/autopilot/runner.ts` deploys by spawning
+> `bin/deploy.sh --detach` and never inspects the result — it relies entirely on these alerts being
+> truthful.
+
+> 🐛 **Reached for `npx next dev` and broke the live dashboard.** `npm run dev:iterate` failed to start
+> — the shell profile exports `NODE_ENV=production`, which makes Next skip the dev CSS pipeline and
+> 500 every route on `@import "tailwindcss"`. The workaround was `NODE_ENV=development npx next dev
+> --port 3001`, which fixed the symptom and **dropped `NEXT_DIST_DIR` with it**, so three dev-server
+> runs wrote into `.next` underneath the production server. Damage is the same as a bare build:
+> `.next/BUILD_ID` emptied, and `/` still returned 200 from in-memory manifests while its referenced
+> `webpack-*.js` and `*.css` both returned **400** (measured). It also poisons the compile gate —
+> `tsconfig.json` includes `.next/types/**/*.ts`, so a deleted dev-only route leaves a stale
+> `validator.ts` that fails `build:check` with `Cannot find module '../../app/<route>/page.js'` long
+> after the file is gone. The correct workaround keeps both variables:
+> `NODE_ENV=development NEXT_DIST_DIR=.next-dev npx next dev --port 3001` — or better, fix the script.
+
 > 🐛 **Verified the build, broke the dashboard — three turns running.** Each turn ended with a
 > `npm run build` to prove the change compiled, then a detached deploy. The build desynced `.next` from
 > the running server immediately; the deploy that would have repaired it waited for the box to go quiet
