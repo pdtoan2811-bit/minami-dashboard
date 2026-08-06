@@ -70,6 +70,11 @@ session keyed `agent:<id>:<taskId>` whose transcript the read pipeline then attr
 `docs/knowledge/14-agents.md` before changing anything there — particularly why its task runner polls
 instead of subscribing.
 
+**Teams** (`lib/teams/*`, `/teams`, same Settings toggle) sit on the agent layer rather than beside it:
+a template's roles become standing agents, and a run is one stage per role — each a separate session in
+that role's own folder, all appending to one dossier on disk. Every stage goes through `assign()`, so
+there is no second way to start a session. `docs/knowledge/15-teams.md`.
+
 ## Conventions
 
 - **Comments explain *why*, not *what*.** This codebase's comments carry hard-won reasoning (races,

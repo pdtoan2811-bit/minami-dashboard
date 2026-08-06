@@ -49,6 +49,14 @@ export type AgentTask = {
   status: AgentTaskStatus;
   /** The manager pane key this ran under: `agent:<agentId>:<taskId>`. */
   key: string;
+  /**
+   * The server process that started this run.
+   *
+   * Live sessions are children of that process, so a record whose pid isn't ours describes work that
+   * is definitely dead — which is what `reapOrphans()` needs to know, and what it used to *assume*
+   * from being at module load. See the post-mortem in §14.3.
+   */
+  pid?: number;
   createdAt: number;
   startedAt?: number;
   endedAt?: number;

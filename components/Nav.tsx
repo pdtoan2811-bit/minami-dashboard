@@ -6,9 +6,14 @@ import { useSetting } from "@/lib/use-settings";
 const ITEMS = [
   { href: "/", label: "Bento", icon: "⊞" },
   { href: "/agents", label: "Agents", icon: "🜂" },
+  { href: "/teams", label: "Teams", icon: "⛩" },
   { href: "/dashboard", label: "Metrics", icon: "◧" },
   { href: "/settings", label: "Settings", icon: "⚙" },
 ];
+
+// Both live behind agent mode. Teams is built ON the agent layer — a product's roles ARE agents — so
+// showing Teams while Agents is hidden would offer a view whose every link leads somewhere hidden.
+const AGENT_MODE_ONLY = ["/agents", "/teams"];
 
 export function Nav() {
   const p = usePathname();
@@ -16,7 +21,7 @@ export function Nav() {
   // install that isn't using agents shouldn't carry a nav entry for them. Purely a client preference
   // — the roster the server keeps doesn't care whether this is on.
   const [agentMode] = useSetting<boolean>("agentMode", false);
-  const items = ITEMS.filter((it) => it.href !== "/agents" || agentMode || p.startsWith("/agents"));
+  const items = ITEMS.filter((it) => !AGENT_MODE_ONLY.includes(it.href) || agentMode || p.startsWith(it.href));
   return (
     <nav className="flex items-center gap-0.5 rounded-xl border border-white/10 bg-white/[0.04] p-0.5">
       {items.map((it) => {

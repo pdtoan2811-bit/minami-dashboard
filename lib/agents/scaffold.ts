@@ -221,11 +221,23 @@ The dashboard is at ${dashboardUrl}; the CLI is a thin wrapper over its \`/api/a
 
 export type ScaffoldResult = { created: string[]; skipped: string[] };
 
+/** A skill file to seed into the new home. Only ever written when absent, like everything else here. */
+export type SeedSkill = { name: string; description: string; body: string };
+
 /**
  * Fill in whatever `home` is missing. Safe to run twice, and safe to run on a folder full of someone
  * else's work — every write goes through writeIfAbsent().
+ *
+ * `persona` and `skills` are how the team layer (§15) seeds a role: a template role already knows what
+ * it owns and how it works, so it ships a written persona instead of the TODO-laden default, which
+ * would otherwise mean an interview per role before the first run. They stay optional and they stay
+ * write-if-absent — an agent that has since rewritten its own persona must not have it reverted by a
+ * second product being pointed at the same brain.
  */
-export function scaffold(a: AgentDef, opts: { dashboardUrl: string; notes?: boolean }): ScaffoldResult {
+export function scaffold(
+  a: AgentDef,
+  opts: { dashboardUrl: string; notes?: boolean; persona?: string; skills?: SeedSkill[] },
+): ScaffoldResult {
   const created: string[] = [];
   const before = new Set<string>();
   for (const f of ["CLAUDE.md", MEMORY_FILE, activityFileFor(a.home)]) {
@@ -240,10 +252,20 @@ export function scaffold(a: AgentDef, opts: { dashboardUrl: string; notes?: bool
     }
   }
 
-  writeIfAbsent(path.join(a.home, "CLAUDE.md"), personaFor(a) + (a.hq ? hqAppendix(opts.dashboardUrl) : ""), created);
+  writeIfAbsent(
+    path.join(a.home, "CLAUDE.md"),
+    (opts.persona || personaFor(a)) + (a.hq ? hqAppendix(opts.dashboardUrl) : ""),
+    created,
+  );
   writeIfAbsent(path.join(a.home, MEMORY_FILE), memorySeedFor(a), created);
   writeIfAbsent(path.join(a.home, activityFileFor(a.home)), activitySeedFor(a), created);
   writeIfAbsent(path.join(a.home, ".claude", "skills", "README.md"), skillsReadme(a), created);
+  for (const s of opts.skills || []) {
+    // Frontmatter is not decoration: `description` is all Claude sees when deciding whether to load a
+    // skill, so a skill without one is a file that never runs.
+    const body = `---\nname: ${s.name}\ndescription: ${s.description}\n---\n\n${s.body}`;
+    writeIfAbsent(path.join(a.home, ".claude", "skills", s.name, "SKILL.md"), body, created);
+  }
   // An empty permissions object, on purpose: it's the file the interview edits, and an absent file is
   // one more thing to discover. `deny` first so the shape of a restriction is visible before it's needed.
   writeIfAbsent(

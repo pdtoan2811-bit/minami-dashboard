@@ -146,6 +146,23 @@ export const NODES: ModuleNode[] = [
   { id: "app/agentsession", label: "agents/[id]/session/[sid]", sub: "read-only transcript viewer\n(the History tab's destination)", layer: "surface", row: 7 },
   { id: "x/agenthome", label: "an agent's home folder", sub: "CLAUDE.md · MEMORY.md · notes\n— the substance, not the registry", layer: "runtime", row: 8 },
 
+  // ── Teams (KNOWLEDGE.md §15) ────────────────────────────────────────────
+  // Sits on the agent layer, not beside it: l/teams-run → l/agents-runner is the ONLY way a stage
+  // starts, so a team run reaches the live pipeline through exactly the same door an assigned task
+  // does. The two things this layer adds are order and a shared file — hence x/dossier hanging off
+  // the runner, and x/record being written by an agent rather than by any code here.
+  { id: "app/teams", label: "app/teams", sub: "products · product · run\n(opt-in view)", layer: "surface", row: 8 },
+  { id: "c/StageRail", label: "teams/StageRail", sub: "stage dots + the\n\"wrote no section\" flag", layer: "component", row: 26 },
+  { id: "l/teams-templates", label: "teams/templates/*", sub: "roles + chain, as data\n(personas, skills)", layer: "core", row: 25 },
+  { id: "l/teams-store", label: "teams/store.ts", sub: "product registry\n· role→agent resolution", layer: "core", row: 26 },
+  { id: "l/teams-run", label: "teams/run.ts", sub: "the chain driver — one stage =\none assigned agent task", layer: "core", row: 27 },
+  { id: "l/teams-dossier", label: "teams/dossier.ts", sub: "the travelling document\n(header + did-it-land check)", layer: "core", row: 28 },
+  { id: "l/teams-brains", label: "teams/brains.ts", sub: "one brain per role, box-wide\n· git per brain", layer: "core", row: 29 },
+  { id: "l/teams-repohook", label: "teams/repo-hook.ts", sub: "marker-bounded team block\nin the workspace's CLAUDE.md", layer: "core", row: 30 },
+  { id: "r/teams", label: "/api/teams/**", sub: "products · runs", layer: "route", row: 17 },
+  { id: "x/dossier", label: "~/.minami/runs/<id>/", sub: "run.json + dossier.md\n— disposable working state", layer: "runtime", row: 9 },
+  { id: "x/record", label: "a product's record", sub: "00-index · decisions · specs · uat\n— curated by the closing role", layer: "runtime", row: 10 },
+
   // ── File preview (KNOWLEDGE.md §5g) ─────────────────────────────────────
   { id: "c/FilePanel", label: "FilePanel", sub: "any file type, paged\n(shares the browser's slot)", layer: "component", row: 22, pipeline: "live" },
   { id: "l/fileview", label: "file-view.ts", sub: "transcript → files touched\n(created vs changed)", layer: "core", row: 18, pipeline: "live" },
@@ -230,6 +247,29 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/agents-history", to: "l/sessions", kind: "import" },
   { from: "app/agents", to: "app/agentsession", kind: "import" },
   { from: "app/agentsession", to: "r/session", kind: "http" },
+
+  // Teams. The one join to everything below it is `l/teams-run → l/agents-runner`: a stage is an
+  // ordinary assigned task, so the workspace check, the attribution and the agent's write-back all
+  // come for free rather than being rebuilt here.
+  { from: "app/teams", to: "c/StageRail", kind: "import" },
+  { from: "app/teams", to: "r/teams", kind: "http", label: "poll 4s" },
+  { from: "app/teams", to: "app/agents", kind: "import", label: "a role IS an agent" },
+  { from: "r/teams", to: "l/teams-store", kind: "import" },
+  { from: "r/teams", to: "l/teams-run", kind: "import" },
+  { from: "r/teams", to: "l/teams-repohook", kind: "import" },
+  { from: "l/teams-store", to: "l/teams-templates", kind: "import" },
+  { from: "l/teams-store", to: "l/teams-brains", kind: "import" },
+  { from: "l/teams-brains", to: "l/agents-store", kind: "import" },
+  { from: "l/teams-brains", to: "l/agents-scaffold", kind: "import", label: "persona + skills" },
+  { from: "l/teams-run", to: "l/agents-runner", kind: "import", label: "one stage = one task" },
+  { from: "l/teams-run", to: "l/teams-dossier", kind: "import" },
+  { from: "l/teams-run", to: "l/teams-brains", kind: "import", label: "commit the brain" },
+  { from: "l/teams-dossier", to: "x/dossier", kind: "import" },
+  { from: "l/teams-repohook", to: "x/agenthome", kind: "import", label: "the workspace's CLAUDE.md" },
+  // Drawn from the runner, not from any module: the record is written by the CLOSING AGENT during its
+  // own turn. No code in this repo writes it, which is the point — only the agent knows what outlived
+  // the run.
+  { from: "l/agents-runner", to: "x/record", kind: "http", label: "the closing role files it" },
   { from: "app/page", to: "c/ProjectIcon", kind: "import" },
   { from: "c/BentoRail", to: "c/ProjectIcon", kind: "import" },
   { from: "app/page", to: "c/FolderPicker", kind: "import" },

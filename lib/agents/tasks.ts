@@ -62,8 +62,11 @@ export function getTask(id: string): AgentTask | null {
 }
 
 export function addTask(t: AgentTask): AgentTask {
-  persist([...load(), t]);
-  return t;
+  // Stamped here rather than by the caller so no path into the task file can skip it — an unstamped
+  // record is indistinguishable from one written by a previous process, and gets reaped.
+  const stamped = { ...t, pid: process.pid };
+  persist([...load(), stamped]);
+  return stamped;
 }
 
 export function patchTask(id: string, patch: Partial<AgentTask>): AgentTask | null {
@@ -91,15 +94,21 @@ export function sessionOwners(agentId: string): Map<string, AgentTask> {
 }
 
 /**
- * Anything left `running` or `queued` from a previous process is a lie: live sessions are children of
- * THIS server, so a restart (every deploy is one) killed them. Called once at module load on the
- * server so a roster never shows a task that's been dead since the last swap.
+ * Anything left `running` or `queued` by a DIFFERENT process is a lie: live sessions are children of
+ * the server that started them, so a restart (every deploy is one) killed them.
+ *
+ * The check is `pid !== process.pid`, not "we are at module load". Module load is not the same event
+ * as process start — `next dev` re-evaluates a module when a new route compiles, and this then reaped
+ * tasks that were genuinely running seconds earlier. `process.pid` is stable across however many times
+ * a module is instantiated inside one process, which is exactly the property needed here. A record
+ * with no pid predates the stamp, so it is by definition from an older process: reap it.
  */
 export function reapOrphans(): number {
   const list = load();
   let n = 0;
   const next = list.map((t) => {
     if (t.status !== "running" && t.status !== "queued") return t;
+    if (t.pid === process.pid) return t;
     n++;
     return {
       ...t,

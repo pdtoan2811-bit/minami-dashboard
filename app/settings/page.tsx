@@ -66,13 +66,18 @@ export default function Settings() {
           <h2 className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-neutral-500">Agents</h2>
           <div className="space-y-2">
             <Row title="Agent view"
-              desc="Adds a roster of standing agents — each with its own home folder, memory and model — alongside the session board. Off hides the nav entry; it doesn't delete anything.">
+              desc="Adds a roster of standing agents — each with its own home folder, memory and model — and the Teams view built on them, alongside the session board. Off hides both nav entries; it doesn't delete anything, and runs already in flight keep going.">
               <Toggle on={agentMode} onChange={setAgentMode} />
             </Row>
             {agentMode && (
-              <a href="/agents" className="block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[11px] text-neutral-400 hover:border-[var(--sakura)]/40">
-                Open the roster →
-              </a>
+              <>
+                <a href="/agents" className="block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[11px] text-neutral-400 hover:border-[var(--sakura)]/40">
+                  Open the roster →
+                </a>
+                <a href="/teams" className="block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[11px] text-neutral-400 hover:border-[var(--sakura)]/40">
+                  Open Teams — products, templates and runs →
+                </a>
+              </>
             )}
           </div>
         </section>

@@ -103,6 +103,31 @@ this to do a piece of work; read the subsystem's own doc.
 - **The module graph claimed the flow canvas armed the brake** (§5f) — stale since v3; it is armed
   from `lib/use-agent.ts`. Found by re-running the extraction script instead of editing from memory,
   which is exactly what that step in the `minami-kb` procedure is for.
+- **Teams shipped** (§15) — team templates, and a task that runs *through* a team rather than inside
+  one chat. Three templates as data (`tech-product` default, `solo-founder`, `content-studio`); each
+  role becomes a standing agent at `~/brains/<role>`, shared box-wide so craft compounds across
+  products. A run is one stage per role — separate session, separate folder, own memory and skills —
+  all appending to one `dossier.md`, and every stage goes through `assign()` so the workspace check,
+  the History-tab attribution and the agent's write-back come for free. Every template puts the same
+  role at both ends of the chain: whoever writes the acceptance criteria is who checks against them,
+  because splitting those makes the check degrade into "does this look finished", which always passes.
+  Filing the record is folded into that closing stage rather than given to a separate Librarian —
+  cheaper, and the known cost (no cross-product duplicate detection) is recorded in §15.2 so it's
+  recognisable if the record starts drifting. Behind the existing Agent view toggle: with it off,
+  nothing about the board changes. New `bin/team.mjs`, named by the marker-bounded team block the
+  product writes into its workspace's `CLAUDE.md` — which is what makes the team reachable from a bare
+  `claude` in that folder, with no dependency on this app running.
+- **An unattended task was reaped as an orphan while it was still running** (§14.3) — `reapOrphans()`
+  treated *module load* as *process start*, which `next dev` breaks by re-evaluating a module whenever
+  a new route compiles. Now stamped with `process.pid` and reaped only when the pid isn't ours.
+  Production was never affected; what it cost was the ability to test the agents layer anywhere except
+  a production build. Post-mortem in §14.3.
+- **Verified end-to-end 2026-07-31** — a full six-stage `tech-product` run against a production build,
+  with every path (agents, products, runs, records) pointed at temp dirs: six sections appended in
+  order under their exact headings, both halves of each agent's write-back landing, and the record
+  filed into `decisions/ specs/ uat/ log.md` with `00-index.md` written last. The closing UAT stage
+  returned **FAIL** on one of the criteria the opening stage had written — the bookend doing the job
+  it exists for rather than rubber-stamping its own run.
 - **Open-source readiness pass** — the repo had been public for weeks with no licence at all, which
   under default copyright makes a public clone readable and nothing else. Added `LICENSE` (MIT),
   corrected `package.json` (`UNLICENSED` → `MIT`, kept `private: true` as an npm-publish guard) and
