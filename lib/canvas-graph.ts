@@ -51,6 +51,10 @@ export type GNode = {
   people?: string[];
   /** 0..1, drawn as a bar. Used by milestone and action. */
   progress?: number;
+  /** Count of relation badges this node will wear. Set by the renderer before layout so the height
+   *  estimate matches what actually draws — badges are ~30px each and were enough to reintroduce
+   *  collisions when unaccounted for. */
+  rels?: number;
   /** Transient effect, cleared by the player after it plays. */
   fx?: NodeFx;
   /** Set while this node is being absorbed into another: it flies to the target and fades, then the
@@ -195,6 +199,7 @@ export function nodeHeight(n: GNode): number {
   if (n.kind === "poll") h += (n.options?.length ?? 0) * 38;
   if (n.kind === "shot") h += 132;
   if (n.people?.length || n.owner || n.by || n.tags?.length || n.reactions?.length) h += 36;
+  if (n.rels) h += n.rels * 30;                     // relation badges the map couldn't draw as lines
   return h + 26;                                    // vertical padding
 }
 

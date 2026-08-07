@@ -22,7 +22,11 @@ import {
   type Placed,
 } from "@/lib/canvas-graph";
 
-export function GraphNode({ n, live, index }: { n: Placed; live: boolean; index: number }) {
+export function GraphNode({ n, live, index, rel }: {
+  n: Placed; live: boolean; index: number;
+  /** Relationships whose other end is too far to draw as a line — worn here instead. */
+  rel?: { kind: string; other: string }[];
+}) {
   const size = KIND_SIZE[n.kind];
   const state = n.state ?? DEFAULT_STATE[n.kind];
   const color = STATE_COLOR[state];
@@ -124,6 +128,7 @@ export function GraphNode({ n, live, index }: { n: Placed; live: boolean; index:
           {n.kind === "shot" ? <Shot src={n.src} /> : null}
           {typeof n.progress === "number" ? <Progress value={n.progress} color={color} /> : null}
 
+          {rel?.length ? <Relations rel={rel} /> : null}
           <Footer n={n} color={color} />
         </div>
 
@@ -196,6 +201,31 @@ function fxStyle(n: Placed): React.CSSProperties {
     case "glow": return { animation: "glowPulse 1100ms var(--ease-out) both" };
     default: return {};
   }
+}
+
+const REL_WORD: Record<string, string> = {
+  blocks: "Blocks", depends: "Depends on", answers: "Answers", contradicts: "Contradicts",
+};
+
+/** A relationship the map couldn't draw. Reads as a sentence on the card — "Blocks · 5-week pilot"
+ *  — which is more legible than a wire crossing three unrelated nodes ever was, and survives the
+ *  camera being somewhere else entirely. */
+function Relations({ rel }: { rel: { kind: string; other: string }[] }) {
+  return (
+    <div className="mt-2 space-y-1">
+      {rel.slice(0, 2).map((r, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-1.5 rounded-lg bg-neutral-100/80 px-2 py-1"
+        >
+          <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-neutral-400">
+            {REL_WORD[r.kind] ?? r.kind}
+          </span>
+          <span className="truncate text-[11.5px] font-medium text-neutral-600">{r.other}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function Footer({ n, color }: { n: Placed; color: string }) {

@@ -63,8 +63,31 @@ function useEased(target: Placed[], ms = 900): Placed[] {
   return frame;
 }
 
+/** Relationships too far apart to draw as a line, keyed by the node that should wear the badge. */
+export function farRelations(graph: Graph, placed: Placed[]) {
+  const byId = new Map(placed.map((p) => [p.id, p]));
+  const out = new Map<string, { kind: string; other: string }[]>();
+  for (const e of graph.edges ?? []) {
+    const a = byId.get(e.from), b = byId.get(e.to);
+    if (!a || !b) continue;
+    if (Math.hypot(a.x - b.x, a.y - b.y) <= 620) continue;
+    const list = out.get(e.from) ?? [];
+    list.push({ kind: e.kind ?? "branch", other: b.label });
+    out.set(e.from, list);
+  }
+  return out;
+}
+
 export function GraphCanvas({ graph }: { graph: Graph }) {
-  const targets = useMemo(() => layout(graph.nodes), [graph.nodes]);
+  // Two passes: lay out once to learn which relationships are too far to draw, annotate the nodes
+  // with how many badges they'll wear, then lay out again so their heights include those badges.
+  // One pass would size every card as if it had none, and they'd collide exactly as before.
+  const targets = useMemo(() => {
+    const first = layout(graph.nodes);
+    const rels = farRelations(graph, first);
+    if (!rels.size) return first;
+    return layout(graph.nodes.map((n) => (rels.has(n.id) ? { ...n, rels: Math.min(2, rels.get(n.id)!.length) } : n)));
+  }, [graph]);
   const placed = useEased(targets);
   const byId = useMemo(() => new Map(placed.map((p) => [p.id, p])), [placed]);
   const [vp, setVp] = useState({ w: 1280, h: 720 });
@@ -90,6 +113,7 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
   // the outer cards hang off the frame: a node is up to 360 units wide, so its edge sits half a card
   // beyond the point being fitted to.
   const bounds = useMemo(() => bbox(placed), [placed]);
+  const rels = useMemo(() => farRelations(graph, placed), [graph, placed]);
 
   const focus = graph.focus ? byId.get(graph.focus) : undefined;
 
@@ -140,7 +164,7 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
       >
         <Edges placed={placed} graph={graph} />
         {placed.map((n, i) => (
-          <GraphNode key={n.id} n={n} index={i} live={graph.focus === n.id} />
+          <GraphNode key={n.id} n={n} index={i} live={graph.focus === n.id} rel={rels.get(n.id)} />
         ))}
       </div>
     </div>
@@ -167,7 +191,18 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
   const pad = 4000; // canvas units of slack around origin so negative coords aren't clipped
 
   const branches = placed.filter((n) => n.parent && byId.has(n.parent));
-  const typed = (graph.edges ?? []).filter((e) => byId.has(e.from) && byId.has(e.to));
+
+  // A typed relationship between two DISTANT nodes cannot be drawn as a line without cutting a long
+  // diagonal across whatever sits between them — and on a tree layout that is almost always several
+  // cards. No curve tuning fixes it; the geometry is simply hostile. So only near pairs get a line.
+  // The rest are handed to the nodes themselves as a badge (see `rel` below), which says the same
+  // thing without dragging a wire through three unrelated cards.
+  const NEAR = 620;
+  const all = (graph.edges ?? []).filter((e) => byId.has(e.from) && byId.has(e.to));
+  const typed = all.filter((e) => {
+    const a = byId.get(e.from)!, b = byId.get(e.to)!;
+    return Math.hypot(a.x - b.x, a.y - b.y) <= NEAR;
+  });
 
   return (
     <svg

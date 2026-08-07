@@ -131,7 +131,8 @@ const pilot: DemoScript = {
       ] },
     { gap: 2600, who: "Toàn", say: "Then six weeks, not three months.",
       does: [
-        { kind: "add", node: { id: "d2", kind: "decision", label: "6-week pilot, not 3 months", detail: "Lands before the September budget cycle closes.", parent: "time", state: "agreed", people: ["Quang", "Phạm Đức Toàn"] } },
+        { kind: "add", node: T("agreed", "Agreed", "time") },
+        { kind: "add", node: { id: "d2", kind: "decision", label: "6-week pilot, not 3 months", detail: "Lands before the September budget cycle closes.", parent: "agreed", state: "agreed", people: ["Quang", "Phạm Đức Toàn"] } },
         { kind: "focus", id: "d2" },
         { kind: "edge", from: "k1", to: "d2", edge: "blocks" },
         { kind: "react", id: "d2", emoji: "🔥" },
