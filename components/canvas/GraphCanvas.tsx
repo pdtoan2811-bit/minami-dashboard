@@ -249,26 +249,11 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
           />
         ))}
 
-        {/* The mindmap edges. Now that a topic is a root node on the LEFT with its cards fanning
-            right, an edge is a short horizontal hop — which is the geometry a curve is actually good
-            at. The earlier versions failed because the layout was wrong for them: a swooping wire up
-            to a heading, or a diagonal across a scatter. Same curve function, finally in a layout
-            that suits it. */}
-        {branches.map((n) => {
-          const p = byId.get(n.parent!);
-          if (!p) return null;
-          return (
-            <path
-              key={`b-${n.id}`}
-              d={curve(...anchor(p, n))}
-              fill="none"
-              stroke={branchColor(branchIds, n.branch)}
-              strokeOpacity={0.42}
-              strokeWidth={2}
-              strokeLinecap="round"
-            />
-          );
-        })}
+        {/* NO topic-to-card edges. They all converge on one point at the label, which is what made
+            that fan look like a bundle of wires tied at a knot rather than a set of connections. The
+            halo already says what belongs to the cluster, and the topic sits at its left as the
+            heading — the membership is spatial, so the lines were re-stating it badly. Only real
+            NODE-TO-NODE relationships get drawn now. */}
 
         {/* Merge beam. The absorbed node flying across was legible only once it had already moved —
             by which point the relationship it was expressing was over. A bright link drawn between
@@ -335,9 +320,14 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
  *  Rounded for the same reason node coordinates are: full-precision floats serialize differently
  *  server- and client-side and React flags the path as a hydration mismatch. */
 function curve(x1: number, y1: number, x2: number, y2: number): string {
-  const dx = Math.round(Math.abs(x2 - x1) * 0.42);
-  const s = x2 >= x1 ? 1 : -1;
-  return `M ${x1} ${y1} C ${x1 + dx * s} ${y1}, ${x2 - dx * s} ${y2}, ${x2} ${y2}`;
+  // Tangents follow the dominant axis. A horizontal-tangent curve between two vertically-stacked
+  // boxes bulges sideways before coming back, which is exactly the shape that looked wrong.
+  if (Math.abs(x2 - x1) >= Math.abs(y2 - y1)) {
+    const dx = Math.round(Math.abs(x2 - x1) * 0.45) * (x2 >= x1 ? 1 : -1);
+    return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+  }
+  const dy = Math.round(Math.abs(y2 - y1) * 0.45) * (y2 >= y1 ? 1 : -1);
+  return `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`;
 }
 
 /** Is `n` anywhere beneath `ancestorId`? Walks up rather than down so it stays cheap on a flat list. */
@@ -364,14 +354,22 @@ function elbow(p: Placed, c: Placed): string {
   return `M ${railX} ${py} L ${railX} ${cy - r} Q ${railX} ${cy} ${railX + r} ${cy} L ${cx} ${cy}`;
 }
 
-/** Anchor an edge to the card's left/right EDGE rather than its centre, so lines emerge from the
- *  side of a node instead of appearing to run underneath it. */
+/** BOX TO BOX. Picks the two facing sides and anchors on those, instead of always using left/right.
+ *  Two cards stacked vertically were being joined side-to-side, so the line left one card's flank,
+ *  travelled sideways and came back — the "not like this" in the screenshot. Choosing the axis with
+ *  the greater separation makes the connection leave one box and enter the other by the shortest
+ *  sensible route, which is what reads as two boxes being joined. */
 function anchor(from: Placed, to: Placed): [number, number, number, number] {
-  const fw = KIND_SIZE[from.kind].w / 2;
-  const tw = KIND_SIZE[to.kind].w / 2;
-  const rightward = to.x >= from.x;
-  return [
-    from.x + (rightward ? fw : -fw), from.y,
-    to.x + (rightward ? -tw : tw), to.y,
-  ];
+  const fw = KIND_SIZE[from.kind].w / 2, fh = nodeHeight(from) / 2;
+  const tw = KIND_SIZE[to.kind].w / 2, th = nodeHeight(to) / 2;
+  const dx = to.x - from.x, dy = to.y - from.y;
+
+  // Compare separation against each box's own size: two wide cards a little apart horizontally are
+  // still "beside" each other, not "above" each other.
+  if (Math.abs(dx) / (fw + tw) >= Math.abs(dy) / (fh + th)) {
+    const s = dx >= 0 ? 1 : -1;
+    return [from.x + s * fw, from.y, to.x - s * tw, to.y];
+  }
+  const s = dy >= 0 ? 1 : -1;
+  return [from.x, from.y + s * fh, to.x, to.y - s * th];
 }

@@ -67,7 +67,11 @@ const pilot: DemoScript = {
   subtitle: "with QDN Digital",
   seed: [T("root", "QSortby pilot")],
   steps: [
-    { gap: 0, who: "Quang", say: "Before we start — did the staging box come back up? Linh was fighting it this morning." },
+    { gap: 0, who: "Quang", say: "Before we start — did the staging box come back up? Linh was fighting it this morning.",
+      does: [
+        { kind: "add", node: T("aside", "Unsorted", "root") },
+        { kind: "add", node: { id: "x1", kind: "aside", label: "Staging box was down this morning", detail: "DNS, unrelated to us — Linh.", parent: "aside" } },
+      ] },
     { gap: 2200, who: "Linh", say: "Back up. It was a DNS thing, nothing to do with us." },
     { gap: 2000, who: "Toàn", say: "Good. So — the sort." },
 
@@ -109,7 +113,8 @@ const pilot: DemoScript = {
       ] },
 
     // tangent — Minami correctly keeps out of it
-    { gap: 3000, who: "Linh", say: "Sorry, unrelated — are we still doing the team lunch Thursday?" },
+    { gap: 3000, who: "Linh", say: "Sorry, unrelated — are we still doing the team lunch Thursday?",
+      does: [{ kind: "add", node: { id: "x2", kind: "aside", label: "Team lunch moved to Friday", detail: "Off-topic; kept in case it matters.", parent: "aside" } }] },
     { gap: 1800, who: "Quang", say: "Friday now. Book it." },
     { gap: 1800, who: "Toàn", say: "Ha. Back to the sort." },
 
@@ -122,6 +127,8 @@ const pilot: DemoScript = {
       does: [{ kind: "fx", id: "q1", fx: "jump" }] },
 
     { gap: 2600, who: "Quang", say: "The real constraint is our budget cycle closes in September.",
+      // Arrived sounding exactly like the lunch chat — and turned out to shape the entire pilot.
+      // This is the case for capturing asides rather than judging relevance in the moment.
       does: [
         { kind: "add", node: T("time", "Timeline", "root") },
         { kind: "add", node: T("cons", "Constraints", "time") },

@@ -30,7 +30,12 @@ export type NodeKind =
   // work
   | "topic" | "decision" | "action" | "question" | "requirement" | "risk" | "milestone"
   // fun
-  | "quote" | "meter" | "poll" | "shot";
+  | "quote" | "meter" | "poll" | "shot"
+  /** Small talk, a tangent, something off-scope. Captured because at the time nobody knows whether
+   *  it matters — the lunch plan is noise, "the budget cycle closes in September" arrived exactly
+   *  the same way and turned out to be the constraint that shaped the whole pilot. Dropping a line
+   *  because it sounds irrelevant is a decision made with the least information you will ever have. */
+  | "aside";
 
 export type EdgeKind = "branch" | "blocks" | "depends" | "answers" | "contradicts";
 
@@ -106,19 +111,19 @@ export const STATE_COLOR: Record<NodeState, string> = {
 export const DEFAULT_STATE: Record<NodeKind, NodeState> = {
   topic: "proposed", decision: "agreed", action: "proposed", question: "open",
   requirement: "proposed", risk: "blocked", milestone: "proposed",
-  quote: "proposed", meter: "proposed", poll: "open", shot: "proposed",
+  quote: "proposed", meter: "proposed", poll: "open", shot: "proposed", aside: "proposed",
 };
 
 /** Type is carried by icon + label, never by hue. Kept as text so no icon font is needed. */
 export const KIND_ICON: Record<NodeKind, string> = {
   topic: "◆", decision: "✓", action: "→", question: "?", requirement: "▤",
-  risk: "!", milestone: "◇", quote: "❝", meter: "◐", poll: "▥", shot: "▣",
+  risk: "!", milestone: "◇", quote: "❝", meter: "◐", poll: "▥", shot: "▣", aside: "~",
 };
 
 export const KIND_LABEL: Record<NodeKind, string> = {
   topic: "Topic", decision: "Decision", action: "Action", question: "Open question",
   requirement: "Requirement", risk: "Risk", milestone: "Milestone",
-  quote: "Moment", meter: "Alignment", poll: "Poll", shot: "Screen",
+  quote: "Moment", meter: "Alignment", poll: "Poll", shot: "Screen", aside: "Aside",
 };
 
 /** Node box size per kind, in canvas units. Decision is the hero — it gets the most room. */
@@ -126,7 +131,7 @@ export const KIND_SIZE: Record<NodeKind, { w: number; h: number }> = {
   topic: { w: 210, h: 62 }, decision: { w: 330, h: 168 }, action: { w: 300, h: 150 },
   question: { w: 300, h: 140 }, requirement: { w: 300, h: 140 }, risk: { w: 300, h: 150 },
   milestone: { w: 280, h: 132 }, quote: { w: 360, h: 186 }, meter: { w: 280, h: 168 },
-  poll: { w: 300, h: 196 }, shot: { w: 300, h: 214 },
+  poll: { w: 300, h: 196 }, shot: { w: 300, h: 214 }, aside: { w: 260, h: 96 },
 };
 
 /** Soft tint behind a node's header band, keyed to its state colour. Kept at very low alpha: the
@@ -204,6 +209,8 @@ export function nodeHeight(n: GNode): number {
 const KIND_ORDER: NodeKind[] = [
   "decision", "requirement", "question", "risk",
   "milestone", "action", "quote", "meter", "poll", "shot",
+  // Asides sink to the bottom of their cluster: kept, but never competing with substance.
+  "aside",
   // Sub-sections LAST. With topics first, a parent's own cards rendered after an entire nested
   // group's descendants, which made the order look random — a direct child of Scope appearing
   // below everything inside "Other signals".
