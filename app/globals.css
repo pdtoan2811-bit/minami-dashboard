@@ -443,10 +443,32 @@ body {
    The canvas is a LIGHT surface on an otherwise dark app: it is streamed as a
    screen share to customers, where a dark map reads as a dev tool and a light
    one reads as a shared whiteboard. Scoped to the route so nothing else shifts. */
+/* Arrival. Overshoots on the way down, settles with one small counter-bounce, and unrotates by a
+   degree — the tilt is what stops it reading as a div fading in, and it is small enough that nobody
+   consciously notices it, which is the point. */
 @keyframes nodeIn {
-  from { opacity: 0; transform: translateY(-14px) scale(0.94); }
-  60%  { opacity: 1; transform: translateY(3px) scale(1.015); }
-  to   { opacity: 1; transform: none; }
+  0%   { opacity: 0; transform: translateY(-26px) scale(0.9) rotate(-1.4deg); }
+  55%  { opacity: 1; transform: translateY(6px) scale(1.03) rotate(0.4deg); }
+  78%  { transform: translateY(-2px) scale(0.995) rotate(-0.15deg); }
+  100% { opacity: 1; transform: none; }
+}
+
+/* State evolution — fires when a node matures (proposed → agreed). A ring pushes outward from the
+   card and fades. This is the single most important moment on the canvas: a customer watching
+   something they just said become AGREED is the thing that makes the surface feel alive rather than
+   like minutes being taken. */
+@keyframes statePop {
+  0%   { box-shadow: 0 0 0 0 var(--pop), 0 0 0 0 transparent; }
+  40%  { box-shadow: 0 0 0 4px var(--pop), 0 0 0 12px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent, 0 0 0 22px transparent; }
+}
+
+/* Reactions land with a bit of bounce — they are the fun layer, so they get to be springier than
+   anything else on the map. */
+@keyframes reactionIn {
+  0%   { opacity: 0; transform: scale(0.4) translateY(6px); }
+  60%  { opacity: 1; transform: scale(1.18) translateY(-2px); }
+  100% { opacity: 1; transform: none; }
 }
 
 /* The idle "breath" — a few pixels over several seconds, phase-offset per node so the map undulates

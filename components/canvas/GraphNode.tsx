@@ -1,3 +1,4 @@
+"use client";
 // One node on the infinite canvas.
 //
 // v1 of this was a white rounded rectangle with a 3px colour rail and one line of text — which is
@@ -15,6 +16,7 @@
 //
 // Structure is identical across all eleven kinds on purpose. With a different shape per kind, a map
 // of eleven types looks assembled rather than designed; kind is legible from the icon and eyebrow.
+import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_STATE, KIND_ICON, KIND_LABEL, KIND_SIZE, STATE_COLOR, TINT, initialsOf,
   type Placed,
@@ -27,6 +29,18 @@ export function GraphNode({ n, live, index }: { n: Placed; live: boolean; index:
   const tint = TINT[state];
   const isHero = n.kind === "decision";
   const isTopic = n.kind === "topic";
+
+  // Fire a pulse when a node MATURES (proposed → agreed). Only on change, never on mount: a map
+  // that pulses every card on arrival has no way left to signal that something actually happened.
+  const [pop, setPop] = useState(false);
+  const seen = useRef(state);
+  useEffect(() => {
+    if (seen.current === state) return;
+    seen.current = state;
+    setPop(true);
+    const t = setTimeout(() => setPop(false), 900);
+    return () => clearTimeout(t);
+  }, [state]);
 
   // Topics are signposts, not content. They stay small and quiet so the leaves they carry are what
   // the eye lands on — a map where every node shouts has no hierarchy at all.
@@ -56,15 +70,19 @@ export function GraphNode({ n, live, index }: { n: Placed; live: boolean; index:
       <div
         className="relative flex h-full flex-col overflow-hidden rounded-[18px] bg-white"
         style={{
+          ...(pop ? { ["--pop" as string]: `${color}66`, animation: "statePop 900ms var(--ease-out) both" } : null),
           boxShadow: isHero
             ? "0 1px 2px rgba(16,24,40,0.06), 0 18px 44px -12px rgba(16,24,40,0.22)"
             : "0 1px 2px rgba(16,24,40,0.05), 0 10px 26px -10px rgba(16,24,40,0.15)",
         }}
       >
         {/* Header band — tint + icon chip + kind. The identity strip. */}
-        <div className="flex items-center gap-2 px-4 py-2.5" style={{ background: tint }}>
+        <div
+          className="flex items-center gap-2 px-4 py-2.5 transition-colors duration-[var(--dur-4)]"
+          style={{ background: tint }}
+        >
           <span
-            className="grid size-[22px] shrink-0 place-items-center rounded-lg text-[12px] font-bold text-white"
+            className="grid size-[22px] shrink-0 place-items-center rounded-lg text-[12px] font-bold text-white transition-colors duration-[var(--dur-4)]"
             style={{ background: color }}
             aria-hidden
           >
@@ -117,27 +135,45 @@ export function GraphNode({ n, live, index }: { n: Placed; live: boolean; index:
   );
 }
 
-/** Positioning + entrance + idle breath. Split out so every kind shares identical motion — things
- *  that move together must move alike, or the map reads as separate widgets on a page. */
+/** Positioning + entrance + idle breath.
+ *
+ *  THREE nested layers, and the nesting is the whole point — each owns one transform, so they can
+ *  run simultaneously without fighting for the same property:
+ *
+ *    outer   translate to (x, y), TRANSITIONED  → glides when the layout reshuffles
+ *    middle  entrance keyframe (scale + drop)   → the arrival
+ *    inner   idle breath                        → the ambient life
+ *
+ *  Position was `left`/`top` before, which cannot be transitioned smoothly and forces layout on
+ *  every change. That is why adding a node made its siblings TELEPORT: the radial layout
+ *  redistributes angles whenever a branch gains a child, so every sibling gets a new coordinate at
+ *  once. Same maths now, but the map re-forms in front of you instead of cutting. It also reads as
+ *  causal — you see the branch make room for the thing that just arrived. */
 function Shell({
   n, size, index, children,
 }: { n: Placed; size: { w: number; h: number }; index: number; children: React.ReactNode }) {
   return (
     <div
-      className="absolute [animation:nodeIn_var(--dur-4)_var(--ease-spring)_both]"
+      className="absolute left-0 top-0 will-change-transform"
       style={{
-        left: n.x - size.w / 2,
-        top: n.y - size.h / 2,
         width: size.w,
         minHeight: size.h,
-        animationDelay: `${Math.min(index * 45, 500)}ms`,
+        // No CSS transition: positions arrive already eased, from the single rAF loop in GraphCanvas
+        // that also draws the edges. Transitioning here as well would double-animate and, worse,
+        // desynchronise the cards from the branches connecting them.
+        transform: `translate3d(${n.x - size.w / 2}px, ${n.y - size.h / 2}px, 0)`,
       }}
     >
       <div
-        className="h-full"
-        style={{ animation: `breathe ${7 + (index % 5)}s ease-in-out ${index * 0.35}s infinite` }}
+        className="h-full [animation:nodeIn_var(--dur-4)_var(--ease-spring)_both]"
+        style={{ animationDelay: `${Math.min(index * 45, 420)}ms` }}
       >
-        {children}
+        <div
+          className="h-full"
+          style={{ animation: `breathe ${7 + (index % 5)}s ease-in-out ${index * 0.35}s infinite` }}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -177,7 +213,7 @@ function Footer({ n, color }: { n: Placed; color: string }) {
               className="flex items-center gap-1 rounded-full border border-neutral-200/80 bg-white px-1.5 py-0.5 text-[11px] font-semibold text-neutral-600"
               // Reactions pop in a beat after the node lands, so the celebration reads as a
               // RESPONSE to the node rather than as part of it.
-              style={{ animation: `nodeIn var(--dur-3) var(--ease-spring) ${240 + i * 90}ms both` }}
+              style={{ animation: `reactionIn 520ms var(--ease-spring) ${240 + i * 90}ms both` }}
             >
               <span className="text-[12px] leading-none">{r.emoji}</span>
               <span className="tabular-nums">{r.count}</span>

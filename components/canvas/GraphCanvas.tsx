@@ -18,8 +18,47 @@ const EDGE_LABEL: Record<string, string> = {
   blocks: "blocks", depends: "depends on", answers: "answers", contradicts: "contradicts",
 };
 
+/** Eases node positions toward their computed target, and returns the in-between frame.
+ *
+ *  One loop drives EVERYTHING. Transitioning the nodes in CSS was the obvious approach and it splits
+ *  the map in half: SVG path `d` cannot be transitioned, so the cards would glide to their new
+ *  angles while the branches connecting them snapped instantly — the map visibly coming apart at
+ *  exactly the moment it should read as one object reorganising. Interpolating here means nodes and
+ *  edges are drawn from the same coordinates on every frame, so they cannot disagree.
+ *
+ *  A node with no previous position is NEW: it appears at its final spot and lets the entrance
+ *  keyframe do the work. Sliding it in from (0,0) would read as it flying across the canvas. */
+function useEased(target: Placed[], ms = 900): Placed[] {
+  const [frame, setFrame] = useState(target);
+  const prev = useRef(new Map<string, { x: number; y: number }>());
+  const raf = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    const from = new Map(prev.current);
+    const t0 = performance.now();
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - t0) / ms);
+      const e = 1 - Math.pow(1 - t, 3); // easeOutCubic — leaves immediately, settles softly
+      const next = target.map((n) => {
+        const f = from.get(n.id);
+        return f ? { ...n, x: f.x + (n.x - f.x) * e, y: f.y + (n.y - f.y) * e } : n;
+      });
+      for (const n of next) prev.current.set(n.id, { x: n.x, y: n.y });
+      setFrame(next);
+      if (t < 1) raf.current = requestAnimationFrame(tick);
+    };
+
+    raf.current = requestAnimationFrame(tick);
+    return () => { if (raf.current) cancelAnimationFrame(raf.current); };
+  }, [target, ms]);
+
+  return frame;
+}
+
 export function GraphCanvas({ graph }: { graph: Graph }) {
-  const placed = useMemo(() => layout(graph.nodes), [graph.nodes]);
+  const targets = useMemo(() => layout(graph.nodes), [graph.nodes]);
+  const placed = useEased(targets);
   const byId = useMemo(() => new Map(placed.map((p) => [p.id, p])), [placed]);
   const [vp, setVp] = useState({ w: 1280, h: 720 });
   const wrapRef = useRef<HTMLDivElement>(null);
