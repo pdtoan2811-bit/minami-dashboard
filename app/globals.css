@@ -462,9 +462,15 @@ body {
 }
 
 .canvas-surface {
-  /* Off-white, not pure white: a paper field lets a white node card sit ON it with real elevation.
-     The wash is what keeps a large empty canvas from looking like an unloaded page. */
+  /* The dot grid does real work, not decoration. Without it a light canvas is just a blank page and
+     the "infinite space" metaphor never lands — it is the strongest cue that this surface is a
+     canvas rather than a document, which is why every tool in the category has one. It also gives
+     the camera something to move against, so a pan reads as travel instead of as content jumping.
+
+     Off-white field, not pure white, so a white node card sits ON it with real elevation. */
   background:
+    radial-gradient(circle at 1px 1px, rgba(16, 24, 40, 0.075) 1px, transparent 0),
     radial-gradient(1200px 700px at 50% 0%, #ffffff, rgba(255, 255, 255, 0) 70%),
     #f4f4f2;
+  background-size: 26px 26px, auto, auto;
 }

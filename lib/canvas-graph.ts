@@ -28,8 +28,20 @@ export type EdgeKind = "branch" | "blocks" | "depends" | "answers" | "contradict
 export type GNode = {
   id: string;
   kind: NodeKind;
-  /** ONE tight line — Minami compresses to ~8 words. Detail belongs in the artifact, not the map. */
+  /** ONE tight line — Minami compresses to ~8 words. The headline. */
   label: string;
+  /** A supporting line under the headline. This is most of what makes a node feel like a THING
+   *  rather than a label: the headline says what, the detail says why it matters. */
+  detail?: string;
+  /** Short chips — "scope", "pricing", "blocker". Give the map texture at a glance. */
+  tags?: string[];
+  /** Emoji reactions accumulated on this node during the call. The fun layer, attached to meaning
+   *  rather than floating: a 🎉 sits ON the decision that earned it. */
+  reactions?: { emoji: string; count: number }[];
+  /** Avatar stack — everyone involved, not just the single owner. */
+  people?: string[];
+  /** 0..1, drawn as a bar. Used by milestone and action. */
+  progress?: number;
   /** Parent id. Absent = the centre. Layout radiates from here. */
   parent?: string;
   state?: NodeState;
@@ -92,10 +104,18 @@ export const KIND_LABEL: Record<NodeKind, string> = {
 
 /** Node box size per kind, in canvas units. Decision is the hero — it gets the most room. */
 export const KIND_SIZE: Record<NodeKind, { w: number; h: number }> = {
-  topic: { w: 240, h: 84 }, decision: { w: 300, h: 116 }, action: { w: 260, h: 96 },
-  question: { w: 250, h: 88 }, requirement: { w: 250, h: 88 }, risk: { w: 250, h: 92 },
-  milestone: { w: 220, h: 84 }, quote: { w: 340, h: 132 }, meter: { w: 230, h: 118 },
-  poll: { w: 260, h: 140 }, shot: { w: 240, h: 156 },
+  topic: { w: 210, h: 62 }, decision: { w: 330, h: 168 }, action: { w: 300, h: 150 },
+  question: { w: 300, h: 140 }, requirement: { w: 300, h: 140 }, risk: { w: 300, h: 150 },
+  milestone: { w: 280, h: 132 }, quote: { w: 360, h: 186 }, meter: { w: 280, h: 168 },
+  poll: { w: 300, h: 196 }, shot: { w: 300, h: 214 },
+};
+
+/** Soft tint behind a node's header band, keyed to its state colour. Kept at very low alpha: the
+ *  tint should read as *warmth*, not as a coloured box — a saturated card is what makes a canvas
+ *  look like a toy rather than a tool. */
+export const TINT: Record<NodeState, string> = {
+  proposed: "#eff5fd", agreed: "#ecf8f3", done: "#ecf8f3",
+  blocked: "#fdefef", open: "#fdf6e7",
 };
 
 export function initialsOf(name: string): string {
@@ -173,29 +193,55 @@ export const DEMO_GRAPH: Graph = {
   focus: "d1",
   nodes: [
     { id: "root", kind: "topic", label: "QSortby pilot" },
+
     { id: "scope", kind: "topic", label: "Scope", parent: "root" },
-    { id: "r1", kind: "requirement", label: "Sort by margin, not revenue", parent: "scope", by: "Quang" },
-    { id: "d1", kind: "decision", label: "One merchant, not the full catalogue", parent: "scope", state: "agreed", at: "18:41" },
-    { id: "q1", kind: "question", label: "Which merchant goes first?", parent: "scope", state: "open" },
+    { id: "r1", kind: "requirement", label: "Sort by margin, not revenue",
+      detail: "Revenue ranking buries the products that actually pay for the store.",
+      parent: "scope", by: "Quang", tags: ["scope"], reactions: [{ emoji: "💯", count: 2 }] },
+    { id: "d1", kind: "decision", label: "One merchant, not the full catalogue",
+      detail: "Narrowed from 12 stores so we can show lift inside the pilot window.",
+      parent: "scope", state: "agreed", at: "18:41",
+      people: ["Phạm Đức Toàn", "Quang", "Linh Trần"], tags: ["scope"],
+      reactions: [{ emoji: "🎉", count: 3 }, { emoji: "🤝", count: 1 }] },
+    { id: "q1", kind: "question", label: "Which merchant goes first?",
+      detail: "Needs a store with clean margin data and enough weekly volume.",
+      parent: "scope", state: "open", tags: ["blocker"] },
 
     { id: "time", kind: "topic", label: "Timeline", parent: "root" },
-    { id: "d2", kind: "decision", label: "6-week pilot, not 3 months", parent: "time", state: "agreed", at: "12:04" },
-    { id: "m1", kind: "milestone", label: "Staging live · 14 Aug", parent: "time" },
-    { id: "a1", kind: "action", label: "Confirm staging environment", parent: "time", owner: "Linh Trần", state: "proposed" },
+    { id: "d2", kind: "decision", label: "6-week pilot, not 3 months",
+      detail: "Has to land before the September budget cycle closes.",
+      parent: "time", state: "agreed", at: "12:04", people: ["Quang", "Phạm Đức Toàn"],
+      reactions: [{ emoji: "🔥", count: 2 }] },
+    { id: "m1", kind: "milestone", label: "Staging live · 14 Aug",
+      detail: "Sort engine pointed at real catalogue data.", parent: "time", progress: 0.35 },
+    { id: "a1", kind: "action", label: "Confirm staging environment",
+      detail: "Needs the merchant's product feed and a read-only API key.",
+      parent: "time", owner: "Linh Trần", state: "proposed", progress: 0.2, tags: ["setup"] },
 
     { id: "risk", kind: "topic", label: "Risks", parent: "root", collapsed: 2 },
-    { id: "k1", kind: "risk", label: "Budget cycle closes in September", parent: "risk", state: "blocked", by: "Quang" },
+    { id: "k1", kind: "risk", label: "Budget cycle closes in September",
+      detail: "If lift isn't provable by then, the pilot doesn't get renewed.",
+      parent: "risk", state: "blocked", by: "Quang", tags: ["timing"] },
 
-    { id: "feel", kind: "topic", label: "Room", parent: "root" },
-    { id: "qt", kind: "quote", label: "If it can't show lift in six weeks, it won't survive the budget cycle.", parent: "feel", by: "Quang" },
-    { id: "mt", kind: "meter", label: "Alignment", parent: "feel", value: 0.62 },
+    { id: "feel", kind: "topic", label: "The room", parent: "root" },
+    { id: "qt", kind: "quote", label: "If it can't show lift in six weeks, it won't survive the budget cycle.",
+      parent: "feel", by: "Quang", at: "04:12", reactions: [{ emoji: "👏", count: 2 }] },
+    { id: "mt", kind: "meter", label: "Alignment", detail: "Converging since the scope narrowed.",
+      parent: "feel", value: 0.62 },
     { id: "pl", kind: "poll", label: "Start with which merchant?", parent: "feel",
-      options: [{ text: "Levents", votes: 2 }, { text: "My Kingdom", votes: 1 }] },
-    { id: "sh", kind: "shot", label: "Sort dashboard v2", parent: "feel", src: "" },
+      options: [{ text: "Levents", votes: 2 }, { text: "My Kingdom", votes: 1 }],
+      reactions: [{ emoji: "🗳️", count: 3 }] },
+    { id: "sh", kind: "shot", label: "Sort dashboard v2",
+      detail: "Shared by Linh at 09:14", parent: "feel", src: "" },
 
     { id: "own", kind: "topic", label: "Next", parent: "root" },
-    { id: "a2", kind: "action", label: "Send pilot scope doc", parent: "own", owner: "Phạm Đức Toàn", state: "proposed" },
-    { id: "a3", kind: "action", label: "Share Q2 sort metrics", parent: "own", owner: "Quang", state: "done" },
+    { id: "a2", kind: "action", label: "Send pilot scope doc",
+      detail: "One pager: success metric, window, what we need from them.",
+      parent: "own", owner: "Phạm Đức Toàn", state: "proposed", progress: 0.6, tags: ["followup"] },
+    { id: "a3", kind: "action", label: "Share Q2 sort metrics",
+      detail: "Baseline to measure the pilot against.",
+      parent: "own", owner: "Quang", state: "done", progress: 1,
+      reactions: [{ emoji: "✅", count: 1 }] },
   ],
   edges: [
     { from: "k1", to: "d2", kind: "blocks" },

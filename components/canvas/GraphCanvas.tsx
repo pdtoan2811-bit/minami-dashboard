@@ -11,7 +11,7 @@
 // on focus and pulls back when focus changes, which is what makes the map feel like it's following
 // the conversation rather than being dragged.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { layout, type Graph, type Placed } from "@/lib/canvas-graph";
+import { KIND_SIZE, layout, type Graph, type Placed } from "@/lib/canvas-graph";
 import { GraphNode } from "@/components/canvas/GraphNode";
 
 const EDGE_LABEL: Record<string, string> = {
@@ -31,23 +31,30 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
     return () => window.removeEventListener("resize", fit);
   }, []);
 
-  // Camera target: the focused node, else the centroid so a fresh map opens on its whole self.
-  const focus = graph.focus ? byId.get(graph.focus) : undefined;
-  const centre = useMemo(() => {
-    if (focus) return { x: focus.x, y: focus.y };
-    if (!placed.length) return { x: 0, y: 0 };
-    const xs = placed.map((p) => p.x), ys = placed.map((p) => p.y);
-    return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
-  }, [focus, placed]);
+  // Real bounding box of the map, node boxes included. Fitting to centre-points alone is what let
+  // the outer cards hang off the frame: a node is up to 360 units wide, so its edge sits half a card
+  // beyond the point being fitted to.
+  const bounds = useMemo(() => bbox(placed), [placed]);
 
-  // Zoom: closer when following a specific node, wider for the overview. Clamped so a big map never
-  // shrinks past legibility — an unreadable map is worse than a cropped one.
+  const focus = graph.focus ? byId.get(graph.focus) : undefined;
+  const centre = focus ? { x: focus.x, y: focus.y } : { x: bounds.cx, y: bounds.cy };
+
+  // Overview fits BOTH axes independently — a single "spread" number over-zooms whenever the map is
+  // wider than it is tall (or vice versa), which is most of the time. HEADER reserves the strip the
+  // floating title occupies so the camera never parks a node underneath it.
+  const HEADER = 104;
+  const MARGIN = 56;
+  const fitZoom = Math.min(
+    (vp.w - MARGIN * 2) / Math.max(1, bounds.w),
+    (vp.h - HEADER - MARGIN) / Math.max(1, bounds.h),
+  );
   // Following a node still has to show its NEIGHBOURS — a camera tight enough to fill the frame with
-  // one card tells a customer nothing about where it sits, which is the entire value of a map.
-  const zoom = focus ? 0.62 : Math.max(0.34, Math.min(0.7, 1100 / Math.max(800, spread(placed))));
+  // one card tells a customer nothing about where it sits, which is the whole value of a map.
+  const zoom = focus ? 0.62 : Math.max(0.22, Math.min(0.7, fitZoom));
 
   const tx = vp.w / 2 - centre.x * zoom;
-  const ty = vp.h / 2 - centre.y * zoom;
+  // Centre within the space BELOW the header rather than the whole viewport.
+  const ty = HEADER + (vp.h - HEADER) / 2 - centre.y * zoom;
 
   return (
     <div ref={wrapRef} className="absolute inset-0 overflow-hidden">
@@ -69,10 +76,14 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
   );
 }
 
-function spread(placed: Placed[]): number {
-  if (placed.length < 2) return 600;
-  const xs = placed.map((p) => p.x), ys = placed.map((p) => p.y);
-  return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) + 400;
+/** Bounding box of the whole map in canvas units, node boxes included. */
+function bbox(placed: Placed[]) {
+  if (!placed.length) return { w: 900, h: 600, cx: 0, cy: 0 };
+  const l = Math.min(...placed.map((p) => p.x - KIND_SIZE[p.kind].w / 2));
+  const r = Math.max(...placed.map((p) => p.x + KIND_SIZE[p.kind].w / 2));
+  const t = Math.min(...placed.map((p) => p.y - KIND_SIZE[p.kind].h / 2));
+  const b = Math.max(...placed.map((p) => p.y + KIND_SIZE[p.kind].h / 2));
+  return { w: r - l, h: b - t, cx: (l + r) / 2, cy: (t + b) / 2 };
 }
 
 /** Edges live in one SVG beneath the nodes. Branch edges are the tree; typed edges are the extra
