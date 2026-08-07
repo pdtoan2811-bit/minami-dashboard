@@ -496,3 +496,50 @@ body {
     #f4f4f2;
   background-size: 26px 26px, auto, auto;
 }
+
+/* ── Semantic motion vocabulary ──────────────────────────────────────────────
+   Each effect is bound to ONE meaning. That's what lets a viewer learn the
+   language without being told: shake always means trouble, glow always means
+   resolved, jump always means "look here". Reuse would destroy it. */
+
+/* A risk or blocker landing. Fast, lateral, slightly angry — it should feel like
+   the map flinched. Tuned short: anything longer reads as a broken transition. */
+@keyframes shake {
+  0%, 100% { transform: translateX(0) rotate(0); }
+  15% { transform: translateX(-7px) rotate(-0.8deg); }
+  30% { transform: translateX(6px) rotate(0.7deg); }
+  45% { transform: translateX(-4px) rotate(-0.5deg); }
+  60% { transform: translateX(3px) rotate(0.3deg); }
+  80% { transform: translateX(-1px) rotate(0); }
+}
+
+/* Emphasis — Minami pointing at something already on the map. A hop reads as
+   "this one", where a pulse would read as "this changed". */
+@keyframes jump {
+  0%, 100% { transform: translateY(0) scale(1); }
+  30% { transform: translateY(-16px) scale(1.035); }
+  55% { transform: translateY(2px) scale(0.99); }
+  75% { transform: translateY(-4px) scale(1.005); }
+}
+
+/* Resolved into something good. Slower and warmer than statePop — that one is a
+   sharp confirmation, this one is a glow that swells and settles. */
+@keyframes glowPulse {
+  0%   { box-shadow: 0 0 0 0 var(--pop); }
+  45%  { box-shadow: 0 0 26px 6px var(--pop); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* An unanswered question, waiting. Continuous and slow so it reads as PENDING
+   rather than as an alert — the map quietly remembering something is open. */
+@keyframes waiting {
+  0%, 100% { box-shadow: 0 0 0 0 var(--pop); }
+  50% { box-shadow: 0 0 0 5px transparent; }
+}
+
+/* Being absorbed into another node. Shrinks and fades while the position loop
+   flies it to its target, so the two halves of the merge read as one action. */
+@keyframes absorb {
+  0%   { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.55); }
+}

@@ -40,9 +40,16 @@ function useEased(target: Placed[], ms = 900): Placed[] {
     const tick = (now: number) => {
       const t = Math.min(1, (now - t0) / ms);
       const e = 1 - Math.pow(1 - t, 3); // easeOutCubic — leaves immediately, settles softly
+      // A merging node's destination is its TARGET's position, not its own — that flight is the
+      // whole readable part of a merge. Without it the node just fades where it stands, which reads
+      // as a delete rather than as "this became part of that".
+      const dest = new Map(target.map((n) => [n.id, n]));
       const next = target.map((n) => {
+        const to = n.mergingInto ? dest.get(n.mergingInto) : undefined;
+        const gx = to ? to.x : n.x;
+        const gy = to ? to.y : n.y;
         const f = from.get(n.id);
-        return f ? { ...n, x: f.x + (n.x - f.x) * e, y: f.y + (n.y - f.y) * e } : n;
+        return f ? { ...n, x: f.x + (gx - f.x) * e, y: f.y + (gy - f.y) * e } : { ...n, x: gx, y: gy };
       });
       for (const n of next) prev.current.set(n.id, { x: n.x, y: n.y });
       setFrame(next);

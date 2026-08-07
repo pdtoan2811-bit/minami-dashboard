@@ -181,5 +181,9 @@ function describe(a: Action): { text: string; tone: string } {
       return { text: `⊟ Collapsed branch (+${a.count})`, tone: "#a3a3a3" };
     case "celebrate":
       return { text: `✦ ${a.label}`, tone: STATE_COLOR.agreed };
+    case "fx":
+      return { text: `⌁ ${a.fx === "shake" ? "Flagged" : a.fx === "jump" ? "Pointed at" : "Highlighted"} ${a.id}`, tone: STATE_COLOR.open };
+    case "merge":
+      return { text: `⇥ Merged ${a.from} → ${a.into}`, tone: STATE_COLOR.agreed };
   }
 }

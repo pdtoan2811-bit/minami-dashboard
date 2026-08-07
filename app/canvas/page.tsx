@@ -130,6 +130,26 @@ function PlayMode({ scriptId, onPick }: { scriptId: string; onPick: (id: string)
 
   useEffect(() => { if (done) setPlaying(false); }, [done]);
 
+  // Phase two of a merge: once the absorbed node has flown to its target and faded, drop it. Doing
+  // this in the snapshot in place means stepping Back replays the merge rather than resurrecting a
+  // half-dead node.
+  useEffect(() => {
+    if (!graph.nodes.some((n) => n.mergingInto)) return;
+    const t = setTimeout(() => {
+      setHist((h) => h.map((g, k) => (k === i ? { ...g, nodes: g.nodes.filter((n) => !n.mergingInto) } : g)));
+    }, 820);
+    return () => clearTimeout(t);
+  }, [graph.nodes, i]);
+
+  // One-shot effects clear themselves; otherwise a node re-shakes on every re-render.
+  useEffect(() => {
+    if (!graph.nodes.some((n) => n.fx)) return;
+    const t = setTimeout(() => {
+      setHist((h) => h.map((g, k) => (k === i ? { ...g, nodes: g.nodes.map(({ fx, ...n }) => (void fx, n)) } : g)));
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [graph.nodes, i]);
+
   // A celebration is a moment, not a state — expire it so the overlay can't sit on the map for the
   // rest of the meeting. Applied to the snapshot in place so stepping Back doesn't resurrect it.
   useEffect(() => {
@@ -211,6 +231,22 @@ function apply(g: Graph, a: Action): Graph {
       return { ...g, nodes: g.nodes.map((n) => (n.id === a.id ? { ...n, collapsed: a.count } : n)) };
     case "celebrate":
       return { ...g, reaction: { kind: a.glyph ?? "spark", label: a.label } };
+    case "fx":
+      return { ...g, nodes: g.nodes.map((n) => (n.id === a.id ? { ...n, fx: a.fx } : n)) };
+    case "merge":
+      return {
+        ...g,
+        focus: a.into,
+        nodes: g.nodes.map((n) => {
+          if (n.id === a.from) return { ...n, mergingInto: a.into };
+          // The survivor takes on the merged wording and glows, so the absorb reads as a gain
+          // rather than a deletion.
+          if (n.id === a.into) {
+            return { ...n, label: a.label ?? n.label, detail: a.detail ?? n.detail, fx: "glow" as const };
+          }
+          return n;
+        }),
+      };
   }
 }
 

@@ -9,7 +9,7 @@
 // timer; the transcript panel renders the same steps as a log. One source, two views, so what you
 // see in the panel is exactly what drove the map.
 
-import type { GNode, NodeState } from "@/lib/canvas-graph";
+import type { GNode, NodeFx, NodeState } from "@/lib/canvas-graph";
 
 export type Action =
   | { kind: "add"; node: GNode }
@@ -17,7 +17,13 @@ export type Action =
   | { kind: "state"; id: string; state: NodeState }
   | { kind: "react"; id: string; emoji: string }
   | { kind: "collapse"; id: string; count: number }
-  | { kind: "celebrate"; label: string; glyph?: "handshake" | "highfive" | "spark" };
+  | { kind: "celebrate"; label: string; glyph?: "handshake" | "highfive" | "spark" }
+  /** Play one of the semantic effects on an existing node. */
+  | { kind: "fx"; id: string; fx: NodeFx }
+  /** Absorb `from` into `into`: it flies across, fades, and the player deletes it. Used when two
+   *  things said separately turn out to be the same thing — which is most of what a good meeting
+   *  summary does. */
+  | { kind: "merge"; from: string; into: string; label?: string; detail?: string };
 
 export type Step = {
   /** ms after the previous step. Pacing is content: a decision landing needs a beat before the
@@ -77,18 +83,26 @@ const pilot: DemoScript = {
         { kind: "add", node: { id: "q1", kind: "question", label: "Which merchant goes first?", detail: "Needs clean margin data and enough weekly volume.", parent: "scope", state: "open", tags: ["blocker"] } },
         { kind: "focus", id: "q1" },
       ] },
-    { gap: 2600, who: "Toàn", say: "Let's park that and come back with two candidates on Friday." },
+    { gap: 2600, who: "Toàn", say: "Let's park that and come back with two candidates on Friday.",
+      does: [{ kind: "fx", id: "q1", fx: "jump" }] },
     { gap: 2400, who: "Quang", say: "The other constraint is our budget cycle closes in September.",
       does: [
         { kind: "add", node: T("time", "Timeline", "root") },
         { kind: "add", node: { id: "k1", kind: "risk", label: "Budget cycle closes in September", detail: "No provable lift by then and the pilot doesn't renew.", parent: "time", state: "blocked", by: "Quang", tags: ["timing"] } },
         { kind: "focus", id: "k1" },
+        { kind: "fx", id: "k1", fx: "shake" },
       ] },
     { gap: 2800, who: "Toàn", say: "Then six weeks, not three months. That lands well before it.",
       does: [
         { kind: "add", node: { id: "d2", kind: "decision", label: "6-week pilot, not 3 months", detail: "Lands before the September budget cycle closes.", parent: "time", state: "agreed", people: ["Quang", "Phạm Đức Toàn"] } },
         { kind: "focus", id: "d2" },
         { kind: "react", id: "d2", emoji: "🔥" },
+      ] },
+    { gap: 2800, who: "Quang", say: "Actually — margin sorting and the one-store pilot are the same ask. It's one thing.",
+      does: [
+        { kind: "merge", from: "r1", into: "d1",
+          label: "Margin-sorted pilot on one merchant",
+          detail: "Margin ranking and the single-store scope were the same decision all along." },
       ] },
     { gap: 2600, who: "Quang", say: "Works. Send me the scope doc and I'll get it signed off.",
       does: [
@@ -124,6 +138,7 @@ const investor: DemoScript = {
         { kind: "add", node: T("raise", "The raise", "root") },
         { kind: "add", node: { id: "q1", kind: "question", label: "Is 18 months enough runway?", detail: "Sarah pushed back — wants 24 with the current burn.", parent: "raise", state: "open", tags: ["raise"] } },
         { kind: "focus", id: "q1" },
+        { kind: "fx", id: "q1", fx: "shake" },
       ] },
     { gap: 2800, who: "Sarah", say: "Eighteen is tight. Most of my portfolio needed twenty-four to get there." },
     { gap: 2400, who: "Toàn", say: "That's fair. I'd rather plan for twenty-four and beat it." },
@@ -186,6 +201,7 @@ const workshop: DemoScript = {
         { kind: "add", node: { id: "q1", kind: "question", label: "Does the name survive?", detail: "Parked — revisit after the visual direction is built out.", parent: "name", state: "open", tags: ["parked"] } },
         { kind: "collapse", id: "name", count: 2 },
         { kind: "focus", id: "q1" },
+        { kind: "fx", id: "q1", fx: "jump" },
       ] },
   ],
 };

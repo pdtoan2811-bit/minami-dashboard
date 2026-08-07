@@ -70,7 +70,11 @@ export function GraphNode({ n, live, index }: { n: Placed; live: boolean; index:
       <div
         className="relative flex h-full flex-col overflow-hidden rounded-[18px] bg-white"
         style={{
-          ...(pop ? { ["--pop" as string]: `${color}66`, animation: "statePop 900ms var(--ease-out) both" } : null),
+          ["--pop" as string]: `${color}66`,
+          ...(pop ? { animation: "statePop 900ms var(--ease-out) both" } : null),
+          // An unanswered question keeps a slow halo: the map quietly remembering something is open,
+          // without the urgency of an alert. Stops the moment it stops being open.
+          ...(!pop && state === "open" ? { animation: "waiting 2.8s ease-in-out infinite" } : null),
           boxShadow: isHero
             ? "0 1px 2px rgba(16,24,40,0.06), 0 18px 44px -12px rgba(16,24,40,0.22)"
             : "0 1px 2px rgba(16,24,40,0.05), 0 10px 26px -10px rgba(16,24,40,0.15)",
@@ -168,15 +172,30 @@ function Shell({
         className="h-full [animation:nodeIn_var(--dur-4)_var(--ease-spring)_both]"
         style={{ animationDelay: `${Math.min(index * 45, 420)}ms` }}
       >
-        <div
-          className="h-full"
-          style={{ animation: `breathe ${7 + (index % 5)}s ease-in-out ${index * 0.35}s infinite` }}
-        >
-          {children}
+        {/* Effect layer — its own element so a shake or a jump never fights the entrance above it
+            or the breath below it. Three transforms, three owners. */}
+        <div className="h-full" style={fxStyle(n)}>
+          <div
+            className="h-full"
+            style={{ animation: `breathe ${7 + (index % 5)}s ease-in-out ${index * 0.35}s infinite` }}
+          >
+            {children}
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+/** Maps a node's transient fx (and the merge state) onto an animation. */
+function fxStyle(n: Placed): React.CSSProperties {
+  if (n.mergingInto) return { animation: "absorb 800ms var(--ease-out) both" };
+  switch (n.fx) {
+    case "shake": return { animation: "shake 520ms var(--ease-out) both" };
+    case "jump": return { animation: "jump 700ms var(--ease-spring) both" };
+    case "glow": return { animation: "glowPulse 1100ms var(--ease-out) both" };
+    default: return {};
+  }
 }
 
 function Footer({ n, color }: { n: Placed; color: string }) {

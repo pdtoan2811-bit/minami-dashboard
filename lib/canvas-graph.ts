@@ -17,6 +17,15 @@
 
 export type NodeState = "proposed" | "agreed" | "done" | "blocked" | "open";
 
+/** One-shot effects. These are a VOCABULARY, not decoration: each is bound to a specific semantic
+ *  event, so a viewer learns what a movement means without being told. Reusing "glow" for two
+ *  different meanings would destroy that, which is why the list is short and deliberately boring to
+ *  extend. */
+export type NodeFx =
+  | "shake"   // a risk or blocker landing — jarring on purpose
+  | "jump"    // emphasis; Minami is pointing at this
+  | "glow";   // resolved into something good
+
 export type NodeKind =
   // work
   | "topic" | "decision" | "action" | "question" | "requirement" | "risk" | "milestone"
@@ -42,6 +51,12 @@ export type GNode = {
   people?: string[];
   /** 0..1, drawn as a bar. Used by milestone and action. */
   progress?: number;
+  /** Transient effect, cleared by the player after it plays. */
+  fx?: NodeFx;
+  /** Set while this node is being absorbed into another: it flies to the target and fades, then the
+   *  player deletes it. Two phases because a node that simply vanishes reads as a bug — the merge
+   *  has to be legible as "this became part of that". */
+  mergingInto?: string;
   /** Parent id. Absent = the centre. Layout radiates from here. */
   parent?: string;
   state?: NodeState;
