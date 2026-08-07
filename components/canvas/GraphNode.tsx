@@ -48,22 +48,35 @@ export function GraphNode({ n, live, index, rel }: {
 
   // Topics are signposts, not content. They stay small and quiet so the leaves they carry are what
   // the eye lands on — a map where every node shouts has no hierarchy at all.
+  // A topic is a HEADER, not a card. It was rendered as a floating white pill, which made it look
+  // like just another (oddly small) node rather than the label for everything beneath it. Depth 1 is
+  // the column title; deeper topics are section labels inside it — a clear size step, so you can
+  // tell a column from a section at a glance.
   if (isTopic) {
+    const isColumn = n.depth <= 1;
     return (
       <Shell n={n} size={size} index={index}>
-        <div
-          className="flex h-full items-center gap-2.5 rounded-full bg-white px-5"
-          style={{ boxShadow: "0 1px 2px rgba(16,24,40,0.05), 0 8px 20px -8px rgba(16,24,40,0.14)" }}
-        >
-          <span className="size-2 shrink-0 rounded-full" style={{ background: color }} />
-          <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-neutral-700">
-            {n.label}
-          </span>
-          {n.collapsed ? (
-            <span className="ml-auto shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-semibold text-neutral-500">
-              +{n.collapsed}
-            </span>
-          ) : null}
+        <div className="flex h-full items-center gap-2">
+          {isColumn ? (
+            <>
+              <span className="text-[19px] font-bold tracking-[-0.02em] text-neutral-800">{n.label}</span>
+              {n.collapsed ? (
+                <span className="rounded-full bg-neutral-200/70 px-2 py-0.5 text-[11px] font-bold text-neutral-500">
+                  +{n.collapsed}
+                </span>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-neutral-400">
+                {n.label}
+              </span>
+              <span className="h-px flex-1 bg-neutral-200" />
+              {n.collapsed ? (
+                <span className="text-[11px] font-bold text-neutral-400">+{n.collapsed}</span>
+              ) : null}
+            </>
+          )}
         </div>
       </Shell>
     );

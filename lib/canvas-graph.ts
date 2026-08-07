@@ -202,32 +202,38 @@ export function nodeHeight(n: GNode): number {
  *  emit in, so a risk can sit between two actions and it reads as a pile. Structure first, then what
  *  was settled, then what is still open, then work, then the ambient/fun nodes. */
 const KIND_ORDER: NodeKind[] = [
-  "topic", "decision", "requirement", "question", "risk",
+  "decision", "requirement", "question", "risk",
   "milestone", "action", "quote", "meter", "poll", "shot",
+  // Sub-sections LAST. With topics first, a parent's own cards rendered after an entire nested
+  // group's descendants, which made the order look random — a direct child of Scope appearing
+  // below everything inside "Other signals".
+  "topic",
 ];
 const rank = (n: GNode) => {
   const i = KIND_ORDER.indexOf(n.kind);
   return i < 0 ? KIND_ORDER.length : i;
 };
 
-const COL_W = 400;    // pitch between topic columns
-const V_GAP = 30;     // vertical gap between stacked cards
-const INDENT = 26;    // per level of nesting inside a column
-const HEAD_GAP = 22;  // under a topic header
+// FREESTYLE CLUSTERS.
+//
+// Three layouts in and the lesson is that each imposed a structure the conversation doesn't have. A
+// radial starburst had no reading order. A tree reshuffled on every add. Columns were stable and
+// readable but implied an AGENDA — a tidy parallel outline, when a real call wanders, doubles back,
+// and picks a thread up twenty minutes later.
+//
+// So: topics are loose clusters scattered across the canvas, each growing organically around its own
+// centre as material arrives. Nothing is aligned to a grid, because nothing about the conversation
+// is. What keeps it from being a mess is that it is DETERMINISTIC (same meeting, same arrangement —
+// no jitter on re-render) and that a relaxation pass guarantees nothing overlaps.
+//
+// Cluster centres sit on a golden-angle spiral. That angle is irrational, so successive clusters
+// never line up into rows or spokes — it's the standard trick for scattering points that read as
+// natural rather than as a pattern.
+const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+const CLUSTER_GAP = 460;   // breathing room between cluster centres
+const ORBIT = 250;         // how far the first child sits from its topic
+const PAD = 34;            // minimum clear space between any two cards
 
-// PARALLEL TOPIC COLUMNS, replacing the balanced tree.
-//
-// A tree looks structured and behaves badly for this: sibling heights change every time anything is
-// added, so the whole branch re-centres and every card shifts. That constant reshuffling is what
-// made positions feel arbitrary — nothing ever settled. It also forces ONE root, when a real meeting
-// runs several topics in parallel and jumps between them.
-//
-// Columns fix both. Each top-level topic owns a column; new material is APPENDED to the bottom of
-// its column, so a card never moves once placed. Nothing above it reflows, the eye keeps its place,
-// and "add to the topic we were discussing an hour ago" is just an append to that column rather
-// than a global re-layout. Topics grow independently and genuinely in parallel — which is what a
-// meeting actually does — and cross-topic relationships become short hops between neighbours
-// instead of diagonals across a starburst.
 export function layout(nodes: GNode[]): Placed[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const kids = new Map<string, GNode[]>();
@@ -241,52 +247,89 @@ export function layout(nodes: GNode[]): Placed[] {
   }
   if (!root) return [];
 
-  // Stable semantic sort: equal kinds keep the order Minami produced them in, so a column still
-  // reads chronologically within each group.
   for (const [k, list] of kids) {
     kids.set(k, list.map((n, i) => ({ n, i })).sort((a, b) => rank(a.n) - rank(b.n) || a.i - b.i).map((o) => o.n));
   }
 
   const out: Placed[] = [];
-  const columns = kids.get(root.id) ?? [];
+  const topics = kids.get(root.id) ?? [];
 
-  columns.forEach((topic, ci) => {
-    const cx = ci * COL_W;
-    let y = 0;
+  // Flatten a topic's whole subtree — in a freestyle cluster, depth stops being a coordinate. It
+  // still drives visual weight, but a grandchild orbits the topic just like a child does.
+  const subtree = (id: string, depth: number): { n: GNode; depth: number }[] => {
+    const cs = kids.get(id) ?? [];
+    return cs.flatMap((c) => [{ n: c, depth }, ...subtree(c.id, depth + 1)]);
+  };
 
-    // Column header
-    out.push({ ...topic, x: cx, y, depth: 1, branch: topic.id });
-    y += nodeHeight(topic) / 2 + HEAD_GAP;
+  topics.forEach((topic, ti) => {
+    const members = subtree(topic.id, 2);
+    // Cluster radius grows with its own population, so a busy topic claims more room instead of
+    // colliding with its neighbours.
+    // Radius grows with BOTH the index and the running population, so a busy topic pushes later
+    // clusters further out instead of letting their halos interleave — overlapping halos read as one
+    // ambiguous blob and destroy the grouping the halo exists to show.
+    const spiralR = CLUSTER_GAP * 0.6 + Math.sqrt(ti + 0.5) * (CLUSTER_GAP + members.length * 52);
+    const a = ti * GOLDEN;
+    const cx = Math.cos(a) * spiralR;
+    const cy = Math.sin(a) * spiralR * 0.72; // slightly flattened: screens are wider than they're tall
 
-    // Walk the subtree depth-first, appending downward. Depth only ever indents; it never moves
-    // anything already placed.
-    const walk = (parent: GNode, level: number) => {
-      for (const child of kids.get(parent.id) ?? []) {
-        const h = nodeHeight(child);
-        out.push({
-          ...child,
-          x: cx + level * INDENT,
-          y: Math.round(y + h / 2),
-          depth: level + 1,
-          branch: topic.id,
-        });
-        y += h + V_GAP;
-        walk(child, level + 1);
-      }
-    };
-    walk(topic, 1);
+    out.push({ ...topic, x: Math.round(cx), y: Math.round(cy), depth: 1, branch: topic.id });
+
+    members.forEach((m, mi) => {
+      const ang = mi * GOLDEN + ti;                      // offset per topic so clusters don't rhyme
+      const rad = ORBIT + Math.sqrt(mi) * 130;
+      out.push({
+        ...m.n,
+        x: Math.round(cx + Math.cos(ang) * rad),
+        y: Math.round(cy + Math.sin(ang) * rad * 0.82),
+        depth: m.depth,
+        branch: topic.id,
+      });
+    });
   });
 
-  // Centre the whole board on the origin so the camera's maths stays symmetrical.
-  if (out.length) {
-    const xs = out.map((p) => p.x);
-    const shift = (Math.min(...xs) + Math.max(...xs)) / 2;
-    for (const p of out) p.x -= shift;
-  }
-  return out;
+  return relax(out);
 }
 
-/** Vertical extent of one topic column — the camera's "establishing shot" target for a topic. */
+/** Push overlapping cards apart until none intersect. Seeded positions give the arrangement its
+ *  organic feel; this only removes collisions, so the result still looks scattered rather than
+ *  packed. Topics barely move (heavy) so clusters keep their identity while leaves give way. */
+function relax(nodes: Placed[], iterations = 90): Placed[] {
+  const box = (n: Placed) => ({ w: KIND_SIZE[n.kind].w + PAD, h: nodeHeight(n) + PAD });
+
+  for (let it = 0; it < iterations; it++) {
+    let moved = false;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const ba = box(a), bb = box(b);
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const ox = (ba.w + bb.w) / 2 - Math.abs(dx);
+        const oy = (ba.h + bb.h) / 2 - Math.abs(dy);
+        if (ox <= 0 || oy <= 0) continue;               // no overlap on at least one axis
+
+        moved = true;
+        // Separate along the axis needing the smaller correction — the shortest way out keeps the
+        // seeded composition rather than flinging cards across the canvas.
+        const aw = a.kind === "topic" ? 0.15 : 0.5;
+        const bw = b.kind === "topic" ? 0.15 : 0.5;
+        const tot = aw + bw || 1;
+        if (ox < oy) {
+          const s = (dx >= 0 ? 1 : -1) * ox;
+          a.x -= s * (aw / tot); b.x += s * (bw / tot);
+        } else {
+          const s = (dy >= 0 ? 1 : -1) * oy;
+          a.y -= s * (aw / tot); b.y += s * (bw / tot);
+        }
+      }
+    }
+    if (!moved) break;
+  }
+  for (const n of nodes) { n.x = Math.round(n.x); n.y = Math.round(n.y); }
+  return nodes;
+}
+
+/** Extent of one topic cluster — the camera's "establishing shot" target for a topic. */
 export function columnBounds(placed: Placed[], branch: string) {
   const own = placed.filter((p) => p.branch === branch);
   if (!own.length) return null;

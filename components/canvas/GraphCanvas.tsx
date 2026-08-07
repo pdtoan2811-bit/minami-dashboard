@@ -198,6 +198,25 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
 
   const branches = placed.filter((n) => n.parent && byId.has(n.parent));
 
+  // One halo per topic, covering its whole cluster.
+  const halos = placed
+    .filter((n) => n.kind === "topic")
+    .map((t) => {
+      const own = placed.filter((p) => p.branch === t.branch);
+      if (own.length < 2 || t.depth > 1) return null;
+      const M = 30;
+      const l = Math.min(...own.map((p) => p.x - KIND_SIZE[p.kind].w / 2)) - M;
+      const r = Math.max(...own.map((p) => p.x + KIND_SIZE[p.kind].w / 2)) + M;
+      const tp = Math.min(...own.map((p) => p.y - nodeHeight(p) / 2)) - M;
+      const bt = Math.max(...own.map((p) => p.y + nodeHeight(p) / 2)) + M;
+      return {
+        id: t.id, x: Math.round(l), y: Math.round(tp),
+        w: Math.round(r - l), h: Math.round(bt - tp),
+        color: branchColor(branchIds, t.branch),
+      };
+    })
+    .filter(Boolean) as { id: string; x: number; y: number; w: number; h: number; color: string }[];
+
   // A typed relationship between two DISTANT nodes cannot be drawn as a line without cutting a long
   // diagonal across whatever sits between them — and on a tree layout that is almost always several
   // cards. No curve tuning fixes it; the geometry is simply hostile. So only near pairs get a line.
@@ -216,29 +235,35 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
       style={{ left: -pad, top: -pad, width: pad * 2, height: pad * 2 }}
     >
       <g transform={`translate(${pad},${pad})`}>
+        {/* Cluster halos. A bracket assumed a vertical column; a scattered cluster needs an area,
+            not a spine. A soft rounded region behind each topic's members says "these belong
+            together" without drawing a line to every card — which at this density would be a
+            cobweb. Low alpha so it reads as grouping, never as a container you could mistake for a
+            card. */}
+        {halos.map((h) => (
+          <rect
+            key={`h-${h.id}`}
+            x={h.x} y={h.y} width={h.w} height={h.h} rx={44}
+            fill={h.color} fillOpacity={0.045}
+            stroke={h.color} strokeOpacity={0.16} strokeWidth={1.5}
+          />
+        ))}
+
+        {/* Thread lines from a topic to its members: short, soft, and only near ones. In a cluster
+            the membership is already carried by the halo, so these are a hint, not the mechanism. */}
         {branches.map((n) => {
           const p = byId.get(n.parent!)!;
-          // Orthogonal ELBOW, not a curve. In a column outline, hierarchy is already carried by
-          // indentation and stacking order — a swooping bezier from a card up to its header just
-          // adds a tail that reads as noise. A rail dropping from the parent's left edge with a
-          // short tick into each child is how every outline, file tree and org chart does it, and it
-          // stays legible however long the column gets.
-          // Hierarchy is carried by the LINES, not by the cards. Weight tapers with depth (a trunk
-          // is thicker than a twig) and each subtree keeps one hue, so you can see at a glance both
-          // how deep something sits and which branch it belongs to. Before this every relationship
-          // was the same 2px grey, which is why the structure was unreadable.
-          const w = Math.max(1.25, 4.5 - n.depth * 1.15);
-          const hue = branchColor(branchIds, n.branch);
+          const d = Math.hypot(n.x - p.x, n.y - p.y);
+          if (d > 560) return null;
           return (
             <path
               key={`b-${n.id}`}
-              d={elbow(p, n)}
+              d={curve(...anchor(p, n))}
               fill="none"
-              stroke={hue}
-              strokeOpacity={Math.max(0.2, 0.5 - n.depth * 0.08)}
-              strokeWidth={Math.max(1.25, w)}
+              stroke={branchColor(branchIds, n.branch)}
+              strokeOpacity={0.28}
+              strokeWidth={Math.max(1.2, 3 - n.depth * 0.55)}
               strokeLinecap="round"
-              strokeLinejoin="round"
             />
           );
         })}
@@ -311,6 +336,18 @@ function curve(x1: number, y1: number, x2: number, y2: number): string {
   const dx = Math.round(Math.abs(x2 - x1) * 0.42);
   const s = x2 >= x1 ? 1 : -1;
   return `M ${x1} ${y1} C ${x1 + dx * s} ${y1}, ${x2 - dx * s} ${y2}, ${x2} ${y2}`;
+}
+
+/** Is `n` anywhere beneath `ancestorId`? Walks up rather than down so it stays cheap on a flat list. */
+function inSubtree(all: Placed[], n: Placed, ancestorId: string): boolean {
+  const byId = new Map(all.map((p) => [p.id, p]));
+  let cur: Placed | undefined = n;
+  let guard = 0;
+  while (cur?.parent && guard++ < 24) {
+    if (cur.parent === ancestorId) return true;
+    cur = byId.get(cur.parent);
+  }
+  return false;
 }
 
 /** Rail-and-tick connector for the column layout: drop a vertical line from just inside the
