@@ -35,6 +35,7 @@
 // is free on all pages, identical regardless of page layout, and thumb-reachable on mobile.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 
 type SpawnerPin = {
   name: string;
@@ -144,6 +145,13 @@ const STYLE: Record<Level, {
 const shortName = (email: string) => email.split("@")[0];
 
 export function AccountStatus() {
+  // /canvas is a BROADCAST surface — Recall.ai streams it as Minami's screen share into a meeting
+  // with clients and investors in it. Operator chrome must never render there: an amber
+  // "you're on the wrong Claude account" card appearing over a live pitch is the exact opposite of
+  // what this component is for. Suppressed at the route level rather than by the page, because the
+  // whole point of this widget is that it mounts globally and nothing has to remember it exists.
+  const onCanvas = usePathname()?.startsWith("/canvas") ?? false;
+
   const [live, setLive] = useState<Live | null>(null);
   const [switching, setSwitching] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -308,6 +316,7 @@ export function AccountStatus() {
   }, []);
 
   // ── render ────────────────────────────────────────────────────────────────────────────────────
+  if (onCanvas) return null;                            // broadcast surface — see note at top of fn
   if (!live) return null;                               // no data — say nothing
   const unhealthy = level !== "ok";
   if (!unhealthy && !recovered) return null;            // healthy at rest — no permanent green nag
