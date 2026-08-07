@@ -16,12 +16,19 @@ import { KIND_LABEL, STATE_COLOR } from "@/lib/canvas-graph";
 export type Spoken = { who: string; say: string; does?: Action[] };
 
 export function TranscriptPanel({
-  script, spoken, playing, onToggle, onRestart, onPick,
+  script, spoken, playing, step, total, nextLine, nextWho,
+  onToggle, onNext, onBack, onRestart, onPick,
 }: {
   script: DemoScript;
   spoken: Spoken[];
   playing: boolean;
+  step: number;
+  total: number;
+  nextLine?: string;
+  nextWho?: string;
   onToggle: () => void;
+  onNext: () => void;
+  onBack: () => void;
   onRestart: () => void;
   onPick: (id: string) => void;
 }) {
@@ -60,25 +67,66 @@ export function TranscriptPanel({
         </div>
         <p className="mt-2 text-[11.5px] leading-snug text-neutral-500">{script.blurb}</p>
 
-        <div className="mt-2.5 flex gap-1.5">
+        <div className="mt-2.5 flex items-center gap-1.5">
+          <button
+            onClick={onBack}
+            disabled={step === 0}
+            className="rounded-lg bg-neutral-100 px-2.5 py-1.5 text-[12px] font-semibold text-neutral-600 enabled:hover:bg-neutral-200 disabled:opacity-40"
+            title="Previous line (←)"
+          >
+            ←
+          </button>
+          <button
+            onClick={onNext}
+            disabled={step >= total}
+            className="flex-1 rounded-lg bg-neutral-900 px-3 py-1.5 text-[12px] font-semibold text-white enabled:hover:bg-neutral-800 disabled:opacity-40"
+            title="Next line (→)"
+          >
+            Next line →
+          </button>
           <button
             onClick={onToggle}
-            className="flex-1 rounded-lg bg-neutral-900 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-neutral-800"
+            disabled={step >= total}
+            className="rounded-lg bg-neutral-100 px-2.5 py-1.5 text-[12px] font-semibold text-neutral-600 enabled:hover:bg-neutral-200 disabled:opacity-40"
+            title="Auto-play (space)"
           >
-            {playing ? "Pause" : "Play"}
+            {playing ? "❚❚" : "▶"}
           </button>
           <button
             onClick={onRestart}
-            className="rounded-lg bg-neutral-100 px-3 py-1.5 text-[12px] font-semibold text-neutral-600 hover:bg-neutral-200"
+            className="rounded-lg bg-neutral-100 px-2.5 py-1.5 text-[12px] font-semibold text-neutral-600 hover:bg-neutral-200"
+            title="Back to blank"
           >
-            Restart
+            ↺
           </button>
+        </div>
+
+        {/* Progress + what's queued. Knowing the NEXT line before you press it is what makes manual
+            stepping usable for a demo — you can talk over it instead of reading it cold. */}
+        <div className="mt-2.5">
+          <div className="flex items-baseline justify-between text-[11px] font-semibold text-neutral-400">
+            <span>{step === 0 ? "Blank canvas" : `Line ${step} of ${total}`}</span>
+            <span className="tabular-nums">{Math.round((step / Math.max(1, total)) * 100)}%</span>
+          </div>
+          <div className="mt-1 h-1 rounded-full bg-neutral-100">
+            <span
+              className="block h-1 rounded-full bg-neutral-800 transition-[width] duration-[var(--dur-3)]"
+              style={{ width: `${(step / Math.max(1, total)) * 100}%` }}
+            />
+          </div>
+          {nextLine ? (
+            <p className="mt-2 line-clamp-2 text-[11.5px] leading-snug text-neutral-400">
+              <span className="font-semibold text-neutral-500">Next · {nextWho}:</span> {nextLine}
+            </p>
+          ) : (
+            <p className="mt-2 text-[11.5px] font-semibold text-neutral-400">Meeting complete.</p>
+          )}
         </div>
       </header>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {spoken.length === 0 ? (
-          <p className="text-[12.5px] text-neutral-400">Press play to run the meeting.</p>
+          <p className="text-[12.5px] leading-snug text-neutral-400">Blank canvas. Press <span className="font-semibold text-neutral-500">Next line</span> (or →) to advance one line at a time, or ▶ to auto-play.</p>
         ) : null}
 
         {spoken.map((s, i) => (

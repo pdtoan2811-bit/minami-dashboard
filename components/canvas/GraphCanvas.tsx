@@ -24,11 +24,20 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
   const [vp, setVp] = useState({ w: 1280, h: 720 });
   const wrapRef = useRef<HTMLDivElement>(null);
 
+  // Measure the CONTAINER, not the window. In play mode the operator panel takes 380px, so a camera
+  // fitted to window width centres the map behind the panel and pushes cards off the visible edge.
+  // A ResizeObserver also covers the panel appearing/disappearing, which no window resize fires for.
   useEffect(() => {
-    const fit = () => setVp({ w: window.innerWidth, h: window.innerHeight });
+    const el = wrapRef.current;
+    if (!el) return;
+    const fit = () => {
+      const r = el.getBoundingClientRect();
+      setVp({ w: Math.max(1, r.width), h: Math.max(1, r.height) });
+    };
     fit();
-    window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   // Real bounding box of the map, node boxes included. Fitting to centre-points alone is what let

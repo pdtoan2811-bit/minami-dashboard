@@ -50,11 +50,12 @@ const pilot: DemoScript = {
   blurb: "Customer call · scope, timeline, a decision landing",
   title: "QSortby · pilot scoping",
   subtitle: "with QDN Digital",
-  seed: [T("root", "QSortby pilot"), T("scope", "Scope", "root"), T("time", "Timeline", "root")],
+  seed: [T("root", "QSortby pilot")],
   steps: [
     { gap: 0, who: "Quang", say: "So the thing that actually bothers us — the sort puts our worst-margin products on page one." },
     { gap: 2600, who: "Toàn", say: "Right, because it's ranking on revenue. Margin never enters it.",
       does: [
+        { kind: "add", node: T("scope", "Scope", "root") },
         { kind: "add", node: { id: "r1", kind: "requirement", label: "Sort by margin, not revenue", detail: "Revenue ranking buries the products that actually pay for the store.", parent: "scope", by: "Quang", tags: ["scope"] } },
         { kind: "focus", id: "r1" },
       ] },
@@ -79,6 +80,7 @@ const pilot: DemoScript = {
     { gap: 2600, who: "Toàn", say: "Let's park that and come back with two candidates on Friday." },
     { gap: 2400, who: "Quang", say: "The other constraint is our budget cycle closes in September.",
       does: [
+        { kind: "add", node: T("time", "Timeline", "root") },
         { kind: "add", node: { id: "k1", kind: "risk", label: "Budget cycle closes in September", detail: "No provable lift by then and the pilot doesn't renew.", parent: "time", state: "blocked", by: "Quang", tags: ["timing"] } },
         { kind: "focus", id: "k1" },
       ] },
@@ -103,11 +105,12 @@ const investor: DemoScript = {
   blurb: "External · pushback, alignment moving in real time",
   title: "Ecom Intel · investor intro",
   subtitle: "Minami announced · recording",
-  seed: [T("root", "Ecom Intel"), T("trac", "Traction", "root"), T("raise", "The raise", "root")],
+  seed: [T("root", "Ecom Intel")],
   steps: [
     { gap: 0, who: "Sarah", say: "Walk me through what's actually working. Not the deck — what's working." },
     { gap: 2600, who: "Toàn", say: "Retention. Merchants who connect two sources stay at ninety-one percent after six months.",
       does: [
+        { kind: "add", node: T("trac", "Traction", "root") },
         { kind: "add", node: { id: "t1", kind: "requirement", label: "91% 6-month retention, 2+ sources", detail: "Single-source merchants churn at roughly triple the rate.", parent: "trac", by: "Phạm Đức Toàn", tags: ["metric"] } },
         { kind: "focus", id: "t1" },
         { kind: "add", node: { id: "mt", kind: "meter", label: "Alignment", detail: "Reading the room.", parent: "root", value: 0.15 } },
@@ -118,6 +121,7 @@ const investor: DemoScript = {
     { gap: 2400, who: "Sarah", say: "Okay. That's more interesting. And the timeline you're raising against?" },
     { gap: 2600, who: "Toàn", say: "Eighteen months to a Series A metric.",
       does: [
+        { kind: "add", node: T("raise", "The raise", "root") },
         { kind: "add", node: { id: "q1", kind: "question", label: "Is 18 months enough runway?", detail: "Sarah pushed back — wants 24 with the current burn.", parent: "raise", state: "open", tags: ["raise"] } },
         { kind: "focus", id: "q1" },
       ] },
@@ -145,11 +149,12 @@ const workshop: DemoScript = {
   blurb: "Creative · mood board, a poll, the fun nodes",
   title: "Ecom Intel · brand direction",
   subtitle: "workshop with Ownego",
-  seed: [T("root", "Brand direction"), T("look", "Look & feel", "root"), T("name", "Naming", "root")],
+  seed: [T("root", "Brand direction")],
   steps: [
     { gap: 0, who: "Linh", say: "I pulled a few references. This first one is what I keep coming back to." },
     { gap: 2400, who: "Toàn", say: "The restraint is right. It doesn't look like a dashboard company.",
       does: [
+        { kind: "add", node: T("look", "Look & feel", "root") },
         { kind: "add", node: { id: "s1", kind: "shot", label: "Reference · editorial grid", detail: "Shared by Linh at 03:12", parent: "look", src: "" } },
         { kind: "focus", id: "s1" },
       ] },
@@ -170,6 +175,7 @@ const workshop: DemoScript = {
     { gap: 3000, who: "Linh", say: "On the name — I still think 'Intel' makes people think chips." },
     { gap: 2400, who: "Toàn", say: "It's the clearest thing we've had though. Everything else needs explaining.",
       does: [
+        { kind: "add", node: T("name", "Naming", "root") },
         { kind: "add", node: { id: "qt", kind: "quote", label: "Everything else needs explaining. That's the whole argument.", parent: "name", by: "Phạm Đức Toàn", at: "11:20" } },
         { kind: "focus", id: "qt" },
         { kind: "react", id: "qt", emoji: "👏" },

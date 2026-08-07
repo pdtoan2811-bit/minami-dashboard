@@ -83,35 +83,74 @@ function Stage({ graph }: { graph: Graph }) {
  *  panel claims Minami did is necessarily what actually happened to the graph. */
 function PlayMode({ scriptId, onPick }: { scriptId: string; onPick: (id: string) => void }) {
   const script = DEMO_BY_ID.get(scriptId) ?? DEMOS[0];
+
+  // History of snapshots rather than a single mutating graph: history[i] is the map after i steps.
+  // Keeping every state is what makes Back possible at all — the reducer is one-way, so rewinding a
+  // mutated graph would mean inventing inverse actions for every kind. Snapshots are a handful of
+  // small objects and buy exact scrubbing for free.
+  const [hist, setHist] = useState<Graph[]>(() => [base(script)]);
   const [i, setI] = useState(0);
-  const [playing, setPlaying] = useState(true);
-  const [spoken, setSpoken] = useState<Spoken[]>([]);
-  const [graph, setGraph] = useState<Graph>(() => base(script));
+  // Starts PAUSED and blank. You asked to drive it, and a demo that runs off on its own the moment
+  // it loads can't be driven.
+  const [playing, setPlaying] = useState(false);
+
+  const graph = hist[i] ?? hist[hist.length - 1];
+  const done = i >= script.steps.length;
+  const spoken: Spoken[] = useMemo(
+    () => script.steps.slice(0, i).map((s) => ({ who: s.who, say: s.say, does: s.does })),
+    [script, i],
+  );
 
   const reset = useCallback(() => {
-    setI(0); setSpoken([]); setGraph(base(script)); setPlaying(true);
+    setHist([base(script)]); setI(0); setPlaying(false);
   }, [script]);
 
   useEffect(() => { reset(); }, [scriptId, reset]);
 
-  useEffect(() => {
-    if (!playing || i >= script.steps.length) return;
-    const step = script.steps[i];
-    const timer = setTimeout(() => {
-      setSpoken((s) => [...s, { who: step.who, say: step.say, does: step.does }]);
-      if (step.does?.length) setGraph((g) => step.does!.reduce(apply, g));
-      setI((n) => n + 1);
-    }, i === 0 ? 400 : step.gap);
-    return () => clearTimeout(timer);
-  }, [i, playing, script]);
+  const next = useCallback(() => {
+    setI((n) => {
+      if (n >= script.steps.length) return n;
+      setHist((h) => {
+        if (h[n + 1]) return h;                       // already computed — Back then Next reuses it
+        const step = script.steps[n];
+        const g = step.does?.length ? step.does.reduce(apply, h[n]) : { ...h[n], reaction: null };
+        return [...h.slice(0, n + 1), g];
+      });
+      return n + 1;
+    });
+  }, [script]);
 
-  // A celebration is a moment, not a state. The producer would clear it; in playback we expire it
-  // ourselves so the overlay can't sit on the map for the rest of the meeting.
+  const back = useCallback(() => setI((n) => Math.max(0, n - 1)), []);
+
+  useEffect(() => {
+    if (!playing || done) return;
+    const t = setTimeout(next, i === 0 ? 400 : script.steps[i].gap);
+    return () => clearTimeout(t);
+  }, [playing, done, i, next, script]);
+
+  useEffect(() => { if (done) setPlaying(false); }, [done]);
+
+  // A celebration is a moment, not a state — expire it so the overlay can't sit on the map for the
+  // rest of the meeting. Applied to the snapshot in place so stepping Back doesn't resurrect it.
   useEffect(() => {
     if (!graph.reaction) return;
-    const t = setTimeout(() => setGraph((g) => ({ ...g, reaction: null })), 2600);
+    const t = setTimeout(
+      () => setHist((h) => h.map((g, k) => (k === i ? { ...g, reaction: null } : g))),
+      2600,
+    );
     return () => clearTimeout(t);
-  }, [graph.reaction]);
+  }, [graph.reaction, i]);
+
+  // Arrow keys: stepping through a demo with the mouse gets old within one run.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight") { setPlaying(false); next(); }
+      if (e.key === "ArrowLeft") { setPlaying(false); back(); }
+      if (e.key === " ") { e.preventDefault(); setPlaying((p) => !p); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [next, back]);
 
   return (
     <main className="flex h-dvh w-dvw overflow-hidden">
@@ -121,8 +160,14 @@ function PlayMode({ scriptId, onPick }: { scriptId: string; onPick: (id: string)
       <TranscriptPanel
         script={script}
         spoken={spoken}
-        playing={playing && i < script.steps.length}
+        playing={playing && !done}
+        step={i}
+        total={script.steps.length}
+        nextLine={script.steps[i]?.say}
+        nextWho={script.steps[i]?.who}
         onToggle={() => setPlaying((p) => !p)}
+        onNext={() => { setPlaying(false); next(); }}
+        onBack={() => { setPlaying(false); back(); }}
         onRestart={reset}
         onPick={onPick}
       />
