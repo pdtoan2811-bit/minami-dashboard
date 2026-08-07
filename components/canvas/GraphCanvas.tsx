@@ -249,9 +249,26 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
           />
         ))}
 
-        {/* No thread lines. The halo already says what belongs to a cluster, and with a label
-            sitting above its own members the relationship is spatial — a line to every card added a
-            swooping wire per node and read as a cobweb. Removing them is the fix, not tuning them. */}
+        {/* The mindmap edges. Now that a topic is a root node on the LEFT with its cards fanning
+            right, an edge is a short horizontal hop — which is the geometry a curve is actually good
+            at. The earlier versions failed because the layout was wrong for them: a swooping wire up
+            to a heading, or a diagonal across a scatter. Same curve function, finally in a layout
+            that suits it. */}
+        {branches.map((n) => {
+          const p = byId.get(n.parent!);
+          if (!p) return null;
+          return (
+            <path
+              key={`b-${n.id}`}
+              d={curve(...anchor(p, n))}
+              fill="none"
+              stroke={branchColor(branchIds, n.branch)}
+              strokeOpacity={0.42}
+              strokeWidth={2}
+              strokeLinecap="round"
+            />
+          );
+        })}
 
         {/* Merge beam. The absorbed node flying across was legible only once it had already moved —
             by which point the relationship it was expressing was over. A bright link drawn between

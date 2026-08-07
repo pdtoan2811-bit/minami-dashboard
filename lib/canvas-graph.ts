@@ -231,12 +231,11 @@ const rank = (n: GNode) => {
 // So clusters pack their own cards into a small grid, then flow across the board left-to-right,
 // wrapping into rows, with a deterministic offset per cluster so the rows never line up into a
 // spreadsheet. Same meeting, same board — no jitter between renders.
-const CARD_GAP_X = 34;
-const CARD_GAP_Y = 30;
-const CLUSTER_GAP_X = 130;
-const CLUSTER_GAP_Y = 120;
-const BOARD_W = 2900;      // wrap width; the board grows downward, like a real one
-const LABEL_H = 54;        // room above a cluster for its heading
+const CARD_GAP_Y = 26;      // between stacked cards in a cluster
+const STEM = 110;           // gap between a topic node and its cards — room for the edge to read
+const CLUSTER_GAP_X = 170;
+const CLUSTER_GAP_Y = 110;
+const BOARD_W = 3400;       // wrap width; the board grows downward, like a real one
 
 export function layout(nodes: GNode[]): Placed[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -263,27 +262,26 @@ export function layout(nodes: GNode[]): Placed[] {
            (kids.get(n.id) ?? []).some((c) => c.kind !== "topic"),
   );
 
-  // ── pack each cluster internally ──────────────────────────────────────────────────────────────
-  type Packed = { topic: GNode; cells: { n: GNode; dx: number; dy: number }[]; w: number; h: number };
+  // ── each cluster is a small left-to-right mindmap ─────────────────────────────────────────────
+  // The topic is a ROOT NODE on the left; its cards fan out to the right, connected by edges. That's
+  // the mindmap logic — a heading floating above a tidy grid described the grouping but never showed
+  // the relationship, and with no edges at all the cards read as an unattached pile.
+  type Packed = { topic: GNode; cells: { n: GNode; dy: number }[]; w: number; h: number; cardX: number };
   const packed: Packed[] = clusters.map((topic) => {
     const members = (kids.get(topic.id) ?? []).filter((c) => c.kind !== "topic");
-    // One column up to three cards, two beyond — keeps a small group tall-and-narrow (easy to scan)
-    // and stops a big one becoming an unreadable ribbon.
-    const cols = members.length > 3 ? 2 : 1;
-    const colW = Math.max(...members.map((m) => KIND_SIZE[m.kind].w));
-    const colHeights = new Array(cols).fill(0);
+    const cardW = Math.max(...members.map((m) => KIND_SIZE[m.kind].w));
+    let dy = 0;
     const cells = members.map((n) => {
-      // Shortest column first: keeps the two columns level instead of one trailing off the bottom.
-      const c = colHeights.indexOf(Math.min(...colHeights));
-      const dx = c * (colW + CARD_GAP_X);
-      const dy = colHeights[c];
-      colHeights[c] += nodeHeight(n) + CARD_GAP_Y;
-      return { n, dx, dy };
+      const cell = { n, dy: dy + nodeHeight(n) / 2 };
+      dy += nodeHeight(n) + CARD_GAP_Y;
+      return cell;
     });
+    const topicW = KIND_SIZE.topic.w;
     return {
       topic, cells,
-      w: cols * colW + (cols - 1) * CARD_GAP_X,
-      h: Math.max(...colHeights) - CARD_GAP_Y + LABEL_H,
+      cardX: topicW + STEM,
+      w: topicW + STEM + cardW,
+      h: Math.max(dy - CARD_GAP_Y, KIND_SIZE.topic.h),
     };
   });
 
@@ -295,19 +293,23 @@ export function layout(nodes: GNode[]): Placed[] {
     if (x > 0 && x + p.w > BOARD_W) { x = 0; y += rowH + CLUSTER_GAP_Y; rowH = 0; row++; }
     // Deterministic offset — enough to break the grid, never enough to look accidental. Derived from
     // the index so it's stable across renders.
-    const wobble = ((i * 37) % 11 - 5) * 9 + (row % 2 ? 26 : 0);
+    const ox = x + ((i * 37) % 11 - 5) * 9 + (row % 2 ? 34 : 0);
+    const oy = y + ((i * 53) % 7 - 3) * 10;
 
-    const ox = x + wobble;
-    const oy = y + ((i * 53) % 7 - 3) * 8;
-
-    out.push({ ...p.topic, x: Math.round(ox + p.w / 2), y: Math.round(oy), depth: 1, branch: p.topic.id });
+    // Topic sits at the vertical CENTRE of what it carries, so the edges fan symmetrically instead
+    // of all raking downward from a corner.
+    out.push({
+      ...p.topic,
+      x: Math.round(ox + KIND_SIZE.topic.w / 2),
+      y: Math.round(oy + p.h / 2),
+      depth: 1, branch: p.topic.id,
+    });
     for (const c of p.cells) {
       out.push({
         ...c.n,
-        x: Math.round(ox + c.dx + KIND_SIZE[c.n.kind].w / 2),
-        y: Math.round(oy + LABEL_H + c.dy + nodeHeight(c.n) / 2),
-        depth: 2,
-        branch: p.topic.id,
+        x: Math.round(ox + p.cardX + KIND_SIZE[c.n.kind].w / 2),
+        y: Math.round(oy + c.dy),
+        depth: 2, branch: p.topic.id,
       });
     }
 
