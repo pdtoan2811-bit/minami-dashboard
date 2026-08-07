@@ -142,8 +142,20 @@ export function initialsOf(name: string): string {
 }
 
 // ── Layout ──────────────────────────────────────────────────────────────────────────────────────
-// Radial tree. Each child gets an angular slice of its parent's sector, so siblings never collide
-// and the map keeps the "radiating from a centre" read at any depth. Ring radius grows per level.
+// A BALANCED HORIZONTAL TREE, not a radial starburst.
+//
+// Radial looks like a mind map and reads like nothing: nodes land at arbitrary angles, so there is
+// no entry point and no scan order, and long branches sweep across the middle crossing everything
+// else. It also put text baselines at every position on a circle, which is exactly as hard to read
+// as it sounds.
+//
+// This is what actual mind-map tools do. The root sits at the centre; top-level branches alternate
+// right and left; each side is a tidy tree where depth moves horizontally and siblings STACK
+// vertically. The consequences are all the ones we want:
+//   · a real reading order — out from the middle, top to bottom within a branch
+//   · siblings cannot overlap, by construction: each is allotted its own subtree height
+//   · every card shares a baseline with its siblings, so the eye tracks along a row
+//   · edges become short horizontal hops instead of long diagonal sweeps
 export type Placed = GNode & {
   x: number; y: number;
   /** 0 = root. Drives edge weight, so hierarchy is legible from the lines alone. */
@@ -163,8 +175,8 @@ export function branchColor(branchIds: string[], id: string): string {
   return BRANCH_HUES[(i < 0 ? 0 : i) % BRANCH_HUES.length];
 }
 
-const MIN_RING = [0, 430, 380, 340];
-const GAP = 64; // canvas units of clear space between siblings
+const COL = 420;   // horizontal distance per depth level
+const V_GAP = 34;  // clear space between stacked siblings
 
 export function layout(nodes: GNode[]): Placed[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -179,43 +191,59 @@ export function layout(nodes: GNode[]): Placed[] {
   }
   if (!root) return [];
 
-  const out: Placed[] = [{ ...root, x: 0, y: 0, depth: 0, branch: root.id }];
-
-  const place = (parentId: string, px: number, py: number, from: number, to: number, depth: number) => {
-    const list = kids.get(parentId) ?? [];
-    if (!list.length) return;
-
-    const r = MIN_RING[Math.min(depth, MIN_RING.length - 1)];
-    const widest = Math.max(...list.map((c) => KIND_SIZE[c.kind].w));
-
-    // Siblings must not overlap, and there are two ways to buy the room: push the ring further out,
-    // or widen the angular slice. Pushing the ring is what a naive fix does, and it explodes — a
-    // 3-child branch inside a 72° slice needs an ~870-unit radius, which scatters the map into empty
-    // space. Widening the slice keeps the map DENSE and readable; the cost is that a deep branch can
-    // encroach on a distant one, which on an infinite canvas is invisible and free.
-    const minStep = (widest + GAP) / r;               // radians one child needs at this ring
-    const span = Math.max(to - from, list.length * minStep);
-    const mid = (from + to) / 2;
-    const step = span / list.length;
-
-    list.forEach((child, i) => {
-      // Centre of this child's slice — keeps a lone child straight out from its parent rather than
-      // hugging one edge of the sector.
-      const a = mid - span / 2 + step * (i + 0.5);
-      // Rounded: sub-pixel coordinates serialize differently on server and client, which React
-      // reports as a hydration mismatch on every path `d` and every node offset. Integers also
-      // spare the compositor a subpixel layer per node.
-      const x = Math.round(px + Math.cos(a) * r);
-      const y = Math.round(py + Math.sin(a) * r);
-      // depth 1 nodes ARE the branches; everything deeper inherits its ancestor's branch id.
-      const branch = depth === 1 ? child.id : (out.find((o) => o.id === parentId)?.branch ?? child.id);
-      out.push({ ...child, x, y, depth, branch });
-      place(child.id, x, y, a - step / 2, a + step / 2, depth + 1);
-    });
+  /** Vertical room a subtree needs: its own height, or its children stacked — whichever is larger.
+   *  Measuring before placing is what makes overlap impossible rather than merely unlikely. */
+  const heightOf = (id: string): number => {
+    const node = byId.get(id);
+    const own = node ? KIND_SIZE[node.kind].h : 80;
+    const cs = kids.get(id) ?? [];
+    if (!cs.length) return own;
+    const stacked = cs.reduce((sum, c) => sum + heightOf(c.id), 0) + V_GAP * (cs.length - 1);
+    return Math.max(own, stacked);
   };
 
-  // Start at -90° so the first branch goes up: a map that opens upward reads as growth.
-  place(root.id, 0, 0, -Math.PI / 2, Math.PI * 1.5, 1);
+  const out: Placed[] = [];
+
+  const place = (node: GNode, depth: number, dir: 1 | -1, top: number, branch: string) => {
+    const h = heightOf(node.id);
+    out.push({
+      ...node,
+      x: dir * depth * COL,
+      y: Math.round(top + h / 2),
+      depth,
+      branch,
+    });
+
+    const cs = kids.get(node.id) ?? [];
+    if (!cs.length) return;
+    // Centre the children block against the parent's own span, so a parent always sits level with
+    // the middle of what it carries rather than with its first child.
+    const total = cs.reduce((sum, c) => sum + heightOf(c.id), 0) + V_GAP * (cs.length - 1);
+    let y = top + (h - total) / 2;
+    for (const c of cs) {
+      place(c, depth + 1, dir, y, depth === 0 ? c.id : branch);
+      y += heightOf(c.id) + V_GAP;
+    }
+  };
+
+  // Split top-level branches between the two sides. Odd counts get the extra on the right, which is
+  // where the eye goes first.
+  const top = kids.get(root.id) ?? [];
+  const rightCount = Math.ceil(top.length / 2);
+  const sides: [GNode[], 1 | -1][] = [[top.slice(0, rightCount), 1], [top.slice(rightCount), -1]];
+
+  out.push({ ...root, x: 0, y: 0, depth: 0, branch: root.id });
+
+  for (const [group, dir] of sides) {
+    if (!group.length) continue;
+    const total = group.reduce((sum, c) => sum + heightOf(c.id), 0) + V_GAP * (group.length - 1);
+    let y = -total / 2; // each side is centred on the root
+    for (const c of group) {
+      place(c, 1, dir, y, c.id);
+      y += heightOf(c.id) + V_GAP;
+    }
+  }
+
   return out;
 }
 

@@ -186,7 +186,7 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
           return (
             <path
               key={`b-${n.id}`}
-              d={curve(p.x, p.y, n.x, n.y)}
+              d={curve(...anchor(p, n))}
               fill="none"
               stroke={hue}
               strokeOpacity={Math.max(0.22, 0.62 - n.depth * 0.13)}
@@ -252,11 +252,28 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
   );
 }
 
-/** Vertical-tangent cubic: leaves the parent and meets the child softly, so the tree reads as
- *  branching rather than as a wire diagram. */
+/** HORIZONTAL-tangent cubic. The old version used vertical tangents regardless of direction, so any
+ *  sideways branch left its parent going *down*, looped, and came back up — which is most of why the
+ *  edges looked wrong. In a left-to-right tree the flow is horizontal, so the tangents must be too:
+ *  the line leaves the parent's edge sideways and arrives at the child's edge sideways, and never
+ *  crosses itself.
+ *
+ *  Rounded for the same reason node coordinates are: full-precision floats serialize differently
+ *  server- and client-side and React flags the path as a hydration mismatch. */
 function curve(x1: number, y1: number, x2: number, y2: number): string {
-  // Rounded for the same reason the node coordinates are: full-precision floats serialize
-  // differently server- and client-side and React flags the whole path as a hydration mismatch.
-  const dy = Math.round((y2 - y1) * 0.5);
-  return `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`;
+  const dx = Math.round(Math.abs(x2 - x1) * 0.42);
+  const s = x2 >= x1 ? 1 : -1;
+  return `M ${x1} ${y1} C ${x1 + dx * s} ${y1}, ${x2 - dx * s} ${y2}, ${x2} ${y2}`;
+}
+
+/** Anchor an edge to the card's left/right EDGE rather than its centre, so lines emerge from the
+ *  side of a node instead of appearing to run underneath it. */
+function anchor(from: Placed, to: Placed): [number, number, number, number] {
+  const fw = KIND_SIZE[from.kind].w / 2;
+  const tw = KIND_SIZE[to.kind].w / 2;
+  const rightward = to.x >= from.x;
+  return [
+    from.x + (rightward ? fw : -fw), from.y,
+    to.x + (rightward ? -tw : tw), to.y,
+  ];
 }
