@@ -179,16 +179,11 @@ export function branchColor(branchIds: string[], id: string): string {
   return BRANCH_HUES[(i < 0 ? 0 : i) % BRANCH_HUES.length];
 }
 
-const COL = 420;   // horizontal distance per depth level
-const V_GAP = 44;  // clear space between stacked siblings
-
 /** CONTENT-AWARE height. KIND_SIZE.h is a MINIMUM, not the rendered height — a card grows with its
  *  detail line, progress bar, poll rows and footer. Spacing against the minimum is what let two
- *  action cards render flush against each other: both declared 150 and both actually drew ~195, so
- *  the layout reserved 45px less than each occupied. Estimating from the same fields the renderer
- *  uses keeps the two in step without a DOM measure-and-reflow pass.
- *
- *  Deliberately errs high: too much air between siblings is untidy, too little is a collision. */
+ *  action cards render flush against each other. Estimating from the same fields the renderer uses
+ *  keeps the two in step without a DOM measure-and-reflow pass. Errs high on purpose: too much air
+ *  between siblings is untidy, too little is a collision. */
 export function nodeHeight(n: GNode): number {
   if (n.kind === "topic") return 62;
   let h = 46;                                       // tinted header band
@@ -203,9 +198,9 @@ export function nodeHeight(n: GNode): number {
   return h + 26;                                    // vertical padding
 }
 
-/** Semantic order among siblings. Without this a branch is whatever order the producer happened to
- *  emit in, so a risk can sit between two actions and the column reads as a pile. Structure first,
- *  then what was settled, then what is still open, then work, then the ambient/fun nodes. */
+/** Semantic order among siblings. Without this a column is whatever order the producer happened to
+ *  emit in, so a risk can sit between two actions and it reads as a pile. Structure first, then what
+ *  was settled, then what is still open, then work, then the ambient/fun nodes. */
 const KIND_ORDER: NodeKind[] = [
   "topic", "decision", "requirement", "question", "risk",
   "milestone", "action", "quote", "meter", "poll", "shot",
@@ -215,6 +210,24 @@ const rank = (n: GNode) => {
   return i < 0 ? KIND_ORDER.length : i;
 };
 
+const COL_W = 400;    // pitch between topic columns
+const V_GAP = 30;     // vertical gap between stacked cards
+const INDENT = 26;    // per level of nesting inside a column
+const HEAD_GAP = 22;  // under a topic header
+
+// PARALLEL TOPIC COLUMNS, replacing the balanced tree.
+//
+// A tree looks structured and behaves badly for this: sibling heights change every time anything is
+// added, so the whole branch re-centres and every card shifts. That constant reshuffling is what
+// made positions feel arbitrary — nothing ever settled. It also forces ONE root, when a real meeting
+// runs several topics in parallel and jumps between them.
+//
+// Columns fix both. Each top-level topic owns a column; new material is APPENDED to the bottom of
+// its column, so a card never moves once placed. Nothing above it reflows, the eye keeps its place,
+// and "add to the topic we were discussing an hour ago" is just an append to that column rather
+// than a global re-layout. Topics grow independently and genuinely in parallel — which is what a
+// meeting actually does — and cross-topic relationships become short hops between neighbours
+// instead of diagonals across a starburst.
 export function layout(nodes: GNode[]): Placed[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const kids = new Map<string, GNode[]>();
@@ -227,66 +240,61 @@ export function layout(nodes: GNode[]): Placed[] {
     kids.set(n.parent, list);
   }
   if (!root) return [];
-  // Stable semantic sort: equal kinds keep the order Minami produced them in, so a branch still
+
+  // Stable semantic sort: equal kinds keep the order Minami produced them in, so a column still
   // reads chronologically within each group.
   for (const [k, list] of kids) {
     kids.set(k, list.map((n, i) => ({ n, i })).sort((a, b) => rank(a.n) - rank(b.n) || a.i - b.i).map((o) => o.n));
   }
 
-  /** Vertical room a subtree needs: its own height, or its children stacked — whichever is larger.
-   *  Measuring before placing is what makes overlap impossible rather than merely unlikely. */
-  const heightOf = (id: string): number => {
-    const node = byId.get(id);
-    const own = node ? nodeHeight(node) : 80;
-    const cs = kids.get(id) ?? [];
-    if (!cs.length) return own;
-    const stacked = cs.reduce((sum, c) => sum + heightOf(c.id), 0) + V_GAP * (cs.length - 1);
-    return Math.max(own, stacked);
-  };
-
   const out: Placed[] = [];
+  const columns = kids.get(root.id) ?? [];
 
-  const place = (node: GNode, depth: number, dir: 1 | -1, top: number, branch: string) => {
-    const h = heightOf(node.id);
-    out.push({
-      ...node,
-      x: dir * depth * COL,
-      y: Math.round(top + h / 2),
-      depth,
-      branch,
-    });
+  columns.forEach((topic, ci) => {
+    const cx = ci * COL_W;
+    let y = 0;
 
-    const cs = kids.get(node.id) ?? [];
-    if (!cs.length) return;
-    // Centre the children block against the parent's own span, so a parent always sits level with
-    // the middle of what it carries rather than with its first child.
-    const total = cs.reduce((sum, c) => sum + heightOf(c.id), 0) + V_GAP * (cs.length - 1);
-    let y = top + (h - total) / 2;
-    for (const c of cs) {
-      place(c, depth + 1, dir, y, depth === 0 ? c.id : branch);
-      y += heightOf(c.id) + V_GAP;
-    }
-  };
+    // Column header
+    out.push({ ...topic, x: cx, y, depth: 1, branch: topic.id });
+    y += nodeHeight(topic) / 2 + HEAD_GAP;
 
-  // Split top-level branches between the two sides. Odd counts get the extra on the right, which is
-  // where the eye goes first.
-  const top = kids.get(root.id) ?? [];
-  const rightCount = Math.ceil(top.length / 2);
-  const sides: [GNode[], 1 | -1][] = [[top.slice(0, rightCount), 1], [top.slice(rightCount), -1]];
+    // Walk the subtree depth-first, appending downward. Depth only ever indents; it never moves
+    // anything already placed.
+    const walk = (parent: GNode, level: number) => {
+      for (const child of kids.get(parent.id) ?? []) {
+        const h = nodeHeight(child);
+        out.push({
+          ...child,
+          x: cx + level * INDENT,
+          y: Math.round(y + h / 2),
+          depth: level + 1,
+          branch: topic.id,
+        });
+        y += h + V_GAP;
+        walk(child, level + 1);
+      }
+    };
+    walk(topic, 1);
+  });
 
-  out.push({ ...root, x: 0, y: 0, depth: 0, branch: root.id });
-
-  for (const [group, dir] of sides) {
-    if (!group.length) continue;
-    const total = group.reduce((sum, c) => sum + heightOf(c.id), 0) + V_GAP * (group.length - 1);
-    let y = -total / 2; // each side is centred on the root
-    for (const c of group) {
-      place(c, 1, dir, y, c.id);
-      y += heightOf(c.id) + V_GAP;
-    }
+  // Centre the whole board on the origin so the camera's maths stays symmetrical.
+  if (out.length) {
+    const xs = out.map((p) => p.x);
+    const shift = (Math.min(...xs) + Math.max(...xs)) / 2;
+    for (const p of out) p.x -= shift;
   }
-
   return out;
+}
+
+/** Vertical extent of one topic column — the camera's "establishing shot" target for a topic. */
+export function columnBounds(placed: Placed[], branch: string) {
+  const own = placed.filter((p) => p.branch === branch);
+  if (!own.length) return null;
+  const t = Math.min(...own.map((p) => p.y - nodeHeight(p) / 2));
+  const b = Math.max(...own.map((p) => p.y + nodeHeight(p) / 2));
+  const l = Math.min(...own.map((p) => p.x - KIND_SIZE[p.kind].w / 2));
+  const r = Math.max(...own.map((p) => p.x + KIND_SIZE[p.kind].w / 2));
+  return { w: r - l, h: b - t, cx: (l + r) / 2, cy: (t + b) / 2 };
 }
 
 export const DEMO_GRAPH: Graph = {

@@ -11,7 +11,7 @@
 // on focus and pulls back when focus changes, which is what makes the map feel like it's following
 // the conversation rather than being dragged.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { KIND_SIZE, branchColor, layout, nodeHeight, type Graph, type Placed } from "@/lib/canvas-graph";
+import { KIND_SIZE, branchColor, columnBounds, layout, nodeHeight, type Graph, type Placed } from "@/lib/canvas-graph";
 import { GraphNode } from "@/components/canvas/GraphNode";
 
 const EDGE_LABEL: Record<string, string> = {
@@ -109,47 +109,53 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
     return () => ro.disconnect();
   }, []);
 
-  // Real bounding box of the map, node boxes included. Fitting to centre-points alone is what let
-  // the outer cards hang off the frame: a node is up to 360 units wide, so its edge sits half a card
-  // beyond the point being fitted to.
   const bounds = useMemo(() => bbox(placed), [placed]);
   const rels = useMemo(() => farRelations(graph, placed), [graph, placed]);
 
+  // ── Camera director ───────────────────────────────────────────────────────────────────────────
+  // Cut-scene grammar, not a follow-cam. When something lands, the camera PUSHES IN on it, HOLDS
+  // long enough to read, then PULLS BACK — first to the topic column it belongs to, then out to the
+  // whole board. That beat is what makes an event feel like an event: a camera that simply tracks
+  // focus never lets you see consequence, because it never shows you the thing in context
+  // afterwards. Three shots per event, and the pull-back is the one doing the emotional work.
   const focus = graph.focus ? byId.get(graph.focus) : undefined;
+  const [shot, setShot] = useState<"push" | "column" | "wide">("wide");
 
-  // Following a node means framing its NEIGHBOURHOOD — the node, its parent, and its siblings — not
-  // the node alone. A camera tight on one card tells a customer nothing about where it sits, which
-  // is the entire value of a map. Previously this was a fixed 0.62 zoom, which left most maps
-  // showing two cards in an empty field.
-  const near = useMemo(() => {
-    if (!focus) return null;
-    const kin = placed.filter(
-      (p) => p.id === focus.id || p.id === focus.parent || (focus.parent && p.parent === focus.parent),
-    );
-    return bbox(kin.length ? kin : [focus]);
-  }, [focus, placed]);
+  useEffect(() => {
+    if (!graph.focus) { setShot("wide"); return; }
+    setShot("push");
+    const a = setTimeout(() => setShot("column"), 2100);  // hold on the subject
+    const b = setTimeout(() => setShot("wide"), 4600);    // then let it breathe
+    return () => { clearTimeout(a); clearTimeout(b); };
+  }, [graph.focus, graph.rev]);
 
-  const centre = near ? { x: near.cx, y: near.cy } : { x: bounds.cx, y: bounds.cy };
+  const target = useMemo(() => {
+    if (!focus) return bounds;
+    if (shot === "push") {
+      const w = KIND_SIZE[focus.kind].w, h = nodeHeight(focus);
+      // Not the card alone — a shallow margin keeps its neighbours just in frame, so even the
+      // tightest shot still says where this thing sits.
+      return { w: w * 2.1, h: h * 2.1, cx: focus.x, cy: focus.y };
+    }
+    if (shot === "column") return columnBounds(placed, focus.branch) ?? bounds;
+    return bounds;
+  }, [focus, shot, bounds, placed]);
 
-  // Overview fits BOTH axes independently — a single "spread" number over-zooms whenever the map is
-  // wider than it is tall (or vice versa), which is most of the time. HEADER reserves the strip the
-  // floating title occupies so the camera never parks a node underneath it.
   const HEADER = 104;
   const MARGIN = 56;
-  const target = near ?? bounds;
   const fitZoom = Math.min(
     (vp.w - MARGIN * 2) / Math.max(1, target.w),
     (vp.h - HEADER - MARGIN) / Math.max(1, target.h),
   );
-  // Capped at 0.85 when following: a neighbourhood of one or two cards would otherwise fit at 2×,
-  // and a map that zooms to fill the frame with a single node has stopped being a map.
-  const zoom = near
-    ? Math.max(0.3, Math.min(0.85, fitZoom))
-    : Math.max(0.22, Math.min(0.7, fitZoom));
+  const zoom = Math.max(0.2, Math.min(shot === "push" ? 1.05 : 0.8, fitZoom));
 
-  const tx = vp.w / 2 - centre.x * zoom;
-  // Centre within the space BELOW the header rather than the whole viewport.
-  const ty = HEADER + (vp.h - HEADER) / 2 - centre.y * zoom;
+  const tx = vp.w / 2 - target.cx * zoom;
+  const ty = HEADER + (vp.h - HEADER) / 2 - target.cy * zoom;
+
+  // Longer and softer on the way out than on the way in: a push-in should feel decisive, a
+  // pull-back should feel like relaxing. Same curve, different duration — that asymmetry is most of
+  // what separates a directed camera from a lerp.
+  const dur = shot === "push" ? 780 : 1250;
 
   return (
     <div ref={wrapRef} className="absolute inset-0 overflow-hidden">
@@ -159,7 +165,7 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
           transform: `translate3d(${tx}px, ${ty}px, 0) scale(${zoom})`,
           // Long and eased: a camera that snaps is disorienting on a shared screen; a camera that
           // glides reads as intentional attention.
-          transition: "transform 900ms cubic-bezier(0.22, 1, 0.36, 1)",
+          transition: `transform ${dur}ms cubic-bezier(0.22, 1, 0.36, 1)`,
         }}
       >
         <Edges placed={placed} graph={graph} />
@@ -212,6 +218,11 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
       <g transform={`translate(${pad},${pad})`}>
         {branches.map((n) => {
           const p = byId.get(n.parent!)!;
+          // Orthogonal ELBOW, not a curve. In a column outline, hierarchy is already carried by
+          // indentation and stacking order — a swooping bezier from a card up to its header just
+          // adds a tail that reads as noise. A rail dropping from the parent's left edge with a
+          // short tick into each child is how every outline, file tree and org chart does it, and it
+          // stays legible however long the column gets.
           // Hierarchy is carried by the LINES, not by the cards. Weight tapers with depth (a trunk
           // is thicker than a twig) and each subtree keeps one hue, so you can see at a glance both
           // how deep something sits and which branch it belongs to. Before this every relationship
@@ -221,12 +232,13 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
           return (
             <path
               key={`b-${n.id}`}
-              d={curve(...anchor(p, n))}
+              d={elbow(p, n)}
               fill="none"
               stroke={hue}
-              strokeOpacity={Math.max(0.22, 0.62 - n.depth * 0.13)}
-              strokeWidth={w}
+              strokeOpacity={Math.max(0.2, 0.5 - n.depth * 0.08)}
+              strokeWidth={Math.max(1.25, w)}
               strokeLinecap="round"
+              strokeLinejoin="round"
             />
           );
         })}
@@ -299,6 +311,18 @@ function curve(x1: number, y1: number, x2: number, y2: number): string {
   const dx = Math.round(Math.abs(x2 - x1) * 0.42);
   const s = x2 >= x1 ? 1 : -1;
   return `M ${x1} ${y1} C ${x1 + dx * s} ${y1}, ${x2 - dx * s} ${y2}, ${x2} ${y2}`;
+}
+
+/** Rail-and-tick connector for the column layout: drop a vertical line from just inside the
+ *  parent's left edge, then a short horizontal tick into the child's left edge. Rounded corners so
+ *  it reads as drawn rather than as a schematic. */
+function elbow(p: Placed, c: Placed): string {
+  const railX = Math.round(p.x - KIND_SIZE[p.kind].w / 2 + 14);
+  const py = Math.round(p.y + nodeHeight(p) / 2);
+  const cy = Math.round(c.y);
+  const cx = Math.round(c.x - KIND_SIZE[c.kind].w / 2);
+  const r = Math.min(12, Math.max(0, cy - py), Math.max(0, cx - railX));
+  return `M ${railX} ${py} L ${railX} ${cy - r} Q ${railX} ${cy} ${railX + r} ${cy} L ${cx} ${cy}`;
 }
 
 /** Anchor an edge to the card's left/right EDGE rather than its centre, so lines emerge from the
