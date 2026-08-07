@@ -240,9 +240,9 @@ const rank = (n: GNode) => {
 // spreadsheet. Same meeting, same board — no jitter between renders.
 const CARD_GAP_Y = 26;      // between stacked cards in a cluster
 const STEM = 110;           // gap between a topic node and its cards — room for the edge to read
-const CLUSTER_GAP_X = 170;
-const CLUSTER_GAP_Y = 110;
-const BOARD_W = 3400;       // wrap width; the board grows downward, like a real one
+const CLUSTER_GAP_X = 150;
+const CLUSTER_GAP_Y = 96;
+const BOARD_COLS = 4;       // masonry columns; the board grows downward, like a real one
 
 export function layout(nodes: GNode[]): Placed[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -292,19 +292,27 @@ export function layout(nodes: GNode[]): Placed[] {
     };
   });
 
-  // ── flow the clusters across the board ────────────────────────────────────────────────────────
+  // ── masonry: uniform columns, shortest-first ──────────────────────────────────────────────────
+  // The previous flow added a deterministic offset per cluster to feel "organic". That offset is
+  // exactly what read as messy — nothing shared an edge, so the board looked like cards had been
+  // dropped rather than placed. "Freestyle" was about topics EMERGING freely, never about visual
+  // randomness, and conflating the two cost several rewrites.
+  //
+  // Uniform column width fixes the alignment; placing each new cluster in the SHORTEST column keeps
+  // it tight without leaving the ragged gaps a strict grid would. It also makes placement genuinely
+  // APPEND-ONLY: a new topic takes the next free slot and nothing already on the board moves, which
+  // is what "stays put, just off-camera" requires — you can't point back at something that shifted
+  // while you were looking away.
+  const cellW = Math.max(...packed.map((p) => p.w));
+  const colH = new Array(BOARD_COLS).fill(0);
   const out: Placed[] = [];
-  let x = 0, y = 0, rowH = 0, row = 0;
 
-  packed.forEach((p, i) => {
-    if (x > 0 && x + p.w > BOARD_W) { x = 0; y += rowH + CLUSTER_GAP_Y; rowH = 0; row++; }
-    // Deterministic offset — enough to break the grid, never enough to look accidental. Derived from
-    // the index so it's stable across renders.
-    const ox = x + ((i * 37) % 11 - 5) * 9 + (row % 2 ? 34 : 0);
-    const oy = y + ((i * 53) % 7 - 3) * 10;
+  for (const p of packed) {
+    const col = colH.indexOf(Math.min(...colH));
+    const ox = col * (cellW + CLUSTER_GAP_X);
+    const oy = colH[col];
 
-    // Topic sits at the vertical CENTRE of what it carries, so the edges fan symmetrically instead
-    // of all raking downward from a corner.
+    // Topic at the vertical centre of its own cards, so edges fan symmetrically.
     out.push({
       ...p.topic,
       x: Math.round(ox + KIND_SIZE.topic.w / 2),
@@ -320,9 +328,8 @@ export function layout(nodes: GNode[]): Placed[] {
       });
     }
 
-    x += p.w + CLUSTER_GAP_X;
-    rowH = Math.max(rowH, p.h);
-  });
+    colH[col] += p.h + CLUSTER_GAP_Y;
+  }
 
   // Centre the board on the origin so the camera's maths stays symmetrical.
   if (out.length) {
