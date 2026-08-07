@@ -128,8 +128,8 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
     // time to find what moved, read it, and look back at the speaker before anything else happens.
     // Short holds make the surface feel busy, which is the opposite of what a reference should feel
     // like, and busy is what reads as amateur.
-    const a = setTimeout(() => setShot("column"), 3400);  // hold on the subject
-    const b = setTimeout(() => setShot("wide"), 7600);    // then let it breathe
+    const a = setTimeout(() => setShot("column"), 5200);   // hold on the subject
+    const b = setTimeout(() => setShot("wide"), 11500);    // then let it breathe
     return () => { clearTimeout(a); clearTimeout(b); };
   }, [graph.focus, graph.rev]);
 
@@ -147,6 +147,8 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
 
   const HEADER = 104;
   const MARGIN = 56;
+  // Fit still allows for the header — a subject centred in the frame can still be TALL enough to
+  // run under the title, so the room is taken out of the zoom rather than out of the position.
   const fitZoom = Math.min(
     (vp.w - MARGIN * 2) / Math.max(1, target.w),
     (vp.h - HEADER - MARGIN) / Math.max(1, target.h),
@@ -162,7 +164,7 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
   //
   // Still asymmetric: a push-in is decisive, a pull-back is relaxing. That asymmetry is most of what
   // separates a directed camera from a lerp.
-  const dur = shot === "push" ? 1500 : 2400;
+  const dur = shot === "push" ? 2400 : 3600;
 
   return (
     <div ref={wrapRef} className="absolute inset-0 overflow-hidden">
