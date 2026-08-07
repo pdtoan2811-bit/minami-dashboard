@@ -249,24 +249,9 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
           />
         ))}
 
-        {/* Thread lines from a topic to its members: short, soft, and only near ones. In a cluster
-            the membership is already carried by the halo, so these are a hint, not the mechanism. */}
-        {branches.map((n) => {
-          const p = byId.get(n.parent!)!;
-          const d = Math.hypot(n.x - p.x, n.y - p.y);
-          if (d > 560) return null;
-          return (
-            <path
-              key={`b-${n.id}`}
-              d={curve(...anchor(p, n))}
-              fill="none"
-              stroke={branchColor(branchIds, n.branch)}
-              strokeOpacity={0.28}
-              strokeWidth={Math.max(1.2, 3 - n.depth * 0.55)}
-              strokeLinecap="round"
-            />
-          );
-        })}
+        {/* No thread lines. The halo already says what belongs to a cluster, and with a label
+            sitting above its own members the relationship is spatial — a line to every card added a
+            swooping wire per node and read as a cobweb. Removing them is the fix, not tuning them. */}
 
         {/* Merge beam. The absorbed node flying across was legible only once it had already moved —
             by which point the relationship it was expressing was over. A bright link drawn between

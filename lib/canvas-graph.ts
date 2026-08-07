@@ -252,40 +252,44 @@ export function layout(nodes: GNode[]): Placed[] {
   }
 
   const out: Placed[] = [];
-  const topics = kids.get(root.id) ?? [];
 
-  // Flatten a topic's whole subtree — in a freestyle cluster, depth stops being a coordinate. It
-  // still drives visual weight, but a grandchild orbits the topic just like a child does.
-  const subtree = (id: string, depth: number): { n: GNode; depth: number }[] => {
-    const cs = kids.get(id) ?? [];
-    return cs.flatMap((c) => [{ n: c, depth }, ...subtree(c.id, depth + 1)]);
-  };
+  // EVERY topic is a cluster, at any depth. Nesting was what broke: with a topic's whole subtree
+  // flattened into one orbit, a sub-topic like "Other signals" landed as just another card floating
+  // far from its own children, with a long wire trailing back to explain the relationship. On a
+  // freestyle canvas a sub-topic IS a topic — promoting them all makes every cluster flat (a label
+  // plus its own cards) and the confusion disappears.
+  // Skip topics with no cards of their own. Once sub-topics are promoted to clusters, a parent
+  // whose children were ALL sub-topics is left holding nothing — it rendered as a bare label
+  // floating in empty space with no halo and no purpose. Its material didn't vanish; it lives in
+  // the clusters that were promoted out of it.
+  const clusters = nodes.filter(
+    (n) => n.kind === "topic" && n.id !== root.id &&
+           (kids.get(n.id) ?? []).some((c) => c.kind !== "topic"),
+  );
 
-  topics.forEach((topic, ti) => {
-    const members = subtree(topic.id, 2);
-    // Cluster radius grows with its own population, so a busy topic claims more room instead of
-    // colliding with its neighbours.
-    // Radius grows with BOTH the index and the running population, so a busy topic pushes later
-    // clusters further out instead of letting their halos interleave — overlapping halos read as one
-    // ambiguous blob and destroy the grouping the halo exists to show.
-    const spiralR = CLUSTER_GAP * 0.6 + Math.sqrt(ti + 0.5) * (CLUSTER_GAP + members.length * 52);
+  clusters.forEach((topic, ti) => {
+    const members = (kids.get(topic.id) ?? []).filter((c) => c.kind !== "topic");
+    const spiralR = CLUSTER_GAP * 0.55 + Math.sqrt(ti + 0.5) * (CLUSTER_GAP + members.length * 62);
     const a = ti * GOLDEN;
     const cx = Math.cos(a) * spiralR;
-    const cy = Math.sin(a) * spiralR * 0.72; // slightly flattened: screens are wider than they're tall
+    const cy = Math.sin(a) * spiralR * 0.7;
 
-    out.push({ ...topic, x: Math.round(cx), y: Math.round(cy), depth: 1, branch: topic.id });
-
+    // Members orbit the centre; the label sits ABOVE them rather than among them, so it reads as a
+    // heading for the group instead of as one more thing floating in it.
+    const spread = 150 + Math.sqrt(members.length) * 120;
     members.forEach((m, mi) => {
-      const ang = mi * GOLDEN + ti;                      // offset per topic so clusters don't rhyme
-      const rad = ORBIT + Math.sqrt(mi) * 130;
+      const ang = mi * GOLDEN + ti * 1.7;
+      const rad = members.length === 1 ? 0 : 90 + Math.sqrt(mi) * 150;
       out.push({
-        ...m.n,
+        ...m,
         x: Math.round(cx + Math.cos(ang) * rad),
-        y: Math.round(cy + Math.sin(ang) * rad * 0.82),
-        depth: m.depth,
+        y: Math.round(cy + Math.sin(ang) * rad * 0.85),
+        depth: 2,
         branch: topic.id,
       });
     });
+
+    out.push({ ...topic, x: Math.round(cx), y: Math.round(cy - spread), depth: 1, branch: topic.id });
   });
 
   return relax(out);
