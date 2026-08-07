@@ -214,25 +214,29 @@ const rank = (n: GNode) => {
   return i < 0 ? KIND_ORDER.length : i;
 };
 
-// FREESTYLE CLUSTERS.
+// FREESTYLE BOARD.
 //
-// Three layouts in and the lesson is that each imposed a structure the conversation doesn't have. A
-// radial starburst had no reading order. A tree reshuffled on every add. Columns were stable and
-// readable but implied an AGENDA — a tidy parallel outline, when a real call wanders, doubles back,
-// and picks a thread up twenty minutes later.
+// Fifth layout, and the mistake in the fourth was reading "freestyle" as "random". A golden-angle
+// scatter with cards orbiting at arbitrary angles produces placement that looks accidental, not
+// designed — big holes on one side, clusters bunched on the other, cards sitting at odd diagonal
+// offsets from each other.
 //
-// So: topics are loose clusters scattered across the canvas, each growing organically around its own
-// centre as material arrives. Nothing is aligned to a grid, because nothing about the conversation
-// is. What keeps it from being a mess is that it is DETERMINISTIC (same meeting, same arrangement —
-// no jitter on re-render) and that a relaxation pass guarantees nothing overlaps.
+// A real workshop board isn't random either. The GROUPS sit wherever they landed, but the cards
+// INSIDE a group are tidy — squared up, evenly spaced, because a human tidied them while talking.
+// That distinction is the whole thing:
 //
-// Cluster centres sit on a golden-angle spiral. That angle is irrational, so successive clusters
-// never line up into rows or spokes — it's the standard trick for scattering points that read as
-// natural rather than as a pattern.
-const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-const CLUSTER_GAP = 460;   // breathing room between cluster centres
-const ORBIT = 250;         // how far the first child sits from its topic
-const PAD = 34;            // minimum clear space between any two cards
+//   inside a cluster  → neat, packed, aligned      (order where the eye reads)
+//   between clusters  → loose flow, uneven rows    (freedom where the structure is)
+//
+// So clusters pack their own cards into a small grid, then flow across the board left-to-right,
+// wrapping into rows, with a deterministic offset per cluster so the rows never line up into a
+// spreadsheet. Same meeting, same board — no jitter between renders.
+const CARD_GAP_X = 34;
+const CARD_GAP_Y = 30;
+const CLUSTER_GAP_X = 130;
+const CLUSTER_GAP_Y = 120;
+const BOARD_W = 2900;      // wrap width; the board grows downward, like a real one
+const LABEL_H = 54;        // room above a cluster for its heading
 
 export function layout(nodes: GNode[]): Placed[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -251,86 +255,74 @@ export function layout(nodes: GNode[]): Placed[] {
     kids.set(k, list.map((n, i) => ({ n, i })).sort((a, b) => rank(a.n) - rank(b.n) || a.i - b.i).map((o) => o.n));
   }
 
-  const out: Placed[] = [];
-
-  // EVERY topic is a cluster, at any depth. Nesting was what broke: with a topic's whole subtree
-  // flattened into one orbit, a sub-topic like "Other signals" landed as just another card floating
-  // far from its own children, with a long wire trailing back to explain the relationship. On a
-  // freestyle canvas a sub-topic IS a topic — promoting them all makes every cluster flat (a label
-  // plus its own cards) and the confusion disappears.
-  // Skip topics with no cards of their own. Once sub-topics are promoted to clusters, a parent
-  // whose children were ALL sub-topics is left holding nothing — it rendered as a bare label
-  // floating in empty space with no halo and no purpose. Its material didn't vanish; it lives in
-  // the clusters that were promoted out of it.
+  // Every topic is a cluster, at any depth — a sub-topic on a freestyle board is just a topic.
+  // Topics holding no cards of their own are skipped: their material lives in the clusters promoted
+  // out of them, and an empty label floating in space has nothing to say.
   const clusters = nodes.filter(
     (n) => n.kind === "topic" && n.id !== root.id &&
            (kids.get(n.id) ?? []).some((c) => c.kind !== "topic"),
   );
 
-  clusters.forEach((topic, ti) => {
+  // ── pack each cluster internally ──────────────────────────────────────────────────────────────
+  type Packed = { topic: GNode; cells: { n: GNode; dx: number; dy: number }[]; w: number; h: number };
+  const packed: Packed[] = clusters.map((topic) => {
     const members = (kids.get(topic.id) ?? []).filter((c) => c.kind !== "topic");
-    const spiralR = CLUSTER_GAP * 0.55 + Math.sqrt(ti + 0.5) * (CLUSTER_GAP + members.length * 62);
-    const a = ti * GOLDEN;
-    const cx = Math.cos(a) * spiralR;
-    const cy = Math.sin(a) * spiralR * 0.7;
-
-    // Members orbit the centre; the label sits ABOVE them rather than among them, so it reads as a
-    // heading for the group instead of as one more thing floating in it.
-    const spread = 150 + Math.sqrt(members.length) * 120;
-    members.forEach((m, mi) => {
-      const ang = mi * GOLDEN + ti * 1.7;
-      const rad = members.length === 1 ? 0 : 90 + Math.sqrt(mi) * 150;
-      out.push({
-        ...m,
-        x: Math.round(cx + Math.cos(ang) * rad),
-        y: Math.round(cy + Math.sin(ang) * rad * 0.85),
-        depth: 2,
-        branch: topic.id,
-      });
+    // One column up to three cards, two beyond — keeps a small group tall-and-narrow (easy to scan)
+    // and stops a big one becoming an unreadable ribbon.
+    const cols = members.length > 3 ? 2 : 1;
+    const colW = Math.max(...members.map((m) => KIND_SIZE[m.kind].w));
+    const colHeights = new Array(cols).fill(0);
+    const cells = members.map((n) => {
+      // Shortest column first: keeps the two columns level instead of one trailing off the bottom.
+      const c = colHeights.indexOf(Math.min(...colHeights));
+      const dx = c * (colW + CARD_GAP_X);
+      const dy = colHeights[c];
+      colHeights[c] += nodeHeight(n) + CARD_GAP_Y;
+      return { n, dx, dy };
     });
-
-    out.push({ ...topic, x: Math.round(cx), y: Math.round(cy - spread), depth: 1, branch: topic.id });
+    return {
+      topic, cells,
+      w: cols * colW + (cols - 1) * CARD_GAP_X,
+      h: Math.max(...colHeights) - CARD_GAP_Y + LABEL_H,
+    };
   });
 
-  return relax(out);
-}
+  // ── flow the clusters across the board ────────────────────────────────────────────────────────
+  const out: Placed[] = [];
+  let x = 0, y = 0, rowH = 0, row = 0;
 
-/** Push overlapping cards apart until none intersect. Seeded positions give the arrangement its
- *  organic feel; this only removes collisions, so the result still looks scattered rather than
- *  packed. Topics barely move (heavy) so clusters keep their identity while leaves give way. */
-function relax(nodes: Placed[], iterations = 90): Placed[] {
-  const box = (n: Placed) => ({ w: KIND_SIZE[n.kind].w + PAD, h: nodeHeight(n) + PAD });
+  packed.forEach((p, i) => {
+    if (x > 0 && x + p.w > BOARD_W) { x = 0; y += rowH + CLUSTER_GAP_Y; rowH = 0; row++; }
+    // Deterministic offset — enough to break the grid, never enough to look accidental. Derived from
+    // the index so it's stable across renders.
+    const wobble = ((i * 37) % 11 - 5) * 9 + (row % 2 ? 26 : 0);
 
-  for (let it = 0; it < iterations; it++) {
-    let moved = false;
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const a = nodes[i], b = nodes[j];
-        const ba = box(a), bb = box(b);
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const ox = (ba.w + bb.w) / 2 - Math.abs(dx);
-        const oy = (ba.h + bb.h) / 2 - Math.abs(dy);
-        if (ox <= 0 || oy <= 0) continue;               // no overlap on at least one axis
+    const ox = x + wobble;
+    const oy = y + ((i * 53) % 7 - 3) * 8;
 
-        moved = true;
-        // Separate along the axis needing the smaller correction — the shortest way out keeps the
-        // seeded composition rather than flinging cards across the canvas.
-        const aw = a.kind === "topic" ? 0.15 : 0.5;
-        const bw = b.kind === "topic" ? 0.15 : 0.5;
-        const tot = aw + bw || 1;
-        if (ox < oy) {
-          const s = (dx >= 0 ? 1 : -1) * ox;
-          a.x -= s * (aw / tot); b.x += s * (bw / tot);
-        } else {
-          const s = (dy >= 0 ? 1 : -1) * oy;
-          a.y -= s * (aw / tot); b.y += s * (bw / tot);
-        }
-      }
+    out.push({ ...p.topic, x: Math.round(ox + p.w / 2), y: Math.round(oy), depth: 1, branch: p.topic.id });
+    for (const c of p.cells) {
+      out.push({
+        ...c.n,
+        x: Math.round(ox + c.dx + KIND_SIZE[c.n.kind].w / 2),
+        y: Math.round(oy + LABEL_H + c.dy + nodeHeight(c.n) / 2),
+        depth: 2,
+        branch: p.topic.id,
+      });
     }
-    if (!moved) break;
+
+    x += p.w + CLUSTER_GAP_X;
+    rowH = Math.max(rowH, p.h);
+  });
+
+  // Centre the board on the origin so the camera's maths stays symmetrical.
+  if (out.length) {
+    const xs = out.map((n) => n.x), ys = out.map((n) => n.y);
+    const sx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const sy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    for (const n of out) { n.x -= sx; n.y -= sy; }
   }
-  for (const n of nodes) { n.x = Math.round(n.x); n.y = Math.round(n.y); }
-  return nodes;
+  return out;
 }
 
 /** Extent of one topic cluster — the camera's "establishing shot" target for a topic. */
