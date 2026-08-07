@@ -37,20 +37,36 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
   const bounds = useMemo(() => bbox(placed), [placed]);
 
   const focus = graph.focus ? byId.get(graph.focus) : undefined;
-  const centre = focus ? { x: focus.x, y: focus.y } : { x: bounds.cx, y: bounds.cy };
+
+  // Following a node means framing its NEIGHBOURHOOD — the node, its parent, and its siblings — not
+  // the node alone. A camera tight on one card tells a customer nothing about where it sits, which
+  // is the entire value of a map. Previously this was a fixed 0.62 zoom, which left most maps
+  // showing two cards in an empty field.
+  const near = useMemo(() => {
+    if (!focus) return null;
+    const kin = placed.filter(
+      (p) => p.id === focus.id || p.id === focus.parent || (focus.parent && p.parent === focus.parent),
+    );
+    return bbox(kin.length ? kin : [focus]);
+  }, [focus, placed]);
+
+  const centre = near ? { x: near.cx, y: near.cy } : { x: bounds.cx, y: bounds.cy };
 
   // Overview fits BOTH axes independently — a single "spread" number over-zooms whenever the map is
   // wider than it is tall (or vice versa), which is most of the time. HEADER reserves the strip the
   // floating title occupies so the camera never parks a node underneath it.
   const HEADER = 104;
   const MARGIN = 56;
+  const target = near ?? bounds;
   const fitZoom = Math.min(
-    (vp.w - MARGIN * 2) / Math.max(1, bounds.w),
-    (vp.h - HEADER - MARGIN) / Math.max(1, bounds.h),
+    (vp.w - MARGIN * 2) / Math.max(1, target.w),
+    (vp.h - HEADER - MARGIN) / Math.max(1, target.h),
   );
-  // Following a node still has to show its NEIGHBOURS — a camera tight enough to fill the frame with
-  // one card tells a customer nothing about where it sits, which is the whole value of a map.
-  const zoom = focus ? 0.62 : Math.max(0.22, Math.min(0.7, fitZoom));
+  // Capped at 0.85 when following: a neighbourhood of one or two cards would otherwise fit at 2×,
+  // and a map that zooms to fill the frame with a single node has stopped being a map.
+  const zoom = near
+    ? Math.max(0.3, Math.min(0.85, fitZoom))
+    : Math.max(0.22, Math.min(0.7, fitZoom));
 
   const tx = vp.w / 2 - centre.x * zoom;
   // Centre within the space BELOW the header rather than the whole viewport.
