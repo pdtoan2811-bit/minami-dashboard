@@ -185,5 +185,9 @@ function describe(a: Action): { text: string; tone: string } {
       return { text: `⌁ ${a.fx === "shake" ? "Flagged" : a.fx === "jump" ? "Pointed at" : "Highlighted"} ${a.id}`, tone: STATE_COLOR.open };
     case "merge":
       return { text: `⇥ Merged ${a.from} → ${a.into}`, tone: STATE_COLOR.agreed };
+    case "edge":
+      return { text: `↔ ${a.from} ${a.edge} ${a.to}`, tone: STATE_COLOR.blocked };
+    case "amend":
+      return { text: `✎ Reworded ${a.id}`, tone: STATE_COLOR.proposed };
   }
 }

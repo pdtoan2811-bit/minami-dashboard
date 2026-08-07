@@ -23,7 +23,11 @@ export type Action =
   /** Absorb `from` into `into`: it flies across, fades, and the player deletes it. Used when two
    *  things said separately turn out to be the same thing — which is most of what a good meeting
    *  summary does. */
-  | { kind: "merge"; from: string; into: string; label?: string; detail?: string };
+  | { kind: "merge"; from: string; into: string; label?: string; detail?: string }
+  /** Draw a typed relationship between two existing nodes — the "they're arguing" case. */
+  | { kind: "edge"; from: string; to: string; edge: "blocks" | "depends" | "answers" | "contradicts" }
+  /** Re-word a node in place. People change their minds mid-sentence; the map has to follow. */
+  | { kind: "amend"; id: string; label?: string; detail?: string };
 
 export type Step = {
   /** ms after the previous step. Pacing is content: a decision landing needs a beat before the
@@ -50,65 +54,114 @@ export type DemoScript = {
 const T = (id: string, label: string, parent?: string): GNode => ({ id, kind: "topic", label, parent });
 
 // ── 1 · Customer pilot scoping ──────────────────────────────────────────────────────────────────
+// Written to behave like an actual meeting rather than a feature tour: people brainstorm three ideas
+// at once, argue, wander off-topic, contradict each other, change their minds mid-sentence, and
+// discover halfway through that two things they said separately were the same thing. Roughly a third
+// of the lines produce NO canvas action at all — banter, hedging, thinking aloud — because a demo
+// where every sentence spawns a node teaches the wrong thing about how this behaves.
 const pilot: DemoScript = {
   id: "pilot",
   name: "Pilot scoping",
-  blurb: "Customer call · scope, timeline, a decision landing",
+  blurb: "Customer call · brainstorm, argument, tangent, a merge",
   title: "QSortby · pilot scoping",
   subtitle: "with QDN Digital",
   seed: [T("root", "QSortby pilot")],
   steps: [
-    { gap: 0, who: "Quang", say: "So the thing that actually bothers us — the sort puts our worst-margin products on page one." },
-    { gap: 2600, who: "Toàn", say: "Right, because it's ranking on revenue. Margin never enters it.",
+    { gap: 0, who: "Quang", say: "Before we start — did the staging box come back up? Linh was fighting it this morning." },
+    { gap: 2200, who: "Linh", say: "Back up. It was a DNS thing, nothing to do with us." },
+    { gap: 2000, who: "Toàn", say: "Good. So — the sort." },
+
+    { gap: 2400, who: "Quang", say: "The thing that actually bothers us is the sort puts our worst-margin products on page one." },
+    { gap: 2600, who: "Toàn", say: "Because it ranks on revenue. Margin never enters it.",
       does: [
         { kind: "add", node: T("scope", "Scope", "root") },
-        { kind: "add", node: { id: "r1", kind: "requirement", label: "Sort by margin, not revenue", detail: "Revenue ranking buries the products that actually pay for the store.", parent: "scope", by: "Quang", tags: ["scope"] } },
+        { kind: "add", node: { id: "r1", kind: "requirement", label: "Rank on margin, not revenue", detail: "Revenue ranking buries the products that actually pay for the store.", parent: "scope", by: "Quang", tags: ["scope"] } },
         { kind: "focus", id: "r1" },
       ] },
-    { gap: 2800, who: "Quang", say: "Can we try it across all twelve stores?" },
-    { gap: 2200, who: "Toàn", say: "I'd rather do one properly than twelve badly. We won't see signal otherwise.",
+
+    // brainstorm burst — three ideas in one breath
+    { gap: 2600, who: "Linh", say: "We could also weight by stock cover. And seasonality. Maybe returns rate too, that kills margin quietly.",
       does: [
-        { kind: "add", node: { id: "d1", kind: "decision", label: "One merchant, not the full catalogue", detail: "Narrowed from 12 stores so lift is provable inside the window.", parent: "scope", state: "proposed", tags: ["scope"], people: ["Phạm Đức Toàn"] } },
-        { kind: "focus", id: "d1" },
+        { kind: "add", node: { id: "r2", kind: "requirement", label: "Weight by stock cover", detail: "Don't promote what we can't fulfil.", parent: "scope", by: "Linh Trần", tags: ["idea"] } },
+        { kind: "add", node: { id: "r3", kind: "requirement", label: "Factor in returns rate", detail: "A high-return product has negative real margin.", parent: "scope", by: "Linh Trần", tags: ["idea"] } },
+        { kind: "focus", id: "r2" },
       ] },
-    { gap: 3000, who: "Quang", say: "Fine. One store, but I want weekly numbers, not a report at the end." },
-    { gap: 2400, who: "Toàn", say: "Weekly it is.",
+    { gap: 2600, who: "Quang", say: "That's three different products. Pick one." },
+    { gap: 2200, who: "Toàn", say: "Agreed. Returns rate is a v2 thing.",
+      does: [{ kind: "fx", id: "r3", fx: "shake" }] },
+
+    // the argument
+    { gap: 2600, who: "Quang", say: "Try it across all twelve stores. We need to know it generalises." },
+    { gap: 2400, who: "Toàn", say: "I'd rather do one properly than twelve badly. Twelve gives us noise, not signal.",
+      does: [
+        { kind: "add", node: { id: "d1", kind: "decision", label: "One merchant, not the full catalogue", detail: "Narrowed from 12 so lift is provable inside the window.", parent: "scope", state: "proposed", tags: ["scope"], people: ["Phạm Đức Toàn"] } },
+        { kind: "focus", id: "d1" },
+        { kind: "edge", from: "r2", to: "d1", edge: "contradicts" },
+      ] },
+    { gap: 2800, who: "Quang", say: "One store doesn't prove anything to my board." },
+    { gap: 2200, who: "Toàn", say: "Twelve half-configured stores won't either. One clean result is more persuasive than twelve muddy ones." },
+    { gap: 2600, who: "Quang", say: "…Fine. One store. But weekly numbers, not a report at the end.",
       does: [
         { kind: "state", id: "d1", state: "agreed" },
         { kind: "react", id: "d1", emoji: "🤝" },
         { kind: "celebrate", label: "Scope agreed", glyph: "handshake" },
       ] },
-    { gap: 3200, who: "Quang", say: "Which store though? That's not obvious.",
+
+    // tangent — Minami correctly keeps out of it
+    { gap: 3000, who: "Linh", say: "Sorry, unrelated — are we still doing the team lunch Thursday?" },
+    { gap: 1800, who: "Quang", say: "Friday now. Book it." },
+    { gap: 1800, who: "Toàn", say: "Ha. Back to the sort." },
+
+    { gap: 2400, who: "Quang", say: "Which store though? That's not obvious.",
       does: [
         { kind: "add", node: { id: "q1", kind: "question", label: "Which merchant goes first?", detail: "Needs clean margin data and enough weekly volume.", parent: "scope", state: "open", tags: ["blocker"] } },
         { kind: "focus", id: "q1" },
       ] },
-    { gap: 2600, who: "Toàn", say: "Let's park that and come back with two candidates on Friday.",
+    { gap: 2400, who: "Toàn", say: "Park it — two candidates by Friday.",
       does: [{ kind: "fx", id: "q1", fx: "jump" }] },
-    { gap: 2400, who: "Quang", say: "The other constraint is our budget cycle closes in September.",
+
+    { gap: 2600, who: "Quang", say: "The real constraint is our budget cycle closes in September.",
       does: [
         { kind: "add", node: T("time", "Timeline", "root") },
         { kind: "add", node: { id: "k1", kind: "risk", label: "Budget cycle closes in September", detail: "No provable lift by then and the pilot doesn't renew.", parent: "time", state: "blocked", by: "Quang", tags: ["timing"] } },
         { kind: "focus", id: "k1" },
         { kind: "fx", id: "k1", fx: "shake" },
       ] },
-    { gap: 2800, who: "Toàn", say: "Then six weeks, not three months. That lands well before it.",
+    { gap: 2600, who: "Toàn", say: "Then six weeks, not three months.",
       does: [
         { kind: "add", node: { id: "d2", kind: "decision", label: "6-week pilot, not 3 months", detail: "Lands before the September budget cycle closes.", parent: "time", state: "agreed", people: ["Quang", "Phạm Đức Toàn"] } },
         { kind: "focus", id: "d2" },
+        { kind: "edge", from: "k1", to: "d2", edge: "blocks" },
         { kind: "react", id: "d2", emoji: "🔥" },
       ] },
-    { gap: 2800, who: "Quang", say: "Actually — margin sorting and the one-store pilot are the same ask. It's one thing.",
+
+    // changing his mind mid-sentence
+    { gap: 2600, who: "Quang", say: "Actually make it five. I want a week of slack before the cycle closes.",
+      does: [
+        { kind: "amend", id: "d2", label: "5-week pilot, one week of slack", detail: "Shortened from six so there's a buffer before the September cycle." },
+      ] },
+
+    // the realisation — two things were the same thing
+    { gap: 2800, who: "Quang", say: "Hang on. Margin ranking and the one-store pilot aren't two asks. They're the same thing.",
+      does: [{ kind: "fx", id: "r1", fx: "glow" }] },
+    { gap: 2400, who: "Toàn", say: "You're right — it's one decision.",
       does: [
         { kind: "merge", from: "r1", into: "d1",
           label: "Margin-sorted pilot on one merchant",
           detail: "Margin ranking and the single-store scope were the same decision all along." },
       ] },
-    { gap: 2600, who: "Quang", say: "Works. Send me the scope doc and I'll get it signed off.",
+
+    { gap: 2800, who: "Quang", say: "Send me the scope doc and I'll get it signed off.",
       does: [
         { kind: "add", node: { id: "a1", kind: "action", label: "Send pilot scope doc", detail: "Success metric, window, what we need from them.", parent: "time", owner: "Phạm Đức Toàn", state: "proposed", progress: 0, tags: ["followup"] } },
         { kind: "focus", id: "a1" },
       ] },
+    { gap: 2200, who: "Linh", say: "And I'll get the staging feed pointed at their catalogue.",
+      does: [
+        { kind: "add", node: { id: "a2", kind: "action", label: "Point staging at their catalogue", detail: "Needs a read-only API key from their side.", parent: "time", owner: "Linh Trần", state: "proposed", progress: 0.1 } },
+        { kind: "focus", id: "a2" },
+      ] },
+    { gap: 2200, who: "Quang", say: "Good. Same time next week." },
   ],
 };
 

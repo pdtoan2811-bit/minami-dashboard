@@ -543,3 +543,10 @@ body {
   0%   { opacity: 1; transform: scale(1); }
   100% { opacity: 0; transform: scale(0.55); }
 }
+
+/* Target of an in-flight merge — a soft pulse marking where the absorbed node is going, so the eye
+   knows where to look before it arrives. */
+@keyframes mergePulse {
+  0%   { r: 12; opacity: 0.28; }
+  100% { r: 34; opacity: 0; }
+}

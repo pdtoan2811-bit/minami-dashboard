@@ -144,7 +144,24 @@ export function initialsOf(name: string): string {
 // ── Layout ──────────────────────────────────────────────────────────────────────────────────────
 // Radial tree. Each child gets an angular slice of its parent's sector, so siblings never collide
 // and the map keeps the "radiating from a centre" read at any depth. Ring radius grows per level.
-export type Placed = GNode & { x: number; y: number };
+export type Placed = GNode & {
+  x: number; y: number;
+  /** 0 = root. Drives edge weight, so hierarchy is legible from the lines alone. */
+  depth: number;
+  /** id of the top-level topic this node hangs under. Every node in a branch shares one, which is
+   *  what lets a whole subtree read as belonging together. */
+  branch: string;
+};
+
+/** Eight branch hues. These identify a SUBTREE, never a state — they appear only on edges and a
+ *  small dot, never as a node's fill, so they can't be confused with the semantic state colours.
+ *  Assigned by order of appearance so the same meeting always colours the same way. */
+export const BRANCH_HUES = ["#6a7fd6", "#3fa08a", "#c98a3e", "#a86bb5", "#4f9dc9", "#c0705f", "#7aa04a", "#8a7fa8"];
+
+export function branchColor(branchIds: string[], id: string): string {
+  const i = branchIds.indexOf(id);
+  return BRANCH_HUES[(i < 0 ? 0 : i) % BRANCH_HUES.length];
+}
 
 const MIN_RING = [0, 430, 380, 340];
 const GAP = 64; // canvas units of clear space between siblings
@@ -162,7 +179,7 @@ export function layout(nodes: GNode[]): Placed[] {
   }
   if (!root) return [];
 
-  const out: Placed[] = [{ ...root, x: 0, y: 0 }];
+  const out: Placed[] = [{ ...root, x: 0, y: 0, depth: 0, branch: root.id }];
 
   const place = (parentId: string, px: number, py: number, from: number, to: number, depth: number) => {
     const list = kids.get(parentId) ?? [];
@@ -190,7 +207,9 @@ export function layout(nodes: GNode[]): Placed[] {
       // spare the compositor a subpixel layer per node.
       const x = Math.round(px + Math.cos(a) * r);
       const y = Math.round(py + Math.sin(a) * r);
-      out.push({ ...child, x, y });
+      // depth 1 nodes ARE the branches; everything deeper inherits its ancestor's branch id.
+      const branch = depth === 1 ? child.id : (out.find((o) => o.id === parentId)?.branch ?? child.id);
+      out.push({ ...child, x, y, depth, branch });
       place(child.id, x, y, a - step / 2, a + step / 2, depth + 1);
     });
   };

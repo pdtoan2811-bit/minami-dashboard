@@ -233,6 +233,14 @@ function apply(g: Graph, a: Action): Graph {
       return { ...g, reaction: { kind: a.glyph ?? "spark", label: a.label } };
     case "fx":
       return { ...g, nodes: g.nodes.map((n) => (n.id === a.id ? { ...n, fx: a.fx } : n)) };
+    case "edge":
+      return { ...g, edges: [...(g.edges ?? []), { from: a.from, to: a.to, kind: a.edge }] };
+    case "amend":
+      return {
+        ...g,
+        nodes: g.nodes.map((n) =>
+          n.id === a.id ? { ...n, label: a.label ?? n.label, detail: a.detail ?? n.detail, fx: "jump" as const } : n),
+      };
     case "merge":
       return {
         ...g,

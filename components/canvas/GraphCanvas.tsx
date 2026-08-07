@@ -11,7 +11,7 @@
 // on focus and pulls back when focus changes, which is what makes the map feel like it's following
 // the conversation rather than being dragged.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { KIND_SIZE, layout, type Graph, type Placed } from "@/lib/canvas-graph";
+import { KIND_SIZE, branchColor, layout, type Graph, type Placed } from "@/lib/canvas-graph";
 import { GraphNode } from "@/components/canvas/GraphNode";
 
 const EDGE_LABEL: Record<string, string> = {
@@ -162,6 +162,8 @@ function bbox(placed: Placed[]) {
  *  than encoded in a line style nobody can decode. */
 function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
   const byId = new Map(placed.map((p) => [p.id, p]));
+  // Branch order = order of appearance, so a given meeting always colours the same way.
+  const branchIds = placed.filter((p) => p.depth === 1).map((p) => p.id);
   const pad = 4000; // canvas units of slack around origin so negative coords aren't clipped
 
   const branches = placed.filter((n) => n.parent && byId.has(n.parent));
@@ -175,15 +177,45 @@ function Edges({ placed, graph }: { placed: Placed[]; graph: Graph }) {
       <g transform={`translate(${pad},${pad})`}>
         {branches.map((n) => {
           const p = byId.get(n.parent!)!;
+          // Hierarchy is carried by the LINES, not by the cards. Weight tapers with depth (a trunk
+          // is thicker than a twig) and each subtree keeps one hue, so you can see at a glance both
+          // how deep something sits and which branch it belongs to. Before this every relationship
+          // was the same 2px grey, which is why the structure was unreadable.
+          const w = Math.max(1.25, 4.5 - n.depth * 1.15);
+          const hue = branchColor(branchIds, n.branch);
           return (
             <path
               key={`b-${n.id}`}
               d={curve(p.x, p.y, n.x, n.y)}
               fill="none"
-              stroke="#d9d9d6"
-              strokeWidth={2}
+              stroke={hue}
+              strokeOpacity={Math.max(0.22, 0.62 - n.depth * 0.13)}
+              strokeWidth={w}
               strokeLinecap="round"
             />
+          );
+        })}
+
+        {/* Merge beam. The absorbed node flying across was legible only once it had already moved —
+            by which point the relationship it was expressing was over. A bright link drawn between
+            the two the instant the merge starts says "these are the same thing" BEFORE anything
+            moves, so the flight reads as a consequence rather than as a surprise. */}
+        {placed.filter((n) => n.mergingInto && byId.has(n.mergingInto)).map((n) => {
+          const to = byId.get(n.mergingInto!)!;
+          return (
+            <g key={`m-${n.id}`}>
+              <path
+                d={curve(n.x, n.y, to.x, to.y)}
+                fill="none"
+                stroke="#1baf7a"
+                strokeWidth={3}
+                strokeLinecap="round"
+                strokeDasharray="10 8"
+                style={{ animation: "flow 0.7s linear infinite" }}
+              />
+              <circle cx={to.x} cy={to.y} r={16} fill="#1baf7a" opacity={0.18}
+                      style={{ animation: "mergePulse 800ms var(--ease-out) infinite" }} />
+            </g>
           );
         })}
 
