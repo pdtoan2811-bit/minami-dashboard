@@ -1,19 +1,19 @@
 // Canvas state + live push.
 //
-// GET  /api/canvas            → current CanvasDoc (falls back to the demo doc)
-// POST /api/canvas            → replace the doc; body is a CanvasDoc
+// GET  /api/canvas            → current Graph (falls back to the demo graph)
+// POST /api/canvas            → replace the graph; body is a Graph
 // GET  /api/canvas?stream=1   → SSE, one `data:` frame per revision
 //
 // Deliberately in-memory. A meeting canvas is live-only: it exists for the length of a call and the
 // durable record is the vault note the pipeline writes afterwards. Persisting it would create a
 // second store of client conversation data on a box that doesn't need one — the exact multi-copy
 // drift problem we're avoiding elsewhere. Restart clears it; that is correct behaviour, not a gap.
-import { DEMO_DOC, type CanvasDoc } from "@/lib/canvas-schema";
+import { DEMO_GRAPH, type Graph } from "@/lib/canvas-graph";
 
 export const dynamic = "force-dynamic";
 
-let doc: CanvasDoc = DEMO_DOC;
-const clients = new Set<(d: CanvasDoc) => void>();
+let doc: Graph = DEMO_GRAPH;
+const clients = new Set<(d: Graph) => void>();
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -25,7 +25,7 @@ export async function GET(req: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
-      const send = (d: CanvasDoc) => {
+      const send = (d: Graph) => {
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(d)}\n\n`));
         } catch {
@@ -69,14 +69,14 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  let next: CanvasDoc;
+  let next: Graph;
   try {
-    next = (await req.json()) as CanvasDoc;
+    next = (await req.json()) as Graph;
   } catch {
     return Response.json({ ok: false, error: "invalid JSON" }, { status: 400 });
   }
-  if (!next || !Array.isArray(next.blocks)) {
-    return Response.json({ ok: false, error: "expected { blocks: [...] }" }, { status: 400 });
+  if (!next || !Array.isArray(next.nodes)) {
+    return Response.json({ ok: false, error: "expected { nodes: [...] }" }, { status: 400 });
   }
 
   doc = { ...next, rev: typeof next.rev === "number" ? next.rev : (doc.rev ?? 0) + 1 };

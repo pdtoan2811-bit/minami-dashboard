@@ -1,140 +1,90 @@
 "use client";
 // The meeting canvas — the page Recall.ai streams as Minami's screen share.
 //
-// It renders exactly one thing: whatever CanvasDoc the producer last POSTed. No navigation, no
-// chrome, no controls — anything clickable here is a lie, because the only people who see this page
-// see it as pixels in someone else's video tile.
+// It renders one thing: whatever Graph the producer last POSTed. No navigation, no controls, no
+// hover states. Anything clickable here is a lie, because everyone who sees this page sees it as
+// pixels in someone else's video tile.
 //
-// Sizing: laid out for a 1280×720 share and scaled to fit whatever viewport it lands in, so the
-// composition never reflows mid-call. A responsive grid would rearrange itself the moment Meet
-// changed the share resolution, which on a client's screen looks like a bug.
+// Light surface by deliberate exception to the app's dark theme — see .canvas-surface in
+// globals.css. The audience is customers, and a dark node graph reads as a developer tool.
 import { useEffect, useRef, useState } from "react";
-import { DEFAULT_SPAN, DEMO_DOC, DEMO_FULL, type CanvasDoc } from "@/lib/canvas-schema";
-import { renderBlock } from "@/components/canvas/Blocks";
-
-const BASE_W = 1280;
-const BASE_H = 720;
+import { DEMO_GRAPH, type Graph } from "@/lib/canvas-graph";
+import { GraphCanvas } from "@/components/canvas/GraphCanvas";
 
 export default function CanvasPage() {
-  const [doc, setDoc] = useState<CanvasDoc>(DEMO_DOC);
-  const [scale, setScale] = useState(1);
-  const rev = useRef(DEMO_DOC.rev ?? 0);
-  const stageRef = useRef<HTMLDivElement>(null);
+  const [graph, setGraph] = useState<Graph>(DEMO_GRAPH);
+  const rev = useRef(DEMO_GRAPH.rev ?? 0);
 
-  // Live updates. `rev` guards against out-of-order frames: a reconnect replays the seed frame, and
-  // without the guard a stale seed could overwrite a newer doc mid-meeting.
   useEffect(() => {
     const demo = new URL(window.location.href).searchParams.get("demo");
-    if (demo === "full") { setDoc(DEMO_FULL); return; }  // template gallery, frozen
-    if (demo === "1") return;                            // frozen realistic demo, for design work
+    // ?demo=1 drops `focus` so the camera sits back and frames the WHOLE map — that's the view you
+    // need to judge composition. ?demo=focus keeps it, to check the follow-the-conversation shot.
+    if (demo === "1") { setGraph({ ...DEMO_GRAPH, focus: undefined }); return; }
+    if (demo === "focus") return;
 
     const es = new EventSource("/api/canvas?stream=1");
     es.onmessage = (e) => {
       try {
-        const next = JSON.parse(e.data) as CanvasDoc;
+        const next = JSON.parse(e.data) as Graph;
+        if (!Array.isArray(next.nodes)) return; // ignore anything that isn't a graph
+        // Guard against out-of-order frames: a reconnect replays the seed, and without this a stale
+        // seed could overwrite a newer map mid-meeting.
         if ((next.rev ?? 0) >= rev.current) {
           rev.current = next.rev ?? 0;
-          setDoc(next);
+          setGraph(next);
         }
       } catch {
-        /* a malformed frame must never blank a live screen share — keep the last good doc */
+        /* a malformed frame must never blank a live screen share — keep the last good graph */
       }
     };
-    // EventSource reconnects on its own; we only need to not treat that as fatal.
-    es.onerror = () => {};
+    es.onerror = () => {}; // EventSource reconnects itself; not fatal
     return () => es.close();
   }, []);
 
-  // Scale-to-fit, measured rather than assumed. The doc is produced by a model during a live call,
-  // so its height is unknown and unbounded — assuming 720px and clipping means the last decisions of
-  // a long meeting silently vanish off the bottom of a client's screen. We render at natural height,
-  // measure, and shrink until it fits. One transform, no reflow, so this costs nothing per frame.
-  useEffect(() => {
-    const el = stageRef.current;
-    if (!el) return;
-    const fit = () => {
-      const h = el.scrollHeight || BASE_H;
-      // Floor the shrink. Below ~0.72 the 15px body text renders under 11px, which on a shared
-      // screen is decoration rather than information — better to let an over-long doc crop than to
-      // make the whole canvas unreadable. Overflow here is a signal the producer sent too much.
-      const raw = Math.min(window.innerWidth / BASE_W, window.innerHeight / h, 1);
-      setScale(Math.max(raw, 0.72));
-    };
-    fit();
-    // Content changes height when a new doc arrives, not just when the window resizes.
-    const ro = new ResizeObserver(fit);
-    ro.observe(el);
-    window.addEventListener("resize", fit);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", fit);
-    };
-  }, [doc]);
-
-  const live = doc.status ?? "live";
+  const status = graph.status ?? "live";
 
   return (
-    <main className="bg-bento grid h-dvh w-dvw place-items-center overflow-hidden">
-      <div
-        ref={stageRef}
-        style={{ width: BASE_W, minHeight: BASE_H, transform: `scale(${scale})`, transformOrigin: "center" }}
-        className="relative shrink-0 px-10 py-8"
-      >
-        <header className="mb-5 flex items-baseline justify-between gap-6">
-          <div className="min-w-0">
-            <h1 className="truncate text-[30px] font-semibold leading-tight text-white/95">
-              {doc.title ?? "Meeting"}
-            </h1>
-            {doc.subtitle ? <p className="mt-0.5 truncate text-[14px] text-white/50">{doc.subtitle}</p> : null}
-          </div>
-          <span className="flex shrink-0 items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5">
-            <span
-              className="size-2 rounded-full"
-              style={{
-                background: live === "live" ? "var(--sakura)" : "rgba(255,255,255,0.3)",
-                boxShadow: live === "live" ? "0 0 0 3px rgba(232,133,155,0.18)" : "none",
-              }}
-            />
-            <span className="text-[12px] font-medium capitalize text-white/70">{live}</span>
-            <span className="text-[12px] text-white/30">·</span>
-            <span className="text-[12px] text-white/50">Minami</span>
-          </span>
-        </header>
+    <main className="canvas-surface relative h-dvh w-dvw overflow-hidden">
+      <GraphCanvas graph={graph} />
 
-        <div className="grid grid-cols-6 gap-3.5">
-          {doc.blocks.map((b, i) => {
-            const span = b.span ?? DEFAULT_SPAN[b.kind] ?? 3;
-            return (
-              <div
-                key={i}
-                style={{ gridColumn: `span ${span} / span ${span}`, animationDelay: `${Math.min(i * 40, 320)}ms` }}
-                className="min-w-0 [animation:bentoIn_var(--dur-3)_var(--ease-spring)_both]"
-              >
-                {renderBlock(b, i)}
-              </div>
-            );
-          })}
+      {/* Chrome floats above the canvas and never moves — the map moves underneath it. */}
+      <header className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-6 p-7">
+        <div className="min-w-0">
+          <h1 className="truncate text-[22px] font-semibold tracking-[-0.01em] text-neutral-800">
+            {graph.title ?? "Meeting"}
+          </h1>
+          {graph.subtitle ? <p className="mt-0.5 truncate text-[13px] text-neutral-500">{graph.subtitle}</p> : null}
         </div>
+        <span className="flex shrink-0 items-center gap-2 rounded-full bg-white/85 px-3 py-1.5 shadow-[0_1px_2px_rgba(16,24,40,0.06),0_4px_12px_-4px_rgba(16,24,40,0.10)] backdrop-blur">
+          <span
+            className="size-1.5 rounded-full"
+            style={{ background: status === "live" ? "#1baf7a" : "#a3a3a3" }}
+          />
+          <span className="text-[12px] font-medium capitalize text-neutral-600">{status}</span>
+          <span className="text-[12px] text-neutral-300">·</span>
+          <span className="text-[12px] text-neutral-500">Minami</span>
+        </span>
+      </header>
 
-        {doc.reaction ? <Reaction kind={doc.reaction.kind} label={doc.reaction.label} /> : null}
-      </div>
+      {graph.reaction ? <Reaction kind={graph.reaction.kind} label={graph.reaction.label} /> : null}
     </main>
   );
 }
 
-/** Celebration overlay.
- *
- *  Anchored bottom-centre, NOT centred. A centred modal covers whatever block happens to be in the
- *  middle — in testing it sat straight on top of the agenda — and hiding live meeting content to
- *  celebrate is precisely backwards. Bottom-centre overlaps the least-critical strip, reads as a
- *  toast rather than a takeover, and keeps the canvas legible while it's up. */
+/** Full-canvas moment. A wash rather than a modal: the map stays visible through it, so the
+ *  celebration lands without hiding the thing being celebrated. */
 function Reaction({ kind, label }: { kind: "handshake" | "highfive" | "spark"; label?: string }) {
   const glyph = kind === "handshake" ? "🤝" : kind === "highfive" ? "🙌" : "✨";
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-6 grid place-items-center">
-      <div className="[animation:bentoIn_var(--dur-3)_var(--ease-spring)_both] flex items-center gap-3.5 rounded-2xl border border-white/10 bg-black/70 px-6 py-3.5 backdrop-blur-sm">
-        <span className="text-[30px] leading-none">{glyph}</span>
-        {label ? <span className="text-[16px] font-medium text-white/90">{label}</span> : null}
+    <div className="pointer-events-none absolute inset-0 grid place-items-center">
+      <div className="absolute inset-0 bg-white/45 [animation:nodeIn_var(--dur-3)_var(--ease-out)_both]" />
+      <div className="[animation:nodeIn_var(--dur-4)_var(--ease-spring)_both] relative flex flex-col items-center gap-2.5">
+        <span className="text-[76px] leading-none drop-shadow-sm">{glyph}</span>
+        {label ? (
+          <span className="rounded-full bg-white px-5 py-2 text-[17px] font-semibold text-neutral-800 shadow-[0_2px_4px_rgba(16,24,40,0.08),0_12px_28px_-8px_rgba(16,24,40,0.18)]">
+            {label}
+          </span>
+        ) : null}
       </div>
     </div>
   );
