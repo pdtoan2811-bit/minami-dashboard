@@ -82,8 +82,9 @@ const pilot: DemoScript = {
     // brainstorm burst — three ideas in one breath
     { gap: 2600, who: "Linh", say: "We could also weight by stock cover. And seasonality. Maybe returns rate too, that kills margin quietly.",
       does: [
-        { kind: "add", node: { id: "r2", kind: "requirement", label: "Weight by stock cover", detail: "Don't promote what we can't fulfil.", parent: "scope", by: "Linh Trần", tags: ["idea"] } },
-        { kind: "add", node: { id: "r3", kind: "requirement", label: "Factor in returns rate", detail: "A high-return product has negative real margin.", parent: "scope", by: "Linh Trần", tags: ["idea"] } },
+        { kind: "add", node: T("ideas", "Other signals", "scope") },
+        { kind: "add", node: { id: "r2", kind: "requirement", label: "Weight by stock cover", detail: "Don't promote what we can't fulfil.", parent: "ideas", by: "Linh Trần", tags: ["idea"] } },
+        { kind: "add", node: { id: "r3", kind: "requirement", label: "Factor in returns rate", detail: "A high-return product has negative real margin.", parent: "ideas", by: "Linh Trần", tags: ["idea"] } },
         { kind: "focus", id: "r2" },
       ] },
     { gap: 2600, who: "Quang", say: "That's three different products. Pick one." },
@@ -123,7 +124,8 @@ const pilot: DemoScript = {
     { gap: 2600, who: "Quang", say: "The real constraint is our budget cycle closes in September.",
       does: [
         { kind: "add", node: T("time", "Timeline", "root") },
-        { kind: "add", node: { id: "k1", kind: "risk", label: "Budget cycle closes in September", detail: "No provable lift by then and the pilot doesn't renew.", parent: "time", state: "blocked", by: "Quang", tags: ["timing"] } },
+        { kind: "add", node: T("cons", "Constraints", "time") },
+        { kind: "add", node: { id: "k1", kind: "risk", label: "Budget cycle closes in September", detail: "No provable lift by then and the pilot doesn't renew.", parent: "cons", state: "blocked", by: "Quang", tags: ["timing"] } },
         { kind: "focus", id: "k1" },
         { kind: "fx", id: "k1", fx: "shake" },
       ] },
@@ -153,12 +155,13 @@ const pilot: DemoScript = {
 
     { gap: 2800, who: "Quang", say: "Send me the scope doc and I'll get it signed off.",
       does: [
-        { kind: "add", node: { id: "a1", kind: "action", label: "Send pilot scope doc", detail: "Success metric, window, what we need from them.", parent: "time", owner: "Phạm Đức Toàn", state: "proposed", progress: 0, tags: ["followup"] } },
+        { kind: "add", node: T("commit", "Commitments", "time") },
+        { kind: "add", node: { id: "a1", kind: "action", label: "Send pilot scope doc", detail: "Success metric, window, what we need from them.", parent: "commit", owner: "Phạm Đức Toàn", state: "proposed", progress: 0, tags: ["followup"] } },
         { kind: "focus", id: "a1" },
       ] },
     { gap: 2200, who: "Linh", say: "And I'll get the staging feed pointed at their catalogue.",
       does: [
-        { kind: "add", node: { id: "a2", kind: "action", label: "Point staging at their catalogue", detail: "Needs a read-only API key from their side.", parent: "time", owner: "Linh Trần", state: "proposed", progress: 0.1 } },
+        { kind: "add", node: { id: "a2", kind: "action", label: "Point staging at their catalogue", detail: "Needs a read-only API key from their side.", parent: "commit", owner: "Linh Trần", state: "proposed", progress: 0.1 } },
         { kind: "focus", id: "a2" },
       ] },
     { gap: 2200, who: "Quang", say: "Good. Same time next week." },

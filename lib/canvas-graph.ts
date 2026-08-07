@@ -176,7 +176,39 @@ export function branchColor(branchIds: string[], id: string): string {
 }
 
 const COL = 420;   // horizontal distance per depth level
-const V_GAP = 34;  // clear space between stacked siblings
+const V_GAP = 44;  // clear space between stacked siblings
+
+/** CONTENT-AWARE height. KIND_SIZE.h is a MINIMUM, not the rendered height — a card grows with its
+ *  detail line, progress bar, poll rows and footer. Spacing against the minimum is what let two
+ *  action cards render flush against each other: both declared 150 and both actually drew ~195, so
+ *  the layout reserved 45px less than each occupied. Estimating from the same fields the renderer
+ *  uses keeps the two in step without a DOM measure-and-reflow pass.
+ *
+ *  Deliberately errs high: too much air between siblings is untidy, too little is a collision. */
+export function nodeHeight(n: GNode): number {
+  if (n.kind === "topic") return 62;
+  let h = 46;                                       // tinted header band
+  h += n.kind === "quote" ? 62 : 30;                // headline (quotes run larger + wrap)
+  if (n.detail) h += 36;                            // supporting line, up to 2 rows
+  if (typeof n.progress === "number") h += 44;
+  if (n.kind === "meter") h += 68;
+  if (n.kind === "poll") h += (n.options?.length ?? 0) * 38;
+  if (n.kind === "shot") h += 132;
+  if (n.people?.length || n.owner || n.by || n.tags?.length || n.reactions?.length) h += 36;
+  return h + 26;                                    // vertical padding
+}
+
+/** Semantic order among siblings. Without this a branch is whatever order the producer happened to
+ *  emit in, so a risk can sit between two actions and the column reads as a pile. Structure first,
+ *  then what was settled, then what is still open, then work, then the ambient/fun nodes. */
+const KIND_ORDER: NodeKind[] = [
+  "topic", "decision", "requirement", "question", "risk",
+  "milestone", "action", "quote", "meter", "poll", "shot",
+];
+const rank = (n: GNode) => {
+  const i = KIND_ORDER.indexOf(n.kind);
+  return i < 0 ? KIND_ORDER.length : i;
+};
 
 export function layout(nodes: GNode[]): Placed[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -190,12 +222,17 @@ export function layout(nodes: GNode[]): Placed[] {
     kids.set(n.parent, list);
   }
   if (!root) return [];
+  // Stable semantic sort: equal kinds keep the order Minami produced them in, so a branch still
+  // reads chronologically within each group.
+  for (const [k, list] of kids) {
+    kids.set(k, list.map((n, i) => ({ n, i })).sort((a, b) => rank(a.n) - rank(b.n) || a.i - b.i).map((o) => o.n));
+  }
 
   /** Vertical room a subtree needs: its own height, or its children stacked — whichever is larger.
    *  Measuring before placing is what makes overlap impossible rather than merely unlikely. */
   const heightOf = (id: string): number => {
     const node = byId.get(id);
-    const own = node ? KIND_SIZE[node.kind].h : 80;
+    const own = node ? nodeHeight(node) : 80;
     const cs = kids.get(id) ?? [];
     if (!cs.length) return own;
     const stacked = cs.reduce((sum, c) => sum + heightOf(c.id), 0) + V_GAP * (cs.length - 1);

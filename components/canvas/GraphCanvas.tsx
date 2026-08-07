@@ -11,7 +11,7 @@
 // on focus and pulls back when focus changes, which is what makes the map feel like it's following
 // the conversation rather than being dragged.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { KIND_SIZE, branchColor, layout, type Graph, type Placed } from "@/lib/canvas-graph";
+import { KIND_SIZE, branchColor, layout, nodeHeight, type Graph, type Placed } from "@/lib/canvas-graph";
 import { GraphNode } from "@/components/canvas/GraphNode";
 
 const EDGE_LABEL: Record<string, string> = {
@@ -152,8 +152,8 @@ function bbox(placed: Placed[]) {
   if (!placed.length) return { w: 900, h: 600, cx: 0, cy: 0 };
   const l = Math.min(...placed.map((p) => p.x - KIND_SIZE[p.kind].w / 2));
   const r = Math.max(...placed.map((p) => p.x + KIND_SIZE[p.kind].w / 2));
-  const t = Math.min(...placed.map((p) => p.y - KIND_SIZE[p.kind].h / 2));
-  const b = Math.max(...placed.map((p) => p.y + KIND_SIZE[p.kind].h / 2));
+  const t = Math.min(...placed.map((p) => p.y - nodeHeight(p) / 2));
+  const b = Math.max(...placed.map((p) => p.y + nodeHeight(p) / 2));
   return { w: r - l, h: b - t, cx: (l + r) / 2, cy: (t + b) / 2 };
 }
 

@@ -60,6 +60,14 @@ function Stage({ graph }: { graph: Graph }) {
   return (
     <>
       <GraphCanvas graph={graph} />
+      {/* Scrim under the floating chrome. The camera can only keep the FOCUSED neighbourhood clear of
+          the header; a card from an unrelated branch can still sit at those coordinates, and the
+          title then renders on top of it and becomes unreadable. A soft fade keeps the type legible
+          whatever slides underneath, without drawing a hard bar across the canvas. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 h-32"
+        style={{ background: "linear-gradient(to bottom, rgba(244,244,242,0.92), rgba(244,244,242,0))" }}
+      />
       <header className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-6 p-7">
         <div className="min-w-0">
           <h1 className="truncate text-[22px] font-semibold tracking-[-0.01em] text-neutral-800">
