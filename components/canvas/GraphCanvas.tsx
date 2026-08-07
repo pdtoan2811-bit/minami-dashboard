@@ -124,8 +124,12 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
   useEffect(() => {
     if (!graph.focus) { setShot("wide"); return; }
     setShot("push");
-    const a = setTimeout(() => setShot("column"), 2100);  // hold on the subject
-    const b = setTimeout(() => setShot("wide"), 4600);    // then let it breathe
+    // Holds are long. On a shared screen the camera is furniture, not a cursor — a customer needs
+    // time to find what moved, read it, and look back at the speaker before anything else happens.
+    // Short holds make the surface feel busy, which is the opposite of what a reference should feel
+    // like, and busy is what reads as amateur.
+    const a = setTimeout(() => setShot("column"), 3400);  // hold on the subject
+    const b = setTimeout(() => setShot("wide"), 7600);    // then let it breathe
     return () => { clearTimeout(a); clearTimeout(b); };
   }, [graph.focus, graph.rev]);
 
@@ -152,10 +156,13 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
   const tx = vp.w / 2 - target.cx * zoom;
   const ty = HEADER + (vp.h - HEADER) / 2 - target.cy * zoom;
 
-  // Longer and softer on the way out than on the way in: a push-in should feel decisive, a
-  // pull-back should feel like relaxing. Same curve, different duration — that asymmetry is most of
-  // what separates a directed camera from a lerp.
-  const dur = shot === "push" ? 780 : 1250;
+  // Slow. A camera crossing a whole board covers far more distance than a card shifting a few
+  // hundred px, so matching the node easing would make the sweep feel snapped and nauseating —
+  // "moving alike" means matching the CURVE, not the clock.
+  //
+  // Still asymmetric: a push-in is decisive, a pull-back is relaxing. That asymmetry is most of what
+  // separates a directed camera from a lerp.
+  const dur = shot === "push" ? 1500 : 2400;
 
   return (
     <div ref={wrapRef} className="absolute inset-0 overflow-hidden">
