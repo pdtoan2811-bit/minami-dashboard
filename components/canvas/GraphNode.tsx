@@ -22,10 +22,12 @@ import {
   type Placed,
 } from "@/lib/canvas-graph";
 
-export function GraphNode({ n, live, index, rel }: {
+export function GraphNode({ n, live, index, rel, branchHue }: {
   n: Placed; live: boolean; index: number;
   /** Relationships whose other end is too far to draw as a line — worn here instead. */
   rel?: { kind: string; other: string }[];
+  /** The cluster's colour, so a heading can carry it without the card palette changing. */
+  branchHue?: string;
 }) {
   const size = KIND_SIZE[n.kind];
   const state = n.state ?? DEFAULT_STATE[n.kind];
@@ -52,31 +54,34 @@ export function GraphNode({ n, live, index, rel }: {
   // like just another (oddly small) node rather than the label for everything beneath it. Depth 1 is
   // the column title; deeper topics are section labels inside it — a clear size step, so you can
   // tell a column from a section at a glance.
+  // A topic is the cluster's HEADING. It was 19px of plain text floating beside 300px cards — the
+  // "big cards next to tiny pills" mismatch. It now carries a branch-coloured marker and a rule that
+  // runs to the edge of the group, so it reads as a heading with a scope rather than as a stray
+  // label, and gives the cluster a definite top-left corner for everything else to align against.
   if (isTopic) {
-    const isColumn = n.depth <= 1;
+    const hue = branchHue ?? "#8a8a86";
     return (
       <Shell n={n} size={size} index={index}>
-        <div className="flex h-full items-center gap-2">
-          {isColumn ? (
-            <>
-              <span className="text-[19px] font-bold tracking-[-0.02em] text-neutral-800">{n.label}</span>
-              {n.collapsed ? (
-                <span className="rounded-full bg-neutral-200/70 px-2 py-0.5 text-[11px] font-bold text-neutral-500">
-                  +{n.collapsed}
-                </span>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-neutral-400">
-                {n.label}
+        <div className="flex h-full flex-col justify-center">
+          <div className="flex items-center gap-2">
+            <span className="size-2.5 shrink-0 rounded-full" style={{ background: hue }} aria-hidden />
+            <span className="truncate text-[17px] font-bold tracking-[-0.02em] text-neutral-700">
+              {n.label}
+            </span>
+            {n.collapsed ? (
+              <span className="shrink-0 rounded-full bg-neutral-200/70 px-1.5 py-0.5 text-[10.5px] font-bold text-neutral-500">
+                +{n.collapsed}
               </span>
-              <span className="h-px flex-1 bg-neutral-200" />
-              {n.collapsed ? (
-                <span className="text-[11px] font-bold text-neutral-400">+{n.collapsed}</span>
-              ) : null}
-            </>
-          )}
+            ) : null}
+          </div>
+          {/* The rule runs PAST the heading box and into the gap before the cards. Stopping at the
+              label's own width left a stub floating in space with a hole after it; carrying it
+              across ties the heading to what it heads and closes the only remaining gap in the
+              cluster. 44px is STEM — kept in sync by hand, which is fine for one number. */}
+          <span
+            className="mt-2 block h-px"
+            style={{ background: hue, opacity: 0.3, width: "calc(100% + 44px)" }}
+          />
         </div>
       </Shell>
     );

@@ -128,7 +128,7 @@ export const KIND_LABEL: Record<NodeKind, string> = {
 
 /** Node box size per kind, in canvas units. Decision is the hero — it gets the most room. */
 export const KIND_SIZE: Record<NodeKind, { w: number; h: number }> = {
-  topic: { w: 210, h: 62 }, decision: { w: 330, h: 168 }, action: { w: 300, h: 150 },
+  topic: { w: 156, h: 62 }, decision: { w: 330, h: 168 }, action: { w: 300, h: 150 },
   question: { w: 300, h: 140 }, requirement: { w: 300, h: 140 }, risk: { w: 300, h: 150 },
   milestone: { w: 280, h: 132 }, quote: { w: 360, h: 186 }, meter: { w: 280, h: 168 },
   poll: { w: 300, h: 196 }, shot: { w: 300, h: 214 }, aside: { w: 260, h: 96 },
@@ -239,7 +239,11 @@ const rank = (n: GNode) => {
 // wrapping into rows, with a deterministic offset per cluster so the rows never line up into a
 // spreadsheet. Same meeting, same board — no jitter between renders.
 const CARD_GAP_Y = 26;      // between stacked cards in a cluster
-const STEM = 110;           // gap between a topic node and its cards — room for the edge to read
+// Gap between the topic label and its cards. Was 110 to leave room for an edge to read — but topic
+// edges are gone, so it was 110px of nothing, on top of a 210px topic box holding a ~60px label.
+// Every cluster carried ~250px of dead column inside its halo, which is most of why the board looked
+// airy and unaligned. Now it's just enough to separate a heading from what it heads.
+const STEM = 44;
 const CLUSTER_GAP_X = 150;
 const CLUSTER_GAP_Y = 96;
 const BOARD_COLS = 4;       // masonry columns; the board grows downward, like a real one
@@ -312,11 +316,14 @@ export function layout(nodes: GNode[]): Placed[] {
     const ox = col * (cellW + CLUSTER_GAP_X);
     const oy = colH[col];
 
-    // Topic at the vertical centre of its own cards, so edges fan symmetrically.
+    // TOP-aligned, not vertically centred. Centring made sense when edges fanned out from the topic
+    // and wanted symmetry; with no edges it just left the label floating in the middle of empty
+    // space with nothing to relate to. Sitting level with the first card, it reads as the heading it
+    // actually is, and gives the cluster a real top-left corner to align everything else against.
     out.push({
       ...p.topic,
       x: Math.round(ox + KIND_SIZE.topic.w / 2),
-      y: Math.round(oy + p.h / 2),
+      y: Math.round(oy + nodeHeight(p.topic) / 2),
       depth: 1, branch: p.topic.id,
     });
     for (const c of p.cells) {

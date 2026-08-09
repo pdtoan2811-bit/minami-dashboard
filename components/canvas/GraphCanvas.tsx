@@ -111,6 +111,7 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
 
   const bounds = useMemo(() => bbox(placed), [placed]);
   const rels = useMemo(() => farRelations(graph, placed), [graph, placed]);
+  const branchIds2 = useMemo(() => placed.filter((p) => p.depth === 1).map((p) => p.id), [placed]);
 
   // ── Camera director ───────────────────────────────────────────────────────────────────────────
   // Cut-scene grammar, not a follow-cam. When something lands, the camera PUSHES IN on it, HOLDS
@@ -179,7 +180,7 @@ export function GraphCanvas({ graph }: { graph: Graph }) {
       >
         <Edges placed={placed} graph={graph} />
         {placed.map((n, i) => (
-          <GraphNode key={n.id} n={n} index={i} live={graph.focus === n.id} rel={rels.get(n.id)} />
+          <GraphNode key={n.id} n={n} index={i} live={graph.focus === n.id} rel={rels.get(n.id)} branchHue={branchColor(branchIds2, n.branch)} />
         ))}
       </div>
     </div>
