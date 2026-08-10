@@ -63,14 +63,23 @@ export async function sliceChunk(file: string, startSec: number, seconds: number
   ]);
 }
 
-/** Chunk boundaries for the first `minutes` of a file (0 or negative = the whole thing). */
-export async function planChunks(file: string, minutes: number) {
+/** Chunk boundaries for the first `minutes` of a file (0 or negative = the whole thing).
+ *
+ *  Chunk and overlap are arguments rather than constants because the A/B arms disagree about them
+ *  (§17): the 60s window above is sized for a transcriber that costs 13s per audio-minute, and a real
+ *  ASR model makes it dead time. Defaults keep the control arm byte-identical to what shipped. */
+export async function planChunks(
+  file: string,
+  minutes: number,
+  chunkSeconds: number = CHUNK_SECONDS,
+  overlapSeconds: number = OVERLAP_SECONDS,
+) {
   const total = await durationSeconds(file);
   const want = minutes > 0 ? Math.min(minutes * 60, total) : total;
   const chunks: { index: number; start: number; seconds: number }[] = [];
-  for (let s = 0, i = 0; s < want; s += CHUNK_SECONDS, i++) {
-    const start = Math.max(0, s - (i ? OVERLAP_SECONDS : 0));
-    chunks.push({ index: i, start, seconds: Math.min(CHUNK_SECONDS + (i ? OVERLAP_SECONDS : 0), want - start) });
+  for (let s = 0, i = 0; s < want; s += chunkSeconds, i++) {
+    const start = Math.max(0, s - (i ? overlapSeconds : 0));
+    chunks.push({ index: i, start, seconds: Math.min(chunkSeconds + (i ? overlapSeconds : 0), want - start) });
   }
   return { total, want, chunks };
 }
