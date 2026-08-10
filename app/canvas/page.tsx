@@ -11,20 +11,18 @@
 // audience is customers, and a dark node graph reads as a developer tool.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_GRAPH, type GNode, type Graph } from "@/lib/canvas-graph";
-import { DEMO_BY_ID, DEMOS, type Action } from "@/lib/canvas-demos";
 import { GraphCanvas } from "@/components/canvas/GraphCanvas";
-import { TranscriptPanel, type Spoken } from "@/components/canvas/TranscriptPanel";
+import { TranscriptPanel, type Segment } from "@/components/canvas/TranscriptPanel";
 
 export default function CanvasPage() {
   const [graph, setGraph] = useState<Graph>(DEMO_GRAPH);
   const [mode, setMode] = useState<"live" | "demo" | "play">("live");
-  const [scriptId, setScriptId] = useState("pilot");
   const rev = useRef(DEMO_GRAPH.rev ?? 0);
 
   useEffect(() => {
     const q = new URL(window.location.href).searchParams;
-    const play = q.get("play");
-    if (play) { setMode("play"); setScriptId(DEMO_BY_ID.has(play) ? play : "pilot"); return; }
+    // ?live=1 (or ?play= for muscle memory) opens the real-audio view.
+    if (q.get("live") || q.get("play")) { setMode("play"); return; }
     if (q.get("demo") === "1") { setMode("demo"); setGraph({ ...DEMO_GRAPH, focus: undefined }); return; }
     if (q.get("demo") === "focus") { setMode("demo"); return; }
 
@@ -44,9 +42,7 @@ export default function CanvasPage() {
     return () => es.close();
   }, []);
 
-  if (mode === "play") {
-    return <PlayMode scriptId={scriptId} onPick={setScriptId} />;
-  }
+  if (mode === "play") return <AudioMode />;
   return (
     <main className="canvas-surface relative h-dvh w-dvw overflow-hidden">
       <Stage graph={graph} />
@@ -87,98 +83,83 @@ function Stage({ graph }: { graph: Graph }) {
   );
 }
 
-/** Scripted playback. The script is the single source for both the map and the panel, so what the
- *  panel claims Minami did is necessarily what actually happened to the graph. */
-function PlayMode({ scriptId, onPick }: { scriptId: string; onPick: (id: string) => void }) {
-  const script = DEMO_BY_ID.get(scriptId) ?? DEMOS[0];
+/** Real audio ingest.
+ *
+ *  Replaces the scripted player entirely. Nothing here is pre-authored: the audio is transcribed by
+ *  mimo, mimo decides what is worth keeping, and the server validates every action before it touches
+ *  the board. What you watch is what the model actually did.
+ *
+ *  Everything arrives over one SSE stream, so the transcript and the canvas can never disagree about
+ *  what happened — the same events drive both. */
+function AudioMode() {
+  const [graph, setGraph] = useState<Graph>({ nodes: [{ id: "root", kind: "topic", label: "Meeting" }] });
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [running, setRunning] = useState(false);
+  const [minutes, setMinutes] = useState(1);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
 
-  // History of snapshots rather than a single mutating graph: history[i] is the map after i steps.
-  // Keeping every state is what makes Back possible at all — the reducer is one-way, so rewinding a
-  // mutated graph would mean inventing inverse actions for every kind. Snapshots are a handful of
-  // small objects and buy exact scrubbing for free.
-  const [hist, setHist] = useState<Graph[]>(() => [base(script)]);
-  const [i, setI] = useState(0);
-  // Starts PAUSED and blank. You asked to drive it, and a demo that runs off on its own the moment
-  // it loads can't be driven.
-  const [playing, setPlaying] = useState(false);
+  const stop = useCallback(() => {
+    esRef.current?.close();
+    esRef.current = null;
+    setRunning(false);
+  }, []);
 
-  const graph = hist[i] ?? hist[hist.length - 1];
-  const done = i >= script.steps.length;
-  const spoken: Spoken[] = useMemo(
-    () => script.steps.slice(0, i).map((s) => ({ who: s.who, say: s.say, does: s.does })),
-    [script, i],
-  );
+  const run = useCallback((mins: number) => {
+    stop();
+    setMinutes(mins);
+    setSegments([]);
+    setProgress(null);
+    setError(null);
+    setGraph({ nodes: [{ id: "root", kind: "topic", label: "Meeting" }], status: "live" });
+    setRunning(true);
 
-  const reset = useCallback(() => {
-    setHist([base(script)]); setI(0); setPlaying(false);
-  }, [script]);
+    const es = new EventSource(`/api/canvas/live?minutes=${mins}`);
+    esRef.current = es;
 
-  useEffect(() => { reset(); }, [scriptId, reset]);
+    let total = 0;
+    let done = 0;
+    // Buffer the transcript for a chunk until its actions arrive, so a segment renders as one
+    // complete unit — line plus what it caused — rather than text first and consequences later.
+    let held: { at: string; lines: string[] } | null = null;
 
-  const next = useCallback(() => {
-    setI((n) => {
-      if (n >= script.steps.length) return n;
-      setHist((h) => {
-        if (h[n + 1]) return h;                       // already computed — Back then Next reuses it
-        const step = script.steps[n];
-        const g = step.does?.length ? step.does.reduce(apply, h[n]) : { ...h[n], reaction: null };
-        return [...h.slice(0, n + 1), g];
-      });
-      return n + 1;
+    es.addEventListener("meta", (e) => {
+      const d = JSON.parse((e as MessageEvent).data);
+      total = d.chunks;
+      setProgress({ done: 0, total });
     });
-  }, [script]);
 
-  const back = useCallback(() => setI((n) => Math.max(0, n - 1)), []);
+    es.addEventListener("transcript", (e) => {
+      const d = JSON.parse((e as MessageEvent).data);
+      held = { at: d.at, lines: d.lines };
+    });
 
-  useEffect(() => {
-    if (!playing || done) return;
-    const t = setTimeout(next, i === 0 ? 400 : script.steps[i].gap);
-    return () => clearTimeout(t);
-  }, [playing, done, i, next, script]);
+    es.addEventListener("graph", (e) => {
+      const d = JSON.parse((e as MessageEvent).data);
+      setGraph(d.graph);
+      if (held) {
+        const seg = held;
+        setSegments((s) => [...s, { at: seg.at, lines: seg.lines, actions: d.actions, dropped: d.dropped }]);
+        held = null;
+      }
+      done += 1;
+      setProgress({ done, total });
+    });
 
-  useEffect(() => { if (done) setPlaying(false); }, [done]);
+    es.addEventListener("fail", (e) => {
+      setError(JSON.parse((e as MessageEvent).data).error);
+      stop();
+    });
 
-  // Phase two of a merge: once the absorbed node has flown to its target and faded, drop it. Doing
-  // this in the snapshot in place means stepping Back replays the merge rather than resurrecting a
-  // half-dead node.
-  useEffect(() => {
-    if (!graph.nodes.some((n) => n.mergingInto)) return;
-    const t = setTimeout(() => {
-      setHist((h) => h.map((g, k) => (k === i ? { ...g, nodes: g.nodes.filter((n) => !n.mergingInto) } : g)));
-    }, 820);
-    return () => clearTimeout(t);
-  }, [graph.nodes, i]);
+    es.addEventListener("done", () => stop());
 
-  // One-shot effects clear themselves; otherwise a node re-shakes on every re-render.
-  useEffect(() => {
-    if (!graph.nodes.some((n) => n.fx)) return;
-    const t = setTimeout(() => {
-      setHist((h) => h.map((g, k) => (k === i ? { ...g, nodes: g.nodes.map(({ fx, ...n }) => (void fx, n)) } : g)));
-    }, 1200);
-    return () => clearTimeout(t);
-  }, [graph.nodes, i]);
+    // EventSource retries on its own; on a finished stream that would restart the whole run, which
+    // would silently re-bill the transcription. Close instead and let the user press again.
+    es.onerror = () => stop();
+  }, [stop]);
 
-  // A celebration is a moment, not a state — expire it so the overlay can't sit on the map for the
-  // rest of the meeting. Applied to the snapshot in place so stepping Back doesn't resurrect it.
-  useEffect(() => {
-    if (!graph.reaction) return;
-    const t = setTimeout(
-      () => setHist((h) => h.map((g, k) => (k === i ? { ...g, reaction: null } : g))),
-      2600,
-    );
-    return () => clearTimeout(t);
-  }, [graph.reaction, i]);
-
-  // Arrow keys: stepping through a demo with the mouse gets old within one run.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight") { setPlaying(false); next(); }
-      if (e.key === "ArrowLeft") { setPlaying(false); back(); }
-      if (e.key === " ") { e.preventDefault(); setPlaying((p) => !p); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [next, back]);
+  useEffect(() => () => { esRef.current?.close(); }, []);
 
   return (
     <main className="flex h-dvh w-dvw overflow-hidden">
@@ -186,84 +167,16 @@ function PlayMode({ scriptId, onPick }: { scriptId: string; onPick: (id: string)
         <Stage graph={graph} />
       </div>
       <TranscriptPanel
-        script={script}
-        spoken={spoken}
-        playing={playing && !done}
-        step={i}
-        total={script.steps.length}
-        nextLine={script.steps[i]?.say}
-        nextWho={script.steps[i]?.who}
-        onToggle={() => setPlaying((p) => !p)}
-        onNext={() => { setPlaying(false); next(); }}
-        onBack={() => { setPlaying(false); back(); }}
-        onRestart={reset}
-        onPick={onPick}
+        segments={segments}
+        running={running}
+        minutes={minutes}
+        progress={progress}
+        error={error}
+        onRun={run}
+        onStop={stop}
       />
     </main>
   );
-}
-
-function base(script: { title: string; subtitle: string; seed: GNode[] }): Graph {
-  return { rev: 0, title: script.title, subtitle: script.subtitle, status: "live", nodes: [...script.seed] };
-}
-
-/** Pure reducer — one action, one new graph. Pure so playback is deterministic and replayable, and
- *  so the same actions could later be applied by the real transcript pipeline unchanged. */
-function apply(g: Graph, a: Action): Graph {
-  switch (a.kind) {
-    case "add": {
-      // Re-adding an existing id REPLACES it, which is how a poll accrues votes without a bespoke
-      // action type: the producer just sends the node again with new numbers.
-      const exists = g.nodes.some((n) => n.id === a.node.id);
-      return {
-        ...g,
-        nodes: exists ? g.nodes.map((n) => (n.id === a.node.id ? { ...n, ...a.node } : n)) : [...g.nodes, a.node],
-      };
-    }
-    case "focus":
-      return { ...g, focus: a.id };
-    case "state":
-      return { ...g, nodes: g.nodes.map((n) => (n.id === a.id ? { ...n, state: a.state } : n)) };
-    case "react":
-      return {
-        ...g,
-        nodes: g.nodes.map((n) => {
-          if (n.id !== a.id) return n;
-          const rs = [...(n.reactions ?? [])];
-          const hit = rs.find((r) => r.emoji === a.emoji);
-          if (hit) hit.count += 1; else rs.push({ emoji: a.emoji, count: 1 });
-          return { ...n, reactions: rs };
-        }),
-      };
-    case "collapse":
-      return { ...g, nodes: g.nodes.map((n) => (n.id === a.id ? { ...n, collapsed: a.count } : n)) };
-    case "celebrate":
-      return { ...g, reaction: { kind: a.glyph ?? "spark", label: a.label } };
-    case "fx":
-      return { ...g, nodes: g.nodes.map((n) => (n.id === a.id ? { ...n, fx: a.fx } : n)) };
-    case "edge":
-      return { ...g, edges: [...(g.edges ?? []), { from: a.from, to: a.to, kind: a.edge }] };
-    case "amend":
-      return {
-        ...g,
-        nodes: g.nodes.map((n) =>
-          n.id === a.id ? { ...n, label: a.label ?? n.label, detail: a.detail ?? n.detail, fx: "jump" as const } : n),
-      };
-    case "merge":
-      return {
-        ...g,
-        focus: a.into,
-        nodes: g.nodes.map((n) => {
-          if (n.id === a.from) return { ...n, mergingInto: a.into };
-          // The survivor takes on the merged wording and glows, so the absorb reads as a gain
-          // rather than a deletion.
-          if (n.id === a.into) {
-            return { ...n, label: a.label ?? n.label, detail: a.detail ?? n.detail, fx: "glow" as const };
-          }
-          return n;
-        }),
-      };
-  }
 }
 
 /** Full-canvas moment. A wash rather than a modal: the map stays visible through it, so the

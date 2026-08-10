@@ -31,6 +31,11 @@ export type NodeKind =
   | "topic" | "decision" | "action" | "question" | "requirement" | "risk" | "milestone"
   // fun
   | "quote" | "meter" | "poll" | "shot"
+  /** A substantive statement that isn't a decision or a commitment — a fact, a claim, a number, an
+   *  argument someone made. The vocabulary was entirely meeting-shaped (decision/action/owner) and
+   *  had nowhere to put "OpenAI made X free" or "returns kill margin quietly", so the model found no
+   *  matching slot and produced nothing at all. Most of what is said in any conversation is this. */
+  | "note"
   /** Small talk, a tangent, something off-scope. Captured because at the time nobody knows whether
    *  it matters — the lunch plan is noise, "the budget cycle closes in September" arrived exactly
    *  the same way and turned out to be the constraint that shaped the whole pilot. Dropping a line
@@ -111,19 +116,19 @@ export const STATE_COLOR: Record<NodeState, string> = {
 export const DEFAULT_STATE: Record<NodeKind, NodeState> = {
   topic: "proposed", decision: "agreed", action: "proposed", question: "open",
   requirement: "proposed", risk: "blocked", milestone: "proposed",
-  quote: "proposed", meter: "proposed", poll: "open", shot: "proposed", aside: "proposed",
+  quote: "proposed", meter: "proposed", poll: "open", shot: "proposed", aside: "proposed", note: "proposed",
 };
 
 /** Type is carried by icon + label, never by hue. Kept as text so no icon font is needed. */
 export const KIND_ICON: Record<NodeKind, string> = {
   topic: "◆", decision: "✓", action: "→", question: "?", requirement: "▤",
-  risk: "!", milestone: "◇", quote: "❝", meter: "◐", poll: "▥", shot: "▣", aside: "~",
+  risk: "!", milestone: "◇", quote: "❝", meter: "◐", poll: "▥", shot: "▣", aside: "~", note: "▪",
 };
 
 export const KIND_LABEL: Record<NodeKind, string> = {
   topic: "Topic", decision: "Decision", action: "Action", question: "Open question",
   requirement: "Requirement", risk: "Risk", milestone: "Milestone",
-  quote: "Moment", meter: "Alignment", poll: "Poll", shot: "Screen", aside: "Aside",
+  quote: "Moment", meter: "Alignment", poll: "Poll", shot: "Screen", aside: "Aside", note: "Note",
 };
 
 /** Node box size per kind, in canvas units. Decision is the hero — it gets the most room. */
@@ -131,7 +136,7 @@ export const KIND_SIZE: Record<NodeKind, { w: number; h: number }> = {
   topic: { w: 156, h: 62 }, decision: { w: 330, h: 168 }, action: { w: 300, h: 150 },
   question: { w: 300, h: 140 }, requirement: { w: 300, h: 140 }, risk: { w: 300, h: 150 },
   milestone: { w: 280, h: 132 }, quote: { w: 360, h: 186 }, meter: { w: 280, h: 168 },
-  poll: { w: 300, h: 196 }, shot: { w: 300, h: 214 }, aside: { w: 260, h: 96 },
+  poll: { w: 300, h: 196 }, shot: { w: 300, h: 214 }, aside: { w: 260, h: 96 }, note: { w: 300, h: 130 },
 };
 
 /** Soft tint behind a node's header band, keyed to its state colour. Kept at very low alpha: the
@@ -208,7 +213,7 @@ export function nodeHeight(n: GNode): number {
  *  was settled, then what is still open, then work, then the ambient/fun nodes. */
 const KIND_ORDER: NodeKind[] = [
   "decision", "requirement", "question", "risk",
-  "milestone", "action", "quote", "meter", "poll", "shot",
+  "milestone", "action", "note", "quote", "meter", "poll", "shot",
   // Asides sink to the bottom of their cluster: kept, but never competing with substance.
   "aside",
   // Sub-sections LAST. With topics first, a parent's own cards rendered after an entire nested
