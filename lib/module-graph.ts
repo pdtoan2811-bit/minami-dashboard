@@ -173,6 +173,7 @@ export const NODES: ModuleNode[] = [
   { id: "c/FlowCanvas", label: "FlowCanvas", sub: "one spine per session\n(ask → what it did)", layer: "component", row: 21, pipeline: "live" },
   { id: "l/flowmodel", label: "flow-model.ts", sub: "transcript → journey\n(acts · evidence · open loops)", layer: "core", row: 16, pipeline: "live" },
   { id: "l/flownarrate", label: "flow-narrate.ts", sub: "Haiku writes the outcome\nline · cached to disk", layer: "core", row: 17, pipeline: "live" },
+  { id: "l/flowstack", label: "flow-stack.ts", sub: "calls → tech slugs\n(what it worked IN)", layer: "core", row: 18, pipeline: "live" },
   { id: "r/flow", label: "/api/flow/[id]", sub: "narratives only\nGET cached · POST writes", layer: "route", row: 14, pipeline: "live" },
   { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
 
@@ -377,6 +378,10 @@ export const EDGES: ModuleEdge[] = [
   { from: "c/FlowCanvas", to: "r/session", kind: "http", label: "transcript · pages back" },
   { from: "c/FlowCanvas", to: "l/flowmodel", kind: "import" },
   { from: "c/FlowStrip", to: "l/flowmodel", kind: "import" },
+  // The stack row's slugs are derived in the MODEL, not the component — so the server-side fold in
+  // /api/flow reaches the same answer the browser does, exactly as it must for narrative keys.
+  { from: "l/flowmodel", to: "l/flowstack", kind: "import" },
+  { from: "c/FlowCanvas", to: "c/BrandIcon", kind: "import" },
   // The narration round trip. Deliberately a SECOND, tiny request rather than a field on the
   // transcript response: the fold already carries every tool result, and doubling that payload to
   // deliver a few hundred bytes of prose is the wrong trade. See KNOWLEDGE.md §5f.

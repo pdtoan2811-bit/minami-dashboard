@@ -5,7 +5,7 @@ which `§` ids live where. Section numbers are stable: code comments cite them.
 
 ---
 
-## 5f. Flow — `components/FlowCanvas.tsx`, `components/FlowStrip.tsx`, `lib/flow-model.ts`, `lib/flow-narrate.ts`
+## 5f. Flow — `components/FlowCanvas.tsx`, `components/FlowStrip.tsx`, `lib/flow-model.ts`, `lib/flow-narrate.ts`, `lib/flow-stack.ts`
 
 **One spine per session, one node per thing you asked for, and each node says what was wanted and how
 it turned out.** It answers three questions the transcript cannot: what have I asked this session for,
@@ -55,6 +55,61 @@ the network down, and it must never invent a fact.
 test, a commit, a deploy — matched against the whole command string, not just its head, because the
 verdict-bearing part is usually downstream of a `cd`/`&&`/pipe. "It says it built" and "here is the
 exit code of the build" are different claims, and only the second one settles an argument.
+
+### v5 — the last three calls, and the stack they worked in
+
+Two additions to the milestone node, both answering questions the acts layer above cannot.
+
+**`Milestone.recent` — the newest three tool calls, on the node.** This is a deliberate, narrow
+exception to "tool calls are two clicks deep", and the rule is still right for the other several
+hundred calls in a session. The exception earns itself on the **live** milestone, where the question is
+"what is it touching *right now*" and the answer used to be two clicks plus a guess about which phase
+to open; on a settled milestone the same three rows are the cheapest possible check that the summary
+above them describes real work. Three is the whole budget (`RECENT_CALLS`) — this is the surface v3
+drowned in, and the preview must stay a preview.
+
+They render **oldest-of-the-three first**, matching the raw log they preview. A preview that reverses
+the order of the thing it previews is a trap, not a shortcut.
+
+**`Milestone.stack` — what it worked IN, as brand icons (`lib/flow-stack.ts`).** The acts layer says
+*what it was doing*; this says *what it was doing it to*, and it says it in icons because that is the
+one part of a node the eye takes in without reading. Scanning a fifty-ask spine for "where did the
+Python work happen" is a text search without it and a glance with it — which is why the icons are on
+the **collapsed** form too, paid for by shortening the ask from 60 chars to 46.
+
+> **Derived from the CALLS, not from the project.** `lib/tech-attach.ts` already knows a topic's stack
+> and reusing it here was the obvious move — but it returns the same answer for every milestone, so it
+> would draw an identical row on every node and carry exactly zero information *inside* this view. The
+> calls are what differ from ask to ask. A milestone that only touched `.py` shows Python even in a
+> TypeScript repo, which is the true and useful answer.
+
+Same contract as the rest of the semantic layer: pure, synchronous, correct mid-stream, and **never
+inventing a fact**. The extension/command/MCP tables are a **whitelist** — anything without a confident
+mapping contributes nothing rather than a guess, because a wrong logo is worse than no logo (a reader
+believes it). Every slug in them is one `public/tech-icons.json` ships or `BrandIcon` has a lettermark
+for, so nothing here can render as a broken tile.
+
+`FlowTurn.tools` exists for this: "the latest 3 calls" is a claim about **time**, and flattening
+`steps` yields *plan* order — a step the plan returns to later collects calls from two different
+moments. So the fold keeps a separate chronological list, and the ack-fold concatenates it.
+
+> 🐛 **Two wrongs found by driving it, not by reading it** (v5, same turn it shipped). Both were only
+> visible on a real transcript, which is the argument for `npm run dev:iterate` on `:3001` over
+> reasoning about the diff.
+>
+> 1. **`\bplaywright\b` in the command table matched `find … -iname "*playwright*"`.** The stack row
+>    claimed a milestone used Playwright when all it had done was *search for the word* — the name
+>    appears in paths far more often than as a command. Rule deleted; real use arrives as an MCP call
+>    or as `npx playwright`, both already covered. The general lesson for that table: match commands
+>    that are **run**, not words that are **mentioned**.
+> 2. **Three MCP calls rendered as `MCP__PLAYWRIG… / MCP__PLAYWRIG… / MCP__PLAYWRIG…`** — a column of
+>    identical prefixes with the distinguishing verb clipped off the end. `shortToolName` now drops the
+>    `mcp__<server>__` prefix (the server is already on the node as its brand icon) and the `browser_`
+>    noun every browser verb repeats, leaving `CLICK · EVALUATE · TAKE_SCREENSHOT`.
+
+**If you add rows to the node, update `estMilestone`.** Heights are estimated, not measured, because
+React Flow positions absolutely — an estimate that omits the new rows is how you get a spine whose
+nodes overlap the phases hanging beside them.
 
 ### The narration is additive, never a replacement
 
@@ -417,8 +472,48 @@ pane keeps animating. Counted against our own list, since the receipt may also l
 > 0.3.220 — `interrupt()` takes no arguments. So a queued message is committed once sent; the tray shows
 > it but cannot remove it. Reaching past the public API for this was rejected as not worth the coupling.
 
-The tray renders **beside the composer, not in the transcript**, because `reconcile()` rebuilds `turns`
-wholesale from the on-disk transcript on every `result` — and a message that hasn't run yet isn't on
-disk, so an inline bubble would be wiped the instant the running turn finished.
+### Where a queued message is visible — all three of its lives
+
+A queued message passes through three states, and until 2026-08-12 it was only visible in the first.
+
+**1. Waiting.** It renders **in the transcript**, at the bottom, as a dashed amber bubble on the user's
+side. It is *not* spliced into `turns`: `reconcile()` rebuilds that array wholesale from the on-disk
+transcript on every `result`, and a message that hasn't run isn't on disk, so anything put in `turns`
+is wiped the instant the running turn ends. It renders from `agent.queued` — the server's mirror of the
+CLI's queue — which survives every reconcile. (It used to live beside the composer for this reason;
+what stays there now is only the sentence about what happens next, which is about the control rather
+than the conversation.)
+
+**2. Running, as its own turn.** On `command_lifecycle: started` the server drops it from `s.queued`,
+so the bubble goes — and nothing put it in the log, so for the length of that turn the message was
+**nowhere**: a reply streaming with no question above it. The server now emits `{ t: "started", uuid,
+text }` carrying the text it is about to forget, and the pane appends a real user turn plus an empty
+streaming bubble. Safe here and not at queue time, and the difference is which reconcile comes next:
+queued, the next one is the *running* turn's `result` (message not on disk → wiped); started, the
+previous result has already fired and the next one ends *this* turn, by which point the message is on
+disk and reconcile replaces the optimistic row with the real one. Same text, no duplicate.
+
+**3. Coalesced into a turn that was already running.** The CLI may fold a queued follow-up into the
+turn in flight rather than giving it its own. Then there is no `started` — only `completed` — and,
+critically, **the CLI never writes a `user` row for it**. What it writes is:
+
+```json
+{ "type": "attachment", "uuid": "…", "parentUuid": "…",
+  "attachment": { "type": "queued_command", "prompt": "<your message>", "source_uuid": "…" } }
+```
+
+`parseLines` now folds that into an ordinary user turn. Before, the message existed on disk and in no
+view built from it — the reply plainly answered a question that appeared nowhere. The only other trace
+is a pair of `queue-operation` rows (`enqueue`/`remove`) which carry no uuid and so cannot be ordered
+against the conversation; the `attachment` row can, which is why it is the one to read.
+
+> 🐛 **The parser fix looked broken for twenty minutes, and the parser was right.** `getSession`'s
+> `turnsCache` is keyed on **mtime + size** and takes a no-read path when both match — so every
+> transcript already parsed kept serving its old fold, and a session that never grows again would have
+> kept it forever. `PARSE_VERSION` existed for exactly this but only guarded the *meta* cache. The
+> turns cache now carries `pv` too, on disk and in memory, and a mismatch drops the entry rather than
+> folding new bytes onto a window the old parser built. **Any future change to `parseLines` must bump
+> `PARSE_VERSION`** — the symptom of forgetting is a fix that works on new sessions and silently
+> doesn't on old ones.
 
 ---

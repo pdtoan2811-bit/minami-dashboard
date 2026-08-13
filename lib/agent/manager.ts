@@ -117,6 +117,12 @@ export type AgentEvent =
   // Messages handed to the CLI while a turn was running, still awaiting their own turn. REPLACE
   // semantics like `activity`: the whole list every time, so a dropped event self-heals on the next one.
   | { t: "queued"; queued: { uuid: string; text: string }[] }
+  // A queued message just BECAME the running turn. Carries its text because the `queued` broadcast that
+  // rides alongside has already dropped it — and without the text the pane cannot put the message into
+  // the transcript, which is the whole point: the reply that follows needs its question above it. See
+  // handleCommandLifecycle, and §5f-bis for why this can be appended optimistically here and could not
+  // be at queue time.
+  | { t: "started"; uuid: string; text: string }
   | { t: "detached" } // no live session exists for this key — client should fall back to the on-disk view
   | { t: "tool"; name: string; input: unknown; id?: string } // a tool call started (live feedback)
   | { t: "tool_end"; id: string; name: string; ok: boolean; ms: number; output?: ToolOutput } // its result came back
@@ -644,6 +650,10 @@ function handleCommandLifecycle(s: Session, m: any) {
     // Every message flows through this channel, including the one that started its turn immediately —
     // so only treat it as a queued handover if we were actually tracking it as queued.
     if (i === -1) return;
+    // Read the text BEFORE the splice — this is the last moment the server holds it. The pane needs it
+    // to write the message into the transcript; after this it exists only on disk, and it does not get
+    // there until this turn ends.
+    const started = s.queued[i];
     s.queued.splice(i, 1);
     s.busy = true;
     s.sawText = false;
@@ -651,6 +661,7 @@ function handleCommandLifecycle(s: Session, m: any) {
     s.partial = "";
     s.partialThinking = "";
     resetActivity(s, "thinking");
+    broadcast(s, { t: "started", uuid: started.uuid, text: started.text });
     broadcast(s, { t: "queued", queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })) });
     broadcast(s, { t: "busy", busy: true });
     broadcast(s, { t: "activity", activity: activityOf(s) });

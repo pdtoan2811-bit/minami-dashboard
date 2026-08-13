@@ -105,7 +105,10 @@ export type SessionMeta = {
   review?: boolean;  // LLM-decided: does this session need the user's attention?
 };
 
-type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string };
+type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string;
+  /** Only on `type: "attachment"`. `queued_command` is a follow-up the CLI folded into a running
+   *  turn instead of giving it its own — see parseLines, and §5f-bis. */
+  attachment?: { type?: string; prompt?: string } };
 
 // Generic bounded LRU: reinsert on every touch (hit or write) so recency reflects actual access, not
 // just insertion order, then evict the oldest once over `max`. Used for both the meta cache and the
@@ -156,7 +159,10 @@ const META_DERIVATION_VERSION = 4;
 // parse change cannot, because the raw rows that fed `accum` are already folded away. So a stale `pv`
 // drops the entry entirely and forces one full reparse from offset 0. v1: meta.cwd froze on the launch
 // cwd instead of the last (fixes drifted-cwd resumes failing with "No conversation found").
-const PARSE_VERSION = 1;
+// v2: `attachment` rows carrying a `queued_command` are now folded in as user turns — without the bump
+// every transcript already parsed keeps its cached fold, so the messages this fix recovers would only
+// appear in sessions that happen to receive another message.
+const PARSE_VERSION = 2;
 
 // Fingerprint of a file's first `len` bytes — cheap (len is capped small) and used ONLY to tell "this
 // file was purely appended to" apart from "this file was truncated and rewritten, but happens to have
@@ -554,6 +560,24 @@ function parseLines(lines: string[], startOff: number, turns: Turn[], toolIndex:
     if (!line.trim()) continue;
     let r: Row;
     try { r = JSON.parse(line); } catch { continue; }
+    // ── a queued message that never got its own turn ────────────────────────────────────────────
+    // When the CLI COALESCES a queued follow-up into the turn already running, it never writes a
+    // `user` row for it. What it writes instead is this: an `attachment` row carrying
+    // `attachment.type === "queued_command"` and the text under `prompt`. Without this branch the
+    // message is on disk but invisible in every view built from the transcript — you send it, the
+    // reply plainly answers it, and the question itself is nowhere. Measured on a real session:
+    // the only other trace is a pair of `queue-operation` rows (enqueue/remove), which carry no
+    // uuid and so cannot be ordered against the conversation.
+    //
+    // Rendered as an ordinary user turn, because that is what it is — the coalescing is an
+    // implementation detail of how the CLI batched the work, not something the reader did.
+    if (r.type === "attachment" && r.attachment?.type === "queued_command") {
+      const prompt = typeof r.attachment.prompt === "string" ? r.attachment.prompt.trim() : "";
+      if (prompt) {
+        turns.push({ role: "user", text: prompt, tools: [], ts: Date.parse(r.timestamp || "") || 0, off: lineOff });
+      }
+      continue;
+    }
     if (r.type !== "user" && r.type !== "assistant") continue;
     const c = r.message?.content;
     let text = "";
@@ -629,6 +653,11 @@ type TurnsEntry = {
   mtime: number;
   size: number;            // file size at last parse — the window's upper bound
   head: string;            // rewrite guard, same contract as the meta cache's fingerprint
+  /** The PARSE_VERSION that produced `turns`. Without it a parser change reaches only transcripts that
+   *  happen to grow afterwards, because this cache is keyed on mtime+size and an unchanged file takes
+   *  the no-read path forever. That is exactly how the `queued_command` fix looked broken: the parser
+   *  was right and every already-parsed session kept serving its old fold. */
+  pv?: number;
   start: number;           // window's lower bound; > 0 means older history exists on disk
   turns: Turn[];
   lineLeftover: string;    // trailing partial line held for the next fold
@@ -678,6 +707,9 @@ function loadTurnsDiskCache(): void {
     // Only entries written by this (windowed) format are usable: an older entry has no `start`/`off`,
     // so folding new bytes onto it would produce a window whose claimed lower bound is a lie.
     for (const [f, v] of Object.entries(obj)) {
+      // Stale `pv` → parsed by logic this build no longer trusts. Drop rather than migrate: the raw
+      // rows that produced these turns are already folded away, so there is nothing to re-derive from.
+      if (v?.pv !== PARSE_VERSION) continue;
       if (!turnsCache.has(f) && v && typeof v.start === "number" && typeof v.size === "number") turnsCache.set(f, v);
     }
   } catch { /* no cache file yet — first run */ }
@@ -787,7 +819,12 @@ export function getSession(id: string, opts?: { before?: number }): SessionPage 
   }
 
   // --- live tail ------------------------------------------------------------------------------------
-  const tc = turnsCache.get(found);
+  // A stale `pv` is treated as no entry at all, so the fold below re-parses from scratch — see the
+  // field's note. Dropping it here rather than filtering on read keeps the incremental-append path
+  // below from folding new bytes onto a window built by the old parser.
+  const cached = turnsCache.get(found);
+  const tc = cached?.pv === PARSE_VERSION ? cached : undefined;
+  if (cached && !tc) turnsCache.delete(found);
   // Unchanged (both mtime AND size) — cheap path, no file read at all. No disk write either: this is the
   // path every 2.5s poll takes when nothing changed, and rewriting the cache file on every idle tick
   // would just trade one kind of thrashing for another.
@@ -833,7 +870,7 @@ export function getSession(id: string, opts?: { before?: number }): SessionPage 
     };
   }
 
-  entry = trimWindow(entry, LIVE_WINDOW_TURNS);
+  entry = { ...trimWindow(entry, LIVE_WINDOW_TURNS), pv: PARSE_VERSION };
   touchTurnsLRU(found, entry);
   turnsCacheDirty = true;
   scheduleTurnsDiskSave(); // throttled — never on the hot path

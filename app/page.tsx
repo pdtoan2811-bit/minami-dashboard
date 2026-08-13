@@ -29,7 +29,7 @@ import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
 import { motion } from "motion/react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bot, ChevronLeft, ChevronRight, Chrome, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Bot, ChevronLeft, ChevronRight, Chrome, Clock, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -1983,7 +1983,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     // Straight assignment, not scrollTo({behavior:"smooth"}): this fires on every token, and a smooth
     // scroll that restarts 30×/second never arrives anywhere. Smooth belongs to the deliberate jump.
     el.scrollTop = el.scrollHeight;
-  }, [visible.length, source[source.length - 1]?.text.length, agent.pending, agent.busy]);
+    // `agent.queued.length` is a dep because queued bubbles are appended AFTER `visible` and so change
+    // the scroll height without changing any of the other four — queue a message while pinned to the
+    // bottom and it would otherwise land just below the fold, which reads as it not having sent.
+  }, [visible.length, source[source.length - 1]?.text.length, agent.pending, agent.busy, agent.queued.length]);
   // Focus mode hides the other panes with `display:none` rather than unmounting them (so their streams
   // survive) — but a display:none box has no layout, and the browser does NOT restore its scrollTop
   // when it comes back. Left alone, every trip into a focused pane and out again would dump the other
@@ -2368,6 +2371,25 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} />
           </div>
         )}
+        {/* What you've said that hasn't run yet — in the log, where you said it.
+            It renders AFTER `visible` rather than inside it because it is not a turn: `turns` is
+            rebuilt wholesale from disk on every `result` (see reconcile), and a message that hasn't
+            run isn't on disk, so anything spliced into that array is wiped the moment the running
+            turn ends. Driven straight off `agent.queued` — the server's mirror of the CLI's own
+            queue — it survives every reconcile, and on `started` it hands over to a real user turn
+            (see the `started` case in lib/use-agent.ts). */}
+        {agent.queued.map((q) => (
+          <div key={q.uuid} className="flex justify-end">
+            <div className="max-w-[85%] rounded-2xl rounded-br-md border border-dashed border-[#c47f18]/45 bg-[#c47f18]/[0.07] px-3 py-2">
+              <div className="mb-0.5 flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-wider text-[#c47f18]">
+                {/* Dashed border + a clock, not a spinner: nothing is happening to this message yet,
+                    and animating it would claim work that hasn't started. */}
+                <Clock className="h-2.5 w-2.5" />queued
+              </div>
+              <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-neutral-300">{q.text}</p>
+            </div>
+          </div>
+        ))}
         </>
         )}
       </div>
@@ -2492,26 +2514,14 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             transcript — so a pasted screenshot, a picked file, and the message you eventually send all
             agree by construction rather than by three code paths staying in sync. */}
         <div className="px-1"><ImageRefs text={input} /></div>
-        {/* What's waiting its turn. This sits by the composer rather than in the transcript on purpose:
-            reconcile() rebuilds `turns` wholesale from the on-disk transcript on every `result`, and a
-            message that hasn't run yet isn't on disk — so a queued bubble rendered inline would be wiped
-            the moment the running turn finished. Here it's driven purely by the server's `queued` list,
-            which is a mirror of the CLI's own queue and survives every reconcile. */}
+        {/* The queued MESSAGES now render in the transcript, where you said them. What stays here is
+            only the part that is about this control rather than about the conversation: what will
+            happen when the current turn ends. Without a word here the alternative reading of a message
+            that visibly went nowhere is "my send didn't work". */}
         {agent.queued.length > 0 && (
-          <div className="flex flex-col gap-1 px-1 pb-1">
-            {agent.queued.map((q, i) => (
-              <div key={q.uuid} className="flex items-start gap-2 rounded-lg border border-[#c47f18]/30 bg-[#c47f18]/[0.07] px-2 py-1">
-                <span className="shrink-0 pt-0.5 text-[9px] font-medium uppercase tracking-wider text-[#c47f18]">
-                  queued{agent.queued.length > 1 ? ` ${i + 1}` : ""}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-neutral-300">{q.text}</span>
-              </div>
-            ))}
-            {/* Say what happens next, because the alternative reading is "my message didn't send". */}
-            <span className="px-0.5 text-[10px] text-neutral-600">
-              {agent.queued.length === 1 ? "runs next, when this turn ends" : "run in order, when this turn ends"} · Stop skips ahead
-            </span>
-          </div>
+          <span className="px-1 pb-1 text-[10px] text-neutral-600">
+            {agent.queued.length === 1 ? "1 message queued — runs next, when this turn ends" : `${agent.queued.length} messages queued — they run in order, when this turn ends`} · Stop skips ahead
+          </span>
         )}
         {/* The E in SHE, and it is scoped to THIS row on purpose. Focus here — you are about to send
             something — and the pane spends a tier back: the folded pill unfolds into the real Plan/Code

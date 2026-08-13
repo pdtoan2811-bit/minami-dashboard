@@ -43,6 +43,8 @@ import {
 } from "lucide-react";
 import { buildJourney, type FlowStep, type FlowTool, type Journey, type Milestone, type Narrative } from "@/lib/flow-model";
 import { activityLabel } from "@/lib/use-agent";
+import BrandIcon, { type Icon } from "@/components/BrandIcon";
+import { loadTechIcons } from "@/lib/tech-icons";
 
 type SourceTurn = { role: "user" | "assistant"; text: string; tools: FlowTool[]; streaming?: boolean; thinking?: string; ts?: number; cost?: number; off?: number };
 
@@ -99,7 +101,10 @@ function toneOf(m: Milestone): keyof typeof TONE {
 function estMilestone(m: Milestone): number {
   const lines = Math.min(2, Math.ceil(m.ask.length / 46));
   const outcome = m.narrative?.outcome || m.headline;
-  return 34 + lines * 15 + Math.ceil(Math.min(outcome.length, 132) / 44) * 14 + 20;
+  // The stack row and the call preview are part of the node's height, not decoration on top of it —
+  // omitting them here is how you get a spine whose nodes overlap the phases hanging beside them.
+  const evidence = (m.stack.length || m.recent.length) ? 8 + (m.stack.length ? 21 : 0) + m.recent.length * 14 : 0;
+  return 34 + lines * 15 + Math.ceil(Math.min(outcome.length, 132) / 44) * 14 + evidence + 20;
 }
 function estStep(s: FlowStep, rawOpen: boolean): number {
   const files = Math.min(s.files.length, 3);
@@ -108,10 +113,11 @@ function estStep(s: FlowStep, rawOpen: boolean): number {
     + files * 13 + checks * 13 + 16 + (s.tools.length ? 14 : 0) + (rawOpen ? 0 : 0);
 }
 
-function Canvas({ journey, busy, open, rawOpen, toggle, toggleRaw }: {
+function Canvas({ journey, busy, open, rawOpen, toggle, toggleRaw, techIcons }: {
   journey: Journey; busy: boolean;
   open: Set<string>; rawOpen: Set<string>;
   toggle: (k: string) => void; toggleRaw: (k: string) => void;
+  techIcons: Record<string, Icon>;
 }) {
   const { fitView } = useReactFlow();
 
@@ -142,7 +148,12 @@ function Canvas({ journey, busy, open, rawOpen, toggle, toggleRaw }: {
               <div className="flex items-center gap-2 text-left leading-tight">
                 <span className="font-mono text-[9px] tabular-nums text-neutral-600">{m.index + 1}</span>
                 <StatusDot status={m.status} tint={tone.tint} />
-                <span className="min-w-0 flex-1 truncate text-[11px] text-neutral-300">{clamp(m.ask, 60)}</span>
+                <span className="min-w-0 flex-1 truncate text-[11px] text-neutral-300">{clamp(m.ask, 46)}</span>
+                {/* The one thing worth spending collapsed width on. A settled milestone's ask is already
+                    truncated, so this is a real trade — but "which of these fifty asks was the Python
+                    one" is answerable by glance with it and only by reading without it, and reading
+                    fifty one-liners is the thing collapsing them was meant to avoid. */}
+                <StackRow stack={m.stack} icons={techIcons} size={13} max={3} />
                 {m.goals.total > 0 && (
                   <span className="shrink-0 font-mono text-[9px] tabular-nums" style={{ color: tone.tint }}>
                     {m.goals.done}/{m.goals.total}
@@ -196,6 +207,19 @@ function Canvas({ journey, busy, open, rawOpen, toggle, toggleRaw }: {
                 <div className="mt-1 line-clamp-3 text-[10.5px] text-neutral-400">
                   {m.narrative && <Sparkles className="mr-1 inline h-2.5 w-2.5 align-[-1px] text-[#6d5ae0]" />}
                   {clamp(outcome, 160)}
+                </div>
+              )}
+              {/* What it worked IN, and the last three things it actually did. The rest of the node is
+                  a summary — these two rows are the only unmediated evidence on it, which is why they
+                  sit directly above the meta row and below every claim they back up. */}
+              {(m.stack.length > 0 || m.recent.length > 0) && (
+                <div className="mt-2 border-t border-white/[0.07] pt-1.5">
+                  {m.stack.length > 0 && (
+                    <div className="mb-1 flex items-center gap-1.5">
+                      <StackRow stack={m.stack} icons={techIcons} size={16} max={5} />
+                    </div>
+                  )}
+                  <RecentCalls tools={m.recent} live={m.status === "running"} />
                 </div>
               )}
               <MetaRow ms={m.ms} cost={m.cost} files={m.files.length} checks={m.checks} />
@@ -329,7 +353,9 @@ function Canvas({ journey, busy, open, rawOpen, toggle, toggleRaw }: {
     });
 
     return { nodes, edges };
-  }, [journey, open, rawOpen, busy]);
+    // `techIcons` is a dep because the manifest lands AFTER the first render: without it the nodes are
+    // memoized with an empty map and every stack row stays a lettermark for the life of the canvas.
+  }, [journey, open, rawOpen, busy, techIcons]);
 
   // Re-frame on the thing you are most likely to be looking at: the live milestone, else the last one
   // you expanded. Fitting a session-long spine whole would scale it to unreadable — which is exactly
@@ -387,6 +413,70 @@ function StatusDot({ status, tint }: { status: string; tint: string }) {
   return <CircleDot className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.2} />;
 }
 
+/** The stack a milestone worked in, as brand icons (lib/flow-stack.ts derives the slugs from the calls
+ *  themselves, so this row differs from ask to ask — unlike the topic's own AttachBar row, which would
+ *  be identical on every node here and therefore say nothing).
+ *
+ *  `icons` arriving empty is normal for the first frame — BrandIcon falls back to a lettermark tile, so
+ *  the row has its final HEIGHT immediately and the node doesn't reflow when the manifest lands. */
+function StackRow({ stack, icons, size, max }: { stack: string[]; icons: Record<string, Icon>; size: number; max: number }) {
+  if (!stack.length) return null;
+  const shown = stack.slice(0, max);
+  return (
+    <span className="flex shrink-0 items-center gap-1" title={`worked in: ${stack.join(", ")}`}>
+      {shown.map((s) => <BrandIcon key={s} slug={s} icons={icons} size={size} />)}
+      {stack.length > max && <span className="font-mono text-[8px] text-neutral-600">+{stack.length - max}</span>}
+    </span>
+  );
+}
+
+/** The newest few tool calls, in the order they ran.
+ *
+ *  This is a deliberate, narrow exception to "tool calls are two clicks deep" — the rule that shaped v4
+ *  and is still right for the other several hundred calls in a session. The exception earns itself on
+ *  the LIVE milestone, where the question is "what is it touching right now" and the answer was
+ *  previously two clicks and a guess about which phase to open; on a settled one the same three rows
+ *  are the cheapest possible check that the summary above them is describing real work. Three is the
+ *  whole budget — see RECENT_CALLS. */
+/** The name column, short enough to leave room for the thing that actually says what happened.
+ *
+ *  An MCP tool's real name is `mcp__playwright__browser_navigate`, and three of those stacked read as
+ *  `MCP__PLAYWRIG… / MCP__PLAYWRIG… / MCP__PLAYWRIG…` — a column of identical prefixes where the
+ *  distinguishing part has been clipped off the end. The server half is already on the node as its
+ *  brand icon, so this drops it and the `browser_` noun that every browser verb repeats. */
+function shortToolName(name: string): string {
+  const m = /^mcp__(.+?)__(.+)$/.exec(name);
+  return m ? m[2].replace(/^browser_/, "") : name;
+}
+
+function RecentCalls({ tools, live }: { tools: FlowTool[]; live: boolean }) {
+  if (!tools.length) return null;
+  return (
+    <div className="flex flex-col gap-[1px]">
+      {tools.map((t, i) => {
+        // Same tri-state as the raw log: `null` is "still running", which is not a failure and must not
+        // be drawn as one. Only the LAST call can be in flight, and only on a live milestone.
+        const running = t.done === false && live && i === tools.length - 1;
+        const ok = t.done === false ? null : t.ok !== false;
+        return (
+          <div key={t.id || `${t.name}:${i}`} className="flex items-center gap-1 leading-tight">
+            <span className={`h-1 w-1 shrink-0 rounded-full ${running ? "animate-pulse" : ""}`}
+              style={{ background: ok === false ? TONE.running.tint : running ? TONE.running.tint : TOOL_TINT, opacity: ok === null && !running ? 0.4 : 1 }} />
+            <span className="shrink-0 font-mono text-[8.5px] uppercase tracking-[.1em]"
+              // 16 rather than 14 because `take_screenshot` is 15 and was the one common verb that
+              // clipped — and a clipped name is exactly the failure this shortening set out to fix.
+              style={{ color: ok === false ? TONE.running.tint : TOOL_TINT }}>{clamp(shortToolName(t.name), 16)}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[9px] text-neutral-500">
+              {clamp(activityLabel(t.name, t.input), 40)}
+            </span>
+            {ok === false && <AlertTriangle className="h-2 w-2 shrink-0 text-[#c4486a]" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Duration · cost · evidence counts. Renders nothing at all when nothing is known, rather than a row
  *  of zeroes — an unparsed cost and a free turn are not the same fact. */
 function MetaRow({ ms, cost, files, checks }: { ms: number; cost: number; files: number; checks: { ok: boolean | null }[] }) {
@@ -434,6 +524,10 @@ export function FlowCanvas({ sessionId, project, busy = false, onClose }: {
   // nothing expanded. A derived default cannot race — there is no write to lose.
   const [open, setOpen] = useState<Set<string> | null>(null);
   const [rawOpen, setRawOpen] = useState<Set<string>>(new Set());
+  // Module-level cache inside lib/tech-icons, so this is one fetch for the whole app however many
+  // panes mount a canvas — and it is NOT keyed on the session, because the manifest never changes.
+  const [techIcons, setTechIcons] = useState<Record<string, Icon>>({});
+  useEffect(() => { let a = true; loadTechIcons().then((d) => { if (a) setTechIcons(d); }); return () => { a = false; }; }, []);
 
   // ── what resets, and when ────────────────────────────────────────────────────────────────────
   // Only a change of SESSION resets the view. This used to live inside the poll effect below, which
@@ -632,7 +726,7 @@ export function FlowCanvas({ sessionId, project, busy = false, onClose }: {
           // it — being the same component that renders <ReactFlow> is not enough, and fails at runtime
           // with "Seems like you have not used ReactFlowProvider as an ancestor".
           <ReactFlowProvider>
-            <Canvas journey={journey} busy={busy} open={shown} rawOpen={rawOpen} toggle={toggle} toggleRaw={toggleRaw} />
+            <Canvas journey={journey} busy={busy} open={shown} rawOpen={rawOpen} toggle={toggle} toggleRaw={toggleRaw} techIcons={techIcons} />
           </ReactFlowProvider>
         )}
       </div>

@@ -737,3 +737,34 @@ this to do a piece of work; read the subsystem's own doc.
 - Bento reworked to Project › Goal › Task; 29 MB transcript parse 9.3 s → 39 ms; cold launch → 8 ms.
 - Cross-machine metrics shipped — self-hosted collector + Tailscale Funnel; deploy moved to Vercel.
 
+### 2026-08-12
+- **A queued message is now visible in the chat log for all three of its lives** (§5f-bis) — waiting
+  (dashed bubble in the transcript, rendered off `agent.queued` so reconcile can't wipe it), running as
+  its own turn (new `started` SSE event carries the text the server is about to forget, so the pane can
+  append a real user turn), and **coalesced into an already-running turn** — which was the bad one: the
+  CLI writes no `user` row in that case, only an `attachment` row with `attachment.type ===
+  "queued_command"`, so the message was on disk and in no view built from it. The reply answered a
+  question that appeared nowhere. `parseLines` folds that row in now. Caught by driving a real session,
+  not by reading the diff — and then the fix appeared not to work because `getSession`'s `turnsCache` is
+  keyed on mtime+size only: `PARSE_VERSION` guarded the meta cache but not the turns cache, so every
+  already-parsed transcript kept its old fold. The turns cache now carries `pv`.
+- **Flow v5: the last three calls, and the stack they worked in** (§5f) — the milestone node now
+  previews its three newest tool calls and a row of brand icons for the tech those calls actually
+  touched. New `lib/flow-stack.ts` derives the slugs from the calls themselves, not from
+  `lib/tech-attach.ts` — the project's own stack is identical on every milestone and so carries zero
+  information inside this view, while the calls are what differ from ask to ask. Whitelist tables, so
+  an unmapped extension contributes nothing rather than a guess. Needed `FlowTurn.tools` (a
+  chronological list), because "the latest 3" is a claim about time and flattening `steps` yields plan
+  order. Two bugs found by driving `:3001` rather than reading the diff: a `\bplaywright\b` command
+  rule that matched `find -iname "*playwright*"` (deleted — match commands that are *run*, not words
+  that are *mentioned*), and three MCP calls rendering as identical clipped `MCP__PLAYWRIG…` prefixes
+  (now `CLICK · EVALUATE · TAKE_SCREENSHOT`).
+- **Tech icons filled in for six topics** (§5d) — `dataAnalyticsOwnego` and `CV` had empty rows;
+  `Minami`, `secondBrain`, `qdn`, `toolkit` had only their git host. Detection wasn't broken: those
+  projects have no `package.json` deps that match, or none at all, so `getAttach` had only
+  `.git/config` to read. Assignments in `~/.minami-bento/icons.json`, each inferred from real evidence
+  (BigQuery MCP servers, `@slack/bolt`, "Obsidian is the IDE" in the vault's CLAUDE.md). Separately:
+  `playwright` and `slack` sit in `WANT` in `bin/build-tech-icons.mjs` but simple-icons v16 ships
+  neither (trademark removal), so they fall through to `BrandIcon`'s lettermark tiles — by design, but
+  the build does not warn that a wanted slug produced nothing.
+

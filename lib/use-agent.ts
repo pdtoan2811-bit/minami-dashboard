@@ -307,6 +307,26 @@ export function useAgent(paneKey: string) {
           setBusy(ev.busy); if (!ev.busy) setStopping(false); break;
         case "queued":
           setQueued(ev.queued || []); break;
+        case "started":
+          // A queued message just became the running turn. Write it into the transcript NOW, the same
+          // shape send() stages: the message, then an empty streaming bubble for the reply.
+          //
+          // Optimistic appends are safe HERE and were not at queue time, and the difference is which
+          // reconcile() comes next. Queued, the next reconcile is the RUNNING turn's `result`, which
+          // rebuilds `turns` from a disk transcript the message isn't in yet — so the bubble vanished.
+          // Started, the previous result has already fired; the next one ends THIS turn, by which point
+          // the message is on disk and reconcile replaces this row with the real one. Same text, no
+          // duplicate.
+          //
+          // Without it the message is invisible for the length of the turn: the tray drops it on
+          // `started` and the transcript doesn't gain it until `result`, so a long turn streams a reply
+          // with no question above it.
+          setTurns((prev) => [
+            ...prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
+            { role: "user", text: ev.text, tools: [] },
+            { role: "assistant", text: "", tools: [], streaming: true },
+          ]);
+          break;
         case "result":
           setBusy(false); setStopping(false); setPending(null); setAsk(null); applyActivity(IDLE_ACTIVITY);
           setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)));

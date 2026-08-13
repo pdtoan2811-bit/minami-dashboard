@@ -20,6 +20,12 @@
 //   /TaskUpdate  TaskUpdate then addresses by `taskId`. Where this is available it is strictly better:
 //                the id IS the node key, so no heuristic can mis-match a reworded step.
 import { activityLabel, type ToolOutput } from "./agent/labels";
+import { stackOf } from "./flow-stack";
+
+/** How many of a milestone's newest tool calls the canvas previews on the node itself. Three is a
+ *  budget, not a preference: this is the same surface v3 drowned in by drawing EVERY call, so the
+ *  preview has to stay small enough that the node is still an account of the work and not a log. */
+export const RECENT_CALLS = 3;
 
 export type FlowStatus = "pending" | "in_progress" | "completed";
 
@@ -78,6 +84,10 @@ export type FlowTurn = {
   index: number;
   request: string;
   steps: FlowStep[];
+  /** Every non-plan tool call of this turn in the order it RAN, which `steps` cannot give you: a step
+   *  the plan returns to later collects calls from two different moments, so flattening the steps
+   *  yields plan order, not time order. "The latest 3 calls" is a claim about time, so it reads this. */
+  tools: FlowTool[];
   /** Whether a real plan drove this turn. The empty-plan fallback is honest about being a fallback. */
   planned: boolean;
   streaming?: boolean;
@@ -414,6 +424,8 @@ function foldTurn(request: string, body: SourceTurn[], index: number, streaming?
   // its subject) and its result landing with "Task #N". Without it a TaskUpdate arriving in that
   // window addresses `task#N`, finds nothing, and the step silently never leaves "pending".
   const taskKeys = new Map<string, string>();
+  // Chronological, across every step — see FlowTurn.tools.
+  const flatTools: FlowTool[] = [];
   let planned = false;
   // Everything before the first TodoWrite. Kept as one node rather than spread across the plan,
   // because attributing it to a step that didn't exist yet would be a guess presented as a fact.
@@ -489,6 +501,7 @@ function foldTurn(request: string, body: SourceTurn[], index: number, streaming?
 
     for (const tool of turn.tools) {
       if (PLAN_TOOLS.has(tool.name)) continue; // the plan itself isn't a step of the plan
+      flatTools.push(tool);
       const st = current();
       st.tools.push(tool);
       const f = fileOf(tool);
@@ -540,7 +553,7 @@ function foldTurn(request: string, body: SourceTurn[], index: number, streaming?
       flat.push({ ...blankStep(`t${index}-reply`, "the reply", streaming ? "in_progress" : "completed", true), text: pre.text, thinking: pre.thinking, cost: pre.cost, t0: pre.t0, t1: pre.t1 });
     }
     flat.forEach(summarize);
-    return { index, request, steps: flat, planned: false, streaming, off, ...totals };
+    return { index, request, steps: flat, tools: flatTools, planned: false, streaming, off, ...totals };
   }
 
   // Order by the LATEST plan, then append anything the plan has since dropped (and the preamble,
@@ -553,7 +566,7 @@ function foldTurn(request: string, body: SourceTurn[], index: number, streaming?
   for (const [k, st] of steps) if (k !== PRE && !keys.includes(k)) ordered.push(st);
 
   ordered.forEach(summarize);
-  return { index, request, steps: ordered, planned: true, streaming, off, ...totals };
+  return { index, request, steps: ordered, tools: flatTools, planned: true, streaming, off, ...totals };
 }
 
 /** The title an unplanned turn's grouped node gets. Named for the INTENT of the group, since there is
@@ -599,6 +612,13 @@ export type Milestone = {
   acts: Act[];
   files: string[];
   checks: Check[];
+  /** The last few tool calls this ask made, oldest of the three first — the same order as the raw log
+   *  they preview, because a preview that reverses the thing it previews is a trap. Three, because that
+   *  is what fits a node without turning it back into the call log v3 was: the point is "what is it
+   *  touching right now", not "what did it do". */
+  recent: FlowTool[];
+  /** Tech slugs for `components/BrandIcon`, derived from the calls themselves — see lib/flow-stack.ts. */
+  stack: string[];
   ms: number;
   cost: number;
   headline: string;
@@ -716,6 +736,9 @@ export function buildJourney(
       prev.turn = {
         ...prev.turn,
         steps: mergeSteps(prev.turn.steps, turn.steps),
+        // Plain concat, not a merge: these folds are consecutive in time by construction, so appending
+        // preserves the chronology `recent` depends on.
+        tools: [...prev.turn.tools, ...turn.tools],
         streaming: prev.turn.streaming || turn.streaming,
         planned: prev.turn.planned || turn.planned,
       };
@@ -735,7 +758,7 @@ export function buildJourney(
       status: "done",
       goals: { done: 0, total: 0 },
       openSteps: [],
-      acts: [], files: [], checks: [],
+      acts: [], files: [], checks: [], recent: [], stack: [],
       ms: 0,
       cost: turn.cost,
       headline: "",
@@ -759,6 +782,8 @@ export function buildJourney(
     m.acts = rollupActs(steps);
     m.files = [...new Set(steps.flatMap((s) => s.files))];
     m.checks = steps.flatMap((s) => s.checks).slice(0, 8);
+    m.recent = m.turn.tools.slice(-RECENT_CALLS);
+    m.stack = stackOf(m.turn.tools);
 
     // A milestone is RUNNING only if it is the live one. An older milestone with a step still marked
     // in_progress isn't running — it was abandoned there, which is an open loop and should read as one.

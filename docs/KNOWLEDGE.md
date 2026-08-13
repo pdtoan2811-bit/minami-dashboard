@@ -35,7 +35,7 @@ recycle one.
 | [`05c-message-render.md`](knowledge/05c-message-render.md) | §5c | ~800 | `Markdown.tsx` and `ThoughtBlock.tsx` — one parser, two tones, and the reasoning-pass seam. |
 | [`05d-topics.md`](knowledge/05d-topics.md) | §5d | ~1,800 | Creating a topic: the folder picker's Recent/Browse tabs, the focus ranking behind Recent, `cwd` validation, `isTrivial`. |
 | [`05e-shell.md`](knowledge/05e-shell.md) | §5e | ~10,300 | The biggest one, and past the length this split was meant to fix — split it before adding another section. Density tiers, Embody, tab-first panes, closing tabs, the hiding panel header, the bento rail, project icons, the ask card, motion/scroll cost, `--continue` parity, the composer. |
-| [`05f-flow.md`](knowledge/05f-flow.md) | §5f §5f-bis | ~6,600 | The session journey — asks, semantic acts, evidence, open loops — four revisions of what it got wrong, the `canUseTool` brake, and mid-turn message queueing. |
+| [`05f-flow.md`](knowledge/05f-flow.md) | §5f §5f-bis | ~7,300 | The session journey — asks, semantic acts, evidence, open loops, the last-3-calls preview and the stack row — five revisions of what it got wrong, the `canUseTool` brake, and mid-turn message queueing. |
 | [`05g-file-preview.md`](knowledge/05g-file-preview.md) | §5g | ~1,600 | Kind-routed file viewing, the shared side slot, the tab row. |
 | [`06-accounts.md`](knowledge/06-accounts.md) | §6 | ~800 | Ground-truth account identity, and why a reported switch is not evidence. |
 | [`07-knowledge-base.md`](knowledge/07-knowledge-base.md) | §7 §7b | ~1,000 | The module map's extracted edges, and how the KB itself is built and served. |
@@ -103,7 +103,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Shell (bento · rail · composer) | `app/page.tsx` + `components/BentoRail.tsx` | **shipped** | grid collapses to a rail — see §5e |
 | Density tiers | `lib/density.ts` | **shipped** | measured roomy/snug/tight/micro; chrome folds, ⌥1–4 — see §5e |
 | Side-slot tabs | `components/PanelTabs.tsx` | **shipped** | one tab row worn by the file preview AND the browser — see §5b, §5g |
-| Flow view | `components/FlowCanvas.tsx` + `lib/flow-model.ts` + `lib/flow-narrate.ts` | **shipped** | one spine per session, one node per ask: what was wanted, what it did, what's still open — see §5f |
+| Flow view | `components/FlowCanvas.tsx` + `lib/flow-model.ts` + `lib/flow-narrate.ts` + `lib/flow-stack.ts` | **shipped** | one spine per session, one node per ask: what was wanted, what it did, what's still open, its last 3 calls and the stack they touched — see §5f |
 | File preview | `components/FilePanel.tsx` + `lib/file-view.ts` + `app/api/fs/file` | **shipped** | any file type, paged; shares the side slot with the browser — see §5g |
 | Module map | `app/architecture` | **shipped** | graph data hand-maintained — see §7 |
 | KB standalone server | `public/kb/serve.mjs` | **shipped** | `npm run kb` → :4400, zero deps |
