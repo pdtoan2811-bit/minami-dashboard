@@ -36,9 +36,24 @@
 /** 16000 samples/s × 2 bytes. One ms of audio, exactly. */
 export const BYTES_PER_MS = 32;
 
-/** A pause this long ends an utterance — about the gap at the end of a sentence. Shorter and it
+/** ⚠️ 700ms WAS SHORTER THAN A HESITATION, AND THAT IS WHY TRANSCRIPTS ARRIVE IN HALVES.
+ *
+ *  The gap at the end of a sentence and the gap in the middle of "ừm…" are the same silence to a
+ *  VAD; only their length separates them. At 700ms every "ừm", "à" and "you know" closed a chunk, so
+ *  the judge was handed the front half of a thought and then, ten seconds later, the back half —
+ *  each meaningless alone. Real examples off a live board: a chunk ending "Ừ. Và", another ending
+ *  "tại vì đấy lúc đấy anh chắc khả năng".
+ *
+ *  1000ms still closes on a real sentence end (measured pause path at 6-9s chunks) while riding over
+ *  ordinary hesitation. Env-overridable because the right value is a property of how a person
+ *  speaks, and Vietnamese hesitation runs longer than English.
+ *
+ *  This is one of two halves: the judge also now receives the preceding lines, so a seam that does
+ *  land mid-sentence can still be read across. Neither fix alone is sufficient.
+ *
+ *  A pause this long ends an utterance — about the gap at the end of a sentence. Shorter and it
  *  fires inside the natural hesitations of Vietnamese and English alike. */
-const SILENCE_MS = 700;
+const SILENCE_MS = Number(process.env.CANVAS_SILENCE_MS || 1000);
 
 /** Speech required before a pause is allowed to close a chunk. The cost floor — see above.
  *

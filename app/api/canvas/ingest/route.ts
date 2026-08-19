@@ -681,7 +681,13 @@ export async function POST(req: Request) {
         // instead of starting a fourth parallel thread about the same thing. Capped inside
         // deriveActions at the last 25 — a whole meeting of labels costs more and decides less.
         s.board.cards().map((c) => c.label),
-        { cfg: mode.derive, spend, revise: true, context: s.context },
+        {
+          cfg: mode.derive, spend, revise: true, context: s.context,
+          /** The lines immediately BEFORE this chunk. `said` was already appended to s.lines above,
+           *  so the run-up is the slice ending where this chunk begins. Four lines is enough to
+           *  rejoin a sentence split by a hesitation without re-feeding the whole meeting. */
+          before: s.lines.slice(Math.max(0, s.lines.length - said.length - 4), s.lines.length - said.length).join("\n"),
+        },
       );
     } catch (e) {
       trace("error", `judge failed — ${e instanceof Error ? e.message.slice(0, 120) : "unknown"}`, Date.now() - tJudge);

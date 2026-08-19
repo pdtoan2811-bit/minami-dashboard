@@ -666,6 +666,27 @@ they cannot read is worse than no card: it is their own words returned to them a
 
 You do NOT write to the canvas directly. You return operations and the server applies them.
 
+WHAT YOU ARE READING — a live speech-to-text transcript, not writing
+It is imperfect in two specific ways, and both are your problem to handle:
+
+1. WORDS ARE MISHEARD, especially names, products and numbers, and especially on first mention.
+   If a word looks like a mangled version of a name you can see in KNOWN NAMES or on the board, it
+   almost certainly is that name — use the correct spelling. If a phrase is garbled beyond reading,
+   do not guess what it might have been and do not build a card on it. A card invented from noise is
+   worse than a missing card: it is put on a screen in front of the people who were talking.
+
+2. SENTENCES ARE CUT MID-THOUGHT. Chunks end on a pause, and people pause in the MIDDLE of
+   sentences — "ừm", "à", "you know". So the last line you are given is often half a sentence, and
+   the first line is often the second half of one. Lines under EARLIER exist to let you read across
+   that seam.
+   If a line stops before it says anything ("và", "tại vì", "so the thing is"), it is an unfinished
+   thought, NOT a point. Return nothing for it. The rest of that sentence is arriving in the next
+   few seconds and you will see it then — a fragment made into a card is a card that has to be
+   revised or merged away later.
+
+Returning an empty actions array is a correct, expected answer. Silence, hesitation and half a
+sentence should all produce nothing.
+
 OPERATIONS
   {"op":"card","topic":"Scope","kind":"...","label":"...","detail":"...","source":"...",
    "relatesTo":"<label of another card>","relation":"blocks|depends|answers|contradicts",
@@ -820,7 +841,18 @@ export async function deriveActions(
   lines: string,
   glossary: string[] = [],
   knownCards: string[] = [],
-  opts: { cfg?: CanvasMode["derive"]; spend?: Spend; revise?: boolean; context?: string } = {},
+  opts: {
+    cfg?: CanvasMode["derive"]; spend?: Spend; revise?: boolean; context?: string;
+    /** The handful of transcript lines immediately BEFORE this chunk.
+     *
+     *  ⚠️ Without these the judge reads every chunk cold. Chunks end on a 700ms pause and people
+     *  hesitate mid-sentence, so a chunk routinely opens on the back half of a thought — "...và cái
+     *  đó thì mình chốt luôn" — with the subject in the previous chunk and no way to recover it.
+     *  The judge then either invents a subject or drops a real decision.
+     *
+     *  Context only. Cards must come from `lines`, or the same sentence would be judged twice. */
+    before?: string;
+  } = {},
 ): Promise<RawAction[]> {
   // STATELESS per chunk. Previously each call needed the board as it stood after the previous chunk,
   // which forced derivation to run strictly in sequence — measured at 10-30s each, so 24 minutes of
@@ -868,7 +900,12 @@ MERGE when two cards on the board turned out to be the same point said twice.
 Name a target EXACTLY as it appears above or the action is discarded. Prefer revising an existing
 card over adding one that is nearly the same.\n\n`
       : "") +
-    `TRANSCRIPT\n${lines}`;
+    (opts.before
+      ? `EARLIER — context only, so you can read across a sentence that was cut in half.
+DO NOT create cards from these lines; they have already been judged.
+${opts.before}\n\n`
+      : "") +
+    `TRANSCRIPT — the new speech. Cards come only from here.\n${lines}`;
 
   const extra: Record<string, unknown> = {};
   if (opts.cfg?.strictSchema) {
