@@ -82,7 +82,11 @@ const RECENT = 60;
  *  healthy meeting never reaches this. Reaching it means the model is having a slow spell, and the
  *  right response is to stay current rather than to faithfully render a conversation that has already
  *  moved on. */
-const MAX_QUEUED_JUDGES = 2;
+/** ⚠️ THIS NUMBER CHANGED MEANING. It was 2 because a queued judge DELAYED every later one, so depth
+ *  was latency and had to be tiny. Judges now run concurrently, so this bounds COST and fan-out only
+ *  — and at 2 it was throwing away real speech to protect against a queue that no longer exists.
+ *  Six concurrent judges at ~3s each is comfortably inside one 10s chunk window. */
+const MAX_QUEUED_JUDGES = 6;
 
 /** How often the board consolidates itself, in utterances.
  *
@@ -111,6 +115,10 @@ type Session = {
   cost: number;
   /** Set the moment the meeting ends. Async work in flight checks this before touching the board. */
   ended: boolean;
+  /** Judges currently talking to the model, mapped to WHEN they started. They no longer share a
+   *  queue, so `end` drains this rather than the chain — see the note on head-of-line blocking. The
+   *  timestamp is what makes the backlog gate self-healing; see JUDGE_CEILING_MS. */
+  inflight: Map<Promise<unknown>, number>;
   /** Topic set by voice ("Minami, chủ đề mới: …"), so later cards hang under it. */
   topic?: string;
   /** What this call is ABOUT, given before it starts — a line anh typed or a Second Brain project he
@@ -191,7 +199,7 @@ function session(id: string): Session {
   let s = store.get(id);
   if (!s) {
     s = {
-      board: createBoard(), lines: [], startedAt: Date.now(), touchedAt: Date.now(),
+      board: createBoard(), lines: [], startedAt: Date.now(), touchedAt: Date.now(), inflight: new Map(),
       utterances: 0, cost: 0, ended: false, queued: 0, dropped: 0, chain: Promise.resolve(), topic: undefined,
       entities: createEntityIndex(loadVocab()),
     };
@@ -313,8 +321,12 @@ export async function POST(req: Request) {
     // Bounded, because `end` must not hang on a wedged provider call. Past the bound we archive what
     // we have and say so — a slightly short record beats a meeting that never closes and never books
     // its cost. The queued tidy returns immediately on `s.ended`, so this normally waits on a judge.
+    // ⚠️ DRAIN BOTH. Judges left the chain when head-of-line blocking was removed, so awaiting
+    // `s.chain` alone would archive a board while the last few utterances were still being judged —
+    // silently reintroducing the "record is missing the end of every meeting" bug this drain exists
+    // to prevent.
     const drained = await Promise.race([
-      s.chain.then(() => true).catch(() => true),
+      Promise.all([s.chain.catch(() => {}), ...[...s.inflight.keys()].map((p) => p.catch(() => {}))]).then(() => true).catch(() => true),
       new Promise<boolean>((r) => setTimeout(() => r(false), 20_000)),
     ]);
     if (!drained) console.warn(`[ingest] archiving ${id} with work still in flight (20s drain elapsed)`);
@@ -598,16 +610,52 @@ export async function POST(req: Request) {
   // So the chain is bounded. When more than this many utterances are already waiting, the OLDEST
   // queued work is skipped rather than run: a card from ninety seconds ago is worth less than the
   // board staying current, and the transcript still records what was said either way.
-  if (s.queued >= MAX_QUEUED_JUDGES) {
+  /** ⚠️ THE GATE MUST NEVER BE ABLE TO LATCH SHUT. This is the last way a board could still freeze.
+   *
+   *  The count was a plain counter decremented in a `finally`. That is correct only while every task
+   *  eventually settles — and the entire history of this pipeline is things that did not: a provider
+   *  holding a socket open, a retry ladder running for minutes, a promise nobody resolved. One leaked
+   *  increment and the gate closes for the REST OF THE MEETING, skipping every utterance from then
+   *  on, with the board frozen and the logs clean.
+   *
+   *  So the gate is derived from evidence rather than from bookkeeping: count the judges that started
+   *  recently. Anything older than the ceiling is written off — if it ever lands its cards are still
+   *  applied, but it stops holding a slot. A stuck judge can cost one slot for two minutes; it can no
+   *  longer cost the meeting. */
+  const JUDGE_CEILING_MS = 120_000;
+  const nowMs = Date.now();
+  const active = [...s.inflight.values()].filter((t) => nowMs - t < JUDGE_CEILING_MS).length;
+  if (active >= MAX_QUEUED_JUDGES) {
     s.dropped++;
-    console.warn(`[ingest] judge backlog full (${s.queued}) — skipping this utterance to stay live`);
+    console.warn(`[ingest] judge backlog full (${active} active) — skipping this utterance to stay live`);
+    trace("skip", `backlog full (${active} judges in flight) — utterance not judged`);
     await publish(req, s, body.title);
     return Response.json({ ok: true, speaker, heard: heard.length, added: 0, skipped: "backlog", cards: s.board.cards().length });
   }
 
   s.queued++;
   const tJudge = Date.now();
-  const run = s.chain.then(async () => {
+  /** ⚠️ THE JUDGE NO LONGER QUEUES BEHIND OTHER JUDGES. THIS IS WHAT MAKES A FREEZE IMPOSSIBLE.
+   *
+   *  It used to run on `s.chain`, so every utterance waited for every earlier one. That is
+   *  head-of-line blocking, and it converts ONE slow leg into a frozen board: a single chunk that
+   *  takes two minutes holds every chunk behind it, the backlog gate then starts skipping arrivals,
+   *  and the canvas stops moving entirely. Every "it stales" and "swear words freeze the canvas"
+   *  report has this shape — the trigger varied (a slow provider, a refusal, a retry ladder), the
+   *  amplifier was always the queue.
+   *
+   *  Shortening the slow leg treats the trigger. Removing the queue removes the amplifier, and only
+   *  one of those can be made to hold for triggers nobody has seen yet.
+   *
+   *  ⚠️ AND IT IS SAFE, because deriveActions is STATELESS PER CHUNK — it is handed topic names as
+   *  strings rather than a board, which is the whole reason that refactor was done. The only ordered
+   *  part is `s.board.apply()`, which is synchronous: Node cannot interleave it, so no lock is
+   *  needed and none is taken. Cards may now land slightly out of order; a board that is one card
+   *  out of sequence is not a defect worth a freeze.
+   *
+   *  Concurrency is still bounded by MAX_QUEUED_JUDGES — that gate now limits COST and fan-out, not
+   *  latency, because a queued judge no longer delays anyone else. */
+  const run = (async () => {
     let actions: RawAction[] = [];
     try {
       // ENTITIES FIRST, then whatever topics already exist. The judge reuses a name from this list
@@ -641,8 +689,10 @@ export async function POST(req: Request) {
     // grounding or dedup rule quietly eating everything, which has happened more than once.
     trace("judge", `${actions.length} proposed → ${added} card(s) on the board`, Date.now() - tJudge);
     return { added };
-  });
-  s.chain = run.catch(() => {});
+  })();
+  // Tracked so `end` can drain judges that are no longer on the chain. Registered before the
+  // finally() below so a fast judge cannot leave the set before it is added.
+  s.inflight.set(run, Date.now());
   /** ⚠️ THE JUDGE IS NO LONGER ON THE RESPONSE PATH, AND THAT IS THE FIX FOR "IT STALES".
    *
    *  Measured 2026-08-18 on the real pipeline: STT 2.5-6s, judge 4.7-8.9s — awaited one after the
@@ -659,7 +709,7 @@ export async function POST(req: Request) {
    *
    *  The end path still awaits s.chain before archiving, so nothing in flight is lost. */
   void run
-    .finally(() => { s.queued--; })
+    .finally(() => { s.queued--; s.inflight.delete(run); })
     .then(() => publish(req, s, body.title))
     .catch(() => { /* the judge logs its own failures; a dropped publish costs one frame */ });
 
