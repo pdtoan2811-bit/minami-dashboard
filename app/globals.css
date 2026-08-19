@@ -523,6 +523,29 @@ body {
   to { stroke-dashoffset: -14; }
 }
 
+/* ⚠️ FORM CONTROLS ON THE LIGHT SURFACE MUST DECLARE THEIR OWN COLOUR.
+ *
+ * The document is `<html class="dark">` and the body sets `text-neutral-100`, because the dashboard
+ * is a dark app. The canvas is a deliberate light exception, and its panels set `bg-white` — but an
+ * <input> that does not name a colour INHERITS the dark theme's near-white text. The result is white
+ * on white: measured at oklch(0.97) on rgb(255,255,255), a contrast ratio of about 1.0, i.e. an
+ * invisible field that still accepts typing.
+ *
+ * This has now happened twice — once in the original light-mode conversion, and again on the command
+ * dock's inputs. Every occurrence was fixed by hand on the inputs that existed at the time, which is
+ * why it came back the moment new ones were added. A rule scoped to the light surface fixes the ones
+ * nobody has written yet. The explicit Tailwind classes stay as well: belt and braces on a defect
+ * whose symptom is that you cannot see it. */
+.canvas-surface input:not([type="checkbox"]):not([type="radio"]),
+.canvas-surface textarea,
+.canvas-surface select {
+  color: #171717;
+}
+.canvas-surface input::placeholder,
+.canvas-surface textarea::placeholder {
+  color: #a3a3a3;
+}
+
 .canvas-surface {
   /* The dot grid does real work, not decoration. Without it a light canvas is just a blank page and
      the "infinite space" metaphor never lands — it is the strongest cue that this surface is a

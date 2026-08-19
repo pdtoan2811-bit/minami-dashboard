@@ -302,7 +302,7 @@ export function CommandDock() {
                 onChange={(e) => setCmdText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") runTyped(); if (e.key === "Escape") { setPanel(null); if (armed) abort(); } }}
                 placeholder="type a command — e.g. new topic: Pricing"
-                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] outline-none focus:border-neutral-500"
+                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-500"
               />
               <button
                 onClick={runTyped}
@@ -352,7 +352,7 @@ export function CommandDock() {
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") addCard(); if (e.key === "Escape") setPanel(null); }}
                 placeholder="…or type the card here and press Enter"
-                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] outline-none focus:border-neutral-500"
+                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-500"
               />
               <button
                 onClick={addCard}
@@ -375,7 +375,7 @@ export function CommandDock() {
                 value={from}
                 onChange={(e) => { setFrom(e.target.value); setPreview(null); }}
                 placeholder="Easy Vision, Easy Vision AI, E C Vision"
-                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] outline-none focus:border-neutral-500"
+                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-500"
               />
               <span className="text-neutral-400">→</span>
               <input
@@ -383,7 +383,7 @@ export function CommandDock() {
                 onChange={(e) => { setTo(e.target.value); setPreview(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") runPreview(); if (e.key === "Escape") setPanel(null); }}
                 placeholder="Ecvision"
-                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] outline-none focus:border-neutral-500"
+                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-500"
               />
               <button
                 onClick={runPreview}
