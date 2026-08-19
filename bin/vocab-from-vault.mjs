@@ -36,7 +36,25 @@ const VAULT = process.env.SECOND_BRAIN_DIR || `${process.env.HOME}/secondBrain`;
 const VOCAB = process.env.CANVAS_VOCAB_FILE || `${process.env.HOME}/.minami/canvas-vocab.json`;
 const WRITE = process.argv.includes("--write");
 
-const SKIP = ["40-49 Archive", "/.raw", "/node_modules", "/.git", "/.obsidian"];
+/** ⚠️ `50-59 Sources/meetings` IS THIS PIPELINE'S OWN OUTPUT, AND HARVESTING IT CLOSES A LOOP.
+ *
+ *  The learning loop writes a meeting note from whatever the ear heard. This scanner then read those
+ *  notes back and promoted what it found into the glossary — which is handed to the ear as authority
+ *  on the next call. So a single mishearing became self-reinforcing:
+ *
+ *    "EC Vision" misheard as "Easy Vision AI"
+ *      -> written into 50-59 Sources/meetings/…
+ *      -> harvested here as a term
+ *      -> fed to the ear as the correct spelling
+ *      -> heard as "Easy Vision AI" more confidently, in more meetings
+ *
+ *  Measured 2026-08-19: "Easy Vision AI" appeared 165 times in the vault, in exactly four files, ALL
+ *  of them machine-written meeting notes. The canonical project note says `title: Ecvision` and never
+ *  once says "Easy Vision". The vault was right; the loop was laundering an error into canon.
+ *
+ *  Vocabulary may only be learned from what a HUMAN wrote. Machine transcripts are evidence of what
+ *  was heard, never of what is true. */
+const SKIP = ["40-49 Archive", "/.raw", "/node_modules", "/.git", "/.obsidian", "50-59 Sources/meetings"];
 
 /** Structural names — the vault's own scaffolding. They are frequent BECAUSE they are filenames, not
  *  because anyone says them out loud, and every one of them eats a slot in a 40-term budget that
@@ -79,6 +97,8 @@ function spoken(raw) {
 
 const files = walk(VAULT);
 const counts = new Map();
+/** alias -> canonical, harvested from project frontmatter and merged into vocab.fixes below. */
+const aliasFixes = new Map();
 const bump = (t, n = 1) => { const k = spoken(t); if (k) counts.set(k, (counts.get(k) ?? 0) + n); };
 
 for (const f of files) {
@@ -88,11 +108,31 @@ for (const f of files) {
   // [[wikilinks]] — the strongest signal: someone deliberately named a thing worth linking to.
   for (const m of text.matchAll(/\[\[([^\]|#]+)/g)) bump(m[1]);
 
-  // frontmatter aliases — the explicit "this is also called…" list, which is exactly a vocabulary.
+  /** frontmatter aliases — the explicit "this is also called…" list, which is exactly a vocabulary.
+   *
+   *  ⚠️ AN ALIAS IS A CORRECTION, NOT JUST ANOTHER WORD. These were only ever `bump`ed, so "Ecom
+   *  Intel" and "Commerce360" joined the term list beside "Ecvision" as three equal, unrelated names.
+   *  The ear was then biased toward all three at once with nothing saying they are the SAME THING, so
+   *  whichever one it picked was "correct" and the board acquired three identities for one product.
+   *
+   *  The note already answers it: `title:` is canonical and `aliases:` are the other ways it gets
+   *  said. That is a many-to-one mapping — precisely a fix rule — and it was being flattened into an
+   *  unordered bag of synonyms. */
   const fm = /^---\n([\s\S]*?)\n---/.exec(text);
   if (fm) {
+    const titleM = /^title:\s*(.+)$/m.exec(fm[1]);
+    const canonical = titleM ? titleM[1].trim().replace(/["']/g, "") : "";
     const al = /aliases:\s*\[([^\]]+)\]/.exec(fm[1]) || /aliases:\s*\n((?:\s*-\s*.+\n?)+)/.exec(fm[1]);
-    if (al) for (const a of al[1].split(/[,\n]/)) bump(a.replace(/^\s*-\s*/, "").replace(/["']/g, ""));
+    if (al) {
+      for (const raw of al[1].split(/[,\n]/)) {
+        const a = raw.replace(/^\s*-\s*/, "").replace(/["']/g, "").trim();
+        if (!a) continue;
+        bump(a);
+        // Only when there is a canonical name to point at, and never a self-referential rule.
+        if (canonical && a.toLowerCase() !== canonical.toLowerCase()) aliasFixes.set(a, canonical);
+      }
+    }
+    if (canonical) bump(canonical, 2);
   }
 
   // The note's own title, worth one mention — a file nobody links to is still a subject that exists.
@@ -159,8 +199,22 @@ const before = new Set(vocab.terms ?? []);
 vocab.terms = [...new Set([...ranked.map(([t]) => t), ...(vocab.terms ?? [])])];
 vocab.fixes = vocab.fixes ?? {};
 
+/** ⚠️ VAULT ALIASES ARE NOT AUTO-PROMOTED TO FIX RULES. Tried, reverted, and the counter-example is
+ *  worth keeping: `ecvision.md` declares `aliases: [Ecom Intel, Commerce360]`, so the rule would have
+ *  rewritten "gộp Ecom Intel với Commerce360 làm một" into "gộp Ecvision với Ecvision làm một" — a
+ *  sentence that no longer means what was said.
+ *
+ *  A fix rule edits a person's words, and that is only ever justified when the ear got them wrong. An
+ *  alias is a name someone legitimately uses. They stay TERMS, which is what makes the decoder spell
+ *  them correctly, and unifying the identities behind them belongs to the board, not the transcript.
+ *
+ *  `aliasFixes` is still collected above, and reported below, so the vault's own answer is visible to
+ *  a human who wants to promote one deliberately. */
+const aliasAdded = 0;
+
 mkdirSync(dirname(VOCAB), { recursive: true });
 writeFileSync(VOCAB, JSON.stringify(vocab, null, 2));
 const added = vocab.terms.filter((t) => !before.has(t)).length;
 console.log(`\n  wrote ${VOCAB}`);
-console.log(`  ${vocab.terms.length} terms total (${added} new), ${Object.keys(vocab.fixes).length} fixes kept\n`);
+console.log(`  ${vocab.terms.length} terms total (${added} new), ${Object.keys(vocab.fixes).length} fixes kept`);
+console.log(`  ${aliasFixes.size} vault aliases seen (kept as terms, NOT auto-promoted to rewrites — see note)\n`);

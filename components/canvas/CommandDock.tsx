@@ -99,6 +99,8 @@ export function CommandDock() {
   const [busy, setBusy] = useState(false);
   const [cmdText, setCmdText] = useState("");
   const [ear, setEar] = useState<string>("");
+  /** The dictionary as it stands, so a correction is edited rather than guessed at. */
+  const [dict, setDict] = useState<{ universal: { from: string; to: string }[]; call: { from: string; to: string }[] } | null>(null);
   const [room, setRoom] = useState(false);
   const [roster, setRoster] = useState<string[]>([]);
   const first = useRef<HTMLInputElement>(null);
@@ -173,6 +175,13 @@ export function CommandDock() {
     setText("");
   }
 
+  /** Loaded when the panel opens, not on mount: it is a real read of a file on every call, and the
+   *  dock is mounted for the whole meeting. */
+  async function loadDict() {
+    const d = await call({ action: "dictionary" });
+    if (d) setDict({ universal: d.universal ?? [], call: d.call ?? [] });
+  }
+
   async function runPreview() {
     if (!from.trim() || !to.trim()) return;
     const d = await call({ action: "fix", from: from.trim(), to: to.trim(), preview: true });
@@ -182,7 +191,8 @@ export function CommandDock() {
   async function commitRename() {
     const d = await call({ action: "fix", from: from.trim(), to: to.trim(), scope: universal ? "universal" : "call" });
     if (!d) return;
-    setFlash({ msg: `Renamed ${d.cardsUpdated} card(s)${universal ? " · saved for future calls" : " · this call only"}` });
+    const n = Array.isArray(d.froms) ? d.froms.length : 1;
+    setFlash({ msg: `${n > 1 ? `${n} spellings → ` : ""}${d.to} · ${d.cardsUpdated} card(s)${universal ? " · saved for future calls" : " · this call only"}` });
     setFrom(""); setTo(""); setPreview(null); setPanel(null);
   }
 
@@ -357,14 +367,14 @@ export function CommandDock() {
 
       {/* ── SỬA TÊN — preview, then commit ──────────────────────────────────────────────────── */}
       {panel === "rename" ? (
-        <Sheet title="Fix a misheard name" sub="Preview exactly which cards change, then confirm" onClose={() => { setPanel(null); setPreview(null); }}>
+        <Sheet title="Fix a misheard name" sub="List every way it gets misheard, separated by commas" onClose={() => { setPanel(null); setPreview(null); }}>
           <div className="w-[520px]">
             <div className="flex items-center gap-2">
               <input
                 ref={first}
                 value={from}
                 onChange={(e) => { setFrom(e.target.value); setPreview(null); }}
-                placeholder="Minami heard it as…"
+                placeholder="Easy Vision, Easy Vision AI, E C Vision"
                 className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] outline-none focus:border-neutral-500"
               />
               <span className="text-neutral-400">→</span>
@@ -372,7 +382,7 @@ export function CommandDock() {
                 value={to}
                 onChange={(e) => { setTo(e.target.value); setPreview(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") runPreview(); if (e.key === "Escape") setPanel(null); }}
-                placeholder="The correct name"
+                placeholder="Ecvision"
                 className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[14px] outline-none focus:border-neutral-500"
               />
               <button
@@ -381,6 +391,30 @@ export function CommandDock() {
                 className="shrink-0 rounded-lg bg-neutral-100 px-3 py-2 text-[13px] font-semibold text-neutral-800 disabled:opacity-40"
               >Preview</button>
             </div>
+
+            {/* ⚠️ SHOW WHAT IS ALREADY TAUGHT. Corrections were added blind, so there was no way to tell
+                from inside a call whether a name was already handled — the honest answer to "why is it
+                still wrong?" is often "that rule exists and something else is at fault". */}
+            {dict && (dict.call.length || dict.universal.length) ? (
+              <div className="mt-2.5 max-h-[104px] overflow-y-auto rounded-lg border border-neutral-200 bg-neutral-50/70 p-2 font-mono text-[11px] leading-[1.5]">
+                {dict.call.map((f) => (
+                  <div key={`c-${f.from}`} className="flex gap-1.5">
+                    <span className="text-amber-700">this call</span>
+                    <span className="text-neutral-500">{f.from}</span>
+                    <span className="text-neutral-300">→</span>
+                    <span className="text-neutral-800">{f.to}</span>
+                  </div>
+                ))}
+                {dict.universal.slice(0, 40).map((f) => (
+                  <div key={`u-${f.from}`} className="flex gap-1.5">
+                    <span className="text-neutral-300">always</span>
+                    <span className="text-neutral-500">{f.from}</span>
+                    <span className="text-neutral-300">→</span>
+                    <span className="text-neutral-800">{f.to}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {preview ? (
               <div className="mt-2.5 rounded-lg border border-neutral-200 bg-neutral-50/70 p-2.5">
@@ -458,7 +492,10 @@ export function CommandDock() {
         >{room ? (roster.length ? `Room · ${roster.length}` : "Room") : "Room"}</Btn>
         <Sep />
         <Btn onClick={() => setPanel(panel === "add" ? null : "add")} active={panel === "add"} icon={<IconPlus />}>Add card</Btn>
-        <Btn onClick={() => setPanel(panel === "rename" ? null : "rename")} active={panel === "rename"} icon={<IconEdit />}>Fix name</Btn>
+        <Btn
+          onClick={() => { const next = panel === "rename" ? null : "rename"; setPanel(next); if (next) void loadDict(); }}
+          active={panel === "rename"} icon={<IconEdit />}
+        >Fix name</Btn>
         <Sep />
         <Btn onClick={async () => { const d = await call({ action: "undo" }); if (d) { setCanRedo(!!d.canRedo); setFlash({ msg: d.removed ? `Removed: ${String(d.removed).slice(0, 32)}` : "Nothing left to undo" }); } }} icon={<IconUndo />}>Undo</Btn>
         <Btn onClick={async () => { const d = await call({ action: "redo" }); if (d) { setCanRedo(!!d.canRedo); setFlash({ msg: d.restored ? `Restored: ${String(d.restored).slice(0, 32)}` : "Nothing to redo" }); } }} dim={!canRedo} icon={<IconRedo />}>Redo</Btn>

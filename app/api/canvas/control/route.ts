@@ -278,10 +278,35 @@ export async function POST(req: Request) {
   }
 
   // ── CORRECT A NAME ────────────────────────────────────────────────────────────────────────────
+  /** LIST THE DICTIONARY. Adding corrections blind is how the same rule gets typed three times and
+   *  how anh cannot tell whether a name is already handled. "Is Easy Vision already mapped?" was
+   *  unanswerable from inside a call until this existed. */
+  if (body.action === "dictionary") {
+    const vocab = loadVocab();
+    return Response.json({
+      ok: true,
+      universal: Object.entries(vocab.fixes ?? {}).map(([from, to]) => ({ from, to })),
+      call: Object.entries(s.fixes ?? {}).map(([from, to]) => ({ from, to })),
+      terms: (vocab.terms ?? []).slice(0, 200),
+    });
+  }
+
   if (body.action === "fix") {
-    const from = (body.from || "").trim();
+    /** ⚠️ ONE NAME, MANY WAYS OF SAYING IT. This took a single `from`, so teaching the ear that
+     *  "ecvision" is heard as "Easy Vision", "Easy Vision AI", "E C Vision" and "EC Vision" meant
+     *  four trips through the panel — during a live call, while the wrong name accumulated on the
+     *  board. A mishearing is rarely singular: an accent that defeats a decoder defeats it in several
+     *  directions at once.
+     *
+     *  Comma or newline separated, so "Easy Vision, Easy Vision AI, E C Vision" is one action. */
+    const froms = String(body.from || "")
+      .split(/[,\n]+/).map((x) => x.trim()).filter(Boolean)
+      // Longest first, so "Easy Vision AI" is consumed before "Easy Vision" can match inside it and
+      // leave a stray " AI" behind — the same rule correctText follows.
+      .sort((a, b) => b.length - a.length);
+    const from = froms[0] ?? "";
     const to = (body.to || "").trim();
-    if (!from || !to) return Response.json({ ok: false, error: "need from and to" }, { status: 400 });
+    if (!froms.length || !to) return Response.json({ ok: false, error: "need from and to" }, { status: 400 });
     const universal = body.scope === "universal";
 
     /** PREVIEW FIRST. A rename rewrites text on cards that are already on a shared screen, and the
@@ -293,8 +318,9 @@ export async function POST(req: Request) {
        *  and it was never reset between cards, so the preview SKIPPED matches — it reported 2 of 3
        *  and the apply then changed all 3. A safeguard that undercounts is worse than none, because
        *  it is trusted. */
-      const probe = new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      const re0 = new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+      const escP = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const probe = new RegExp(froms.map(escP).join("|"), "i");
+      const re0 = new RegExp(froms.map(escP).join("|"), "gi");
       const hits = s.board.cards()
         .filter((c) => probe.test(c.label) || probe.test(c.detail ?? ""))
         .map((c) => ({ id: c.id, before: c.label, after: c.label.replace(re0, () => to) }));
@@ -303,18 +329,21 @@ export async function POST(req: Request) {
 
     if (universal) {
       const vocab = loadVocab();
-      vocab.fixes[from.toLowerCase()] = to;
+      for (const f of froms) vocab.fixes[f.toLowerCase()] = to;
       saveVocab(vocab);
     } else {
       s.fixes = s.fixes ?? {};
-      s.fixes[from.toLowerCase()] = to;
+      for (const f of froms) s.fixes[f.toLowerCase()] = to;
     }
 
     // Retroactive, always. Teaching only the future leaves the wrong name sitting on the board anh is
     // looking at, which reads as the correction having been ignored.
-    const re = new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // One alternation over every variant, still longest-first, so a card saying "Easy Vision AI" is
+    // rewritten once and completely rather than partially by the shorter rule.
+    const re = new RegExp(froms.map(esc).join("|"), "gi");
+    const probeApply = new RegExp(froms.map(esc).join("|"), "i");
     let touched = 0;
-    const probeApply = new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     for (const c of s.board.cards()) {
       if (probeApply.test(c.label) || probeApply.test(c.detail ?? "")) {
         s.board.reviseById({
@@ -326,7 +355,7 @@ export async function POST(req: Request) {
       }
     }
     if (touched) await repaint(req, s);
-    return Response.json({ ok: true, from, to, scope: universal ? "universal" : "call", cardsUpdated: touched });
+    return Response.json({ ok: true, from, froms, to, scope: universal ? "universal" : "call", cardsUpdated: touched });
   }
 
   return Response.json({ ok: false, error: `unknown action ${body.action}` }, { status: 400 });

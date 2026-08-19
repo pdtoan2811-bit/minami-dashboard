@@ -31,7 +31,15 @@ const FILE = process.env.CANVAS_VOCAB_FILE || `${process.env.HOME}/.minami/canva
 const SEED = {
   terms: [
     "Minami", "mind map", "canvas", "Recall.ai", "Ownego", "qone", "QSortby",
-    "Easy Vision AI", "Hetzner", "Slack", "Second Brain", "real-time",
+    /** ⚠️ "Easy Vision AI" WAS SEEDED HERE AS IF IT WERE THE PRODUCT NAME. It is not — it is the
+     *  MISHEARING of it. The vault's own project note says `title: Ecvision` and never once says
+     *  "Easy Vision", yet this list taught the ear the wrong spelling on every single call, then the
+     *  learning loop wrote that spelling into meeting notes, and the vault scanner harvested it back
+     *  as authority. Seeding a mishearing is how one bad transcription becomes canon.
+     *
+     *  The real name is written `ecvision.ai` and SAID "EC Vision", so both reach the decoder, and
+     *  every variant anh actually produces is mapped home in `fixes` below. */
+    "Ecvision", "ecvision.ai", "EC Vision", "Hetzner", "Slack", "Second Brain", "real-time",
     /** ⚠️ THE CRAFT VOCABULARY, not just the proper nouns.
      *
      *  The vault sync fills this list with PROJECT NAMES — Minami, QSortby, Ecom Intel — because that
@@ -55,6 +63,27 @@ const SEED = {
     "mind mask": "mind map",
     "real town": "real-time",
     "recall ai": "Recall.ai",
+    /** ⚠️ ONE PRODUCT, MANY WAYS OF SAYING IT — and the ear only has to get it wrong once for the
+     *  board, the archive and the vault to inherit the error. "ecvision.ai" is said "EC Vision", and
+     *  an English-trained decoder hearing Vietnamese-accented "EC" reaches for "Easy" every time.
+     *  Reported directly: "I got a lot of Easy Vision when I say EC Vision."
+     *
+     *  All of them land on the vault's canonical `title:`. Longest-first matching is handled by
+     *  correctText, so "Easy Vision AI" is consumed before "Easy Vision" can match inside it. */
+    "easy vision ai": "Ecvision",
+    "easy vision": "Ecvision",
+    "e c vision": "Ecvision",
+    "ec vision": "Ecvision",
+    /** ⚠️ "Ecom Intel" and "Commerce360" are DELIBERATELY ABSENT, though the vault lists both as
+     *  aliases of this same product. A fix rule rewrites what a person said, and those two are things
+     *  anh actually says — not things the ear got wrong. Mapping them here turned
+     *
+     *    "bên Ecom Intel với Commerce360 gộp làm một"   (merge these two)
+     *  into
+     *    "bên Ecvision với Ecvision gộp làm một"        (merge it with itself)
+     *
+     *  — a sentence that no longer means what he said. Corrections are for MISHEARINGS. A synonym
+     *  someone chose is theirs, and unifying identities is the board's job, not the transcript's. */
     // Blaze's characteristic error is SPLITTING a name it does not know into two Vietnamese-looking
     // syllables, rather than substituting a different word. Observed 2026-08-17 on the first real
     // clip: "Minami" → "Mi Nami". Its `prompt` field is inert, so post-correction is the only lever.
