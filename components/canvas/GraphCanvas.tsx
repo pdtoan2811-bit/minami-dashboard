@@ -395,10 +395,21 @@ export function GraphCanvas({ graph, thinking, fit }: {
     return keep;
   }, [selected, placed, graph.edges]);
 
-  /** Floor for shrink-to-fit: past this an unreadable board is not a better answer than a cropped
-   *  one, so the camera goes back to panning. Declared here because the CENTRE has to reason about it
-   *  too — see below. */
-  const FIT_FLOOR = 0.45;
+  /** The handover point between FRAMING THE BOARD and FOLLOWING THE NEWEST CARD.
+   *
+   *  ⚠️ THIS NUMBER DECIDES WHETHER THE CAMERA MOVES AT ALL. While the whole board fits at this zoom
+   *  or better, the camera frames it and holds still; below it, framing is abandoned and the camera
+   *  pans to whatever was just said.
+   *
+   *  It was 0.45 — 47% of desktop follow zoom — so essentially every real board "fit", the camera
+   *  never moved, and cards shrank toward illegibility as the meeting went on. Framing something
+   *  nobody can read is not framing it.
+   *
+   *  0.88 is deliberately close to follow zoom: the board is only framed when doing so costs almost
+   *  no legibility, and the moment it would cost more than about a tenth the camera stops trying to
+   *  show everything and goes to read what was just said. Reading the newest card is the job; seeing
+   *  the whole shape is a bonus that is only worth taking while it is nearly free. */
+  const FIT_FLOOR = 0.88;
 
   /** Where the camera points: the whole board's centre, or null to fall back to following the newest
    *  card.
@@ -484,12 +495,19 @@ export function GraphCanvas({ graph, thinking, fit }: {
     // less often, not only to move it more slowly — every move it does not make is a move that cannot
     // judder. A card landing inside the frame needs no camera at all, and at broadcast zoom the frame
     // already holds a whole branch.
-    // FIT FIRST IN PRESENT. The safe box at 1080p is ~1760x880 — most boards simply fit, so the
-    // honest default is a camera that does not move at all. 0.92/0.86 means it holds still until a
-    // new card is genuinely near the edge, which removes the "movement too sudden" problem by
-    // removing the movement rather than by slowing it down.
-    const gx = present ? 0.92 : broadcast ? 0.88 : 0.72;
-    const gy = present ? 0.86 : broadcast ? 0.7 : 0.5;
+    /** ⚠️ THIS CODE ONLY RUNS WHEN FRAMING HAS ALREADY BEEN GIVEN UP ON.
+     *
+     *  The old 0.92/0.86 came from "fit first in present": most boards fit, so the honest default was
+     *  a camera that never moved, and these numbers existed to keep it still. But the fit branch
+     *  returns above — by the time execution reaches here the board does NOT fit, the camera IS
+     *  panning, and holding still is the one thing it must not do. At 0.92 the newest card had to
+     *  reach 92% of the way to the edge before the camera reacted, so a card would appear hard against
+     *  the frame, or half outside it, and stay there.
+     *
+     *  Tightened so a new card lands comfortably inside the frame rather than at its edge. Broadcast
+     *  keeps the generous zone: judder is worse on a 15fps re-encode than a card near an edge is. */
+    const gx = broadcast && !present ? 0.88 : 0.62;
+    const gy = broadcast && !present ? 0.7 : 0.45;
     setFollowAt((prev) => {
       const dx = Math.abs(newestX - prev.cx) > hw * gx;
       const dy = Math.abs(newestY - prev.cy) > hh * gy;
@@ -535,10 +553,34 @@ export function GraphCanvas({ graph, thinking, fit }: {
    *  Broadcast stays fixed: that path is a 1280x720 re-encode where small text is already the enemy,
    *  and a viewer of a video stream cannot pinch. Manual scroll or pinch still hands control over
    *  immediately, so nothing is taken away — it just starts framed. */
-  const autoZoom = broadcast && !present ? FOLLOW_ZOOM : fitZoom;
+  /** ⚠️ THE ZOOM AND THE DEAD ZONE MUST BE THE SAME NUMBER.
+   *
+   *  This rendered at `fitZoom` in every non-broadcast mode, while the follow effect above sized its
+   *  dead zone with `safe.w / FOLLOW_ZOOM`. So while the camera was panning, it decided whether the
+   *  newest card was near the edge using a zoom it was not applying — at the old 0.45 floor the dead
+   *  zone was computed for a frame twice the size of the one on screen, which is why a new card could
+   *  be visibly off the edge and the camera would judge it comfortably inside and refuse to move.
+   *
+   *  So there are exactly two states now, and each is internally consistent:
+   *    fitCentre !== null  the whole board fits readably → frame it, hold still, shrink as needed
+   *    fitCentre === null  it does not → FOLLOW_ZOOM, and pan to the newest card
+   *
+   *  `fitCentre` is the authority for which state we are in precisely because it already applies the
+   *  floor, so the pan and the zoom can no longer disagree about whether the board fits. */
+  const framing = fitCentre !== null;
+  const autoZoom = broadcast && !present ? FOLLOW_ZOOM : framing ? fitZoom : FOLLOW_ZOOM;
   // Centre on the safe box, not on the frame. In broadcast the two differ vertically: the frame's
   // centre sits below the safe box's once the header is accounted for, and that offset is exactly
   // enough to push the newest card under the call controls.
+  /** ⚠️ DO NOT CLAMP THE AIM POINT TO THE BOARD'S BOUNDING BOX. Tried, reverted, measured.
+   *
+   *  The idea was sound — centring on the newest card leaves empty grid below it, so clamp the camera
+   *  to the board's bounds and reclaim that space. It fails because this board's bounds are SPARSE:
+   *  the root and the older topics sit far off to one side with nothing in between, so the bbox is
+   *  mostly empty and clamping to it dragged the camera off the newest card and into the gap. The
+   *  frame got emptier, not fuller, and the card anh was waiting for ended up at the edge.
+   *
+   *  Empty canvas beneath the newest card is the honest picture of a board that ends there. */
   const autoTx = safe.cx - followAt.cx * autoZoom;
   const autoTy = safe.cy - followAt.cy * autoZoom;
 
