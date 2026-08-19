@@ -197,27 +197,54 @@ ok "receiver ready on :${RECV_PORT} → :${PORT}"
 # Quick-tunnel hostnames rotate on every restart and are printed only to stdout — losing one has cost
 # a meeting before, so it is captured to a file the moment it appears.
 b "  3/4  tunnel"
-# Same rule as the receiver: a live tunnel whose hostname we still have is reused rather than
-# replaced. Quick-tunnel hostnames rotate on every restart, so needlessly recreating one also
-# invalidates a URL a running meeting may be streaming to.
-EXISTING="$(cat "$STATE/receiver-url.txt" 2>/dev/null || true)"
-if [ -n "$EXISTING" ] && pgrep -f "cloudflared tunnel --url http://localhost:${RECV_PORT}" >/dev/null 2>&1; then
-  HOST="$EXISTING"
-  ok "reusing ${HOST#https://}"
-else
+
+# ⚠️ A QUICK TUNNEL IS THE MOST FRAGILE LINK IN THIS WHOLE CHAIN, AND IT FAILS SILENTLY.
+#
+# The bot streams audio to a PUBLIC url; that url is a Cloudflare quick tunnel, which is ephemeral by
+# design. When it dies mid-call the symptom is indistinguishable from a quiet room: the receiver is
+# healthy, the app is healthy, every log is clean, and no audio arrives. Observed 2026-08-19 — a
+# tunnel flapped for twelve minutes ("control stream encountered a failure while serving", retrying
+# every 64s) while a real meeting produced zero cards.
+#
+# The reuse check was the same mistake as the port check earlier in this file: it asked whether
+# cloudflared was RUNNING, not whether the tunnel WORKED. A process that has been failing for two
+# hours is still a process, so the launcher happily reused a dead url and dispatched a paid bot at it.
+#
+# `tunnel_up` therefore proves the url end-to-end with an actual request before trusting it, and
+# replaces the tunnel if it cannot. Any HTTP response counts as alive; only a connection failure (000)
+# is death.
+tunnel_reachable() {
+  [ -n "${1:-}" ] || return 1
+  [ "$(curl -s -o /dev/null -m 8 -w '%{http_code}' "$1" 2>/dev/null)" != "000" ]
+}
+
+tunnel_up() {
+  local existing host code
+  existing="$(cat "$STATE/receiver-url.txt" 2>/dev/null || true)"
+  if tunnel_reachable "$existing"; then printf '%s' "$existing"; return 0; fi
+
+  # Only ever matched on OUR port, so a cloudflared serving something else is untouched. This is the
+  # one place the file's "recorded pids, never pkill -f" rule is relaxed, and deliberately: the dead
+  # tunnel may have been started by a previous run of this script that has since exited, so there is
+  # no pid to have recorded.
+  for pid in $(pgrep -f "cloudflared tunnel --url http://localhost:${RECV_PORT}" 2>/dev/null); do
+    kill "$pid" 2>/dev/null
+  done
+  : > "$STATE/tunnel.log"
   nohup cloudflared tunnel --url "http://localhost:${RECV_PORT}" > "$STATE/tunnel.log" 2>&1 &
   TUNNEL_PID=$!
-fi
-if [ -z "${HOST:-}" ]; then
   for _ in $(seq 1 45); do
-    HOST=$(grep -aoE "https://[a-z0-9-]+\.trycloudflare\.com" "$STATE/tunnel.log" | head -1)
-    [ -n "$HOST" ] && break
+    host=$(grep -aoE "https://[a-z0-9-]+\.trycloudflare\.com" "$STATE/tunnel.log" | head -1)
+    # ⚠️ PRINTED IS NOT THE SAME AS READY. cloudflared logs the hostname before it can serve, so a bot
+    # dispatched the instant the url appears can miss the first seconds of a call — or all of it.
+    if tunnel_reachable "$host"; then printf '%s' "$host" > "$STATE/receiver-url.txt"; printf '%s' "$host"; return 0; fi
     sleep 1
   done
-fi
-[ -n "$HOST" ] || { no "no tunnel hostname — check $STATE/tunnel.log"; read -r -p "  enter to close "; exit 1; }
-echo "$HOST" > "$STATE/receiver-url.txt"
-ok "${HOST#https://}"
+  return 1
+}
+
+HOST="$(tunnel_up)" || { no "no working tunnel — check $STATE/tunnel.log"; read -r -p "  enter to close "; exit 1; }
+ok "${HOST#https://} (reachable)"
 
 # ── 4. start a call, or go read one ─────────────────────────────────────────────────────────────
 # Two different jobs share these services. Starting a meeting needs the bot and the tunnel; browsing
@@ -294,8 +321,6 @@ esac
 [ -n "$CTX" ] && dim "context: $CTX"
 
 curl -s -o /dev/null -X POST "http://127.0.0.1:${PORT}/api/canvas?reset=1" -H "authorization: Bearer ${CANVAS_INGEST_TOKEN:-}"
-export RECALL_RECEIVER_URL="wss://${HOST#https://}"
-
 echo
 b "  share this tab in Meet"
 printf "  \033[4mhttp://localhost:%s/canvas?present=1\033[0m\n" "$PORT"
@@ -337,10 +362,68 @@ if [ -n "$MEET_CODE" ]; then
   fi
 fi
 
-CANVAS_MEETING_CONTEXT="${CTX:-}" node bin/minami-meet.mjs "$MEET" --present &
-BOT_PID=$!
-[ -n "$LOCK" ] && printf '%s' "$BOT_PID" > "$LOCK"
-wait "$BOT_PID"
+# ⚠️ THE TUNNEL IS WATCHED FOR THE WHOLE CALL, AND A DEAD ONE IS REPAIRED RATHER THAN REPORTED.
+#
+# Verifying the tunnel once at startup is not enough — it dies MID-call, which is exactly when nobody
+# is looking at a terminal. And it cannot simply be restarted underneath a running bot: Recall bakes
+# the receiver url into the bot at creation (realtime_endpoints), and a quick-tunnel hostname rotates
+# on every restart. So the only real repair is a fresh tunnel AND a fresh bot.
+#
+# That is what this loop does. The watchdog polls the url; two consecutive failures (~30s) mean the
+# tunnel is gone rather than blipping, so it stops the bot — cleanly, with SIGINT, so the bot leaves
+# the room instead of being abandoned there billing. The loop then gets a new tunnel and rejoins.
+#
+# Bounded at 3 rejoins. If a call needs a fourth, the problem is not the tunnel and silently
+# re-dispatching paid bots at it is the wrong answer.
+REJOINS=0
+MAX_REJOINS=3
+watch_tunnel() {
+  local fails=0
+  while kill -0 "$BOT_PID" 2>/dev/null; do
+    sleep 15
+    kill -0 "$BOT_PID" 2>/dev/null || return 0
+    if tunnel_reachable "$HOST"; then
+      fails=0
+    else
+      fails=$((fails + 1))
+      # One failure is a blip — a quick tunnel drops a request now and then and recovers on its own.
+      # Two in a row, thirty seconds apart, is an outage.
+      if [ "$fails" -ge 2 ]; then
+        printf '\n  \033[31m✗\033[0m tunnel is down — the bot cannot send audio. Rejoining with a fresh one.\n'
+        touch "$STATE/tunnel-died"
+        kill -INT "$BOT_PID" 2>/dev/null
+        return 0
+      fi
+    fi
+  done
+}
+
+while :; do
+  export RECALL_RECEIVER_URL="wss://${HOST#https://}"
+  rm -f "$STATE/tunnel-died"
+  CANVAS_MEETING_CONTEXT="${CTX:-}" node bin/minami-meet.mjs "$MEET" --present &
+  BOT_PID=$!
+  [ -n "$LOCK" ] && printf '%s' "$BOT_PID" > "$LOCK"
+  watch_tunnel &
+  WATCH_PID=$!
+  wait "$BOT_PID" 2>/dev/null
+  kill "$WATCH_PID" 2>/dev/null
+
+  # A normal exit — anh hung up, or the bot left on its own — ends the call. Only a tunnel death
+  # rejoins, and only while there is budget for it.
+  [ -f "$STATE/tunnel-died" ] || break
+  rm -f "$STATE/tunnel-died"
+  REJOINS=$((REJOINS + 1))
+  if [ "$REJOINS" -gt "$MAX_REJOINS" ]; then
+    no "the tunnel has failed ${MAX_REJOINS} times — stopping rather than dispatching more bots"
+    dim "  Something upstream is wrong. See $STATE/tunnel.log"
+    break
+  fi
+  b "  reconnecting (${REJOINS}/${MAX_REJOINS})"
+  HOST="$(tunnel_up)" || { no "could not raise a new tunnel — see $STATE/tunnel.log"; break; }
+  ok "${HOST#https://} (reachable)"
+  dim "rejoining the call — you may need to re-admit Minami"
+done
 
 # ── THE LEARNING LOOP ───────────────────────────────────────────────────────────────────────────
 # A call that never reaches the vault may as well not have happened — the vault is where anh actually
