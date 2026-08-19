@@ -164,7 +164,17 @@ export async function POST(req: Request) {
   if (nextRev < (doc.rev ?? 0)) {
     return Response.json({ ok: false, error: "stale revision", have: doc.rev, got: nextRev }, { status: 409 });
   }
-  doc = { ...next, rev: nextRev };
+  /** ⚠️ EQUAL REVS ARE A DROPPED FRAME, AND JUDGES NOW FINISH TOGETHER.
+   *
+   *  rev is a wall-clock millisecond and the client accepts only a STRICTLY GREATER one — so two
+   *  publishes stamped in the same millisecond leave the second invisible until something else moves.
+   *  That was rare while judges ran one at a time. They now run concurrently and routinely land in the
+   *  same breath, which turns a theoretical tie into a recurring one.
+   *
+   *  Nudging forward keeps the wall-clock meaning (the debug panel reads rev as an age) while
+   *  guaranteeing the strict monotonicity the client's guard requires. */
+  const stamped = nextRev <= (doc.rev ?? 0) ? (doc.rev ?? 0) + 1 : nextRev;
+  doc = { ...next, rev: stamped };
   (globalThis as { __canvasDoc?: Graph }).__canvasDoc = doc;
   for (const send of clients) send(doc);
   return Response.json({ ok: true, rev: doc.rev, clients: clients.size });

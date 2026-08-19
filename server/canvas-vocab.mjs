@@ -155,8 +155,18 @@ export function saveVocab(v) {
  *  Kept SHORT and put in a sentence rather than dumped as a list: a decoding prompt is conditioning
  *  context, not a dictionary lookup, and a wall of comma-separated tokens biases it toward producing
  *  a list. Capped because the prompt competes with the audio for the model's attention. */
+/** ⚠️ THE LIVE GLOSSARY GOES FIRST, OR IT DOES NOT GO AT ALL.
+ *
+ *  `extra` is the highest-value signal there is: words scraped from what was said in the last minute
+ *  of THIS meeting, plus anything anh corrected by hand mid-call. It was concatenated AFTER the vault
+ *  list and the whole thing cut to 40 — and the vault list is now 179 terms, so `extra` was sliced off
+ *  in its entirety, every call. Measured: passing "Recall" and "screenshare" as live keyterms, neither
+ *  reached the decoder.
+ *
+ *  The cap itself is right (40 names is roughly what a decoder prompt can bias before the tail stops
+ *  mattering). The ORDER was wrong: a general vocabulary was crowding out the specific one. */
 export function asrPrompt(vocab, extra = []) {
-  const terms = [...new Set([...(vocab.terms ?? []), ...extra])].slice(0, 40);
+  const terms = [...new Set([...extra, ...(vocab.terms ?? [])])].slice(0, 40);
   if (!terms.length) return undefined;
   return `This is a product meeting. Expect these names and terms: ${terms.join(", ")}.`;
 }
