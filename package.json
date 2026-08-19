@@ -18,7 +18,7 @@
     "url": "https://github.com/pdtoan2811-bit/minami-dashboard.git"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "NEXT_DIST_DIR=.next-dev next dev",
     "build": "next build",
     "build:check": "NEXT_DIST_DIR=.next-verify next build",
     "start": "next start",

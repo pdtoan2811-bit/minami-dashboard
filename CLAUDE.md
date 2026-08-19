@@ -82,6 +82,8 @@ there is no second way to start a session. `docs/knowledge/15-teams.md`.
   undone by the next person who finds it odd.
 - **Server is the source of truth for live activity.** Activity state uses REPLACE semantics so a
   dropped SSE event self-heals on the next one. Don't add client-side derivation that can disagree.
+- **Token and pricing facts live in `docs/knowledge/16-token-economics.md`** — read that rather
+  than loading the `claude-api` skill, which inlines ~137k tokens to answer a two-line question.
 - **Model pins live in `lib/model-pins.ts`** — never hardcode a model id elsewhere, so the session
   model and the model the dashboard *alerts on* can't drift apart.
 - **`bypassPermissions` is the default permission mode** (`DEFAULT_PERMISSION_MODE` in

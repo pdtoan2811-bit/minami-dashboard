@@ -131,6 +131,42 @@ Three smaller things that only matter once this is automatic:
   wrong guess has to cost nothing — otherwise opening and closing three blank chats leaves three
   checkouts and three branches to clean up by hand, and the friction this removed comes back as mess.
 
+> 🐛 **The auto-discard passed `--force`, the one flag that turns the occupancy guard off.** Closing
+> an isolated pane calls `discardIfPristine`, which ran `task.mjs rm --force`. `cmdRm` gates its
+> claim/live-cwd check on `&& !force`, so the call disabled exactly the protection installed after the
+> incident above, then substituted a dirty/commits check that **cannot** see occupancy — the claim
+> file is gitignored, so a claimed tree reports zero dirty files. And closing a pane does not stop its
+> session; that is deliberate and documented two sections up. Repro: open a blank second chat, send a
+> message, close the tab while the agent is still reading, and its checkout is deleted underneath it.
+>
+> Verified against a real worktree: a claimed tree shows `0` dirty files, `rm` without `--force`
+> refuses with *"occupied — claimed by 1 pane(s)"*, and `rm --force` deletes it. Three gates now stand
+> in the way, in order of what they can see — the claim file (checked in `lib/worktree.ts`, readable
+> with the dashboard down), `task.mjs rm` **without** `--force` (re-checks claim *and* live cwd), and
+> clean-plus-zero-commits-ahead. A refusal is a normal outcome: the tree simply stays.
+>
+> The shape of the mistake is worth more than the fix. The module imports `worktreeOf` from
+> `worktree-claim` — the file whose entire purpose is answering "is anyone working here?" — and then
+> never asked it. A guard you route around is worse than one you never had, because the code reads as
+> if it is protected.
+
+> 🐛 **Two smaller ones in the same pass.** (1) `nameFor` listed only *directories*, but `task new`
+> mounts an **existing branch** when it finds one — so a leftover `task/chat` meant the next
+> auto-isolated chat silently started on someone's old commits, and would have merged them on the
+> first "merge back". Name allocation now reads `refs/heads/task` too; verified by leaving a stale
+> `task/chat` and watching isolate return `chat-2`. (2) Name allocation and creation are not atomic,
+> so two panes opened in the same second both picked `chat`; the loser threw, the route 500'd, and the
+> client — which catches and carries on — created the pane **unisolated**, silently. It retries now.
+> Both failed toward "no isolation" or "wrong isolation" while looking like success, which is the
+> hazard of making the feature silent.
+
+> 🐛 **`/api/worktree` would execute any repo's `bin/task.mjs`.** The route takes a client-supplied
+> `cwd`, resolved to a git root, and ran the CLI *out of that repository*. Local-only posture, but it
+> is still arbitrary-script execution keyed on a path the client names — any checkout on the machine
+> carrying that filename would do. The CLI backend is now confined to the dashboard's own checkout
+> (`isOwnRepo`, which resolves through a worktree's `.git` pointer file so previews still count);
+> every other repo gets the plain-git backend, which runs nothing but `git`.
+
 **What this deliberately does not do:** re-isolate chats that were already running, and merge
 automatically in repos with no `bin/task.mjs`. The autopilot stays out of repos it has no gates for.
 

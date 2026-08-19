@@ -1,0 +1,194 @@
+"use client";
+// CUT SCENE — the board stops, and one moment gets the whole screen.
+//
+// ── Why a reaction deserves this and a card doesn't ──────────────────────────────────────────────
+// Everything else on this canvas is a RECORD: a card, an edge, a chip. Records accumulate, and their
+// job is to still be legible in ten minutes. A reaction is not a record — it is a MOMENT, and a
+// moment rendered as a 12px pill in a card footer has been filed rather than felt. On a shared
+// screen it is invisible: nobody in the room notices that the AI just agreed something was the
+// strongest claim of the meeting.
+//
+// So the reaction gets the screen. Not because it is more important than the board, but because it
+// is the only thing here with a MOMENT shape, and a moment that nobody notices did not happen.
+//
+// ── The pill stays ──────────────────────────────────────────────────────────────────────────────
+// The cut scene does not replace the chip on the card. Cut scene = the moment, chip = the memory.
+// Someone scrolling back at minute forty must still find it, and a full-screen flash is the one
+// thing on this board that leaves nothing behind.
+//
+// ── Slow, not flashy ────────────────────────────────────────────────────────────────────────────
+// The temptation is a confetti burst. Confetti is loud AND fast, which reads as a notification —
+// something demanding dismissal. This is the opposite gesture: the board dims, one glyph rises and
+// settles, a line of text says what it was for, and it recedes. ~3.4s end to end, most of it hold.
+// Elegance here is entirely a function of nothing happening quickly.
+//
+// ── One at a time, and not too many ─────────────────────────────────────────────────────────────
+// The relate pass returns 3–5 reactions in a single frame. Playing them back to back would take the
+// screen away for fifteen seconds — the board would be unusable exactly when it just got interesting.
+// The queue plays one at a time, drops anything beyond MAX_QUEUED, and enforces a cooldown so a busy
+// stretch of meeting cannot turn into a slideshow. A cut scene that happens constantly is a screen
+// saver, and stops meaning anything.
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+/** Total time on screen, matched to the keyframes in globals.css. */
+const DURATION = 3400;
+/** Reduced-motion hold. Shorter because none of the 3.4s is arrival or exit any more — it is all
+ *  hold, and a still image needs only long enough to be read. */
+const STILL_DURATION = 2200;
+/** Minimum quiet between two cut scenes. Long enough that two in a row read as two events. */
+const COOLDOWN = 2600;
+/** Anything past this in one burst is filed to the cards and never shown big. */
+const MAX_QUEUED = 2;
+
+export type Moment = { id: string; emoji: string; label?: string };
+
+/** What each glyph is FOR. The emoji alone is ambiguous at 140px — 🔥 could be "this is great" or
+ *  "this is on fire, badly" — so the scene always names the reason underneath it. */
+const MEANING: Record<string, string> = {
+  "🔥": "Strongest claim yet",
+  "😮": "That landed",
+  "💡": "New idea",
+  "❓": "Left hanging",
+  "👏": "Worth marking",
+  "🤝": "Agreement",
+  "🙌": "Everyone's aligned",
+  "✨": "Worth keeping",
+  "💯": "Full agreement",
+  "🎉": "Milestone",
+  "✅": "Settled",
+};
+
+export function CutScene({ moment, onDone }: { moment: Moment | null; onDone: () => void }) {
+  // REDUCED MOTION IS NOT A SHORTER CUT SCENE — it is a still one.
+  //
+  // The global rule in globals.css clamps every animation to 1ms, which is right for a slide-in and
+  // catastrophic here: these keyframes END at opacity 0, so the scene snapped straight to its exit
+  // state and the viewer got a dimmed screen with nothing on it for three and a half seconds. Caught
+  // in a headless browser, which defaults to `reduce` — the same thing every reduced-motion user
+  // would have had.
+  //
+  // So: no animation, no dim, a shorter hold, and the content rendered plainly. The moment is still
+  // delivered; only the movement is dropped, which is exactly what the preference asks for.
+  const [still, setStill] = useState(false);
+  useEffect(() => {
+    setStill(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+  }, []);
+
+  useEffect(() => {
+    if (!moment) return;
+    const t = setTimeout(onDone, still ? STILL_DURATION : DURATION);
+    return () => clearTimeout(t);
+  }, [moment, onDone, still]);
+
+  if (!moment) return null;
+  const meaning = MEANING[moment.emoji] ?? "Reaction";
+  const anim = (name: string) => (still ? undefined : `${name} ${DURATION}ms cubic-bezier(0.22, 1, 0.36, 1) both`);
+
+  return (
+    <div className="pointer-events-none absolute inset-0 z-40 grid place-items-center" aria-live="polite">
+      {/* The wash. Blur rather than a flat scrim: the board stays visible as SHAPE, so the cut scene
+          reads as the room dimming around what is already there, not as a modal covering it up. */}
+      <div
+        className={still ? "absolute inset-0" : "absolute inset-0 backdrop-blur-[3px]"}
+        style={{
+          background: "radial-gradient(ellipse at center, rgba(244,244,242,0.86) 0%, rgba(244,244,242,0.62) 100%)",
+          animation: anim("cutWash"),
+        }}
+      />
+
+      <div className="relative flex flex-col items-center">
+        {/* One ring, travelling outward and fading. A single slow ring reads as resonance; three
+            staggered ones read as a notification badge, which is the register we are avoiding. */}
+        {still ? null : (
+          <span
+            className="absolute size-[150px] rounded-full border border-neutral-300/70"
+            style={{ animation: anim("cutRing") }}
+            aria-hidden
+          />
+        )}
+        <span
+          className="text-[132px] leading-none"
+          style={{ animation: anim("cutGlyph"), filter: "drop-shadow(0 18px 34px rgba(16,24,40,0.16))" }}
+        >
+          {moment.emoji}
+        </span>
+
+        <div className="mt-7 flex flex-col items-center gap-2" style={{ animation: anim("cutText") }}>
+          <span className="text-[13px] font-bold uppercase tracking-[0.18em] text-neutral-400">
+            {meaning}
+          </span>
+          {moment.label ? (
+            <span className="max-w-[min(680px,72vw)] text-center text-[26px] font-semibold leading-snug tracking-[-0.01em] text-neutral-800">
+              {moment.label}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The queue. Feed it moments as they arrive; it plays at most one at a time, with a cooldown.
+ *
+ *  `seen` is keyed by moment id and never cleared, so a graph frame that re-sends a reaction the
+ *  board already has — which every frame does, since the graph is sent whole — cannot replay it. That
+ *  is the difference between a cut scene and a strobe. */
+export function useCutScenes() {
+  const [current, setCurrent] = useState<Moment | null>(null);
+  const queue = useRef<Moment[]>([]);
+  const shown = useRef(new Set<string>());
+  const lastEnded = useRef(0);
+  /** Bumped whenever the queue gains something, purely to re-run the advance effect below. The queue
+   *  itself is a ref — it must survive a remount — and a ref changing cannot wake an effect. */
+  const [nudge, setNudge] = useState(0);
+
+  const offer = useCallback((moments: Moment[]) => {
+    let added = false;
+    for (const m of moments) {
+      if (shown.current.has(m.id) || queue.current.some((q) => q.id === m.id)) continue;
+      if (queue.current.length < MAX_QUEUED) {
+        queue.current.push(m);
+        added = true;
+      } else {
+        // Overflow is RETIRED, not deferred. The graph is re-sent whole on every frame, so a moment
+        // merely skipped comes back on the next render and plays later — turning one six-reaction
+        // burst into six minutes of scenes at the cooldown cadence, which is the slideshow this cap
+        // exists to prevent. Marking it shown is what makes the drop actually a drop; the chip on the
+        // card still carries it, only the big moment is forfeited.
+        shown.current.add(m.id);
+      }
+    }
+    if (added) setNudge((n) => n + 1);
+  }, []);
+
+  // ADVANCE. One effect owns the whole schedule: when nothing is playing and something is waiting,
+  // start it once the cooldown has elapsed.
+  //
+  // This is deliberately an effect with real dependencies rather than a pump() called from wherever.
+  // The pump version worked and then silently stopped working, because React's dev double-invoke runs
+  // mount effects, discards them, and runs them again — so a timer armed in the first pass was
+  // cleared by the cleanup and re-armed only if some later render happened to call pump again.
+  // Nothing errored; scenes just never appeared. Expressed as an effect, the cleanup and the re-arm
+  // are the same mechanism, so the double-invoke is a no-op instead of a coin flip.
+  useEffect(() => {
+    if (current || !queue.current.length) return;
+    const wait = Math.max(0, COOLDOWN - (Date.now() - lastEnded.current));
+    const t = setTimeout(() => {
+      const next = queue.current.shift();
+      if (!next) return;
+      // Marked SHOWN here, not when offered — "already displayed" is the only predicate that is true
+      // at most once regardless of how many times the graph re-offers the same reaction.
+      shown.current.add(next.id);
+      setCurrent(next);
+    }, wait);
+    return () => clearTimeout(t);
+  }, [current, nudge]);
+
+  const done = useCallback(() => {
+    lastEnded.current = Date.now();
+    setCurrent(null);
+  }, []);
+
+  return { current, offer, done };
+}

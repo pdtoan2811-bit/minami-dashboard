@@ -44,9 +44,11 @@ recycle one.
 | [`10-alerts.md`](knowledge/10-alerts.md) | §10 | ~1,600 | Disk-backed out-of-pane alerts that survive the deploy that produced them. |
 | [`11-images.md`](knowledge/11-images.md) | §11 | ~1,100 | Pasted screenshots: the path is the payload, so it survives a reload. |
 | [`12-rendering-cost.md`](knowledge/12-rendering-cost.md) | §12 | ~1,400 | Why the dashboard made the machine hot: idle GPU 31% → 14%, and never animate inside a `backdrop-filter`. |
+| [`16-token-economics.md`](knowledge/16-token-economics.md) | §16 | ~1,100 | Where the box's tokens actually go: a cache write costs 12.5-20x a read, deploys force the re-writes, auto-compaction is inert. **Read this instead of loading the 137k-token `claude-api` skill for a price.** |
 | [`13-autopilot.md`](knowledge/13-autopilot.md) | §13 | ~1,200 | Always-on merge · resolve · deploy, off by default. Was a second `§12`; renumbered. |
 | [`14-agents.md`](knowledge/14-agents.md) | §14 | ~3,000 | Standing agents: identity + home folder ≠ cwd, scaffold vs adopt, the onboarding interview, the unattended task runner (and why it polls), attribution rules, HQ and `bin/agent.mjs`. |
 | [`15-teams.md`](knowledge/15-teams.md) | §15 | ~2,600 | Teams: templates → standing agents, a product's three lifespans (run · record · repo block), the chain runner, and why a handoff is a file rather than a payload. |
+| [`17-meeting-canvas.md`](knowledge/17-meeting-canvas.md) | §17 | ~1,900 | `/canvas`: audio → transcript → ReactFlow board. Why using a chat LLM as the transcriber costs latency, accuracy *and* money, OpenRouter's STT catalogue with prices, and the specified-but-unbuilt replacement. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~9,400 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -119,6 +121,8 @@ The live and read pipelines meet only on disk. They never call each other.
 | Teams | `lib/teams/*` + `app/teams/*` | **shipped** | templates → standing agents; one task, N sessions, one dossier — see §15 |
 | Chain runner | `lib/teams/run.ts` | **shipped** | each stage is an ordinary agent task; polls the task record — see §15.4 |
 | Team CLI | `bin/team.mjs` | **shipped** | what the repo's CLAUDE.md team block names — see §15.3 |
+| Meeting canvas | `lib/mimo.ts` + `lib/audio.ts` + `app/api/canvas/live` | **partial** | works off a hardcoded mp3. Still no audio-capture leg, so nothing "joins" a call yet — see §17 |
+| Canvas A/B harness | `lib/canvas-modes.ts` + `?mode=` + the panel scorecard | **shipped** | 3 arms, one variable each, `report` event per run. Verified end-to-end 2026-08-10: control produced nothing in 175s, real-ASR arm got first transcript in 1.4s — see §17 |
 
 ---
 

@@ -1,12 +1,24 @@
 @import "tailwindcss";
 
+/* EMOJI MUST BE A WEBFONT, not a system font name.
+ *
+ * The stack below named "Apple Color Emoji" and "Segoe UI Emoji" — fonts that exist on anh's Mac and
+ * on Windows, and on NEITHER of the two machines that actually matter here. Recall renders the bot's
+ * page in a headless Linux Chrome with a minimal font set, so every emoji fell through to tofu: a
+ * reaction chip showed "□ 1" in a live meeting, and the full-screen cut scene — a 132px glyph — would
+ * have been a 132px empty rectangle.
+ *
+ * Loading the font makes it a property of the PAGE rather than of whoever happens to render it, which
+ * is the only version of this that survives leaving the developer's laptop. */
+@import url("https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap");
+
 /* ── Typography ──────────────────────────────────────────────────────────────
    A refined UI font stack (San Francisco on Apple, Segoe/Inter/Roboto elsewhere)
    plus emoji fallbacks so 🌸 & co. render. Set as Tailwind's --font-sans so every
    `font-sans` and the default body text picks it up. */
 @theme {
   --font-sans: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, "Inter",
-    "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+    "Helvetica Neue", Arial, "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
 }
 
 /* ── Theme ──────────────────────────────────────────────────────────────────
@@ -446,11 +458,39 @@ body {
 /* Arrival. Overshoots on the way down, settles with one small counter-bounce, and unrotates by a
    degree — the tilt is what stops it reading as a div fading in, and it is small enough that nobody
    consciously notices it, which is the point. */
+/* MIRO-STYLE SPAWN. The object appears where it belongs and settles — it does not fly in.
+   The old version dropped 26px and rotated 1.4deg on the way, which is charming at desk distance and
+   useless on a shared screen: video compression smears small rotations into mush, and a card that
+   arrives from somewhere else makes you track motion instead of reading text. A board tool spawns in
+   place, scales up with a little overshoot, and lifts its shadow while it does — the object reads as
+   being PUT DOWN, which survives any amount of compression because the cue is size, not detail. */
 @keyframes nodeIn {
-  0%   { opacity: 0; transform: translateY(-26px) scale(0.9) rotate(-1.4deg); }
-  55%  { opacity: 1; transform: translateY(6px) scale(1.03) rotate(0.4deg); }
-  78%  { transform: translateY(-2px) scale(0.995) rotate(-0.15deg); }
-  100% { opacity: 1; transform: none; }
+  0%   { opacity: 0; transform: scale(0.86); box-shadow: 0 0 0 rgba(16,24,40,0); }
+  45%  { opacity: 1; transform: scale(1.035); box-shadow: 0 16px 34px -12px rgba(16,24,40,0.30); }
+  72%  { transform: scale(0.997); }
+  100% { opacity: 1; transform: none; box-shadow: 0 1px 2px rgba(16,24,40,0.06); }
+}
+
+/* THE CARD BEING DISCUSSED RIGHT NOW. A slow green pulse, running until another card takes over.
+   Green rather than the card's own kind colour on purpose: the kind palette says what a card IS,
+   and this has to say which card we are ON — a separate question, so it needs a channel of its own
+   that no card type can ever occupy.
+   Blinking rather than static because a shared screen is watched intermittently. A static ring is
+   invisible to someone who was already looking at the board; motion is the only cue that re-arrives
+   for a viewer who never looked away. Slow (1.6s) and never fully off — a hard flash is an alarm,
+   and this is a pointer. */
+
+/* ── RING RULE ────────────────────────────────────────────────────────────────────────────────────
+   A ring holds ONE width and changes only its opacity. It never grows while fading.
+   Every ring here used to expand outward as it faded — 0px solid to 8, 14, even 22px transparent.
+   That reads as a soft grey bloom rather than a border: at its widest it is at its faintest, so the
+   thing carrying the meaning is never actually visible, and on a re-encoded shared screen the whole
+   gradient is crushed to noise. A thin ring that brightens and dims stays a BORDER at every frame of
+   the animation, which is what makes it survive both compression and a glance.
+   ──────────────────────────────────────────────────────────────────────────────────────────────── */
+@keyframes newestRing {
+  0%, 100% { box-shadow: 0 0 0 2.5px rgba(27,175,122,0.85), 0 10px 26px -10px rgba(16,24,40,0.26); }
+  50%      { box-shadow: 0 0 0 2.5px rgba(27,175,122,0.32), 0 10px 26px -10px rgba(16,24,40,0.26); }
 }
 
 /* State evolution — fires when a node matures (proposed → agreed). A ring pushes outward from the
@@ -458,9 +498,9 @@ body {
    something they just said become AGREED is the thing that makes the surface feel alive rather than
    like minutes being taken. */
 @keyframes statePop {
-  0%   { box-shadow: 0 0 0 0 var(--pop), 0 0 0 0 transparent; }
-  40%  { box-shadow: 0 0 0 4px var(--pop), 0 0 0 12px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent, 0 0 0 22px transparent; }
+  0%   { box-shadow: 0 0 0 2.5px rgba(0,0,0,0); }
+  30%  { box-shadow: 0 0 0 2.5px var(--pop); }
+  100% { box-shadow: 0 0 0 2.5px rgba(0,0,0,0); }
 }
 
 /* Reactions land with a bit of bounce — they are the fun layer, so they get to be springier than
@@ -533,8 +573,8 @@ body {
 /* An unanswered question, waiting. Continuous and slow so it reads as PENDING
    rather than as an alert — the map quietly remembering something is open. */
 @keyframes waiting {
-  0%, 100% { box-shadow: 0 0 0 0 var(--pop); }
-  50% { box-shadow: 0 0 0 5px transparent; }
+  0%, 100% { box-shadow: 0 0 0 2px rgba(0,0,0,0); }
+  50%      { box-shadow: 0 0 0 2px var(--pop); }
 }
 
 /* Being absorbed into another node. Shrinks and fades while the position loop
@@ -549,4 +589,300 @@ body {
 @keyframes mergePulse {
   0%   { r: 12; opacity: 0.28; }
   100% { r: 34; opacity: 0; }
+}
+
+/* Presence: listening reads as sound, thinking reads as work. */
+/* Level-meter bars. The floor is 38% rather than 0 so a bar never disappears — a meter that empties
+   reads as "disconnected", which is the opposite of the message.
+
+   SLOW AND SHALLOW ON PURPOSE. The first version swung 22%→100% in half a second, which is what a VU
+   meter does when it is tracking a waveform — and this one isn't, it is a state indicator. Fast
+   full-range motion in the corner of a shared screen reads as an alarm and pulls the eye off the
+   board on every cycle. A narrow band moving slowly says "alive" without ever saying "look at me",
+   which is the whole job. */
+@keyframes vu {
+  0%, 100% { height: 38%; }
+  50%      { height: 92%; }
+}
+
+/* The halo behind the presence pill. Very low opacity and slow: it should register as "something is
+   alive down there" in peripheral vision without ever competing with the board for attention.
+   Paced to a resting breath (~5s). At 2.2s it read as a pulse, and a pulse reads as urgent. */
+@keyframes presenceHalo {
+  0%, 100% { opacity: 0.10; transform: scale(0.97); }
+  50%      { opacity: 0.24; transform: scale(1.03); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Skeleton bars. A gentle opacity breath, not a sweeping gradient: a travelling highlight across
+   twenty placeholder cards at once turns the whole board into a light show. */
+@keyframes shimmer {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+/* The moment a skeleton becomes a card. A ring in the card's own colour flares and falls away —
+   loud for 200ms, gone by 900, so it marks the arrival without leaving the board decorated. */
+@keyframes fillIn {
+  0%   { box-shadow: 0 0 0 2.5px rgba(0,0,0,0), 0 1px 2px rgba(16,24,40,0.06); transform: scale(0.985); }
+  22%  { box-shadow: 0 0 0 2.5px var(--pop), 0 8px 24px -8px rgba(16,24,40,0.22); transform: scale(1.012); }
+  100% { box-shadow: 0 0 0 2.5px rgba(0,0,0,0), 0 1px 2px rgba(16,24,40,0.06); transform: scale(1); }
+}
+
+/* Content arriving where the bars were. Rises a few pixels rather than appearing in place, so the
+   eye reads a replacement rather than a flicker. */
+@keyframes contentIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* A NEW TOPIC OPENED. The one board event the camera moves for, so it gets the one colour event
+   too — a wash in the branch hue that blooms and clears. Peaks low (0.16) because it sits behind
+   live text: the goal is "colour arrived here", not a highlighter pen. */
+@keyframes topicArrive {
+  0%   { opacity: 0; transform: scale(0.94); }
+  18%  { opacity: 0.16; transform: scale(1); }
+  55%  { opacity: 0.12; }
+  100% { opacity: 0; transform: scale(1.015); }
+}
+
+/* The topic's marker dot, ringing out with it. Uses currentColor via box-shadow on the dot itself
+   so it needs no extra element. */
+@keyframes topicPulse {
+  0%   { box-shadow: 0 0 0 3px rgba(0,0,0,0); transform: scale(1); }
+  22%  { box-shadow: 0 0 0 3px currentColor; transform: scale(1.35); }
+  100% { box-shadow: 0 0 0 3px rgba(0,0,0,0); transform: scale(1); }
+}
+
+/* ── CUT SCENE ────────────────────────────────────────────────────────────────────────────────────
+   A reaction taking the whole screen. See components/canvas/CutScene.tsx for why a reaction gets
+   this and a card does not.
+
+   All four keyframes run the SAME 3400ms and differ only in their internal percentages. That is what
+   makes them feel like one gesture instead of four animations that happen to overlap: there is a
+   single timeline, and each element is early or late within it. Roughly:
+
+     0–12%    arrival     glyph rises and settles, wash fades in
+     12–24%   the text    lands after the glyph, so the eye reads image then words
+     24–76%   HOLD        more than half the scene is stillness. This is the elegance.
+     76–100%  recede      everything leaves together, slowly, no bounce
+
+   The hold is the part that is easy to cut and the only part that makes it feel considered. */
+
+@keyframes cutWash {
+  0%   { opacity: 0; }
+  12%  { opacity: 1; }
+  76%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Rises 26px and settles. No overshoot: a spring here would read as playful, and the register we
+   want is "something just happened" rather than "look what I did". */
+@keyframes cutGlyph {
+  0%   { opacity: 0; transform: translateY(26px) scale(0.86); }
+  14%  { opacity: 1; transform: translateY(0) scale(1); }
+  76%  { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-14px) scale(0.97); }
+}
+
+/* One ring, outward and gone. Finishes early — by the time the eye reaches the text the ring has
+   already resolved, so the frame is still while you read. */
+@keyframes cutRing {
+  0%   { opacity: 0; transform: scale(0.5); }
+  16%  { opacity: 0.55; }
+  46%  { opacity: 0; transform: scale(1.85); }
+  100% { opacity: 0; transform: scale(1.85); }
+}
+
+/* Text follows the glyph rather than accompanying it — image first, then the words that explain it. */
+@keyframes cutText {
+  0%   { opacity: 0; transform: translateY(12px); }
+  12%  { opacity: 0; transform: translateY(12px); }
+  24%  { opacity: 1; transform: translateY(0); }
+  76%  { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-8px); }
+}
+
+/* ── BROADCAST MODE ───────────────────────────────────────────────────────────────────────────────
+   `/canvas?broadcast=1` — what the Recall bot renders and screen-shares into the meeting.
+
+   The constraint is fixed and not negotiable: meeting platforms cap shared video at 1280x720, and
+   Recall exposes no resolution, framerate or bitrate control. So the only way to improve quality is
+   to change what we put in those pixels.
+
+   THE KEY IDEA: a video encoder spends its bitrate on PIXELS THAT CHANGE. This canvas breathes,
+   pulses, travels dashes along every typed edge and haloes the presence pill — none of which ever
+   stops. At 15fps into a bandwidth-limited encoder that means the whole frame is re-encoded
+   continuously and the static text, which is the actual payload, gets whatever bits are left. The
+   board looked soft in the meeting for the same reason a windy tree looks soft in a video call.
+
+   So ambient motion is switched OFF here and the bitrate goes to the words instead. This is the
+   trade anh asked for — quality over framerate — expressed as motion rather than as fps, because
+   fps is the one knob the platform will not give us.
+
+   PURPOSEFUL motion stays: a card arriving, a cut scene, a merge. Those carry meaning and are worth
+   their bits. Idle decoration does not.
+
+   Everything else here is about surviving compression: chroma subsampling and quantisation destroy
+   low-contrast grey text first, and hairlines alias into dashed grey mush. So type gets bigger and
+   darker, and strokes get thicker. */
+
+/* 1 — kill the animations that never end. Named individually rather than a blanket `*` rule, so a
+      new purposeful animation is opted OUT by default instead of being silently frozen.
+
+      `shimmer` is deliberately NOT in this list, though it loops forever like the rest. It drives the
+      three skeleton bars on a card whose text hasn't arrived yet, and a skeleton that doesn't move
+      does not read as "loading" — it reads as an empty broken card. Its absence changes MEANING,
+      which is the line: ambient decoration goes, state indicators stay. It is also three small bars,
+      so it costs almost nothing to encode.
+
+      `waiting` is a halo that pulses forever on every unresolved question. That one goes: the card
+      already says "Open" in text, so nothing is lost but the bitrate. */
+.broadcast [style*="breathe"],
+.broadcast [style*="presenceHalo"],
+.broadcast [style*="glowPulse"],
+.broadcast [style*="topicPulse"],
+.broadcast [style*="waiting"],
+.broadcast [style*="float"] {
+  animation: none !important;
+}
+
+/* 2 — the dash travel on typed edges. A moving dotted line is the single most expensive thing on
+      this board per unit of meaning: every frame, every edge, forever. Static dashes read exactly
+      the same in a still frame, which is what a 15fps stream mostly is. */
+.broadcast [style*="flow"] {
+  animation: none !important;
+}
+
+/* 3 — secondary text. neutral-400/500 on near-white survives a laptop screen and does not survive
+      4:2:0 chroma subsampling at 720p; it turns into grey fog. Darkened one full step. */
+.broadcast .text-neutral-400 { color: #6b6b66 !important; }
+.broadcast .text-neutral-500 { color: #52524e !important; }
+.broadcast .text-neutral-300 { color: #8a8a84 !important; }
+
+/* 4 — scale. Two wrong answers before the right one, both worth recording.
+      `font-size: 112%` did nothing: this canvas sizes type in arbitrary pixels (text-[15px]), and px
+      does not scale with the root font size.
+      `zoom: 1.12` scaled the type but BROKE THE LAYOUT — the children are h-dvh/w-dvw, so zooming
+      the root made them overflow the viewport: the header was clipped off the top edge and the
+      presence pill half off the bottom-left corner. Verified in a real meeting; anh's screenshot is
+      the evidence.
+      The right lever is the CAMERA, not the page. GraphCanvas already owns a constant scale
+      (FOLLOW_ZOOM) applied to the graph transform, so raising it there enlarges the cards without
+      touching the page box at all. See components/canvas/GraphCanvas.tsx. Nothing to do here. */
+
+/* 5 — hairlines. A 1px border at 720p after compression is a suggestion of a line. */
+.broadcast .border,
+.broadcast [class*="border-"] {
+  border-width: 1.5px;
+}
+
+/* 6 — the dotted grid backdrop. Thousands of tiny high-contrast dots are worst-case input for an
+      encoder: maximum spatial detail, zero information. Replaced with a composed field.
+
+      COMPOSING FOR THE ACTUAL FRAME. The safe box is 500x600 — PORTRAIT inside a 16:9 landscape
+      frame — so roughly 60% of the picture is margin that content may never enter. Left flat, that
+      margin reads as a blank page with something small floating in it, which is what made a crisp
+      stream still look unfinished.
+
+      So the margin is given a job. A soft vertical light column behind the safe box makes the middle
+      read as the STAGE and the sides as deliberate space around it, and a vignette closes the frame
+      so it ends rather than just stopping. Both are large, smooth gradients — the cheapest possible
+      thing for an encoder to carry, unlike the dot grid they replace. */
+.broadcast .canvas-surface {
+  background-image:
+    linear-gradient(to right,
+      rgba(16, 24, 40, 0.045) 0%,
+      rgba(16, 24, 40, 0.012) 24%,
+      rgba(255, 255, 255, 0.55) 42%,
+      rgba(255, 255, 255, 0.55) 58%,
+      rgba(16, 24, 40, 0.012) 76%,
+      rgba(16, 24, 40, 0.045) 100%),
+    radial-gradient(120% 90% at 50% 42%, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 62%) !important;
+  /* MUST be reset alongside the image. `.canvas-surface` sets `background-size: 26px 26px` for the
+     dot grid's first layer, and that size applies to whatever layer sits in that slot — so replacing
+     the image while leaving the size tiled a full-width gradient into 26px slices and rendered the
+     whole frame as vertical corduroy. Caught on the first screenshot at 720p. */
+  background-size: 100% 100%, 100% 100% !important;
+  background-repeat: no-repeat, no-repeat !important;
+}
+
+/* 8 — TYPE SIZED FOR THE FRAME, not for a laptop.
+      The title sat at 22px inside a 500px-wide stage on a 1280px canvas — correct at desk distance
+      and lost on a shared screen. Everything the room reads at a glance goes up a step, and the
+      status pill goes with it so the pair still reads as one object. */
+.broadcast .canvas-header h1 {
+  font-size: 30px;
+  letter-spacing: -0.02em;
+}
+
+.broadcast .canvas-header p {
+  font-size: 15px;
+  margin-top: 3px;
+}
+
+/* 9 — the empty state. This is the FIRST thing every meeting shows, for as long as it takes someone
+      to say something worth keeping — so it is the most-seen frame in the product and it was the
+      least designed. Bigger, and given a mark so it reads as a considered screen rather than as a
+      page that failed to load. */
+.broadcast .canvas-empty-title { font-size: 42px; letter-spacing: -0.025em; }
+.broadcast .canvas-empty-sub { font-size: 18px; max-width: 30ch; }
+
+/* 10 — the header, while the board is still empty. A title in the top-left of a frame whose only
+       other content is dead centre reads as a stray label. Centred over the same axis it becomes the
+       top of one composition — and it moves back to the corner the moment real cards exist and the
+       header's job changes from "titling a screen" to "labelling a working board". */
+.broadcast .canvas-empty-frame .canvas-header {
+  justify-content: center;
+  gap: 14px;
+}
+.broadcast .canvas-empty-frame .canvas-header > div { min-width: 0; text-align: center; }
+
+/* 7 — THE SAFE BOX APPLIES TO THE CHROME TOO.
+      The camera keeps CARDS inside the 500x600 middle (see GraphCanvas), but the title and the
+      presence pill are absolutely positioned against the frame, not the camera — so they sat outside
+      it. That is not a cosmetic mismatch: it is exactly how "Minami is listening" ended up sliced in
+      half behind Meet's own participant chrome, which is the one element whose entire job is to prove
+      the thing is working.
+      A safe area that only some of the interface respects is not a safe area. */
+.broadcast .canvas-header {
+  left: 390px;
+  right: 390px;
+  top: 60px;
+  padding: 0;
+
+  /* THE HEADER MUST OCCLUDE, NOT JUST SIT ON TOP.
+   *
+   * A card slid under the title and the two rendered through each other — "Meeting / 4 utterances"
+   * printed across a NOTE card, both unreadable, in a live meeting. Pushing the camera down helps and
+   * cannot fix it: the board can be taller than the frame, so SOMETHING will eventually pass through
+   * that band, and a transparent header guarantees a collision the moment it does.
+   *
+   * The default scrim is a full-width gradient built for a left-aligned title on a wide canvas. Inside
+   * a 500px safe box it does not cover the right half of the header at all. This is a local, opaque
+   * band with a soft lower edge — cards disappear UNDER it instead of colliding with it, which is what
+   * a title bar is supposed to do. */
+  padding-bottom: 14px;
+  background: linear-gradient(
+    to bottom,
+    rgba(244, 244, 242, 0.97) 0%,
+    rgba(244, 244, 242, 0.97) 62%,
+    rgba(244, 244, 242, 0) 100%
+  );
+}
+
+.broadcast .canvas-presence {
+  left: 402px;
+  bottom: 72px;
+}
+
+/* The empty state's three dots. A SEPARATE name from `breathe` on purpose: broadcast mode kills every
+   ambient animation by name, and this is the one exception — a totally static frame reads as a frozen
+   stream, and the whole point of this screen is to prove the thing is alive and waiting. Slow, offset
+   periods so the three never resynchronise into a progress bar. */
+@keyframes emptyPulse {
+  0%, 100% { opacity: 0.28; transform: translateY(0); }
+  50%      { opacity: 0.85; transform: translateY(-3px); }
 }

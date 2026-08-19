@@ -1,0 +1,178 @@
+// THE VOCABULARY — the thing that actually fixes the transcript.
+//
+// Three ASR models have now been made the default and two overturned, and every one of them mangles
+// the same handful of words: "Minami" → "Minamino", "mind map" → "my mask", "real-time" → "real town".
+// That is not a model quality problem and swapping models will never solve it. No general ASR has
+// heard of Minami or qone, and a decoder that has never seen a word cannot output it.
+//
+// Worse than wrong text: on 2026-08-12 "Minamino" became the TOPIC NAME of an entire board. A single
+// misheard proper noun propagated out of the transcript and into the structure, where every later
+// card hung off it. Everything downstream — the judge, the cards, the archive, the email — inherits
+// whatever the transcript says, so this is the one place a fix reaches all of them at once.
+//
+// ── Two interventions, because one is not enough ────────────────────────────────────────────────
+//
+//   BEFORE  terms are sent to the ASR as a decoding prompt, so it can produce the right word.
+//   AFTER   known mishearings are rewritten, because biasing reduces errors and never eliminates them.
+//
+// The "after" pass is what makes this robust: it does not require the model to cooperate.
+//
+// ── Why a file anh can edit ─────────────────────────────────────────────────────────────────────
+// He is the one who knows what he actually said. A correction he makes once should hold for every
+// future meeting, which means it has to live somewhere durable rather than in a prompt someone
+// retypes. `bin/vocab.mjs` is the CLI; this is the library.
+
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { dirname } from "node:path";
+
+const FILE = process.env.CANVAS_VOCAB_FILE || `${process.env.HOME}/.minami/canvas-vocab.json`;
+
+/** Seeded from the terms already observed being mangled in real meetings. */
+const SEED = {
+  terms: [
+    "Minami", "mind map", "canvas", "Recall.ai", "Ownego", "qone", "QSortby",
+    "Easy Vision AI", "Hetzner", "Slack", "Second Brain", "real-time",
+    /** ⚠️ THE CRAFT VOCABULARY, not just the proper nouns.
+     *
+     *  The vault sync fills this list with PROJECT NAMES — Minami, QSortby, Ecom Intel — because that
+     *  is what gets [[linked]] in notes. But measured on one clip: the ear scored 8/8 on technical
+     *  terms when the glossary contained them and 5/8 when it did not, mangling "workflow" into
+     *  "Hugging Face" and "CLAUDE.md" into "Cloudinary". These are the words anh says in every single
+     *  call and no note ever links to them, so nothing else was ever going to supply them. */
+    "workflow", "agent", "context", "memory", "deploy", "vector search", "embedding",
+    "prompt", "token", "latency", "endpoint", "webhook", "repo", "branch", "commit",
+    "database", "schema", "migration", "cache", "queue", "pipeline", "transcript",
+    "diarization", "Claude Code", "Claude CLI", "CLAUDE.md", "Cursor", "Figma", "Notion",
+    "Obsidian", "Shopify", "Astro", "Next.js", "Remotion", "Playwright", "Supabase",
+  ],
+  fixes: {
+    // Every one of these was observed in a real transcript, not imagined.
+    "minamino": "Minami",
+    "midami": "Minami",
+    "my maps": "mind maps",
+    "my map": "mind map",
+    "my mask": "mind map",
+    "mind mask": "mind map",
+    "real town": "real-time",
+    "recall ai": "Recall.ai",
+    // Blaze's characteristic error is SPLITTING a name it does not know into two Vietnamese-looking
+    // syllables, rather than substituting a different word. Observed 2026-08-17 on the first real
+    // clip: "Minami" → "Mi Nami". Its `prompt` field is inert, so post-correction is the only lever.
+    // "Claude" has no Vietnamese neighbour, so every ear reaches for "cloud" — observed as "Cloud CLI",
+    // "cloud md", "cloudem" and "Cloud đem" across three different models. Post-correction is the only
+    // lever left: all three ASR prompt/biasing parameters were probed and proved inert.
+    "cloud cli": "Claude CLI",
+    "cloud code": "Claude Code",
+    "cloud md": "CLAUDE.md",
+    "cloudem": "CLAUDE.md",
+    "mi nami": "Minami",
+    "mi na mi": "Minami",
+  },
+};
+
+/** MERGE the shipped seed with the saved file, file wins.
+ *
+ *  This used to RETURN the file whenever the file existed, so the seed was only ever consulted on a
+ *  machine that had never run before. Every fix added to SEED after that first run was dead code on
+ *  every existing install — added, committed, believed in, never loaded. Caught by adding the "mi nami"
+ *  fix for Blaze and watching the correction not fire.
+ *
+ *  Merging the other way round would silently revert anh's own edits, so the file still wins on any
+ *  key it defines; the seed only supplies keys the file has never heard of. */
+export function loadVocab() {
+  try {
+    const d = JSON.parse(readFileSync(FILE, "utf8"));
+    return {
+      terms: [...new Set([...(SEED.terms ?? []), ...(d.terms ?? [])])],
+      fixes: { ...(SEED.fixes ?? {}), ...(d.fixes ?? {}) },
+    };
+  } catch (e) {
+    /** ⚠️ ONLY SEED WHEN THE FILE IS GENUINELY ABSENT.
+     *
+     *  This used to seed on ANY failure and then WRITE that seed back — so one transient read error,
+     *  or a torn file caught mid-write by the launchd sync job, replaced 132 vault terms and every
+     *  hand-taught correction with the 12-term default, permanently, with no backup and no message.
+     *  A first run and a corrupted file are not the same event and must not have the same handler.
+     *
+     *  The returned object is also a COPY: the catch used to hand back SEED itself, which callers
+     *  then mutated (ingest writes learned fixes into it), quietly editing the module constant for
+     *  the lifetime of the process. */
+    if (e && e.code !== "ENOENT") {
+      console.error(`[vocab] could not read ${FILE} (${e.code ?? e.message}) — using defaults WITHOUT overwriting`);
+      return { terms: [...SEED.terms], fixes: { ...SEED.fixes } };
+    }
+    saveVocab(SEED);
+    return { terms: [...SEED.terms], fixes: { ...SEED.fixes } };
+  }
+}
+
+export function saveVocab(v) {
+  try {
+    mkdirSync(dirname(FILE), { recursive: true });
+    // TEMP + RENAME. The app and the launchd vault-sync job both write this file with no lock; a
+    // plain writeFileSync truncates in place, so a reader landing mid-write sees a torn file — and
+    // the reader's failure path used to overwrite it with defaults. rename is atomic on the same
+    // filesystem, so a reader sees either the old file or the new one, never a broken one.
+    const tmp = `${FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify(v, null, 2));
+    renameSync(tmp, FILE);
+  } catch (e) {
+    console.error("[vocab] could not write:", e.message);
+  }
+}
+
+/** What the ASR is told to expect.
+ *
+ *  Kept SHORT and put in a sentence rather than dumped as a list: a decoding prompt is conditioning
+ *  context, not a dictionary lookup, and a wall of comma-separated tokens biases it toward producing
+ *  a list. Capped because the prompt competes with the audio for the model's attention. */
+export function asrPrompt(vocab, extra = []) {
+  const terms = [...new Set([...(vocab.terms ?? []), ...extra])].slice(0, 40);
+  if (!terms.length) return undefined;
+  return `This is a product meeting. Expect these names and terms: ${terms.join(", ")}.`;
+}
+
+/** Escape a phrase for use inside a RegExp. */
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Rewrite known mishearings.
+ *
+ *  Longest-first so "my maps" is corrected before "my map" can match inside it — otherwise the shorter
+ *  rule fires first and leaves "mind maps" as "mind mapss". Word-boundary anchored so a fix never
+ *  fires inside a longer word.
+ *
+ *  Case is PRESERVED for the first letter only: a fix at the start of a sentence should not lowercase
+ *  it, and a proper noun should keep its capital wherever it lands. */
+export function correctText(text, vocab) {
+  const fixes = Object.entries(vocab.fixes ?? {}).sort((a, b) => b[0].length - a[0].length);
+  let out = text;
+  for (const [wrong, right] of fixes) {
+    out = out.replace(new RegExp(`\\b${esc(wrong)}\\b`, "gi"), (m) =>
+      m[0] === m[0].toUpperCase() ? right[0].toUpperCase() + right.slice(1) : right,
+    );
+  }
+  return out;
+}
+
+/** Correct a batch of transcript lines, and report what changed.
+ *
+ *  Returning the diff is deliberate: a silent correction layer is impossible to trust or debug, and
+ *  the log line it produces is how anh finds out a fix is firing — or that a new mishearing needs one. */
+export function correctLines(lines, vocab) {
+  const changes = [];
+  const corrected = lines.map((l) => {
+    const c = correctText(l, vocab);
+    if (c !== l) changes.push({ from: l, to: c });
+    return c;
+  });
+  return { corrected, changes };
+}
+
+/** Teach it a new correction. */
+export function learn({ term, was }) {
+  const v = loadVocab();
+  if (term && !v.terms.includes(term)) v.terms.push(term);
+  if (was && term) v.fixes[was.toLowerCase()] = term;
+  saveVocab(v);
+  return v;
+}

@@ -18,27 +18,65 @@
 // of eleven types looks assembled rather than designed; kind is legible from the icon and eyebrow.
 import { useEffect, useRef, useState } from "react";
 import {
-  DEFAULT_STATE, KIND_ICON, KIND_LABEL, KIND_SIZE, STATE_COLOR, TINT, initialsOf,
+  DEFAULT_STATE, FAMILY_COLOR, FAMILY_TINT, KIND_ICON, KIND_LABEL, KIND_SIZE, STATE_COLOR, TINT,
+  familyOf, initialsOf, measured, nodeHeight, widthOf,
   type Placed,
 } from "@/lib/canvas-graph";
 
-export function GraphNode({ n, live, index, rel, branchHue }: {
+export function GraphNode({ n, live, index, rel, branchHue, skeleton, announcing, newest, selected }: {
   n: Placed; live: boolean; index: number;
+  /** Clicked — the card whose connections are being traced. Drawn as a ring rather than a fill so the
+   *  card's own kind colour still reads; the selection is a question about the card, not a new state
+   *  of it. */
+  selected?: boolean;
+  /** True for the first beat after the card lands, before its content fills in. */
+  skeleton?: boolean;
+  /** This topic just opened — the one event the camera moves for. */
+  announcing?: boolean;
+  /** The most recently added card: what is being talked about right now. */
+  newest?: boolean;
   /** Relationships whose other end is too far to draw as a line — worn here instead. */
   rel?: { kind: string; other: string }[];
   /** The cluster's colour, so a heading can carry it without the card palette changing. */
   branchHue?: string;
 }) {
-  const size = KIND_SIZE[n.kind];
+  // FALL BACK, DO NOT THROW. An unknown kind used to crash here — KIND_SIZE[n.kind] is undefined, so
+  // reading .h took down the whole canvas and replaced the board with an error overlay. The ingest
+  // path validates (CARD_KINDS.has(kind) ? kind : "note"), so a meeting cannot produce one; a direct
+  // publish to /api/canvas can, and did. One bad card must cost that card's dimensions, never the
+  // entire board in the middle of a call.
+  const size = { w: widthOf(n), h: (KIND_SIZE[n.kind] ?? KIND_SIZE.note).h };
   const state = n.state ?? DEFAULT_STATE[n.kind];
-  const color = STATE_COLOR[state];
-  const tint = TINT[state];
+  // Colour is KIND, never state — see the note on KIND_FAMILY. State survives as the small dot in
+  // the header, which is the right weight for it: you look for it, it doesn't shout at you.
+  const family = familyOf(n);
+  const color = FAMILY_COLOR[family];
+  const tint = FAMILY_TINT[family];
+  const stateColor = STATE_COLOR[state];
+  // Only worth showing when it isn't simply what this kind always is. A "proposed" badge on every
+  // card teaches you to stop reading badges.
+  const showState = state !== DEFAULT_STATE[n.kind];
   const isHero = n.kind === "decision";
   const isTopic = n.kind === "topic";
 
   // Fire a pulse when a node MATURES (proposed → agreed). Only on change, never on mount: a map
   // that pulses every card on arrival has no way left to signal that something actually happened.
   const [pop, setPop] = useState(false);
+  // The moment the skeleton fills in. A ring in the card's own colour flares and fades — it marks
+  // the arrival as an EVENT, and because it uses the kind colour it also teaches the palette: you
+  // learn "green means decided" by watching a decision arrive green.
+  const [justFilled, setJustFilled] = useState(false);
+  const wasSkeleton = useRef(!!skeleton);
+  useEffect(() => {
+    if (wasSkeleton.current && !skeleton) {
+      setJustFilled(true);
+      const t = setTimeout(() => setJustFilled(false), 900);
+      wasSkeleton.current = false;
+      return () => clearTimeout(t);
+    }
+    wasSkeleton.current = !!skeleton;
+  }, [skeleton]);
+
   const seen = useRef(state);
   useEffect(() => {
     if (seen.current === state) return;
@@ -47,6 +85,33 @@ export function GraphNode({ n, live, index, rel, branchHue }: {
     const t = setTimeout(() => setPop(false), 900);
     return () => clearTimeout(t);
   }, [state]);
+
+  // ── stage one: the block ──────────────────────────────────────────────────────────────────────
+  // Same box, same position, same size — only the content is missing. Nothing moves when it fills,
+  // because a card that resizes on hydrate would shove its neighbours and undo the whole point of
+  // reserving the slot before the card arrives.
+  if (skeleton && !isTopic) {
+    return (
+      <Shell n={n} size={size} index={index}>
+        <div
+          className="flex h-full flex-col overflow-hidden rounded-[18px] border bg-white"
+          style={{ borderColor: color, boxShadow: `0 0 0 3px ${tint}` }}
+        >
+          <div className="flex items-center gap-2 px-4 py-3" style={{ background: tint }}>
+            <span className="size-5 rounded-md" style={{ background: color, opacity: 0.35 }} />
+            <span className="h-2 w-16 rounded-full" style={{ background: color, opacity: 0.28 }} />
+          </div>
+          <div className="flex flex-1 flex-col gap-2.5 px-4 pt-4">
+            {/* Bars, not a spinner. A spinner says "waiting"; bars say "text is coming, roughly this
+                much of it", which is the only useful thing a placeholder can tell you. */}
+            <span className="h-3 w-4/5 rounded-full bg-neutral-200" style={{ animation: "shimmer 1.1s ease-in-out infinite" }} />
+            <span className="h-2.5 w-full rounded-full bg-neutral-100" style={{ animation: "shimmer 1.1s ease-in-out 120ms infinite" }} />
+            <span className="h-2.5 w-3/5 rounded-full bg-neutral-100" style={{ animation: "shimmer 1.1s ease-in-out 240ms infinite" }} />
+          </div>
+        </div>
+      </Shell>
+    );
+  }
 
   // Topics are signposts, not content. They stay small and quiet so the leaves they carry are what
   // the eye lands on — a map where every node shouts has no hierarchy at all.
@@ -62,10 +127,35 @@ export function GraphNode({ n, live, index, rel, branchHue }: {
     const hue = branchHue ?? "#8a8a86";
     return (
       <Shell n={n} size={size} index={index}>
-        <div className="flex h-full flex-col justify-center">
-          <div className="flex items-center gap-2">
-            <span className="size-2.5 shrink-0 rounded-full" style={{ background: hue }} aria-hidden />
-            <span className="truncate text-[17px] font-bold tracking-[-0.02em] text-neutral-700">
+        <div className="relative flex h-full flex-col justify-center">
+          {/* The flare. A wash in the branch's own colour blooms behind the heading and clears —
+              paired with the camera move, so a new topic is announced twice over: once by where you
+              are looking, once by colour arriving where you land. Behind the text, never over it. */}
+          {announcing ? (
+            <span
+              className="pointer-events-none absolute -inset-x-3 -inset-y-2 rounded-2xl"
+              style={{ background: hue, animation: "topicArrive 2400ms var(--ease-out) both" }}
+              aria-hidden
+            />
+          ) : null}
+          <div className="relative flex items-center gap-2">
+            <span
+              className="size-2.5 shrink-0 rounded-full"
+              style={{
+                background: hue,
+                ...(announcing ? { animation: "topicPulse 2400ms var(--ease-out) both" } : null),
+              }}
+              aria-hidden
+            />
+            {/* Every topic is a pill in its own branch colour. It used to be a pill only when
+                active and plain grey otherwise, which made the palette mean two things at once —
+                "this is branch X" and "we are here now" — and left the rest of the board looking
+                unfinished. The colour now says only which branch it is; the green ring says where
+                we are. One cue, one meaning. */}
+            <span
+              className="rounded-lg px-2 py-0.5 text-[17px] font-bold leading-tight tracking-[-0.02em] text-white"
+              style={{ background: hue }}
+            >
               {n.label}
             </span>
             {n.collapsed ? (
@@ -74,14 +164,6 @@ export function GraphNode({ n, live, index, rel, branchHue }: {
               </span>
             ) : null}
           </div>
-          {/* The rule runs PAST the heading box and into the gap before the cards. Stopping at the
-              label's own width left a stub floating in space with a hole after it; carrying it
-              across ties the heading to what it heads and closes the only remaining gap in the
-              cluster. 44px is STEM — kept in sync by hand, which is fine for one number. */}
-          <span
-            className="mt-2 block h-px"
-            style={{ background: hue, opacity: 0.3, width: "calc(100% + 44px)" }}
-          />
         </div>
       </Shell>
     );
@@ -93,13 +175,31 @@ export function GraphNode({ n, live, index, rel, branchHue }: {
         className="relative flex h-full flex-col overflow-hidden rounded-[18px] bg-white"
         style={{
           ["--pop" as string]: `${color}66`,
-          ...(pop ? { animation: "statePop 900ms var(--ease-out) both" } : null),
-          // An unanswered question keeps a slow halo: the map quietly remembering something is open,
-          // without the urgency of an alert. Stops the moment it stops being open.
-          ...(!pop && state === "open" ? { animation: "waiting 2.8s ease-in-out infinite" } : null),
-          boxShadow: isHero
-            ? "0 1px 2px rgba(16,24,40,0.06), 0 18px 44px -12px rgba(16,24,40,0.22)"
-            : "0 1px 2px rgba(16,24,40,0.05), 0 10px 26px -10px rgba(16,24,40,0.15)",
+          // ONE animation slot, so precedence has to be explicit rather than emergent. It used to be
+          // four conditional spreads and the last one that matched silently won — which is why the
+          // green "we're on this card" ring never appeared on a card whose state happened to be
+          // `open`: the ambient waiting halo was spread after it and took the slot.
+          //
+          // Order is by lifetime, shortest first. A transient event (just arrived, just matured)
+          // outranks a standing condition (this is the current card, this question is unanswered),
+          // because the event is over in under a second and the condition will still be true after.
+          animation: pop
+            ? "statePop 900ms var(--ease-out) both"
+            : justFilled
+              ? "fillIn 900ms var(--ease-out) both"
+              : newest
+                ? "newestRing 1.6s cubic-bezier(0.4, 0.03, 0.2, 1) infinite"
+                : state === "open"
+                  ? "waiting 2.8s ease-in-out infinite"
+                  : undefined,
+          // SELECTION OUTRANKS THE RESTING SHADOW. A ring in the card's own kind colour, plus a
+          // lifted shadow — the same visual grammar as `newest`, because both answer "this one", just
+          // one by arriving and the other by being asked about.
+          boxShadow: selected
+            ? `0 0 0 2.5px ${color}, 0 1px 2px rgba(16,24,40,0.06), 0 22px 50px -12px rgba(16,24,40,0.30)`
+            : isHero
+              ? "0 1px 2px rgba(16,24,40,0.06), 0 18px 44px -12px rgba(16,24,40,0.22)"
+              : "0 1px 2px rgba(16,24,40,0.05), 0 10px 26px -10px rgba(16,24,40,0.15)",
         }}
       >
         {/* Header band — tint + icon chip + kind. The identity strip. */}
@@ -117,12 +217,23 @@ export function GraphNode({ n, live, index, rel, branchHue }: {
           <span className="text-[10.5px] font-bold uppercase tracking-[0.13em]" style={{ color }}>
             {KIND_LABEL[n.kind]}
           </span>
+          {showState ? (
+            <span className="ml-auto flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full" style={{ background: stateColor }} aria-hidden />
+              <span className="text-[10px] font-semibold capitalize text-neutral-500">{state}</span>
+            </span>
+          ) : null}
           {n.at ? (
-            <span className="tabular-nums ml-auto text-[11px] font-medium text-neutral-400">{n.at}</span>
+            <span className={`tabular-nums text-[11px] font-medium text-neutral-400 ${showState ? "ml-2" : "ml-auto"}`}>
+              {n.at}
+            </span>
           ) : null}
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-3">
+        <div
+          className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-3"
+          style={justFilled ? { animation: "contentIn 460ms var(--ease-out) both" } : undefined}
+        >
           {n.kind === "quote" ? (
             <p className="text-[17px] font-medium leading-snug tracking-[-0.01em] text-neutral-800">
               “{n.label}”
@@ -137,8 +248,11 @@ export function GraphNode({ n, live, index, rel, branchHue }: {
             </p>
           )}
 
+          {/* No line-clamp. Truncated detail is unreadable exactly when you most need it — while
+              working out why a card is wrong. Layout measures real heights now, so long text costs a
+              taller card rather than a broken cluster. */}
           {n.detail ? (
-            <p className="mt-1 line-clamp-2 text-[12.5px] leading-snug text-neutral-500">{n.detail}</p>
+            <p className="mt-1 text-[12.5px] leading-snug text-neutral-500">{n.detail}</p>
           ) : null}
 
           {n.kind === "meter" && typeof n.value === "number" ? <Meter value={n.value} /> : null}
@@ -179,21 +293,57 @@ export function GraphNode({ n, live, index, rel, branchHue }: {
 function Shell({
   n, size, index, children,
 }: { n: Placed; size: { w: number; h: number }; index: number; children: React.ReactNode }) {
+  // Measure after paint and hand the real height back to the layout. One observer per node is
+  // cheap; the alternative is guessing how text wraps, which is what put cards outside their halos.
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const report = () => {
+      // offsetHeight, NOT getBoundingClientRect: the card sits inside the camera's `scale(zoom)`
+      // transform, and getBoundingClientRect reports the SCALED height. Zoomed out that reads back
+      // smaller than the card really is, so the layout packs the next card into space the first one
+      // actually occupies — the overlap. offsetHeight is layout height, before any transform.
+      const h = el.offsetHeight;
+      if (h > 20 && Math.abs((measured.get(n.id) ?? 0) - h) > 2) {
+        measured.set(n.id, h);
+        window.dispatchEvent(new CustomEvent("canvas:remeasure"));
+      }
+    };
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [n.id]);
+
+  // Vertical placement MUST use the same height the layout reserved. It used to use
+  // KIND_SIZE[kind].h — a fixed per-kind constant — while layout() spaced siblings by nodeHeight(),
+  // which accounts for detail text, footers and relation badges. Two different numbers for the same
+  // card: the layout leaves a 240px slot, the card is drawn as if it were 150px tall and its content
+  // spills past the bottom into the next one. Measuring heights could never fix that on its own.
+  const h = nodeHeight(n);
   return (
     <div
       className="absolute left-0 top-0 will-change-transform"
       style={{
         width: size.w,
-        minHeight: size.h,
+        minHeight: h,
         // No CSS transition: positions arrive already eased, from the single rAF loop in GraphCanvas
         // that also draws the edges. Transitioning here as well would double-animate and, worse,
         // desynchronise the cards from the branches connecting them.
-        transform: `translate3d(${n.x - size.w / 2}px, ${n.y - size.h / 2}px, 0)`,
+        transform: `translate3d(${n.x - size.w / 2}px, ${n.y - h / 2}px, 0)`,
+
       }}
     >
+      {/* Band caption. Sits OUTSIDE the measured element on purpose: the layout already reserved a
+          row for it (BAND_LABEL_H), so including it in the card's measured height would double-count
+          and reopen the overlap this pass just closed. */}
       <div
+        ref={ref}
         className="h-full [animation:nodeIn_var(--dur-4)_var(--ease-spring)_both]"
-        style={{ animationDelay: `${Math.min(index * 45, 420)}ms` }}
+        // No delay. This used to stagger a burst of simultaneous mounts by index — but arrival is
+        // now staggered upstream by the release queue, and a card that waits its turn and THEN waits
+        // another 420ms before animating just looks stalled. Each card animates the moment it lands.
       >
         {/* Effect layer — its own element so a shake or a jump never fights the entrance above it
             or the breath below it. Three transforms, three owners. */}
@@ -227,28 +377,41 @@ const REL_WORD: Record<string, string> = {
 
 /** A relationship the map couldn't draw. Reads as a sentence on the card — "Blocks · 5-week pilot"
  *  — which is more legible than a wire crossing three unrelated nodes ever was, and survives the
- *  camera being somewhere else entirely. */
+ *  camera being somewhere else entirely.
+ *
+ *  Two is the cap because a card wearing four chips is a list, not a card, and the height it forces
+ *  pushes its neighbours around. But the overflow is COUNTED rather than dropped: the routing model
+ *  promises a relationship is always a line or a badge and never neither, and a chip list that
+ *  silently ends at two would break that promise at the last possible step — the one place nobody
+ *  would think to look for it. */
 function Relations({ rel }: { rel: { kind: string; other: string }[] }) {
+  const shown = rel.slice(0, 2);
+  const more = rel.length - shown.length;
   return (
     <div className="mt-2 space-y-1">
-      {rel.slice(0, 2).map((r, i) => (
+      {shown.map((r, i) => (
         <div
           key={i}
           className="flex items-center gap-1.5 rounded-lg bg-neutral-100/80 px-2 py-1"
         >
-          <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-neutral-400">
+          <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.1em] text-neutral-400">
             {REL_WORD[r.kind] ?? r.kind}
           </span>
-          <span className="truncate text-[11.5px] font-medium text-neutral-600">{r.other}</span>
+          <span className="truncate text-[11.5px] font-medium leading-snug text-neutral-600">{r.other}</span>
         </div>
       ))}
+      {more > 0 ? (
+        <div className="px-2 text-[10px] font-bold uppercase tracking-[0.1em] text-neutral-400">
+          +{more} more
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function Footer({ n, color }: { n: Placed; color: string }) {
   const people = n.people ?? (n.owner ? [n.owner] : n.by ? [n.by] : []);
-  const hasAny = people.length || n.tags?.length || n.reactions?.length;
+  const hasAny = people.length || n.tags?.length || n.reactions?.length || n.mergedFrom?.length;
   if (!hasAny) return null;
 
   return (
@@ -269,6 +432,18 @@ function Footer({ n, color }: { n: Placed; color: string }) {
               {t}
             </span>
           ))}
+        </span>
+      ) : null}
+
+      {n.mergedFrom?.length ? (
+        <span
+          className="flex min-w-0 items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-[10.5px] font-semibold text-neutral-500"
+          title={`Merged in: ${n.mergedFrom.join(" · ")}`}
+        >
+          <span aria-hidden>⤿</span>
+          <span className="truncate">
+            {n.mergedFrom.length === 1 ? n.mergedFrom[0] : `${n.mergedFrom.length} merged in`}
+          </span>
         </span>
       ) : null}
 

@@ -57,6 +57,10 @@ export type GNode = {
   /** Emoji reactions accumulated on this node during the call. The fun layer, attached to meaning
    *  rather than floating: a 🎉 sits ON the decision that earned it. */
   reactions?: { emoji: string; count: number }[];
+  /** Labels of cards folded into this one. A merge used to be untraceable: the loser vanished and
+   *  the winner looked exactly as it did before, so the board silently lost the fact that two people
+   *  had made the same point — which is often the most interesting thing that happened. */
+  mergedFrom?: string[];
   /** Avatar stack — everyone involved, not just the single owner. */
   people?: string[];
   /** 0..1, drawn as a bar. Used by milestone and action. */
@@ -139,9 +143,54 @@ export const KIND_SIZE: Record<NodeKind, { w: number; h: number }> = {
   poll: { w: 300, h: 196 }, shot: { w: 300, h: 214 }, aside: { w: 260, h: 96 }, note: { w: 300, h: 130 },
 };
 
-/** Soft tint behind a node's header band, keyed to its state colour. Kept at very low alpha: the
- *  tint should read as *warmth*, not as a coloured box — a saturated card is what makes a canvas
- *  look like a toy rather than a tool. */
+/** WHAT A CARD'S COLOUR MEANS.
+ *
+ *  It used to mean STATE, and that is what made the board unreadable: two NOTE cards sat side by
+ *  side in amber and blue purely because the model tagged one `open` and let the other default to
+ *  `proposed`. Nothing visible on either card explained the difference, so colour read as noise —
+ *  and once colour is noise, every other visual cue gets distrusted with it.
+ *
+ *  Colour now means KIND, via five families. Not thirteen hues: thirteen distinguishable hues do not
+ *  exist on a light surface — the validated palette carries four plus a neutral, and past that,
+ *  colour-blind separation collapses (six kinds already put orange beside red at normal-vision
+ *  ΔE 7.1). So the family answers "what sort of thing is this" at a glance, and the icon and label
+ *  carry the exact kind. State moves to a small dot, where being subtle is correct: state is a
+ *  property OF a card, not a category of card.
+ *
+ *  ambient is deliberately grey. Notes, quotes and asides are the bulk of any real transcript, and
+ *  giving the majority of cards a colour is what turned the board into confetti. */
+export type KindFamily = "settled" | "work" | "open" | "risk" | "ambient";
+
+export const KIND_FAMILY: Record<NodeKind, KindFamily> = {
+  decision: "settled", milestone: "settled",
+  action: "work", requirement: "work",
+  question: "open", poll: "open",
+  risk: "risk",
+  note: "ambient", quote: "ambient", aside: "ambient", meter: "ambient", shot: "ambient",
+  topic: "ambient",
+};
+
+export const FAMILY_COLOR: Record<KindFamily, string> = {
+  settled: "#1baf7a", // green — it is decided
+  work: "#2a78d6",    // blue  — someone has to do it
+  open: "#eda100",    // amber — it wants an answer
+  risk: "#e34948",    // red   — it threatens something
+  ambient: "#8a8a86", // grey  — it was said
+};
+
+export const FAMILY_TINT: Record<KindFamily, string> = {
+  settled: "#ecf8f3", work: "#eff5fd", open: "#fdf6e7", risk: "#fdefef", ambient: "#f4f4f2",
+};
+
+export const familyOf = (n: { kind: NodeKind }) => KIND_FAMILY[n.kind] ?? "ambient";
+
+/** A placed node's width. Always prefer this to KIND_SIZE — the layout overrides the per-kind width
+ *  so a level has one edge, and anything reading KIND_SIZE directly will disagree with where the
+ *  card actually is. */
+export const widthOf = (p: { kind: NodeKind; w?: number }) => p.w ?? KIND_SIZE[p.kind].w;
+
+/** Soft tint behind a node's header band, keyed to its kind family. Very low alpha: it should read
+ *  as warmth, not as a coloured box — a saturated card makes a canvas look like a toy. */
 export const TINT: Record<NodeState, string> = {
   proposed: "#eff5fd", agreed: "#ecf8f3", done: "#ecf8f3",
   blocked: "#fdefef", open: "#fdf6e7",
@@ -155,214 +204,171 @@ export function initialsOf(name: string): string {
   return (p.length > 1 ? p[0][0] + last : last).toUpperCase();
 }
 
-// ── Layout ──────────────────────────────────────────────────────────────────────────────────────
-// A BALANCED HORIZONTAL TREE, not a radial starburst.
-//
-// Radial looks like a mind map and reads like nothing: nodes land at arbitrary angles, so there is
-// no entry point and no scan order, and long branches sweep across the middle crossing everything
-// else. It also put text baselines at every position on a circle, which is exactly as hard to read
-// as it sounds.
-//
-// This is what actual mind-map tools do. The root sits at the centre; top-level branches alternate
-// right and left; each side is a tidy tree where depth moves horizontally and siblings STACK
-// vertically. The consequences are all the ones we want:
-//   · a real reading order — out from the middle, top to bottom within a branch
-//   · siblings cannot overlap, by construction: each is allotted its own subtree height
-//   · every card shares a baseline with its siblings, so the eye tracks along a row
-//   · edges become short horizontal hops instead of long diagonal sweeps
-export type Placed = GNode & {
-  x: number; y: number;
-  /** 0 = root. Drives edge weight, so hierarchy is legible from the lines alone. */
-  depth: number;
-  /** id of the top-level topic this node hangs under. Every node in a branch shares one, which is
-   *  what lets a whole subtree read as belonging together. */
-  branch: string;
-};
+/** Heights measured from the DOM, keyed by node id. Populated by the renderer after paint.
+ *
+ *  nodeHeight() below is an ESTIMATE from which fields a card carries, and it was always going to
+ *  drift: it guesses how many lines a label wraps to. Real measurements win where we have them; the
+ *  estimate is only the first-paint seed. */
+export const measured = new Map<string, number>();
 
-/** Eight branch hues. These identify a SUBTREE, never a state — they appear only on edges and a
- *  small dot, never as a node's fill, so they can't be confused with the semantic state colours.
- *  Assigned by order of appearance so the same meeting always colours the same way. */
-export const BRANCH_HUES = ["#6a7fd6", "#3fa08a", "#c98a3e", "#a86bb5", "#4f9dc9", "#c0705f", "#7aa04a", "#8a7fa8"];
+/** Heights are always EVEN. Cards are placed by their centre and drawn from `y - h/2`, so an odd
+ *  height puts the card on a half pixel and the gaps either side round independently. */
+const even = (v: number) => Math.ceil(v / 2) * 2;
 
-export function branchColor(branchIds: string[], id: string): string {
-  const i = branchIds.indexOf(id);
-  return BRANCH_HUES[(i < 0 ? 0 : i) % BRANCH_HUES.length];
-}
-
-/** CONTENT-AWARE height. KIND_SIZE.h is a MINIMUM, not the rendered height — a card grows with its
- *  detail line, progress bar, poll rows and footer. Spacing against the minimum is what let two
- *  action cards render flush against each other. Estimating from the same fields the renderer uses
- *  keeps the two in step without a DOM measure-and-reflow pass. Errs high on purpose: too much air
- *  between siblings is untidy, too little is a collision. */
 export function nodeHeight(n: GNode): number {
+  const real = measured.get(n.id);
+  if (real) return even(real);
+
   if (n.kind === "topic") return 62;
   let h = 46;                                       // tinted header band
   h += n.kind === "quote" ? 62 : 30;                // headline (quotes run larger + wrap)
-  if (n.detail) h += 36;                            // supporting line, up to 2 rows
+  if (n.detail) h += 36;
   if (typeof n.progress === "number") h += 44;
   if (n.kind === "meter") h += 68;
   if (n.kind === "poll") h += (n.options?.length ?? 0) * 38;
   if (n.kind === "shot") h += 132;
-  if (n.people?.length || n.owner || n.by || n.tags?.length || n.reactions?.length) h += 36;
+  if (n.people?.length || n.owner || n.by || n.tags?.length || n.reactions?.length || n.mergedFrom?.length) h += 36;
   if (n.rels) h += n.rels * 30;                     // relation badges the map couldn't draw as lines
-  return h + 26;                                    // vertical padding
+  return even(h + 26);
 }
 
-/** Semantic order among siblings. Without this a column is whatever order the producer happened to
- *  emit in, so a risk can sit between two actions and it reads as a pile. Structure first, then what
- *  was settled, then what is still open, then work, then the ambient/fun nodes. */
-const KIND_ORDER: NodeKind[] = [
-  "decision", "requirement", "question", "risk",
-  "milestone", "action", "note", "quote", "meter", "poll", "shot",
-  // Asides sink to the bottom of their cluster: kept, but never competing with substance.
-  "aside",
-  // Sub-sections LAST. With topics first, a parent's own cards rendered after an entire nested
-  // group's descendants, which made the order look random — a direct child of Scope appearing
-  // below everything inside "Other signals".
-  "topic",
-];
-const rank = (n: GNode) => {
-  const i = KIND_ORDER.indexOf(n.kind);
-  return i < 0 ? KIND_ORDER.length : i;
+export type Placed = GNode & {
+  /** Rendered width. Uniform per level — see widthOf. */
+  w: number;
+  x: number; y: number;
+  /** 0 = the root. Drives connector weight, so hierarchy is legible from the lines alone. */
+  depth: number;
+  /** id of the top-level branch this node hangs under. Every node in a subtree shares one, which is
+   *  what lets a whole branch read as belonging together — and what colours it. */
+  branch: string;
+  /** +1 right of the root, -1 left. Decides which edge a connector leaves from. */
+  side: 1 | -1;
 };
 
-// FREESTYLE BOARD.
-//
-// Fifth layout, and the mistake in the fourth was reading "freestyle" as "random". A golden-angle
-// scatter with cards orbiting at arbitrary angles produces placement that looks accidental, not
-// designed — big holes on one side, clusters bunched on the other, cards sitting at odd diagonal
-// offsets from each other.
-//
-// A real workshop board isn't random either. The GROUPS sit wherever they landed, but the cards
-// INSIDE a group are tidy — squared up, evenly spaced, because a human tidied them while talking.
-// That distinction is the whole thing:
-//
-//   inside a cluster  → neat, packed, aligned      (order where the eye reads)
-//   between clusters  → loose flow, uneven rows    (freedom where the structure is)
-//
-// So clusters pack their own cards into a small grid, then flow across the board left-to-right,
-// wrapping into rows, with a deterministic offset per cluster so the rows never line up into a
-// spreadsheet. Same meeting, same board — no jitter between renders.
-const CARD_GAP_Y = 26;      // between stacked cards in a cluster
-// Gap between the topic label and its cards. Was 110 to leave room for an edge to read — but topic
-// edges are gone, so it was 110px of nothing, on top of a 210px topic box holding a ~60px label.
-// Every cluster carried ~250px of dead column inside its halo, which is most of why the board looked
-// airy and unaligned. Now it's just enough to separate a heading from what it heads.
-const STEM = 44;
-const CLUSTER_GAP_X = 150;
-const CLUSTER_GAP_Y = 96;
-const BOARD_COLS = 4;       // masonry columns; the board grows downward, like a real one
+/** One hue per branch. Identifies a SUBTREE, never a state. */
+export const BRANCH_HUES = ["#6a7fd6", "#3fa08a", "#c98a3e", "#a86bb5", "#4f9dc9", "#c0705f", "#7aa04a", "#8a7fa8"];
 
+export function branchColor(branchIds: string[], branch: string): string {
+  const i = branchIds.indexOf(branch);
+  return BRANCH_HUES[(i < 0 ? 0 : i) % BRANCH_HUES.length];
+}
+
+const UNIT = 24;
+const MAX_CARD_W = Math.max(...Object.values(KIND_SIZE).map((k) => k.w));
+
+// ── MIND MAP ─────────────────────────────────────────────────────────────────────────────────────
+// A root in the middle, branches radiating left and right, depth growing outward, children stacked
+// beside their parent.
+//
+// This replaces a herringbone, which replaced rows, which replaced columns. Each of those was a
+// FLAT structure wearing map clothing: two levels, topic and card, with the visual language doing
+// all the work of implying hierarchy that the data never had. You cannot draw a mind map from a list
+// however you route the lines — the shape has to exist in the graph first.
+//
+// So depth is real here and unbounded: any node may parent any other, and the layout reads whatever
+// tree it is given.
+//
+// ── The one thing given up ──
+// A tidy tree centres each parent on its children, so a new leaf moves its parent, its grandparent,
+// and any siblings below it. Earlier layouts fought hard for append-only stability and this gives
+// some of it back — deliberately, because it is the property that makes a mind map READ as one. The
+// mitigation is at the camera: it holds the newest node, so the movement happens around what you are
+// looking at rather than under it.
 export function layout(nodes: GNode[]): Placed[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const kids = new Map<string, GNode[]>();
+  const orphans: GNode[] = [];
   let root: GNode | undefined;
 
+  /** ⚠️ AN ORPHAN MUST BE ADOPTED, NEVER DROPPED.
+   *
+   *  This line used to be `root ??= n; continue;` — so the FIRST node with a missing parent became
+   *  the root and every subsequent one was skipped entirely. Not hidden: never placed. It existed in
+   *  the graph, counted in the card total, was written to the archive, and simply was not on screen.
+   *
+   *  The upstream cause (merging a parent without re-parenting its children) is fixed in
+   *  canvas-board, but this is the layer that decides what anh SEES, and it must not be able to lose
+   *  a card no matter what it is handed. Anything parentless now hangs off the root, which is wrong
+   *  in position and right in the only way that matters — it is visible. */
   for (const n of nodes) {
-    if (!n.parent || !byId.has(n.parent)) { root ??= n; continue; }
-    const list = kids.get(n.parent) ?? [];
-    list.push(n);
-    kids.set(n.parent, list);
+    if (!n.parent) { root ??= n; continue; }
+    if (!byId.has(n.parent)) { orphans.push(n); continue; }
+    (kids.get(n.parent) ?? (kids.set(n.parent, []), kids.get(n.parent)!)).push(n);
   }
   if (!root) return [];
-
-  for (const [k, list] of kids) {
-    kids.set(k, list.map((n, i) => ({ n, i })).sort((a, b) => rank(a.n) - rank(b.n) || a.i - b.i).map((o) => o.n));
+  if (orphans.length) {
+    console.warn(`[layout] ${orphans.length} orphaned card(s) re-attached to root — a parent was removed without adoption`);
+    for (const o of orphans) {
+      o.parent = root.id;
+      (kids.get(root.id) ?? (kids.set(root.id, []), kids.get(root.id)!)).push(o);
+    }
   }
 
-  // Every topic is a cluster, at any depth — a sub-topic on a freestyle board is just a topic.
-  // Topics holding no cards of their own are skipped: their material lives in the clusters promoted
-  // out of them, and an empty label floating in space has nothing to say.
-  const clusters = nodes.filter(
-    (n) => n.kind === "topic" && n.id !== root.id &&
-           (kids.get(n.id) ?? []).some((c) => c.kind !== "topic"),
-  );
+  const LEVEL_W = UNIT * 20;    // 480 — one step outward per level of depth
+  const LEAF_PITCH = UNIT * 9;  // 216 — vertical slot per leaf, sized for a card plus air
+  // Air between one branch's subtree and the next on the same side.
+  //
+  // Without it a branch boundary is spaced exactly like a sibling boundary, so two unrelated subjects
+  // sit as close together as two cards about the same thing — the board reads as one long list with
+  // colours on it. Three slots is the smallest gap that survives a card being taller than average,
+  // which is what makes the separation legible rather than nominal.
+  const BRANCH_GAP = 3;
 
-  // ── each cluster is a small left-to-right mindmap ─────────────────────────────────────────────
-  // The topic is a ROOT NODE on the left; its cards fan out to the right, connected by edges. That's
-  // the mindmap logic — a heading floating above a tidy grid described the grouping but never showed
-  // the relationship, and with no edges at all the cards read as an unattached pile.
-  type Packed = { topic: GNode; cells: { n: GNode; dy: number }[]; w: number; h: number; cardX: number };
-  const packed: Packed[] = clusters.map((topic) => {
-    const members = (kids.get(topic.id) ?? []).filter((c) => c.kind !== "topic");
-    const cardW = Math.max(...members.map((m) => KIND_SIZE[m.kind].w));
-    let dy = 0;
-    const cells = members.map((n) => {
-      const cell = { n, dy: dy + nodeHeight(n) / 2 };
-      dy += nodeHeight(n) + CARD_GAP_Y;
-      return cell;
+  const out: Placed[] = [];
+  const branches = kids.get(root.id) ?? [];
+
+  // Branches alternate sides, in the order the subjects came up: first right, then left, then right.
+  // Alternating rather than filling one side keeps the root central and the board roughly square,
+  // which is what stops a long meeting from becoming a single endless column.
+  const sides = branches.map((_, i) => (i % 2 === 0 ? 1 : -1));
+
+  /** Places a subtree and returns the y its parent should centre on.
+   *
+   *  Leaves consume slots in traversal order; a parent sits at the midpoint of its children. That is
+   *  the whole tidy-tree algorithm, and it is why the shape stays legible at any depth: no node can
+   *  ever be further from its children than half their spread. */
+  let slot = 0;
+  const place = (n: GNode, depth: number, side: 1 | -1, branch: string): number => {
+    const children = kids.get(n.id) ?? [];
+    const y = children.length
+      ? children.map((c) => place(c, depth + 1, side, branch)).reduce((a, b) => a + b, 0) / children.length
+      : (slot++) * LEAF_PITCH;
+
+    out.push({
+      ...n,
+      x: Math.round(side * depth * LEVEL_W),
+      y: Math.round(y),
+      w: n.kind === "topic" ? KIND_SIZE.topic.w : MAX_CARD_W,
+      depth,
+      branch,
+      side,
     });
-    const topicW = KIND_SIZE.topic.w;
-    return {
-      topic, cells,
-      cardX: topicW + STEM,
-      w: topicW + STEM + cardW,
-      h: Math.max(dy - CARD_GAP_Y, KIND_SIZE.topic.h),
-    };
+    return y;
+  };
+
+  branches.forEach((b, i) => {
+    // Each side runs its own slot counter, so the two halves grow independently instead of one
+    // pushing the other down.
+    // Start below everything already placed on THIS side, plus the branch gap. Each side runs its
+    // own counter so the two halves grow independently instead of one pushing the other down.
+    const earlier = branches.filter((_, j) => sides[j] === sides[i] && j < i);
+    slot = earlier.reduce((acc, sib) => acc + countLeaves(sib, kids) + BRANCH_GAP, 0);
+    place(b, 1, sides[i] as 1 | -1, b.id);
   });
 
-  // ── masonry: uniform columns, shortest-first ──────────────────────────────────────────────────
-  // The previous flow added a deterministic offset per cluster to feel "organic". That offset is
-  // exactly what read as messy — nothing shared an edge, so the board looked like cards had been
-  // dropped rather than placed. "Freestyle" was about topics EMERGING freely, never about visual
-  // randomness, and conflating the two cost several rewrites.
-  //
-  // Uniform column width fixes the alignment; placing each new cluster in the SHORTEST column keeps
-  // it tight without leaving the ragged gaps a strict grid would. It also makes placement genuinely
-  // APPEND-ONLY: a new topic takes the next free slot and nothing already on the board moves, which
-  // is what "stays put, just off-camera" requires — you can't point back at something that shifted
-  // while you were looking away.
-  const cellW = Math.max(...packed.map((p) => p.w));
-  const colH = new Array(BOARD_COLS).fill(0);
-  const out: Placed[] = [];
-
-  for (const p of packed) {
-    const col = colH.indexOf(Math.min(...colH));
-    const ox = col * (cellW + CLUSTER_GAP_X);
-    const oy = colH[col];
-
-    // TOP-aligned, not vertically centred. Centring made sense when edges fanned out from the topic
-    // and wanted symmetry; with no edges it just left the label floating in the middle of empty
-    // space with nothing to relate to. Sitting level with the first card, it reads as the heading it
-    // actually is, and gives the cluster a real top-left corner to align everything else against.
-    out.push({
-      ...p.topic,
-      x: Math.round(ox + KIND_SIZE.topic.w / 2),
-      y: Math.round(oy + nodeHeight(p.topic) / 2),
-      depth: 1, branch: p.topic.id,
-    });
-    for (const c of p.cells) {
-      out.push({
-        ...c.n,
-        x: Math.round(ox + p.cardX + KIND_SIZE[c.n.kind].w / 2),
-        y: Math.round(oy + c.dy),
-        depth: 2, branch: p.topic.id,
-      });
-    }
-
-    colH[col] += p.h + CLUSTER_GAP_Y;
-  }
-
-  // Centre the board on the origin so the camera's maths stays symmetrical.
-  if (out.length) {
-    const xs = out.map((n) => n.x), ys = out.map((n) => n.y);
-    const sx = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const sy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    for (const n of out) { n.x -= sx; n.y -= sy; }
-  }
+  out.push({ ...root, x: 0, y: Math.round(mid(out)), w: KIND_SIZE.topic.w, depth: 0, branch: root.id, side: 1 });
   return out;
 }
 
-/** Extent of one topic cluster — the camera's "establishing shot" target for a topic. */
-export function columnBounds(placed: Placed[], branch: string) {
-  const own = placed.filter((p) => p.branch === branch);
-  if (!own.length) return null;
-  const t = Math.min(...own.map((p) => p.y - nodeHeight(p) / 2));
-  const b = Math.max(...own.map((p) => p.y + nodeHeight(p) / 2));
-  const l = Math.min(...own.map((p) => p.x - KIND_SIZE[p.kind].w / 2));
-  const r = Math.max(...own.map((p) => p.x + KIND_SIZE[p.kind].w / 2));
-  return { w: r - l, h: b - t, cx: (l + r) / 2, cy: (t + b) / 2 };
+/** Leaves under a node — how many vertical slots its subtree will consume. */
+function countLeaves(n: GNode, kids: Map<string, GNode[]>): number {
+  const c = kids.get(n.id) ?? [];
+  return c.length ? c.reduce((a, k) => a + countLeaves(k, kids), 0) : 1;
 }
+
+const mid = (ps: { y: number }[]) =>
+  ps.length ? (Math.min(...ps.map((p) => p.y)) + Math.max(...ps.map((p) => p.y))) / 2 : 0;
+
 
 export const DEMO_GRAPH: Graph = {
   rev: 1,

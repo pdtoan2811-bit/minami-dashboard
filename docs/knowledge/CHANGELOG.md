@@ -8,6 +8,89 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-08-12
+- **A queued message is now visible in the chat log for all three of its lives** (§5f-bis) — waiting
+  (dashed bubble in the transcript, rendered off `agent.queued` so reconcile can't wipe it), running as
+  its own turn (new `started` SSE event carries the text the server is about to forget, so the pane can
+  append a real user turn), and **coalesced into an already-running turn** — which was the bad one: the
+  CLI writes no `user` row in that case, only an `attachment` row with `attachment.type ===
+  "queued_command"`, so the message was on disk and in no view built from it. The reply answered a
+  question that appeared nowhere. `parseLines` folds that row in now. Caught by driving a real session,
+  not by reading the diff — and then the fix appeared not to work because `getSession`'s `turnsCache` is
+  keyed on mtime+size only: `PARSE_VERSION` guarded the meta cache but not the turns cache, so every
+  already-parsed transcript kept its old fold. The turns cache now carries `pv`.
+- **Flow v5: the last three calls, and the stack they worked in** (§5f) — the milestone node now
+  previews its three newest tool calls and a row of brand icons for the tech those calls actually
+  touched. New `lib/flow-stack.ts` derives the slugs from the calls themselves, not from
+  `lib/tech-attach.ts` — the project's own stack is identical on every milestone and so carries zero
+  information inside this view, while the calls are what differ from ask to ask. Whitelist tables, so
+  an unmapped extension contributes nothing rather than a guess. Needed `FlowTurn.tools` (a
+  chronological list), because "the latest 3" is a claim about time and flattening `steps` yields plan
+  order. Two bugs found by driving `:3001` rather than reading the diff: a `\bplaywright\b` command
+  rule that matched `find -iname "*playwright*"` (deleted — match commands that are *run*, not words
+  that are *mentioned*), and three MCP calls rendering as identical clipped `MCP__PLAYWRIG…` prefixes
+  (now `CLICK · EVALUATE · TAKE_SCREENSHOT`).
+- **Tech icons filled in for six topics** (§5d) — `dataAnalyticsOwnego` and `CV` had empty rows;
+  `Minami`, `secondBrain`, `qdn`, `toolkit` had only their git host. Detection wasn't broken: those
+  projects have no `package.json` deps that match, or none at all, so `getAttach` had only
+  `.git/config` to read. Assignments in `~/.minami-bento/icons.json`, each inferred from real evidence
+  (BigQuery MCP servers, `@slack/bolt`, "Obsidian is the IDE" in the vault's CLAUDE.md). Separately:
+  `playwright` and `slack` sit in `WANT` in `bin/build-tech-icons.mjs` but simple-icons v16 ships
+  neither (trademark removal), so they fall through to `BrandIcon`'s lettermark tiles — by design, but
+  the build does not warn that a wanted slug produced nothing.
+
+### 2026-08-10
+- **Canvas A/B harness shipped, and it overturned two of the predictions that motivated it** (§17) —
+  `?mode=mimo|stt|stt-fast` runs the same audio down three pipelines, each changing one variable, and
+  emits a `report` the panel keeps per arm. First run: the control arm produced **nothing at all** in
+  175s (three blank transcription replies on its single chunk), while the real-ASR arm had a
+  transcript in 1.4s — **but that run was measuring the max_tokens bug, not the arms.** Re-run after
+  the budget fix, the conclusion inverted: arm A works, costs **$0.030/audio-hour** and finishes in
+  55s; arm B costs **$1.43** and takes 165s, while still winning first-transcript 9× (1.3s vs 11.5s)
+  and first-card 2×. The ASR leg matched research exactly ($0.11/hr); the judging leg is the whole
+  expense. The predicted "~$0.10/audio-hour all-in" was wrong either way. Also **disproved
+  diarization-through-OpenRouter**: `provider.options` is accepted and silently ignored, so speaker
+  labels never arrive. Cost is read from `usage.cost`, not computed.
+- **Restored the max_tokens fix that a concurrent edit had reverted** (§17) — `2442a90`'s message
+  documents budgets raised to 6000–7000, but the committed code still had 600/900/2000: this session
+  was editing the same functions in the same minutes and its string-replacements wrote the old values
+  back before the commit was made. Budgets are now 7000 (transcribe) / 6000 (judge, relations),
+  retries double the budget rather than repeat it, and `finish_reason: "length"` with empty content
+  throws with the token count. *A commit message is not evidence the code does what it says.*
+- **Canvas panel: configure-then-Start, instead of run-on-click** — every selector used to launch a
+  billed run the moment it was clicked, so picking an arm and picking a duration were two runs and
+  there was no way to change your mind. Selection is now a draft with an explicit Start button and a
+  summary of what it will do. *Reported by anh: "like a trap that I select then run right away."*
+- **Meeting canvas documented, and its root defect named** (§17) — new doc for `/canvas`, which had no
+  entry in this record at all. `transcribe()` uses a chat LLM (`xiaomi/mimo-v2.5`) for ASR, which is
+  what drives all three complaints: ~13s per audio-minute, ~1 chunk in 3 returning `content: null`,
+  invented speaker labels, and Luna/Lumen/Luno across identical runs. OpenRouter shipped a dedicated
+  `/api/v1/audio/transcriptions` endpoint after this pipeline was written; catalogue, prices and the
+  batch-only constraints are recorded. Replacement specified — `x-ai/grok-stt-1.0` at $0.10/audio-hour
+  is the only model meeting anh's mixed-language + diarization constraints — but **nothing was built
+  and nothing was measured**. Two things must be tested before building: whether diarization survives
+  OpenRouter's `{ text, usage }` response shape, and that Nova-3's `language=multi` excludes Vietnamese.
+
+### 2026-08-06
+- **Auto-isolation audit: the discard path could delete a checkout under a running agent** (§9) —
+  `discardIfPristine` called `task.mjs rm --force`, and `cmdRm` gates its occupancy check on
+  `&& !force`. The substitute dirty-check could never catch it: the claim file is gitignored, so a
+  claimed tree reports zero dirty files. Fixed by dropping `--force` and checking the claim in
+  `lib/worktree.ts` as well; proved against a real worktree that a claimed tree now refuses removal.
+  Same pass: name allocation reads `refs/heads/task` so a stale branch is not silently remounted,
+  isolate retries on a name collision instead of falling back to no isolation, and the `task.mjs`
+  backend is confined to the dashboard's own checkout rather than any client-named repo.
+- **Token economics measured, and the `claude-api` skill demoted** (§16, new) — that skill inlines
+  ~137k tokens and fires on a very broad trigger; the audit needed two numbers out of it. Both now
+  live in `docs/knowledge/16-token-economics.md` with a one-line pointer from CLAUDE.md. The
+  measurements: 445 transcripts, 50,694 turns, 96.7% cache hit ratio; **cache writes are 3.4% of
+  tokens and ~30% of spend** because a write costs 12.5–20× a read. Auto-compaction turns out to be
+  **inert** — 7 events ever, so tuning `AUTOCOMPACT_PCT` saves nothing — and the real lever is cold
+  resumes, driven by 71 logged deploys (49 in one week) each ending every session on the box.
+  Raising `IDLE_REAP_MS` was considered and rejected: deploys kill idle sessions first.
+  *Requested by user: "audit these things … the session creating and closing with context or auto
+  compact memory to save usage" / "the previous file you read … is too damn long and token consuming".*
+
 ### 2026-08-03
 - **A second chat in a folder now gets its own checkout** (§9, §13) — the worktree tooling had been
   complete and unused for weeks because the middle step was manual, which is why §9's occupancy guard
@@ -736,35 +819,4 @@ this to do a piece of work; read the subsystem's own doc.
 ### 2026-07-27
 - Bento reworked to Project › Goal › Task; 29 MB transcript parse 9.3 s → 39 ms; cold launch → 8 ms.
 - Cross-machine metrics shipped — self-hosted collector + Tailscale Funnel; deploy moved to Vercel.
-
-### 2026-08-12
-- **A queued message is now visible in the chat log for all three of its lives** (§5f-bis) — waiting
-  (dashed bubble in the transcript, rendered off `agent.queued` so reconcile can't wipe it), running as
-  its own turn (new `started` SSE event carries the text the server is about to forget, so the pane can
-  append a real user turn), and **coalesced into an already-running turn** — which was the bad one: the
-  CLI writes no `user` row in that case, only an `attachment` row with `attachment.type ===
-  "queued_command"`, so the message was on disk and in no view built from it. The reply answered a
-  question that appeared nowhere. `parseLines` folds that row in now. Caught by driving a real session,
-  not by reading the diff — and then the fix appeared not to work because `getSession`'s `turnsCache` is
-  keyed on mtime+size only: `PARSE_VERSION` guarded the meta cache but not the turns cache, so every
-  already-parsed transcript kept its old fold. The turns cache now carries `pv`.
-- **Flow v5: the last three calls, and the stack they worked in** (§5f) — the milestone node now
-  previews its three newest tool calls and a row of brand icons for the tech those calls actually
-  touched. New `lib/flow-stack.ts` derives the slugs from the calls themselves, not from
-  `lib/tech-attach.ts` — the project's own stack is identical on every milestone and so carries zero
-  information inside this view, while the calls are what differ from ask to ask. Whitelist tables, so
-  an unmapped extension contributes nothing rather than a guess. Needed `FlowTurn.tools` (a
-  chronological list), because "the latest 3" is a claim about time and flattening `steps` yields plan
-  order. Two bugs found by driving `:3001` rather than reading the diff: a `\bplaywright\b` command
-  rule that matched `find -iname "*playwright*"` (deleted — match commands that are *run*, not words
-  that are *mentioned*), and three MCP calls rendering as identical clipped `MCP__PLAYWRIG…` prefixes
-  (now `CLICK · EVALUATE · TAKE_SCREENSHOT`).
-- **Tech icons filled in for six topics** (§5d) — `dataAnalyticsOwnego` and `CV` had empty rows;
-  `Minami`, `secondBrain`, `qdn`, `toolkit` had only their git host. Detection wasn't broken: those
-  projects have no `package.json` deps that match, or none at all, so `getAttach` had only
-  `.git/config` to read. Assignments in `~/.minami-bento/icons.json`, each inferred from real evidence
-  (BigQuery MCP servers, `@slack/bolt`, "Obsidian is the IDE" in the vault's CLAUDE.md). Separately:
-  `playwright` and `slack` sit in `WANT` in `bin/build-tech-icons.mjs` but simple-icons v16 ships
-  neither (trademark removal), so they fall through to `BrandIcon`'s lettermark tiles — by design, but
-  the build does not warn that a wanted slug produced nothing.
 

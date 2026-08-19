@@ -1,0 +1,27 @@
+[Unit]
+Description=Minami meeting canvas — Recall.ai audio receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/minami-dashboard
+EnvironmentFile=/root/minami-dashboard/.env.local
+ExecStart=/usr/bin/node server/recall-receiver.mjs
+
+# A meeting is not interruptible. If this dies mid-call the board simply stops updating while the bot
+# keeps sitting in the room, so it comes back fast and keeps coming back.
+Restart=always
+RestartSec=3
+
+# The CAX11 has 4 GB and already runs the Slack bot plus headless `claude` spawns. The receiver holds
+# at most a few seconds of PCM per speaker — 32 KB per second per participant — so this ceiling is
+# ~50x its real working set and exists only to guarantee it can never be the process that OOMs the box.
+MemoryMax=512M
+
+StandardOutput=append:/root/minami-dashboard/canvas-receiver.log
+StandardError=append:/root/minami-dashboard/canvas-receiver.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,761 @@
+// LIVE INGEST — one utterance from a Recall bot becomes cards on the board.
+//
+//   Google Meet → Recall → server/recall-receiver.mjs → POST here → /api/canvas → the bot's screen
+//
+// The counterpart to /api/canvas/live, which reads an mp3 off disk for the A/B harness. Both share
+// lib/canvas-board.ts, so a rule bought with a bug on the test path applies here too.
+//
+// ── Three things this does differently from the file path ───────────────────────────────────────
+//
+// 1. IT KNOWS WHO SPOKE. Recall streams a separate channel per participant with their roster name
+//    attached — proven on a real Meet 2026-08-12, diacritics intact. No diarization, no inference.
+//    The transcript therefore carries real names, which is the one thing OpenRouter could not give
+//    us at any price.
+//
+// 2. NO CHUNK PLANNING. The receiver already cut on the speaker's own pauses, so an utterance
+//    arrives whole. There is nothing to slice and no overlap to pay for.
+//
+// 3. STATE LIVES BETWEEN REQUESTS. The file path builds a board inside one long-lived SSE handler;
+//    here every utterance is a separate HTTP request, so the board is held per meeting on
+//    globalThis — same reason the transcript caches live there, a dev hot-reload must not orphan a
+//    meeting in progress.
+//
+// ── What is deliberately NOT here ───────────────────────────────────────────────────────────────
+// No relate pass. It reads the whole board at once and belongs at the END of a meeting.
+// The TIDY pass now runs continuously in the background (see TIDY_EVERY) — it is the counterweight
+// that makes judging every utterance affordable, and it had never once run during a meeting.
+
+import { deriveActions, glossaryFrom, noSpend, refineBoard, transcribe, type RawAction } from "@/lib/canvas-llm";
+import { createBoard, type Board } from "@/lib/canvas-board";
+import { resolveMode } from "@/lib/canvas-modes";
+// Plain ESM helper, shared with the standalone receiver which cannot import TS.
+import { archiveMeeting } from "@/server/canvas-archive.mjs";
+import { asrPrompt, correctLines, loadVocab, saveVocab } from "@/server/canvas-vocab.mjs";
+import { parseCommand, describeCommand, applyCommand, type Command, type CommandHost } from "@/lib/canvas-commands";
+import { trace } from "@/lib/canvas-trace";
+import { createEntityIndex, type EntityIndex } from "@/server/canvas-entities.mjs";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 120;
+
+const TOKEN = process.env.CANVAS_INGEST_TOKEN || "";
+
+/** ⚠️ FAIL CLOSED. This was `if (TOKEN && ...)` — an unset token skipped the check entirely, so a
+ *  MISCONFIGURATION opened the endpoint instead of closing it. That is not theoretical: .env.local
+ *  declared CANVAS_INGEST_TOKEN twice, once empty on line 13 and once real on line 35, and dotenv
+ *  keeps the FIRST — so the token looked present in the file, the server booted clean, and the
+ *  endpoint sat open on a public Cloudflare tunnel. An unauthenticated POST was confirmed accepted.
+ *
+ *  What that exposed: anyone with the tunnel URL could spend OpenRouter credit on STT and judge
+ *  calls, publish arbitrary cards onto the canvas Minami screen-shares INTO a live meeting, and end
+ *  and archive a meeting in progress.
+ *
+ *  Opening it now takes a deliberate CANVAS_INGEST_OPEN=1, which cannot happen by typo or by a dead
+ *  line drifting to the top of a file. */
+const OPEN = process.env.CANVAS_INGEST_OPEN === "1";
+if (!TOKEN && !OPEN) {
+  console.error("[ingest] CANVAS_INGEST_TOKEN is unset — refusing every request. Set it, or set CANVAS_INGEST_OPEN=1 for local dev.");
+}
+
+/** How much recent transcript anything looks at.
+ *
+ *  ⚠️ EVERY consumer of the transcript must use a WINDOW, not the whole meeting. Three separate
+ *  callers were handed `s.lines` in full, and each one is O(n) per call:
+ *
+ *    quoteIsGrounded  joins + normalises + Set-builds the ENTIRE transcript, once per proposed card
+ *    glossaryFrom     regex-scans every line, twice per utterance
+ *
+ *  With ~5 cards per utterance and a transcript that grows all meeting, that is O(n²) over the call —
+ *  fine for the 60-second test file, and by minute forty it is seconds of blocking CPU per utterance
+ *  on a 2-vCPU box, on the same event loop that serves the bot's SSE stream. The board would visibly
+ *  stall the longer a meeting ran, which is the worst possible shape for this bug: it passes every
+ *  short test and only appears in real use.
+ *
+ *  There is a correctness reason too, and it is the better argument. Grounding against the whole
+ *  meeting lets a card cite something said forty minutes ago and count as evidence for what was just
+ *  said. Grounding is supposed to mean "traceable to THIS", and a window is what makes that true. */
+const RECENT = 60;
+
+/** How many utterances may be waiting to be judged before we start skipping.
+ *
+ *  2 is deliberately tight. Utterances arrive roughly every 10s and a judge call takes 2-6s, so a
+ *  healthy meeting never reaches this. Reaching it means the model is having a slow spell, and the
+ *  right response is to stay current rather than to faithfully render a conversation that has already
+ *  moved on. */
+const MAX_QUEUED_JUDGES = 2;
+
+/** How often the board consolidates itself, in utterances.
+ *
+ *  ⚠️ THIS NEVER RAN. `refineBoard` has existed for weeks and the live path never called it — the
+ *  same class of bug as the reactions: built, wired to nothing. The consequence was measured on a real
+ *  meeting: 38 cards under 2 topics, duplicates accumulating for the whole call, because nothing was
+ *  ever allowed to merge them.
+ *
+ *  Judging every utterance is what makes the board feel live, and it is also what produces duplicates
+ *  — the judge sees one breath and cannot know the same point was made four minutes ago. Continuous
+ *  tidying is the counterweight that makes that trade affordable. Without it, "keep the real-time
+ *  feel" and "stop the sprawl" are in direct conflict; with it they are not.
+ *
+ *  Every 3 utterances is roughly every 30s at the observed cadence. It runs OFF the response path, so
+ *  a slow tidy delays nothing a viewer is waiting on. */
+const TIDY_EVERY = 3;
+
+type Session = {
+  board: Board;
+  /** Speaker-prefixed lines, newest last. Capped — see LINE_CAP. */
+  lines: string[];
+  startedAt: number;
+  /** Bumped on every request, so an abandoned meeting can be swept. */
+  touchedAt: number;
+  utterances: number;
+  cost: number;
+  /** Set the moment the meeting ends. Async work in flight checks this before touching the board. */
+  ended: boolean;
+  /** Topic set by voice ("Minami, chủ đề mới: …"), so later cards hang under it. */
+  topic?: string;
+  /** What this call is ABOUT, given before it starts — a line anh typed or a Second Brain project he
+   *  picked. Handed to every judge call so the first topic is the real subject rather than whatever
+   *  the opening small talk happened to be about. */
+  context?: string;
+  /** A spoken "tidy" waiting for the next utterance to run it on the chain. */
+  forceTidy?: boolean;
+  /** Ear chosen mid-call. Overrides CANVAS_STT_MODEL for THIS meeting only — the env default is what
+   *  the next call starts from, so an experiment cannot silently become the permanent setting. */
+  stt?: string;
+  /** Language pin for this meeting: "vi", "en", or "" for auto-detect. */
+  sttLang?: string;
+  /** Several people sharing one microphone — see TranscribeEngine.room. */
+  room?: boolean;
+  /** Names discovered in the room so far, fed back so labels stay stable between chunks. */
+  roster?: string[];
+  /** Set by the canvas "listen" button: until this moment, speech is read as a command with no wake
+   *  word required. See app/api/canvas/control/route.ts for why a button beats a spoken name. */
+  commandUntil?: number;
+  /** Corrections scoped to THIS call only — they die with the session and never touch the vault-
+   *  synced vocabulary file. */
+  fixes?: Record<string, string>;
+  /** Judge calls waiting on the chain. Bounded — see MAX_QUEUED_JUDGES. */
+  queued: number;
+  dropped: number;
+  /** Who and what this meeting is about, resolved across mishearings. */
+  entities: EntityIndex;
+  /** Serialises judging per meeting. Each judge call needs the board as it stood after the previous
+   *  one, and two utterances landing together would otherwise both propose the same topic and both
+   *  create it. Transcription is NOT serialised — it does not touch the board. */
+  chain: Promise<unknown>;
+};
+
+/** Meetings in flight. On globalThis so a Next hot-reload in dev doesn't strand a live call. */
+const store: Map<string, Session> =
+  (globalThis as { __canvasSessions?: Map<string, Session> }).__canvasSessions ??
+  ((globalThis as { __canvasSessions?: Map<string, Session> }).__canvasSessions = new Map());
+
+/** Transcript kept in memory. Enough for the end-of-meeting summary to be useful, bounded so a
+ *  three-hour call cannot grow without limit. The durable record is the vault note, not this. */
+const LINE_CAP = 4000;
+
+/** A meeting with no traffic for this long is over, however it ended. */
+const SESSION_TTL_MS = 45 * 60 * 1000;
+
+/** Meetings that have ENDED and been archived.
+ *
+ *  `session()` creates on miss, and `end` deletes — so ANY request arriving after `end` silently
+ *  built a second, empty session under the same id. That is not hypothetical: when the bot leaves,
+ *  the receiver flushes its final buffered audio (`chunker.end()`) at socket close, while the
+ *  launcher POSTs `end` as soon as its status poll sees `done`. Those two race, and the poll often
+ *  wins. The resurrected session then paid for STT and a judge call on a meeting that was over,
+ *  published a near-empty board OVER the finished one on the canvas, and sat in memory until the
+ *  45-minute sweep — with an archive already written, so nothing it produced was ever saved.
+ *
+ *  A tombstone is the id alone, not the board, so remembering costs a string for one TTL. */
+const ENDED = new Map<string, number>();
+const TOMBSTONE_MS = 10 * 60 * 1000;
+
+function sweep() {
+  // Sessions were only ever removed by an explicit `event: "end"`. Every other ending — the bot
+  // crashing, the launcher dying mid-poll (which happened, on a transient socket error), a meeting
+  // simply abandoned — leaked a board and a full transcript for the lifetime of the process. On a
+  // 4 GB box shared with the Slack bot that is not theoretical.
+  const now = Date.now();
+  for (const [id, s] of store) {
+    if (now - s.touchedAt > SESSION_TTL_MS) {
+      console.warn(`[ingest] sweeping abandoned meeting ${id} (idle ${Math.round((now - s.touchedAt) / 60000)}m)`);
+      store.delete(id);
+    }
+  }
+  for (const [id, at] of ENDED) if (now - at > TOMBSTONE_MS) ENDED.delete(id);
+}
+
+function session(id: string): Session {
+  sweep();
+  let s = store.get(id);
+  if (!s) {
+    s = {
+      board: createBoard(), lines: [], startedAt: Date.now(), touchedAt: Date.now(),
+      utterances: 0, cost: 0, ended: false, queued: 0, dropped: 0, chain: Promise.resolve(), topic: undefined,
+      entities: createEntityIndex(loadVocab()),
+    };
+    store.set(id, s);
+  }
+  s.touchedAt = Date.now();
+  return s;
+}
+
+/** Push the board to /api/canvas, which fans it out over SSE to every viewer — including the browser
+ *  the Recall bot is screen-sharing. Failure is logged, never thrown: a dropped frame costs one
+ *  repaint, a thrown error costs the meeting. */
+async function publish(req: Request, s: Session, title?: string) {
+  // Last line of defence: an ended meeting must never be repainted as live, no matter which in-flight
+  // caller gets here. The end path publishes its own status:"ended" frame before deleting the session.
+  if (s.ended) return;
+  /** ⚠️ ONLY OVERRIDE THE TITLE IF THERE REALLY IS ONE. Every caller passed `body.title || "Meeting"`,
+   *  so the literal English word was handed to graph() on every publish and won over the board's own
+   *  language-aware title — the language switch fired correctly, logged correctly, and the board still
+   *  said "Meeting" over entirely Vietnamese cards. Passing undefined lets the board decide. */
+  const graph = s.board.graph({
+    ...(title ? { title } : {}),
+    subtitle: `${s.utterances} utterances · ${s.board.cards().length} cards`,
+  });
+  try {
+    const r = await fetch(new URL("/api/canvas", req.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
+      body: JSON.stringify(graph),
+    });
+    /** ⚠️ A NON-2xx HERE USED TO BE INVISIBLE. fetch only rejects on a transport failure, so on the day
+     *  /api/canvas gained auth and the internal callers had not yet been handed the token, every publish
+     *  "succeeded": no throw, no log, a healthy-looking ingest, and a board that simply never changed.
+     *  That was "I am running one, but nothing created or shown". The status is checked now, and the
+     *  failure goes both to the log and to the debug panel on the canvas. */
+    if (!r.ok) {
+      const why = `publish rejected — HTTP ${r.status}${r.status === 401 ? " (internal call is missing the ingest token)" : ""}`;
+      trace("error", why);
+      console.error(`[ingest] ${why}`);
+    } else {
+      trace("paint", `board published — ${s.board.cards().length} cards`);
+    }
+  } catch (e) {
+    trace("error", `publish failed — ${e instanceof Error ? e.message.slice(0, 120) : "unknown"}`);
+    console.error("[ingest] publish failed:", e instanceof Error ? e.message : e);
+  }
+}
+
+export async function POST(req: Request) {
+  if (!TOKEN && !OPEN) {
+    return Response.json({ ok: false, error: "ingest token not configured" }, { status: 503 });
+  }
+  if (TOKEN && req.headers.get("authorization") !== `Bearer ${TOKEN}`) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
+  let body: {
+    meetingId?: string; speaker?: string | null; audio?: string; format?: string; context?: string;
+    speechMs?: number; totalMs?: number; event?: string; title?: string;
+  };
+  try { body = await req.json(); } catch { return Response.json({ ok: false, error: "invalid JSON" }, { status: 400 }); }
+
+  const id = body.meetingId || "default";
+
+  // Late audio from the receiver's final flush lands here AFTER the archive is written. Dropping it
+  // is the correct outcome — the alternative is paying to transcribe it into a board nobody will
+  // ever see. Logged rather than silent, because a LOT of these would mean the flush is racing badly.
+  /** ⚠️ `end` MUST BE IDEMPOTENT. It was exempt from the tombstone so a late end could still close a
+   *  meeting — but session() creates on miss, and the first end had already deleted the session. So a
+   *  DUPLICATE end (the dock's disconnect plus the launcher's poll, or one double-click) built a
+   *  brand-new empty session, archived a second folder reading "Nothing was captured", booked a
+   *  0.0-minute meeting, and PUBLISHED that empty board — blanking the screen anh was sharing at the
+   *  exact moment the meeting ended. */
+  if (ENDED.has(id) && body.event === "end" && !store.has(id)) {
+    return Response.json({ ok: true, ignored: "already ended" });
+  }
+  if (ENDED.has(id) && body.event !== "end") {
+    console.log(`[ingest] ignoring ${body.audio ? "late audio" : "late event"} for ended meeting ${id}`);
+    return Response.json({ ok: true, ignored: "meeting ended" });
+  }
+
+  const s = session(id);
+
+  // ── end of meeting ────────────────────────────────────────────────────────────────────────────
+  // The bot leaving is the signal to stop, not a timeout. Everything expensive that reads the whole
+  // board at once happens here, once, when nobody is waiting on it.
+  /** SEED — sent once, before the first word. Sets the subject the judge should name topics after,
+   *  and opens the board with that topic so the very first card has somewhere sensible to land. */
+  if (body.event === "seed") {
+    const ctx = (body.context || "").trim().slice(0, 400);
+    if (ctx) {
+      s.context = ctx;
+      // The first line is treated as the headline subject; anything after it is background.
+      const head = ctx.split(/[\n.·—-]/)[0]?.trim();
+      if (head && head.length > 1 && head.length <= 60) {
+        s.topic = head;
+        s.board.topicId(head);
+      }
+      console.log(`[ingest] seeded: ${ctx.slice(0, 80)}`);
+      await publish(req, s, undefined);
+    }
+    return Response.json({ ok: true, seeded: ctx || null, topic: s.topic ?? null });
+  }
+
+  if (body.event === "end") {
+    // Close the session BEFORE anything else. A tidy pass may be in flight; without this it would
+    // finish, mutate a board that has already been archived, and publish it — putting a finished
+    // meeting back on the live canvas after the record was written.
+    s.ended = true;
+    ENDED.set(id, Date.now());
+
+    // ⚠️ DRAIN BEFORE ARCHIVING. The archive used to be taken synchronously, the instant `end`
+    // arrived — but up to MAX_QUEUED_JUDGES judges can still be mid-flight, each holding cards for
+    // the last utterances of the call. They finished a second later and mutated a board that was
+    // already on disk, so the durable record was systematically missing the END of every meeting:
+    // exactly where the decisions and the agreements are. Nothing logged, nothing failed; the notes
+    // were simply short.
+    //
+    // Bounded, because `end` must not hang on a wedged provider call. Past the bound we archive what
+    // we have and say so — a slightly short record beats a meeting that never closes and never books
+    // its cost. The queued tidy returns immediately on `s.ended`, so this normally waits on a judge.
+    const drained = await Promise.race([
+      s.chain.then(() => true).catch(() => true),
+      new Promise<boolean>((r) => setTimeout(() => r(false), 20_000)),
+    ]);
+    if (!drained) console.warn(`[ingest] archiving ${id} with work still in flight (20s drain elapsed)`);
+    else if (s.queued > 0) console.log(`[ingest] drained ${s.queued} in-flight judge(s) before archiving`);
+
+    const minutes = +((Date.now() - s.startedAt) / 60000).toFixed(1);
+    const graph = s.board.graph({ ...(body.title ? { title: body.title } : {}), status: "ended" });
+
+    // THE DURABLE RECORD. Until this existed a meeting produced a live board and nothing you could
+    // read the next morning — the canvas is in-memory by design and dies with the call.
+    const archived = archiveMeeting({
+      meetingId: id,
+      title: body.title || "Meeting",
+      startedAt: s.startedAt,
+      minutes,
+      graph,
+      transcript: s.lines,
+      cost: +s.cost.toFixed(4),
+    });
+
+    const summary = {
+      utterances: s.utterances,
+      cards: s.board.cards().length,
+      topics: s.board.topicNames().length,
+      edges: s.board.edges.length,
+      minutes,
+      cost: +s.cost.toFixed(4),
+      archived,
+      transcript: s.lines,
+    };
+    /** ⚠️ TELL THE SCREEN IT IS OVER. The ended graph was built, archived and then dropped — the
+     *  canvas kept rendering the last LIVE frame, so a finished meeting sat on a shared screen
+     *  showing "Live · Listening" indefinitely. Verified after a real call: status was still "live"
+     *  eight minutes after the bot had gone. Publishing here is the only moment that knows. */
+    try {
+      await fetch(new URL("/api/canvas", req.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
+        body: JSON.stringify(graph),
+      });
+    } catch (e) {
+      console.error("[ingest] final publish failed:", e instanceof Error ? e.message : e);
+    }
+
+    store.delete(id);
+    return Response.json({ ok: true, ended: true, summary });
+  }
+
+  if (!body.audio) return Response.json({ ok: false, error: "expected { audio } base64" }, { status: 400 });
+
+  /** ⚠️ A NEAR-SILENT CHUNK MUST NOT REACH A MODEL. Flagged repeatedly through the day and finally
+   *  earned: the chunker already measures speech, and windows carrying 0.4-0.8s of it were being sent
+   *  anyway. Handed almost nothing, a generative ear fills the gap from whatever context it has — the
+   *  glossary-as-fake-meeting failure — and even a well-behaved ASR returns filler the judge then
+   *  turns into cards nobody said.
+   *
+   *  1.2s is below any real sentence and above a cough. It also stops paying for them: at chat-model
+   *  rates a silent chunk is not free. */
+  const MIN_SPEECH_MS = Number(process.env.CANVAS_MIN_SPEECH_MS || 1200);
+  if (typeof body.speechMs === "number" && body.speechMs < MIN_SPEECH_MS) {
+    console.log(`[ingest] skipping a near-silent chunk (${body.speechMs}ms of speech)`);
+    trace("skip", `near-silent chunk — ${body.speechMs}ms of speech, below the ${MIN_SPEECH_MS}ms floor`);
+    return Response.json({ ok: true, skipped: "too little speech", speechMs: body.speechMs });
+  }
+
+  const audio = Buffer.from(body.audio, "base64");
+  const speaker = body.speaker?.trim() || null;
+  const mode = resolveMode(null);
+  const spend = noSpend();
+
+  // ── hear ──────────────────────────────────────────────────────────────────────────────────────
+  // THE VOCABULARY, APPLIED AT BOTH ENDS.
+  //
+  // Before: known terms are sent as a decoding prompt, so the model can produce "Minami" instead of
+  // guessing at a name it has never heard. After: known mishearings are rewritten, because biasing
+  // reduces errors and never eliminates them — three different ASR models all produced "my mask" for
+  // "mind map", and no amount of prompting fixes a word the decoder simply does not know.
+  //
+  // The order matters downstream: correction happens BEFORE the judge sees anything, so the cards,
+  // the topic names, the archive and the email all inherit the corrected text. That is the whole
+  // point. "Minamino" became the topic name of an entire board because the raw transcript was what
+  // got judged.
+  const vocab = loadVocab();
+  const glossary = glossaryFrom(s.lines.slice(-RECENT));
+
+  let heard: string[];
+  /** ⚠️ START THE CLOCK BEFORE THE EAR, NOT AFTER IT.
+   *
+   *  This used to be declared below the try/catch, so `sttMs` measured the gap between transcription
+   *  FINISHING and the judge being queued — a few hundred microseconds of local work. It reported
+   *  `stt=1ms` for a six-second clip, and the "slower than real time" warning it feeds could never
+   *  fire, because 1ms is never greater than a 10s chunk. The one number that would have shown the ear
+   *  degrading from 3.5s to 20s during "it stales" was structurally incapable of showing it. */
+  const tHeard = Date.now();
+  try {
+    /** THE EAR CAN CHANGE MID-CALL. `mode.transcribe` is resolved from env at module load, so it is
+     *  the same object for every meeting; overriding a copy keeps this call's choice out of the next
+     *  one. Language is part of the choice, not a separate setting — the reason to switch ears is
+     *  usually the reason to change the pin (Vietnamese-heavy vs English-heavy). */
+    const roomOpt = s.room ? { room: { known: s.roster ?? [] } } : {};
+    const ear = s.stt || s.sttLang !== undefined || s.room
+      ? { ...mode.transcribe, ...(s.stt ? { model: s.stt } : {}), ...(s.sttLang !== undefined ? { language: s.sttLang || undefined } : {}), ...roomOpt }
+      : mode.transcribe;
+    const r = await transcribe(
+      ear,
+      audio,
+      glossary,
+      spend,
+      body.format || "wav",
+      asrPrompt(vocab, glossary),
+    );
+    // PER-CALL FIXES LAYERED OVER THE UNIVERSAL ONES. Session fixes win, because anh typed them in
+    // this meeting about this meeting — a name corrected by hand thirty seconds ago is better evidence
+    // than a rule learned last week.
+    const scoped = s.fixes ? { ...vocab, fixes: { ...vocab.fixes, ...s.fixes } } : vocab;
+    const { corrected, changes } = correctLines(r.lines, scoped);
+    // Logged, never silent: a correction layer nobody can see is one nobody can trust, and this line
+    // is how a NEW mishearing gets noticed and taught.
+    for (const c of changes) {
+      console.log(`[vocab] "${c.from}" → "${c.to}"`);
+      trace("correct", `"${c.from}" → "${c.to}"`);
+    }
+
+    // ── ENTITY RESOLUTION ────────────────────────────────────────────────────────────────────────
+    // Learn from this utterance, then rewrite it. Order matters: observing first means a name first
+    // heard correctly in THIS line can immediately fix a mangled version later in the same line.
+    //
+    // This runs BEFORE the judge, so the board is built from resolved names — which is the whole
+    // point. "Minamino" became a topic name because the judge read the raw text.
+    for (const l of corrected) s.entities.observe(l);
+    heard = corrected.map((l) => s.entities.rewrite(l));
+    for (let i = 0; i < heard.length; i++) {
+      if (heard[i] !== corrected[i]) console.log(`[entity] "${corrected[i]}" → "${heard[i]}"`);
+    }
+  } catch (e) {
+    // One failed utterance is a few seconds of board, not a broken meeting. The next one is seconds
+    // away and the receiver has already moved on.
+    trace("error", `transcribe failed — ${e instanceof Error ? e.message.slice(0, 120) : "unknown"}`);
+    console.error("[ingest] transcribe failed:", e instanceof Error ? e.message : e);
+    return Response.json({ ok: false, error: "transcribe failed" }, { status: 502 });
+  }
+  if (!heard.length) {
+    // Worth a line. A run of these means the ASR is returning nothing for real audio — which has
+    // happened twice, and both times the only visible symptom was a board that stopped growing.
+    console.log(`[ingest] ${speaker ?? "?"}: transcript empty, nothing to judge`);
+    return Response.json({ ok: true, skipped: "no speech" });
+  }
+
+  /** ⚠️ RE-CHECK AFTER THE AWAIT. transcribe() takes seconds, and the launcher POSTs `end` the moment
+   *  its poll sees `done`. A chunk that entered before the end returned after it, then pushed lines,
+   *  queued a judge on a chain the end had already drained, mutated the archived board, and published
+   *  with the default status "live" — flipping a finished meeting's shared screen back to
+   *  "Live · Listening", with those cards never archived. `s` was captured before the delete, so
+   *  store.delete() could not prevent it. */
+
+  /** Book the ASR spend NOW, before any early return. Three paths below — "no speech", a
+   *  commands-only utterance, and a judge-backlog skip — returned before the old accounting line, so
+   *  a successful, already-paid transcription was never counted. That was noise at whisper's
+   *  $0.09/hr; the omni ear bills at chat-model rates and it is not. */
+  s.cost += spend.cost;
+
+  if (s.ended) {
+    console.log(`[ingest] discarding a chunk that finished transcribing after the meeting ended`);
+    return Response.json({ ok: true, ignored: "meeting ended" });
+  }
+
+  // ── VOICE COMMANDS, BEFORE THE JUDGE ─────────────────────────────────────────────────────────
+  // A command is an instruction ABOUT the board. Judged as content it becomes a card describing the
+  // request instead of obeying it — and anh only reaches for a command when the automatic path has
+  // already failed him, so getting it wrong twice is the worst possible outcome.
+  //
+  // Split rather than filtered: a command line is REMOVED from what the judge sees, so "Minami, ghi
+  // lại: giá $50" produces exactly one card saying "giá $50" rather than that plus a card about
+  // someone asking to note a price.
+  // The canvas button opens a window in which the wake word is OPTIONAL: anh already declared intent
+  // by clicking, so requiring him to also be heard saying a proper noun re-introduces the exact
+  // failure the button exists to route around.
+  const armed = !!s.commandUntil && Date.now() < s.commandUntil;
+  const commands: Command[] = [];
+  const plain: string[] = [];
+  for (const line of heard) {
+    const c = parseCommand(line) ?? (armed ? parseCommand(`Minami ${line}`) : null);
+    if (c) {
+      commands.push(c);
+      console.log(`[command]${armed ? " (armed)" : ""} ${describeCommand(c)}`);
+      trace("command", `${armed ? "" : "(unarmed) "}${describeCommand(c)}`);
+    }
+    else plain.push(line);
+  }
+  // One click, one command. Leaving the window open would turn the rest of the sentence — and the
+  // rest of the meeting's small talk — into commands.
+  if (armed && commands.length) s.commandUntil = undefined;
+
+  // On the SESSION, not a local: a "tidy" command usually arrives on its own, and the commands-only
+  // path below returns before the tidy block is ever reached. A local would be set and then thrown
+  // away — the one command that exists purely to trigger a tidy would be the one that never did.
+  let forceTidy = s.forceTidy ?? false;
+  for (const c of commands) {
+    // ONE applier, shared with the dock — see lib/canvas-commands.ts. A second copy here is how the
+    // two paths would quietly diverge the first time a command was added to only one of them.
+    applyCommand(s as unknown as CommandHost, c, (f, to) => {
+      vocab.fixes[f.toLowerCase()] = to;
+      saveVocab(vocab);
+    });
+    if (c.kind === "tidy") forceTidy = true;
+  }
+
+  // Commands alone still repaint — otherwise the one thing anh did by hand is the one thing he cannot
+  // see happen, and he has no way to tell it worked.
+  if (commands.length && !plain.length) {
+    // Carried forward rather than dropped. The next utterance is seconds away and runs the real tidy
+    // block, which is already correctly serialised on s.chain — re-implementing it here would be a
+    // second copy of the one piece of code that must never race the judge.
+    s.forceTidy = forceTidy;
+    await publish(req, s, body.title);
+    return Response.json({ ok: true, commands: commands.length, tidyQueued: forceTidy, cards: s.board.cards().length });
+  }
+  heard = plain;
+
+  /** Vietnamese is unambiguous in writing: the tone-marked vowels and đ exist in no other language
+   *  anh speaks. One line carrying them is enough — this is a language SIGNAL, not a ratio, and
+   *  waiting for a majority would leave the board English through the opening minutes. */
+  if (/[àáâãèéêìíòóôõùúýăđĩũơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(heard.join(" "))) {
+    if (s.board.setLanguage("vi")) console.log("[board] language → vi (board labels follow the room)");
+  }
+
+  // The name comes from the meeting roster, not from the model. This is the entire reason the stack
+  // uses Recall rather than a diarizing ASR: attribution here is identity, not a guess.
+  /** ── WHO SAID IT, WHEN EVERYONE SHARES ONE MIC ─────────────────────────────────────────────
+   *
+   *  Normally the name is free and authoritative: Recall streams one participant per connection, so
+   *  `speaker` IS identity, not a guess — which is the whole reason this stack uses Recall rather
+   *  than a diarizing ASR. Room mode is the case that breaks: the people around anh are not in the
+   *  call, so every voice arrives on his stream under his name.
+   *
+   *  There the ear returns "<name>: <line>", and the label wins over the Recall roster — it is the
+   *  only thing that knows a second person spoke. Anything unlabelled falls back to the participant,
+   *  so a mixed reply degrades to today's behaviour rather than losing the line. */
+  let said: string[];
+  if (s.room) {
+    const named: string[] = [];
+    for (const line of heard) {
+      // ⚠️ NOT EVERY COLON IS A SPEAKER. "http://example.com" parsed as a person called "http" and
+      // would have been learned into the roster permanently. A URL scheme is the common case; the
+      // guard is cheap and the failure is durable.
+      const m = /^\s*([\p{L}][\p{L}\p{N} .'’-]{0,28}?)\s*:\s*(.+)$/u.exec(line);
+      if (m && m[2].trim() && !m[2].startsWith("//")) {
+        const who = m[1].trim();
+        named.push(`${who}: ${m[2].trim()}`);
+        // Learn real names only. "Người 2" is a placeholder, not an identity, and feeding it back
+        // would freeze the room at its first guess instead of letting a real name replace it.
+        if (!/^(người|speaker|nguoi)\s*\d+$/i.test(who)) {
+          s.roster = [...new Set([...(s.roster ?? []), who])].slice(0, 12);
+        }
+      } else {
+        named.push(speaker ? `${speaker}: ${line}` : line);
+      }
+    }
+    said = named;
+    const fresh = (s.roster ?? []).join(", ");
+    if (fresh) console.log(`[room] voices so far: ${fresh}`);
+  } else {
+    said = speaker ? heard.map((l) => `${speaker}: ${l}`) : heard;
+  }
+  s.lines.push(...said);
+  if (s.lines.length > LINE_CAP) s.lines.splice(0, s.lines.length - LINE_CAP);
+  s.utterances++;
+
+  // ── judge ─────────────────────────────────────────────────────────────────────────────────────
+  // Chained per meeting so board state is never raced. Awaited so the HTTP response reflects what
+  // actually landed — the receiver is sequential per speaker anyway, and back-pressure here is
+  // better than a queue we cannot see.
+  // ── DON'T LET THE QUEUE COMPOUND ──────────────────────────────────────────────────────────────
+  //
+  // Judging is serialised per meeting because each call needs the board as it stood after the last
+  // one. That is correct and it has a failure mode: if a judge call ever takes longer than the gap
+  // between utterances, the backlog grows and NEVER recovers. Measured live 2026-08-13 — the ingest
+  // route returned 200 in 60.5s, then 52s, then 44s, then 37s. Those are not slow calls; that is a
+  // queue draining, and every card in it was arriving a minute after it was said.
+  //
+  // So the chain is bounded. When more than this many utterances are already waiting, the OLDEST
+  // queued work is skipped rather than run: a card from ninety seconds ago is worth less than the
+  // board staying current, and the transcript still records what was said either way.
+  if (s.queued >= MAX_QUEUED_JUDGES) {
+    s.dropped++;
+    console.warn(`[ingest] judge backlog full (${s.queued}) — skipping this utterance to stay live`);
+    await publish(req, s, body.title);
+    return Response.json({ ok: true, speaker, heard: heard.length, added: 0, skipped: "backlog", cards: s.board.cards().length });
+  }
+
+  s.queued++;
+  const tJudge = Date.now();
+  const run = s.chain.then(async () => {
+    let actions: RawAction[] = [];
+    try {
+      // ENTITIES FIRST, then whatever topics already exist. The judge reuses a name from this list
+      // before inventing one, so the board's backbone becomes the things actually being discussed
+      // rather than a cluster name improvised from a single ten-second breath.
+      const backbone = [
+        ...s.entities.entities().slice(0, 8).map((e) => e.name),
+        ...s.board.topicNames(),
+      ];
+      actions = await deriveActions(
+        [...new Set(backbone)],
+        said.join("\n"),
+        glossaryFrom(s.lines.slice(-RECENT)),
+        // Labels already on the board, so the judge can hang this utterance UNDER an earlier point
+        // instead of starting a fourth parallel thread about the same thing. Capped inside
+        // deriveActions at the last 25 — a whole meeting of labels costs more and decides less.
+        s.board.cards().map((c) => c.label),
+        { cfg: mode.derive, spend, revise: true, context: s.context },
+      );
+    } catch (e) {
+      trace("error", `judge failed — ${e instanceof Error ? e.message.slice(0, 120) : "unknown"}`, Date.now() - tJudge);
+      console.error("[ingest] derive failed:", e instanceof Error ? e.message : e);
+      return { added: 0 };
+    }
+    let added = 0;
+    // The RECENT window, not the whole meeting — see the note on RECENT. This is both the fix for the
+    // quadratic cost and the thing that makes "grounded" mean what it says.
+    const recent = s.lines.slice(-RECENT);
+    for (const a of actions) if (s.board.apply(a, recent)) added++;
+    // The single most useful line in the panel: "12 proposed → 0 on the board" is the signature of a
+    // grounding or dedup rule quietly eating everything, which has happened more than once.
+    trace("judge", `${actions.length} proposed → ${added} card(s) on the board`, Date.now() - tJudge);
+    return { added };
+  });
+  s.chain = run.catch(() => {});
+  /** ⚠️ THE JUDGE IS NO LONGER ON THE RESPONSE PATH, AND THAT IS THE FIX FOR "IT STALES".
+   *
+   *  Measured 2026-08-18 on the real pipeline: STT 2.5-6s, judge 4.7-8.9s — awaited one after the
+   *  other inside a single request, so a chunk cost 8-15s against a 10s chunk window. The pipeline
+   *  simply could not keep up with speech, so the board sat a chunk or more behind and never
+   *  recovered. Nothing errored; every request returned 200. It read as "stale" because that is
+   *  exactly what it was.
+   *
+   *  Returning as soon as the audio is transcribed and the judge is QUEUED means the request costs
+   *  the STT leg alone (~3-6s), comfortably inside the window. Cards still appear when the judge
+   *  lands, which is the same wall-clock moment as before — but the requests stop stacking, and
+   *  MAX_QUEUED_JUDGES finally sees a real queue depth instead of always finding 1 because the
+   *  previous request had already blocked to completion.
+   *
+   *  The end path still awaits s.chain before archiving, so nothing in flight is lost. */
+  void run
+    .finally(() => { s.queued--; })
+    .then(() => publish(req, s, body.title))
+    .catch(() => { /* the judge logs its own failures; a dropped publish costs one frame */ });
+
+  const sttMs = Date.now() - tHeard;
+  // Per-leg timing, always. The hardest thing about this pipeline has been that "slow" and "broken"
+  // produce identical logs — a clean 200 either way.
+  console.log(`[timing] stt=${sttMs}ms queued=${s.queued} chunk=${body.totalMs ?? "?"}ms`);
+  /** ⚠️ DO NOT TRUNCATE THE TRANSCRIPT HERE. At 120 chars this cut every utterance mid-sentence, and
+   *  the terms that get mangled are disproportionately at the END of a long sentence — so the panel
+   *  hid exactly the evidence it exists to show. (Measured: a clip scored 5/10 on terminology when
+   *  read from this line and 10/10 when read from the model's actual reply.) trace() caps at 300. */
+  trace("hear", `[${mode.transcribe.model.replace(/^omni:/, "")}] ${speaker ?? "?"}: ${heard.join(" ")}`, sttMs);
+  if (sttMs > (body.totalMs ?? 10_000)) {
+    console.warn(`[timing] ⚠ the ear is slower than real time (${sttMs}ms for ${body.totalMs ?? "?"}ms of audio) — the board will fall behind`);
+  }
+
+  // (spend is now booked immediately after transcribe — see the note there)
+  await publish(req, s, body.title);
+
+  // ── CONSOLIDATE, IN THE BACKGROUND ────────────────────────────────────────────────────────────
+  // Deliberately NOT awaited. The response is already sent and the board already published; a tidy
+  // that took four seconds would otherwise add four seconds to every third utterance for no visible
+  // benefit. Failure is swallowed for the same reason it is elsewhere: a missed tidy costs a slightly
+  // messier board, a thrown one would cost the meeting.
+  // `forceTidy` is what makes "Minami, dọn lại" mean anything; the cadence covers the rest. A spoken
+  // tidy also ignores the 5-card floor, because anh asking is better evidence that the board needs it
+  // than a card count is.
+  if (forceTidy) s.forceTidy = false;
+  if ((forceTidy || s.utterances % TIDY_EVERY === 0) && (forceTidy || s.board.cards().length >= 5)) {
+    // ⚠️ ON THE CHAIN, not beside it. Tidy merges and revises the SAME board the judge writes to, and
+    // mergeCards() splices from `nodes` and rewrites `edges` in place. Running it concurrently with a
+    // judge call meant a card could be spliced away mid-apply, or an edge rewritten to point at a node
+    // that no longer existed. Nothing about that would have failed loudly — it would have shown up as
+    // cards or edges occasionally going missing, which is indistinguishable from the model's own
+    // inconsistency and therefore essentially undebuggable.
+    //
+    // Serialising costs latency only on every third utterance, and only for the ~2-3s tidy takes.
+    s.chain = s.chain.then(async () => {
+      if (s.ended) return;
+      const tTidy = Date.now();
+      try {
+        const tidySpend = noSpend();
+        const { revise, merge, nest } = await refineBoard(
+          s.board.cards().map((c) => ({ id: c.id, label: c.label, detail: c.detail })),
+          s.lines.slice(-RECENT).join("\n"),
+          { cfg: { ...mode.derive, model: mode.derive.tidyModel }, spend: tidySpend },
+        );
+        // Same cadence as the board tidy: drop one-off entity clusters so resolution does not get
+        // slower as the meeting gets longer.
+        s.entities.prune();
+        let n = 0;
+        for (const r of revise) if (s.board.reviseById(r)) n++;
+        for (const m of merge) if (s.board.mergeById(m.from, m.into)) n++;
+        s.cost += tidySpend.cost;
+        if (!merge.length && !revise.length) {
+          console.log(`[tidy] no changes proposed across ${s.board.cards().length} cards`);
+          trace("tidy", `nothing to change across ${s.board.cards().length} cards`, Date.now() - tTidy);
+        } else if (n && !s.ended) {
+          console.log(`[tidy] ${merge.length} merged, ${revise.length} revised across ${s.board.cards().length} cards`);
+          trace("tidy", `${merge.length} merged, ${revise.length} revised across ${s.board.cards().length} cards`, Date.now() - tTidy);
+          await publish(req, s, body.title);
+        } else {
+          // Proposed but nothing applied — every id the model returned failed to resolve. That is a
+          // real defect (stale ids, wrong shape) and it must not look like a quiet success.
+          console.warn(`[tidy] proposed ${merge.length} merges / ${revise.length} revisions, APPLIED NONE`);
+          // Loud in the panel too: "proposed N, applied 0" is the signature of stale ids, and it is
+          // otherwise indistinguishable from a board that simply had nothing to tidy.
+          trace("error", `tidy proposed ${merge.length} merges / ${revise.length} revisions and APPLIED NONE — ids did not resolve`, Date.now() - tTidy);
+        }
+        // APPLIED, not discarded. `void nest` sat here for the life of the project, which is the
+        // whole reason boards never grew past two levels: the tidy pass computed a hierarchy every
+        // 30 seconds and the result was dropped on the floor. Nesting is what makes this a mind map
+        // rather than a list with headings.
+        let nested = 0;
+        for (const x of nest) if (s.board.nestById(x.id, x.under)) nested++;
+        if (nest.length) {
+          console.log(`[tidy] nest: ${nested}/${nest.length} applied${nested < nest.length ? " (rest rejected: cycle, missing id, or already there)" : ""}`);
+          trace("tidy", `nesting: ${nested}/${nest.length} applied${nested < nest.length ? " (rest rejected: cycle, missing id, or already nested)" : ""}`);
+        }
+        if (nested) n += nested;
+      } catch (e) {
+        trace("error", `tidy failed — ${e instanceof Error ? e.message.slice(0, 120) : "unknown"}`, Date.now() - tTidy);
+        console.error("[tidy] failed:", e instanceof Error ? e.message : e);
+      }
+    }).catch(() => {});
+  }
+
+  // `added` is gone from the response on purpose: the judge no longer finishes before we reply, so
+  // there is no honest number to report. `queued` is the useful one — it says how far behind we are.
+  return Response.json({
+    ok: true,
+    speaker,
+    heard: heard.length,
+    queued: s.queued,
+    sttMs,
+    cards: s.board.cards().length,
+    costSoFar: +s.cost.toFixed(4),
+  });
+}
