@@ -115,6 +115,9 @@ cleanup() {
   [ -n "${RECV_PID:-}" ]   && kill "$RECV_PID"   2>/dev/null && ok "receiver"
   [ -n "${APP_PID:-}" ]    && kill "$APP_PID"    2>/dev/null && ok "app (:${PORT})"
   [ -z "${APP_PID:-}" ]    && dim "app was already running — left alone"
+  # The lock must go even when the script dies badly, or the next run is locked out of the room by a
+  # bot that is no longer there. The stale-lock check above is the second line of defence, not the first.
+  [ -n "${LOCK:-}" ] && rm -f "$LOCK" 2>/dev/null
   dim "dashboard on 3010 untouched"
   echo
 }
@@ -125,16 +128,44 @@ trap cleanup EXIT
 
 # ── 1. the app ──────────────────────────────────────────────────────────────────────────────────
 b "  1/4  meeting app"
-if curl -fsS -o /dev/null -m 3 "http://127.0.0.1:${PORT}/"; then
-  ok "already up on :${PORT}"
+# ⚠️ ASK "IS THE PORT TAKEN", NOT "IS THE APP FAST".
+#
+# This decided whether to start an app with `curl -fsS -m 3 /`, and treated any failure as "nothing
+# there, start one". A 3s timeout is not an absence test — it is a SPEED test. On 2026-08-19 a
+# degraded app was already on this port answering a trivial GET in 3.8s; the probe timed out, the
+# launcher concluded the port was free, and tried to start a second server on a port that was by
+# definition occupied. It died with EADDRINUSE into a log nobody reads, APP_PID was left pointing at
+# a corpse, and the whole meeting then ran against the foreign degraded server — 48 chunks of a real
+# call lost to `ingest failed`, with the launcher reporting a clean start throughout.
+#
+# So the question is answered by the kernel, which cannot be slow: is anything BOUND to this port?
+#   nothing bound  -> start one, and verify it actually survived
+#   bound + healthy -> reuse it, and do NOT record APP_PID (cleanup must not kill what we did not start)
+#   bound + sick    -> STOP. Never try to start a second server on a taken port.
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  # Generous timeout: this is a health check, and a busy-but-working app must not be condemned for
+  # being busy. That confusion is the entire bug above.
+  if curl -fsS -o /dev/null -m 25 "http://127.0.0.1:${PORT}/"; then
+    ok "already up on :${PORT} — reusing it"
+  else
+    no "something is listening on :${PORT} but not answering."
+    dim "  Minami will NOT start a second server on a port that is already taken —"
+    dim "  that is what silently lost a meeting. Find and stop it, then run this again:"
+    dim "    lsof -nP -iTCP:${PORT} -sTCP:LISTEN"
+    read -r -p "  enter to close "; exit 1
+  fi
 else
   NODE_ENV=development NEXT_DIST_DIR="$DIST" nohup npx next dev -p "$PORT" > "$STATE/oncall-app.log" 2>&1 &
   APP_PID=$!
   for _ in $(seq 1 60); do
-    curl -s -o /dev/null -m 3 "http://127.0.0.1:${PORT}/" && break
+    # ⚠️ CHECK THE PROCESS IS STILL ALIVE, not only that the port is quiet. A start that dies
+    # immediately (EADDRINUSE, a bad env, a syntax error) would otherwise burn the full two minutes
+    # of this loop and then report a generic timeout instead of the real reason.
+    kill -0 "$APP_PID" 2>/dev/null || { no "the app exited during startup:"; tail -12 "$STATE/oncall-app.log"; read -r -p "  enter to close "; exit 1; }
+    curl -fsS -o /dev/null -m 5 "http://127.0.0.1:${PORT}/" && break
     sleep 2
   done
-  curl -s -o /dev/null -m 3 "http://127.0.0.1:${PORT}/" && ok "up on :${PORT}" || { no "app never came up — see $STATE/oncall-app.log"; read -r -p "  enter to close "; exit 1; }
+  curl -fsS -o /dev/null -m 10 "http://127.0.0.1:${PORT}/" && ok "up on :${PORT}" || { no "app never came up — see $STATE/oncall-app.log"; tail -12 "$STATE/oncall-app.log"; read -r -p "  enter to close "; exit 1; }
 fi
 # 401 is the CORRECT answer: the token loaded. 503 means it did not, and audio would be refused all call.
 code=$(curl -s -o /dev/null -w "%{http_code}" -m 5 -X POST "http://127.0.0.1:${PORT}/api/canvas/ingest" -H "content-type: application/json" -d '{}')
@@ -272,8 +303,43 @@ dim "Present now → A tab → pick it"
 open "http://localhost:${PORT}/canvas?present=1" 2>/dev/null
 echo
 
+# ⚠️ ONE BOT PER ROOM. A Recall bot is BILLED, and a second one in the same call costs twice while
+# also doubling the audio the pipeline must chew — each bot streams every participant.
+#
+# Not hypothetical: on 2026-08-19 the canvas froze (the port bug above), the meeting looked dead, anh
+# relaunched, and two bots sat in udm-aion-awd for twenty minutes — double billing and double ingest
+# load on a server already failing under single load. Relaunching when something looks broken is the
+# correct human instinct; the script is what has to know better.
+#
+# ⚠️ A RECORDED PID, NOT `pgrep -f`. Measured while writing this: `pgrep -f "minami-meet.mjs.*CODE"`
+# matched the very pipeline that ran it and MISSED two live bots — a false positive and a false
+# negative in the same breath. It is the same hazard this file already documents for `pkill -f`, and
+# a guard that answers wrongly in both directions is worse than none. The lock is a file this script
+# writes and removes, and the PID in it is verified to still be a bot before it is believed.
+MEET_CODE="$(printf '%s' "$MEET" | sed -E 's#.*meet\.google\.com/##; s#[?&].*##')"
+LOCK=""
+if [ -n "$MEET_CODE" ]; then
+  LOCK="$STATE/bot-${MEET_CODE}.pid"
+  if [ -f "$LOCK" ]; then
+    OTHER="$(cat "$LOCK" 2>/dev/null)"
+    # Two conditions, both required. A PID alone is not proof: pids are reused, and a stale lock from
+    # a crash must never lock anh out of his own meeting.
+    if [ -n "$OTHER" ] && kill -0 "$OTHER" 2>/dev/null && ps -p "$OTHER" -o command= 2>/dev/null | grep -q 'minami-meet\.mjs'; then
+      no "a Minami bot is ALREADY in ${MEET_CODE} (pid ${OTHER})"
+      dim "  Two bots in one room bill twice and halve the pipeline's throughput."
+      dim "  If that one is stuck, stop it first — it leaves the call cleanly:"
+      dim "    kill -INT ${OTHER}"
+      dim "  Then run this again."
+      read -r -p "  enter to close "; exit 1
+    fi
+    dim "clearing a stale bot lock for ${MEET_CODE}"
+    rm -f "$LOCK"
+  fi
+fi
+
 CANVAS_MEETING_CONTEXT="${CTX:-}" node bin/minami-meet.mjs "$MEET" --present &
 BOT_PID=$!
+[ -n "$LOCK" ] && printf '%s' "$BOT_PID" > "$LOCK"
 wait "$BOT_PID"
 
 # ── THE LEARNING LOOP ───────────────────────────────────────────────────────────────────────────

@@ -61,11 +61,26 @@ function findAudio(node, out = { buffer: null, participant: null, botId: null },
   return out;
 }
 
+/** How many consecutive ingest failures before this stops being a blip and starts being an outage. */
+const LOUD_AFTER = 3;
+let consecutiveFails = 0;
+
 /** Ship one utterance to the pipeline.
  *
- *  Failure here must never stop the meeting: a dropped chunk costs a few seconds of board, a thrown
- *  exception costs the whole call. So it logs and moves on — the next utterance is seconds away, and
- *  the transcript is not the durable record anyway. */
+ *  Failure here must never stop the meeting: a thrown exception costs the whole call. So it logs and
+ *  moves on — the next utterance is seconds away.
+ *
+ *  ⚠️ BUT IT MUST TRY MORE THAN ONCE, AND IT MUST GET LOUD.
+ *
+ *  This used to be a single un-retried, un-timed-out fetch whose only trace was one grey line reading
+ *  `ingest failed: fetch failed`. On 2026-08-19 the app on :3011 degraded (a trivial GET took 3.8s)
+ *  and 48 consecutive chunks died exactly that way — a whole stretch of a real meeting, gone, while
+ *  the log scrolled past at the same cadence as a healthy one and the canvas simply stopped growing.
+ *
+ *  This audio is the ONLY copy of what was said. It is not like a dropped frame; there is nothing to
+ *  re-render it from. So: a bounded retry with backoff, an explicit timeout so a wedged server cannot
+ *  hold the socket open indefinitely, and a shout on the third consecutive failure — because the one
+ *  thing the old line never conveyed was "this is not one chunk, this is all of them". */
 async function send(chunk) {
   stats.chunks++;
   stats.bytes += chunk.pcm.length;
@@ -91,39 +106,86 @@ async function send(chunk) {
 
   if (!INGEST) return; // dry run: prove the audio leg before wiring the models to it
 
-  try {
-    const res = await fetch(INGEST, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(INGEST_TOKEN ? { authorization: `Bearer ${INGEST_TOKEN}` } : {}),
-      },
-      body: JSON.stringify({
-        // ⚠️ WITHOUT THIS EVERY MEETING SHARES ONE BOARD.
-        //
-        // The ingest route keys sessions on `meetingId` and falls back to "default" when it is
-        // absent — which it always was. So every utterance from every meeting accumulated into one
-        // session, two concurrent meetings would have shown each other's cards, and the launcher's
-        // end-of-meeting event (which correctly targets the bot id) closed a session that had never
-        // existed, making the summary permanently empty and leaking the real one.
-        //
-        // Recall puts the bot id in every audio frame, so identity is already on the wire.
-        meetingId: chunk.meetingId ?? chunker?.meetingId ?? null,
-        speaker: chunk.speaker,
-        email: chunk.email,
-        speechMs: Math.round(chunk.speechMs),
-        totalMs: Math.round(chunk.totalMs),
-        // WAV rather than mp3: Recall already delivers exactly what the STT endpoint wants, so this
-        // is a 44-byte header instead of an ffmpeg subprocess per utterance.
-        audio: wav(chunk.pcm).toString("base64"),
-        format: "wav",
-      }),
-    });
-    if (!res.ok) { stats.failed++; log(`  ingest ${res.status}: ${(await res.text()).slice(0, 140)}`); }
-  } catch (e) {
-    stats.failed++;
-    log(`  ingest failed: ${e.message.slice(0, 140)}`);
+  // Built once and reused across attempts: re-encoding 200KB of base64 per retry is wasteful, and a
+  // retry must send byte-identical audio anyway.
+  const body = JSON.stringify(bodyFor(chunk));
+  const ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    // Generous but finite. A judge chain can legitimately hold a request for tens of seconds; a
+    // wedged socket must not hold it forever.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 45_000);
+    try {
+      const res = await fetch(INGEST, {
+        method: "POST",
+        signal: ctl.signal,
+        headers: {
+          "content-type": "application/json",
+          ...(INGEST_TOKEN ? { authorization: `Bearer ${INGEST_TOKEN}` } : {}),
+        },
+        body,
+      });
+      if (res.ok) {
+        if (consecutiveFails >= LOUD_AFTER) log(`  ✓ ingest recovered after ${consecutiveFails} lost chunk(s)`);
+        consecutiveFails = 0;
+        return;
+      }
+      const text = (await res.text()).slice(0, 140);
+      // 4xx is OUR bug — a bad body, a wrong token, an ended meeting. Retrying cannot help and would
+      // only bury the real message under two more copies of it.
+      if (res.status < 500) { stats.failed++; noteFailure(`ingest ${res.status}: ${text}`); return; }
+      if (attempt === ATTEMPTS) { stats.failed++; noteFailure(`ingest ${res.status} after ${ATTEMPTS} attempts: ${text}`); return; }
+      log(`  ingest ${res.status}, retrying (${attempt}/${ATTEMPTS})`);
+    } catch (e) {
+      const why = e?.name === "AbortError" ? "timed out after 45s" : String(e?.message ?? e).slice(0, 140);
+      if (attempt === ATTEMPTS) { stats.failed++; noteFailure(`ingest failed after ${ATTEMPTS} attempts: ${why}`); return; }
+      log(`  ingest failed (${why}), retrying (${attempt}/${ATTEMPTS})`);
+    } finally {
+      clearTimeout(timer);
+    }
+    // Backoff, so a server that is merely saturated gets a moment to breathe rather than three
+    // near-simultaneous copies of the request that saturated it.
+    await new Promise((r) => setTimeout(r, attempt * 1500));
   }
+}
+
+/** Shout when failures stop being isolated. A per-chunk line is invisible in a log that already
+ *  prints a line per chunk; "NOTHING HAS REACHED THE CANVAS FOR N CHUNKS" is not. */
+function noteFailure(msg) {
+  consecutiveFails++;
+  log(`  ${msg}`);
+  if (consecutiveFails === LOUD_AFTER || (consecutiveFails > LOUD_AFTER && consecutiveFails % 5 === 0)) {
+    log("");
+    log(`  ⚠⚠ NOTHING HAS REACHED THE CANVAS FOR ${consecutiveFails} CHUNKS — the board is frozen.`);
+    log(`  ⚠⚠ Target: ${INGEST}`);
+    log(`  ⚠⚠ Check that the meeting app is up and healthy on that port. Audio is being LOST.`);
+    log("");
+  }
+}
+
+/** The request body for one utterance. Split out of send() so a retry re-sends byte-identical audio
+ *  without rebuilding 200KB of base64 each time. */
+function bodyFor(chunk) {
+  return {
+    // ⚠️ WITHOUT THIS EVERY MEETING SHARES ONE BOARD.
+    //
+    // The ingest route keys sessions on `meetingId` and falls back to "default" when it is absent —
+    // which it always was. So every utterance from every meeting accumulated into one session, two
+    // concurrent meetings would have shown each other's cards, and the launcher's end-of-meeting
+    // event (which correctly targets the bot id) closed a session that had never existed, making the
+    // summary permanently empty and leaking the real one.
+    //
+    // Recall puts the bot id in every audio frame, so identity is already on the wire.
+    meetingId: chunk.meetingId ?? chunker?.meetingId ?? null,
+    speaker: chunk.speaker,
+    email: chunk.email,
+    speechMs: Math.round(chunk.speechMs),
+    totalMs: Math.round(chunk.totalMs),
+    // WAV rather than mp3: Recall already delivers exactly what the STT endpoint wants, so this is a
+    // 44-byte header instead of an ffmpeg subprocess per utterance.
+    audio: wav(chunk.pcm).toString("base64"),
+    format: "wav",
+  };
 }
 
 
