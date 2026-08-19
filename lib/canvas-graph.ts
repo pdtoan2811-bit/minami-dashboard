@@ -98,6 +98,13 @@ export type GEdge = { from: string; to: string; kind?: EdgeKind };
 
 export type Graph = {
   rev?: number;
+  /** Which meeting produced this board.
+   *
+   *  ⚠️ Load-bearing, not decoration. Boards used to live in one global document with no idea whose
+   *  they were, so two concurrent meetings overwrote each other and the loser's SCREEN SHARE showed
+   *  the winner's cards to their customer. Every frame now says who it belongs to, and a viewer pins
+   *  itself to the first one it sees. */
+  meetingId?: string;
   title?: string;
   subtitle?: string;
   status?: "live" | "paused" | "ended";

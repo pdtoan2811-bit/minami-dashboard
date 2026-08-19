@@ -81,8 +81,45 @@ export default function CanvasPage() {
      *  three, it resyncs to whatever the server says. A stale frame can still lose a race; it can no
      *  longer win the war. */
     let stale = 0;
+    /** ⚠️ THIS TAB PINS ITSELF TO ONE MEETING, AND NEVER RENDERS ANOTHER.
+     *
+     *  This surface is SCREEN-SHARED to a customer. Boards used to live in one global document, so a
+     *  second meeting publishing anywhere on the server replaced what this tab was showing — proven
+     *  twice on 2026-08-19, once by a stray probe and once by two bots in one room. A confidentiality
+     *  failure, not a rendering glitch: the other room's decisions, on your screen, mid-call.
+     *
+     *  Pinning on the FIRST frame rather than from the URL is deliberate. The meeting id is Recall's
+     *  bot id and does not exist until the bot has joined, so the launcher cannot put it in the URL it
+     *  opens. The first board to arrive is by definition this tab's meeting. */
+    let pinned: string | null = null;
     const accept = (next: Graph) => {
       if (!Array.isArray(next.nodes)) return;
+      const mid = typeof next.meetingId === "string" ? next.meetingId : "";
+      /** ⚠️ ONLY A REAL MEETING ID PINS. An empty one is the seed board, the pre-call reset, or a
+       *  legacy caller — and pinning to "" would have been fatal in the obvious way: the SSE stream
+       *  seeds every new subscriber with the empty board BEFORE any meeting has published, so the tab
+       *  would have locked onto "" and then refused every genuine frame for the whole call. Exactly
+       *  the permanent-blank-board failure this pin was written to prevent, caused by the pin. */
+      if (mid) {
+        if (pinned === null) pinned = mid;
+        else if (mid !== pinned) {
+          // Refused, loudly in the console and silently on screen: the room must see nothing change.
+          console.warn(`[canvas] ignoring a frame from meeting "${mid}" — this tab is showing "${pinned}"`);
+          return;
+        }
+      } else {
+        /** ⚠️ AN UNOWNED FRAME RELEASES THE PIN, AND THIS IS NOT A DETAIL — IT IS THE LAUNCHER'S FLOW.
+         *
+         *  `Minami Call.command` resets the board and opens this tab BEFORE the bot joins, because the
+         *  meeting id is Recall's bot id and does not exist yet. So the tab's first frame is whatever
+         *  the server still holds — last meeting's board — and without this it would pin to the OLD
+         *  meeting and then reject every frame from the new one, for the whole call.
+         *
+         *  Caught in QA doing exactly that: server showed 1 card, the tab showed "Minami is listening".
+         *  A reset publishes an unowned board, so an unowned frame is the signal to let go. */
+        if (pinned !== null) console.warn(`[canvas] board reset — releasing the pin on "${pinned}"`);
+        pinned = null;
+      }
       const r = next.rev ?? 0;
       /** ⚠️ STRICTLY GREATER, not >=. The poller runs every 4s and hands back the same document when
        *  nothing has changed; accepting an equal rev called setGraph with a NEW OBJECT IDENTITY, which
@@ -133,7 +170,10 @@ export default function CanvasPage() {
      *  A poll every 4s costs one small local request and removes the entire class. SSE stays for
      *  latency; polling is the floor under it. Whichever arrives first wins, and `accept` orders them. */
     const tick = async () => {
-      try { accept((await (await fetch("/api/canvas", { cache: "no-store" })).json()) as Graph); }
+      // Scoped once known. Without this the poller would happily fetch whatever board was published
+      // most recently — the same leak the pin exists to close, arriving by a different route.
+      const q = pinned === null ? "" : `?meeting=${encodeURIComponent(pinned)}`;
+      try { accept((await (await fetch(`/api/canvas${q}`, { cache: "no-store" })).json()) as Graph); }
       catch { /* a failed poll is one stale frame, not a broken board */ }
     };
     void tick();

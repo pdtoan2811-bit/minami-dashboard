@@ -35,16 +35,34 @@ const EMPTY = (): Graph => ({
  *  this module, and a plain module-level `doc` was therefore RESET to empty every time a file was
  *  touched. Observed repeatedly while building — a board with cards on it went blank because a
  *  comment was edited in an unrelated file. */
-let doc: Graph =
-  (globalThis as { __canvasDoc?: Graph }).__canvasDoc ??
-  ((globalThis as { __canvasDoc?: Graph }).__canvasDoc = EMPTY());
-const clients = new Set<(d: Graph) => void>();
+/** ⚠️ ONE BOARD PER MEETING. There used to be exactly one `doc` for the whole server.
+ *
+ *  Sessions were already keyed by meetingId, but everything they produced was flattened into a single
+ *  global document — so two meetings running at once overwrote each other, and the loser's tab, the
+ *  one being SCREEN-SHARED to a customer, rendered the winner's cards. Confirmed on 2026-08-19 twice
+ *  over: a probe under a different meetingId replaced a live 6-card board mid-call, and the same day
+ *  two bots joined one room and ping-ponged the board between them.
+ *
+ *  A board is now stored under the meeting that produced it, and a viewer pins itself to the first
+ *  meeting it sees (see the canvas page). `""` is the legacy bucket for anything publishing without an
+ *  id, which keeps older callers working rather than silently dropping their frames. */
+type Store = { docs: Map<string, Graph>; last: string };
+const store: Store =
+  (globalThis as { __canvasStore?: Store }).__canvasStore ??
+  ((globalThis as { __canvasStore?: Store }).__canvasStore = { docs: new Map([["", EMPTY()]]), last: "" });
+
+const docFor = (id: string | null): Graph =>
+  (id !== null ? store.docs.get(id) : store.docs.get(store.last)) ?? EMPTY();
+
+/** A subscriber, and the meeting it pinned itself to (null = whatever is current). */
+const clients = new Set<{ send: (d: Graph) => void; meeting: string | null }>();
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
 
+  const want = url.searchParams.get("meeting");
   if (url.searchParams.get("stream") !== "1") {
-    return Response.json(doc, { headers: { "cache-control": "no-store" } });
+    return Response.json(docFor(want), { headers: { "cache-control": "no-store" } });
   }
 
   const encoder = new TextEncoder();
@@ -58,8 +76,9 @@ export async function GET(req: Request) {
           /* client vanished mid-write; the cancel() below does the cleanup */
         }
       };
-      send(doc); // seed immediately so a late joiner isn't staring at a blank screen share
-      clients.add(send);
+      send(docFor(want)); // seed immediately so a late joiner isn't staring at a blank screen share
+      const sub = { send, meeting: want };
+      clients.add(sub);
 
       // Proxies and load balancers close an idle event-stream well inside a meeting's length, and a
       // dead canvas on a client's screen is worse than a stale one. A comment frame is ignored by
@@ -75,7 +94,7 @@ export async function GET(req: Request) {
       // Captured for cancel(), below.
       onCancel = () => {
         clearInterval(beat);
-        clients.delete(send);
+        clients.delete(sub);
       };
     },
     /** ⚠️ THIS IS WHERE A DISCONNECTED VIEWER IS ACTUALLY FORGOTTEN.
@@ -129,10 +148,14 @@ export async function POST(req: Request) {
   // A meeting must not open on the last meeting's board. The launcher calls this before the bot
   // joins, so whatever the room sees first is empty rather than a stranger's conversation.
   if (new URL(req.url).searchParams.get("reset") === "1") {
-    doc = { ...EMPTY(), rev: Date.now() };
-    (globalThis as { __canvasDoc?: Graph }).__canvasDoc = doc;
-    for (const send of clients) send(doc);
-    return Response.json({ ok: true, reset: true, rev: doc.rev });
+    // Reset clears EVERY board. The launcher calls this before a bot joins, and "start clean" has to
+    // mean clean — leaving another meeting's board addressable would defeat the point of the reset.
+    const fresh = { ...EMPTY(), rev: Date.now() };
+    store.docs.clear();
+    store.docs.set("", fresh);
+    store.last = "";
+    for (const c of clients) c.send(fresh);
+    return Response.json({ ok: true, reset: true, rev: fresh.rev });
   }
 
   let next: Graph;
@@ -160,9 +183,13 @@ export async function POST(req: Request) {
   // rev at graph-build time, so a repaint built at t=99 can arrive after a judge's t=100 publish —
   // leaving the SERVER on the older board while clients correctly kept the newer one. A reconnect or
   // the polling fallback would then render a board missing the judge's cards.
+  // Revisions are per BOARD. Comparing against a global high-water mark would let a busy meeting's
+  // clock reject a quieter meeting's perfectly valid frames.
+  const mid = typeof next.meetingId === "string" ? next.meetingId : "";
+  const cur = store.docs.get(mid);
   const nextRev = typeof next.rev === "number" ? next.rev : Date.now();
-  if (nextRev < (doc.rev ?? 0)) {
-    return Response.json({ ok: false, error: "stale revision", have: doc.rev, got: nextRev }, { status: 409 });
+  if (nextRev < (cur?.rev ?? 0)) {
+    return Response.json({ ok: false, error: "stale revision", have: cur?.rev, got: nextRev }, { status: 409 });
   }
   /** ⚠️ EQUAL REVS ARE A DROPPED FRAME, AND JUDGES NOW FINISH TOGETHER.
    *
@@ -173,9 +200,15 @@ export async function POST(req: Request) {
    *
    *  Nudging forward keeps the wall-clock meaning (the debug panel reads rev as an age) while
    *  guaranteeing the strict monotonicity the client's guard requires. */
-  const stamped = nextRev <= (doc.rev ?? 0) ? (doc.rev ?? 0) + 1 : nextRev;
-  doc = { ...next, rev: stamped };
-  (globalThis as { __canvasDoc?: Graph }).__canvasDoc = doc;
-  for (const send of clients) send(doc);
-  return Response.json({ ok: true, rev: doc.rev, clients: clients.size });
+  const stamped = nextRev <= (cur?.rev ?? 0) ? (cur?.rev ?? 0) + 1 : nextRev;
+  const saved: Graph = { ...next, rev: stamped, meetingId: mid };
+  store.docs.set(mid, saved);
+  store.last = mid;
+  // Delivered ONLY to viewers of this meeting, plus unpinned ones (a viewer pins on its first frame,
+  // so "unpinned" means it has not seen anything yet).
+  let sent = 0;
+  for (const c of clients) {
+    if (c.meeting === null || c.meeting === mid) { c.send(saved); sent++; }
+  }
+  return Response.json({ ok: true, rev: saved.rev, meetingId: mid, clients: sent });
 }

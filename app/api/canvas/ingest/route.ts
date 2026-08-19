@@ -227,24 +227,11 @@ async function publish(req: Request, s: Session, title?: string) {
     ...(title ? { title } : {}),
     subtitle: `${s.utterances} utterances · ${s.board.cards().length} cards`,
   });
-  /** ⚠️ THERE IS ONLY ONE BOARD DOCUMENT, AND IT HAS NO IDEA WHICH MEETING OWNS IT.
-   *
-   *  Sessions are keyed per meetingId; `/api/canvas` is a single global `doc`. So two meetings running
-   *  at once overwrite each other, and the loser's screen-share shows the winner's cards. Confirmed
-   *  the hard way on 2026-08-19: a probe under a different meetingId replaced a live 6-card board with
-   *  its own, mid-call. Two bots in one room — which happened the same day — reproduces it too.
-   *
-   *  The real fix is a board per meeting, which changes this route, the SSE stream and the client's
-   *  choice of what to render. Until then this cannot be allowed to be SILENT: the takeover is stamped
-   *  and shouted, so a wrong board on a shared screen is attributable in one line instead of being
-   *  mistaken for the judge inventing things. */
-  const g = globalThis as { __canvasOwner?: string };
-  if (g.__canvasOwner && g.__canvasOwner !== s.id) {
-    const why = `board handover: meeting ${g.__canvasOwner} → ${s.id} (ONE global board; the other meeting's screen now shows this one)`;
-    trace("error", why);
-    console.warn(`[ingest] ⚠ ${why}`);
-  }
-  g.__canvasOwner = s.id;
+  /** Every frame says who it belongs to. The server keys boards on this, and a viewer pins itself to
+   *  the first meeting it sees — together that is what stops one meeting's screen-share from ever
+   *  rendering another's cards. Previously this was a single global document and they did exactly
+   *  that: confirmed twice on 2026-08-19, once by a stray probe and once by two bots in one room. */
+  graph.meetingId = s.id;
   try {
     const r = await fetch(new URL("/api/canvas", req.url), {
       method: "POST",

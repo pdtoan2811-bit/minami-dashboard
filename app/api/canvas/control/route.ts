@@ -53,6 +53,10 @@ function localOrigin(req: Request): boolean {
 }
 
 type Session = {
+  /** Set by the ingest route when the session is created. Needed here so a repaint publishes onto the
+   *  board that meeting owns — without it, every dock action (rename, undo, tidy) would land in the
+   *  legacy bucket and a pinned viewer would never see the change. */
+  id?: string;
   board: {
     cards: () => Array<{ id: string; label: string; detail?: string }>;
     reviseById: (r: { id: string; label?: string; detail?: string }) => boolean;
@@ -110,7 +114,7 @@ async function repaint(req: Request, s: Session) {
       // first casualty — 401 on every publish while audio kept flowing, so the shared board simply
       // stopped updating with nothing on screen to say why.
       headers: { "content-type": "application/json", ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
-      body: JSON.stringify(s.board.graph({ status: "live" })),
+      body: JSON.stringify({ ...(s.board.graph({ status: "live" }) as object), meetingId: s.id ?? "" }),
     });
   } catch (e) {
     console.error("[control] repaint failed:", e instanceof Error ? e.message : e);
