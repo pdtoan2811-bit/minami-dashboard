@@ -322,7 +322,10 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
       {/* Opposite corner from the dock, off by default, remembered per browser. This tab is the one
           anh screen-shares in present mode, so the trace is opt-in rather than ambient — but when a
           board goes blank or stale mid-call, this is the difference between guessing and reading. */}
-      <DebugPanel />
+      <DebugPanel
+        clientCards={graph.nodes.filter((n) => n.kind !== "topic").length}
+        clientRev={graph.rev}
+      />
     </div>
   );
 }

@@ -26,10 +26,14 @@ const TINT: Record<TraceEvent["kind"], string> = {
   paint: "#78716c", skip: "#c47f18", error: "#c4486a", command: "#b4638a",
 };
 
-export function DebugPanel() {
+/** What THIS tab currently has on screen, so the panel can compare it against what the server says.
+ *  Passed in rather than re-fetched, because the whole question is whether the rendered board and the
+ *  server agree — asking the server twice could not answer that. */
+export function DebugPanel({ clientCards, clientRev }: { clientCards?: number; clientRev?: number }) {
   const [on, setOn] = useState(false);
   const [events, setEvents] = useState<TraceEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [server, setServer] = useState<{ cards: number; rev: number } | null>(null);
   const box = useRef<HTMLDivElement>(null);
 
   // Remembered per browser: anh turns it on because something is wrong, and a reload in the middle of
@@ -61,6 +65,22 @@ export function DebugPanel() {
         }
         const d = await r.json();
         if (alive && Array.isArray(d.events)) { setError(null); setEvents(d.events); }
+
+        /** ── IS THE SERVER AHEAD OF THIS TAB? ──────────────────────────────────────────────────
+         *
+         *  The failure this answers has happened repeatedly and always looks the same from the
+         *  outside: the board stops growing. That single symptom has had at least four different
+         *  causes — the judge never ran, the publish 401'd, SSE died behind a tunnel, and the client's
+         *  own rev guard rejected every frame forever. The first two mean the server has nothing; the
+         *  last two mean the server has cards THIS TAB IS NOT SHOWING, and no amount of staring at
+         *  the canvas distinguishes them.
+         *
+         *  So: ask the server what it holds, compare it with what is rendered, and state the answer
+         *  plainly. "server 12 · tab 9" turns an hour of guessing into a refresh. */
+        const g = await fetch("/api/canvas", { cache: "no-store" }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+        if (alive && g && Array.isArray(g.nodes)) {
+          setServer({ cards: g.nodes.filter((n: { kind?: string }) => n.kind !== "topic").length, rev: g.rev ?? 0 });
+        }
       } catch (e) {
         // Never rethrown: the trace failing must not affect the board. Shown, though.
         if (alive) setError(`trace unreachable — ${e instanceof Error ? e.message : "network error"}`);
@@ -100,6 +120,25 @@ export function DebugPanel() {
             <span className="flex-1" />
             <button onClick={() => setOn(false)} className="text-[13px] leading-none text-neutral-300 hover:text-neutral-700">×</button>
           </div>
+          {server ? (() => {
+            const behind = clientCards !== undefined && server.cards > clientCards;
+            const ahead = clientCards !== undefined && clientCards > server.cards;
+            return (
+              <div
+                className="mb-1.5 rounded-md px-1.5 py-1 font-mono text-[11px]"
+                style={behind ? { background: "#fdf2f4", color: "#a13650" } : { background: "#f5f5f4", color: "#78716c" }}
+              >
+                {behind
+                  ? `⚠ server has ${server.cards} cards, this tab shows ${clientCards} — ${server.cards - clientCards} not rendered. Reload.`
+                  : ahead
+                    ? `tab shows ${clientCards}, server has ${server.cards} — this tab is stale in the other direction`
+                    : `in sync — server ${server.cards} cards, tab ${clientCards ?? "?"}`}
+                {clientRev !== undefined && server.rev > clientRev
+                  ? `  ·  rev ${Math.round((server.rev - clientRev) / 1000)}s behind`
+                  : ""}
+              </div>
+            );
+          })() : null}
           <div ref={box} className="max-h-[300px] space-y-0.5 overflow-y-auto font-mono text-[11px] leading-[1.45]">
             {events.map((e, i) => (
               <div key={i} className="flex gap-1.5">

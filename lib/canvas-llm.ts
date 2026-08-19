@@ -298,14 +298,34 @@ type CallOpts = {
 async function chat(messages: Msg[], maxTokens: number, timeoutMs = 240_000, opts: CallOpts = {}): Promise<string> {
   let budget = maxTokens;
   let lastErr: Error | null = null;
+  /** ⚠️ `timeoutMs` IS THE TOTAL, NOT THE PER-ATTEMPT ALLOWANCE.
+   *
+   *  It used to be handed to all three attempts in full, so a caller asking for 45s could be held for
+   *  135s — and deriveActions does exactly that: it computes a 45s `deadline`, then only re-checks it
+   *  BETWEEN its own two attempts, with no idea that the call inside had already tripled it.
+   *
+   *  Measured on a live board 2026-08-19, and the arithmetic is unmistakable: judge legs of 124.5s and
+   *  118.0s, a tidy of 132.2s — each almost exactly 3 x their caller's ~45s. Those run on one serial
+   *  chain, so a single stalled leg holds every utterance behind it, the backlog gate then skips
+   *  everything that arrives, and the board stops moving. That is "sometimes it stales".
+   *
+   *  A deadline that a callee may silently multiply is not a deadline. */
+  const deadline = Date.now() + timeoutMs;
   for (let attempt = 0; attempt < 3; attempt++) {
+    const left = deadline - Date.now();
+    // 2s is the floor worth trying at all; below that the attempt would time out before the model
+    // could answer, and burn the tokens anyway.
+    if (left < 2000) break;
     try {
-      const out = await chatOnce(messages, budget, timeoutMs, opts);
+      const out = await chatOnce(messages, budget, left, opts);
       if (out.length > 10) return out;
       if (opts.spend) opts.spend.empties += 1;
     } catch (e) {
       lastErr = e instanceof Error ? e : new Error(String(e));
       if (opts.spend) opts.spend.empties += 1;
+      // A refusal is deterministic for the same input. Retrying buys the identical answer at the
+      // identical price, twice, while the board sits frozen.
+      if ((lastErr as Error & { refused?: boolean }).refused) throw lastErr;
     }
     budget *= 2;
   }
@@ -362,6 +382,22 @@ async function chatOnce(messages: Msg[], maxTokens: number, timeoutMs: number, o
         `max_tokens exhausted before any content: budget ${maxTokens}, ` +
         `${data.usage?.completion_tokens ?? "?"} completion tokens burned on reasoning`,
       );
+    }
+    /** ⚠️ A REFUSAL IS NOT A SHORT ANSWER, AND RETRYING IT IS PURE LATENCY.
+     *
+     *  chat() retries a reply under 10 characters, on the correct theory that it means the budget was
+     *  too small. But a model that DECLINES — because the transcript contains swearing, which real
+     *  meetings are full of — also returns a short reply, with finish_reason "content_filter" or a
+     *  plain "stop". Doubling the token budget cannot talk it into answering: the input is identical,
+     *  so the refusal is identical, three times over.
+     *
+     *  That is the reported "swear words freeze the canvas": one profane utterance turned a 3s judge
+     *  into the full retry ladder, and on a serial chain that stalls every utterance behind it.
+     *  Marked so chat() can stop instead of trying twice more for the same answer. */
+    if (choice?.finish_reason === "content_filter" || (content.length <= 10 && choice?.finish_reason === "stop")) {
+      const e = new Error(`model declined or returned nothing (finish_reason=${choice?.finish_reason})`);
+      (e as Error & { refused?: boolean }).refused = true;
+      throw e;
     }
     return content;
   } finally {
