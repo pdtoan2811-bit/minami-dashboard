@@ -978,7 +978,14 @@ export async function deriveActions(
    *  than any amount of prompt tuning: it names the subject before the first word is spoken. */
   const user =
     (opts.context ? `MEETING CONTEXT — what this call is about. Use these words for topic names.\n${opts.context}\n\n` : "") +
-    (knownTopics.length ? `KNOWN TOPICS — reuse these names when they fit\n${knownTopics.join(", ")}\n\n` : "") +
+    (knownTopics.length
+      ? `KNOWN TOPICS — MOST RECENT FIRST. Reuse one when it genuinely fits.\n${knownTopics.join(", ")}\n\n` +
+        `⚠️ A MEETING MOVES ON. The first name above is what was being discussed a moment ago; the last\n` +
+        `is older and probably finished. If this chunk is not about one of the first few, START A NEW\n` +
+        `TOPIC rather than reaching back for an old one — a card filed under a subject the room left\n` +
+        `twenty minutes ago is worse than a new topic with one card in it. Reaching back is the most\n` +
+        `common way this board goes wrong late in a call.\n\n`
+      : "") +
     (knownCards.length
       ? `${opts.revise ? "CARDS ON THE BOARD — you may point relatesTo at these, revise or merge them, and hang new cards UNDER them" : "CARDS ON THE BOARD — point relatesTo or under at any of these"}\n${knownCards.slice(-25).join("\n")}\n\n`
       : "") +

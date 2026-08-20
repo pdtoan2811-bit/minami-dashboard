@@ -87,13 +87,23 @@ export function createBoard() {
   const edges: NonNullable<Graph["edges"]> = [];
   const topicByName = new Map<string, string>();
   const cardByLabel = new Map<string, string>();
+  /** When each topic last received a card. The board's own sense of what the meeting is ON now.
+   *
+   *  ⚠️ WITHOUT THIS, A TOPIC NEVER GETS OLD. The judge is handed the topic list and told to reuse a
+   *  name when it fits — with no notion of recency, a topic coined in minute three is exactly as
+   *  available in minute thirty-eight as one from a minute ago. Measured on a real 40-minute board:
+   *  cards in the second half attached to topics created on average 26 nodes earlier, up to 48. Anh
+   *  named it on the call: "AI dùng topic cũ, không biết topic hiện tại". */
+  const topicUsed = new Map<string, number>();
   const seenLabels = new Set<string>();
   let seq = 0;
 
+  /** Bumped on every use, so "recent" means recently CHOSEN rather than recently created. */
+  let tick = 0;
   const topicId = (name: string) => {
     const key = name.trim().toLowerCase().slice(0, 40);
     const hit = topicByName.get(key);
-    if (hit) return hit;
+    if (hit) { topicUsed.set(hit, ++tick); return hit; }
 
     // Fuzzy merge before creating. Chunks are judged in parallel, so each starts with whatever topics
     // happened to exist and invents its own name for the same subject — one run produced "OpenAI
@@ -115,6 +125,7 @@ export function createBoard() {
     const id = `t${++seq}`;
     topicByName.set(key, id);
     nodes.push({ id, kind: "topic", label: name.trim().slice(0, 40), parent: "root" });
+    topicUsed.set(id, ++tick);
     return id;
   };
 
@@ -295,7 +306,20 @@ export function createBoard() {
       return dead.map((d) => d.label);
     },
 
-    topicNames: () => nodes.filter((n) => n.kind === "topic" && n.id !== "root").map((n) => n.label),
+    /** Topics MOST RECENTLY USED FIRST, and only the live end of the list.
+     *
+     *  A meeting moves on; the board should offer the judge where the conversation IS, not everywhere
+     *  it has been. The cap matters as much as the order — fourteen candidate topics is an invitation
+     *  to file anything anywhere, and eight of those fourteen held nothing at all. */
+    topicNames: (limit = 8) => {
+      const t = nodes.filter((n) => n.kind === "topic" && n.id !== "root");
+      // Never used ranks by creation, which for a template's seeded agenda is the order anh chose.
+      const rank = (n: GNode) => topicUsed.get(n.id) ?? 0;
+      return [...t].sort((a, b) => rank(b) - rank(a)).slice(0, limit).map((n) => n.label);
+    },
+
+    /** Every topic, oldest first — for the archive and anything that must see the whole board. */
+    allTopicNames: () => nodes.filter((n) => n.kind === "topic" && n.id !== "root").map((n) => n.label),
     cards: () => nodes.filter((n) => n.kind !== "topic"),
     topicId,
     mergeCards,

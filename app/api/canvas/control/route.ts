@@ -67,7 +67,8 @@ type Session = {
     restore: (n: unknown) => boolean;
     topicId: (name: string) => string;
     /** The board's topic names, for saving its shape as a template. */
-    topicNames?: () => string[];
+    topicNames?: (limit?: number) => string[];
+    allTopicNames?: () => string[];
     pruneEmptyTopics?: () => string[];
     apply: (a: Record<string, unknown>, lines: string[]) => unknown;
     graph: (meta?: Record<string, unknown>) => unknown;
@@ -299,7 +300,9 @@ export async function POST(req: Request) {
   if (body.action === "save-template") {
     const name = (body.text || "").trim();
     if (!name) return Response.json({ ok: false, error: "name the template" }, { status: 400 });
-    const topics = (s.board.topicNames?.() ?? []) as string[];
+    // ⚠️ THE WHOLE SHAPE, not the recent end of it. topicNames() is deliberately truncated for the
+    // judge; a template saved from it would quietly lose the topics the meeting opened with.
+    const topics = (s.board.allTopicNames?.() ?? s.board.topicNames?.(99) ?? []) as string[];
     const saved = saveTemplate(name, topics);
     if (!saved) return Response.json({ ok: false, error: "no topics on the board yet" }, { status: 400 });
     return Response.json({ ok: true, template: saved.name, topics: saved.topics });
