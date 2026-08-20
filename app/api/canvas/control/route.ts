@@ -21,6 +21,7 @@
 // `fixes`, so a universal correction made here is not clobbered by the next sync. That is load-
 // bearing: the two writers share a file and only one of them owns each half of it.
 
+import { saveTemplate } from "@/server/canvas-templates.mjs";
 import { loadVocab, saveVocab } from "@/server/canvas-vocab.mjs";
 import { parseTyped, applyCommand, describeCommand, type CommandHost } from "@/lib/canvas-commands";
 
@@ -65,6 +66,8 @@ type Session = {
     removeLast: () => ({ id: string; label: string } | null);
     restore: (n: unknown) => boolean;
     topicId: (name: string) => string;
+    /** The board's topic names, for saving its shape as a template. */
+    topicNames?: () => string[];
     apply: (a: Record<string, unknown>, lines: string[]) => unknown;
     graph: (meta?: Record<string, unknown>) => unknown;
     cards2?: never;
@@ -287,6 +290,20 @@ export async function POST(req: Request) {
   /** LIST THE DICTIONARY. Adding corrections blind is how the same rule gets typed three times and
    *  how anh cannot tell whether a name is already handled. "Is Easy Vision already mapped?" was
    *  unanswerable from inside a call until this existed. */
+  /** Save the shape of the board anh is looking at, so the next call of this kind starts from it.
+   *
+   *  ⚠️ TOPICS ONLY — see server/canvas-templates.mjs. Saving the cards would carry one meeting's
+   *  decisions into the next, arriving on a shared screen looking exactly like things that had just
+   *  been said. The reusable part of a meeting is its shape. */
+  if (body.action === "save-template") {
+    const name = (body.text || "").trim();
+    if (!name) return Response.json({ ok: false, error: "name the template" }, { status: 400 });
+    const topics = (s.board.topicNames?.() ?? []) as string[];
+    const saved = saveTemplate(name, topics);
+    if (!saved) return Response.json({ ok: false, error: "no topics on the board yet" }, { status: 400 });
+    return Response.json({ ok: true, template: saved.name, topics: saved.topics });
+  }
+
   /** Memes on or off, for the rest of this call. */
   if (body.action === "memes") {
     s.memesOff = body.on === false;

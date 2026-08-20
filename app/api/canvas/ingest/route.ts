@@ -30,6 +30,7 @@ import { createBoard, type Board } from "@/lib/canvas-board";
 import { resolveMode } from "@/lib/canvas-modes";
 // Plain ESM helper, shared with the standalone receiver which cannot import TS.
 import { archiveMeeting } from "@/server/canvas-archive.mjs";
+import { getTemplate } from "@/server/canvas-templates.mjs";
 import { asrPrompt, correctLines, loadVocab, saveVocab } from "@/server/canvas-vocab.mjs";
 import { parseCommand, describeCommand, applyCommand, addressesMinami, type Command, type CommandHost } from "@/lib/canvas-commands";
 import { trace } from "@/lib/canvas-trace";
@@ -149,6 +150,8 @@ type Session = {
   stt?: string;
   /** Language pin for this meeting: "vi", "en", or "" for auto-detect. */
   sttLang?: string;
+  /** The template this call started from, if any — recorded so the archive can say so. */
+  template?: string;
   /** Set by "tắt meme" or the dock toggle. Memes are anh's own curation, but a room can still turn
    *  out to be the wrong one — a client joins late, a call turns serious. */
   memesOff?: boolean;
@@ -285,6 +288,8 @@ export async function POST(req: Request) {
   let body: {
     meetingId?: string; speaker?: string | null; audio?: string; format?: string; context?: string;
     speechMs?: number; totalMs?: number; event?: string; title?: string;
+    /** Start from a saved meeting shape — see server/canvas-templates.mjs. */
+    template?: string;
   };
   try { body = await req.json(); } catch { return Response.json({ ok: false, error: "invalid JSON" }, { status: 400 }); }
 
@@ -315,6 +320,16 @@ export async function POST(req: Request) {
   /** SEED — sent once, before the first word. Sets the subject the judge should name topics after,
    *  and opens the board with that topic so the very first card has somewhere sensible to land. */
   if (body.event === "seed") {
+    /** A TEMPLATE IS A HAND-MADE WARM-UP. It seeds the backbone the judge hangs things under —
+     *  "agenda nó khá là rõ… nó cứ pick từ đấy nó đỡ bị lạc". Topics are REAL, not ghosts: anh chose
+     *  them deliberately before the call, which is exactly the difference between a template and the
+     *  AI's guess at one. */
+    const tpl = body.template ? getTemplate(String(body.template)) : null;
+    if (tpl) {
+      for (const t of tpl.topics) s.board.topicId(t);
+      s.template = tpl.name;
+      console.log(`[ingest] template "${tpl.name}": ${tpl.topics.length} topics`);
+    }
     const ctx = (body.context || "").trim().slice(0, 400);
     if (ctx) {
       s.context = ctx;

@@ -355,6 +355,31 @@ for g in json.load(sys.stdin):
 esac
 [ -n "$CTX" ] && dim "context: $CTX"
 
+# ── the shape of the meeting ────────────────────────────────────────────────────────────────────
+# Anh's own reason for wanting these: in a sharing session or a sales call the agenda is known in
+# advance, and without it the judge wanders — "agenda nó khá là rõ… nó cứ pick từ đấy nó đỡ bị lạc".
+# Picking one seeds the topics the board hangs everything under, before a word is spoken.
+TEMPLATE=""
+TPLS="$(curl -s -m 6 "http://127.0.0.1:${PORT}/api/templates" 2>/dev/null \
+  | python3 -c "
+import json,sys
+try: t=json.load(sys.stdin).get('templates',[])
+except Exception: t=[]
+for i,x in enumerate(t,1): print(f\"{i}. {x['name']} — {', '.join(x['topics'][:4])}\")
+" 2>/dev/null || true)"
+if [ -n "$TPLS" ]; then
+  echo
+  b "  start from a shape?"
+  echo "$TPLS" | sed 's/^/     /'
+  dim "enter to skip"
+  read -r -p "  number: " TNUM
+  if [ -n "$TNUM" ]; then
+    TEMPLATE="$(echo "$TPLS" | sed -n "${TNUM}p" | sed 's/^[0-9]*\. //; s/ — .*//')"
+    [ -n "$TEMPLATE" ] && ok "$TEMPLATE"
+  fi
+fi
+export CANVAS_MEETING_TEMPLATE="$TEMPLATE"
+
 curl -s -o /dev/null -X POST "http://127.0.0.1:${PORT}/api/canvas?reset=1" -H "authorization: Bearer ${CANVAS_INGEST_TOKEN:-}"
 echo
 b "  share this tab in Meet"

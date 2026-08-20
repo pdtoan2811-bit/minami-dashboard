@@ -32,7 +32,9 @@ import { checkBudget, recordMeeting } from "../server/canvas-budget.mjs";
 const MEET = process.argv[2];
 const KEY = process.env.RECALL_API_KEY;
 const REGION = process.env.RECALL_REGION || "ap-northeast-1";
-const RECEIVER = process.env.RECALL_RECEIVER_URL || "";   // wss://…  (the tunnel to recall-receiver)
+const RECEIVER = process.env.RECALL_RECEIVER_URL || "";
+/** A saved meeting shape to start from — see server/canvas-templates.mjs. Chosen in the launcher. */
+const TEMPLATE = process.env.CANVAS_MEETING_TEMPLATE || "";   // wss://…  (the tunnel to recall-receiver)
 const CANVAS = process.env.RECALL_CANVAS_URL || "";       // https://… (the tunnel to /canvas)
 const INGEST = process.env.CANVAS_INGEST_URL || "";
 const INGEST_TOKEN = process.env.CANVAS_INGEST_TOKEN || "";
@@ -185,7 +187,7 @@ if (INGEST) {
       const r = await fetch(INGEST, {
         method: "POST",
         headers: { "content-type": "application/json", ...(INGEST_TOKEN ? { authorization: `Bearer ${INGEST_TOKEN}` } : {}) },
-        body: JSON.stringify({ meetingId: "pending", event: "seed", context: CONTEXT }),
+        body: JSON.stringify({ meetingId: "pending", event: "seed", context: CONTEXT, template: TEMPLATE }),
       });
       const d = await r.json().catch(() => null);
       log(`context: ${CONTEXT.slice(0, 70)}${d?.topic ? `  → topic "${d.topic}"` : ""}`);
