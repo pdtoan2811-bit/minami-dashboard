@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_GRAPH, type GNode, type Graph } from "@/lib/canvas-graph";
 import { GraphCanvas } from "@/components/canvas/GraphCanvas";
-import { CutScene, useCutScenes, type Moment } from "@/components/canvas/CutScene";
+import { CutScene, useCutScenes, pickMeme, MOMENT_MEANING, type Moment } from "@/components/canvas/CutScene";
 import { Presence } from "@/components/canvas/Presence";
 import { CommandDock } from "@/components/canvas/CommandDock";
 import { DebugPanel } from "@/components/canvas/DebugPanel";
@@ -38,7 +38,6 @@ export default function CanvasPage() {
   const seeded = useRef(false);
   /** Rendering for the Recall bot's 1280x720 @ 15fps stream rather than for a screen. */
   const [broadcast, setBroadcast] = useState(false);
-
   useEffect(() => {
     const q = new URL(window.location.href).searchParams;
     if (q.get("broadcast") === "1") {
@@ -209,6 +208,17 @@ export default function CanvasPage() {
 function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "thinking" | "idle" }) {
   const status = graph.status ?? "live";
 
+  /** Which memes exist. null until loaded, which behaves identically to having collected none:
+   *  every moment falls back to the emoji scene. That is the whole reason anh can fill one folder at
+   *  a time instead of all eleven before seeing anything. */
+  const [memes, setMemes] = useState<Record<string, string[]> | null>(null);
+  useEffect(() => {
+    fetch("/api/memes", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setMemes(d?.memes ?? {}))
+      .catch(() => setMemes({}));
+  }, []);
+
   // Read in an EFFECT, never during render.
   //
   // This was `typeof window !== "undefined" && new URL(location.href)...` inline in the JSX, which is
@@ -228,7 +238,54 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
   // emoji) pair and the queue remembers what it has already played, so each reaction gets exactly one
   // cut scene for the life of the board however many times the frame repeats it.
   const scenes = useCutScenes();
+
+  /** The meme for the moment on screen, chosen ONCE per moment.
+   *
+   *  ⚠️ Keyed on the moment ID, not the moment object. pickMeme() records what it returns so a call
+   *  never repeats an image — so calling it twice for one moment would burn two memes for one scene
+   *  and, on a folder of two, exhaust it instantly. */
+  const sceneId = scenes.current?.id ?? null;
+  const sceneEmoji = scenes.current?.emoji ?? "";
+  const memeFor = useMemo(
+    () => (sceneId ? pickMeme(sceneEmoji, memes) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sceneId is the identity that matters
+    [sceneId, memes],
+  );
+
+  /** ?memes=preview — play every moment back to back, so a collection can be judged in one sitting.
+   *
+   *  Without this, "do my memes land?" needs a real meeting AND the judge to mark the right card.
+   *  The cut scene is the one surface here whose entire job is how it feels, so it is the one that
+   *  most needs to be watchable on demand. 6.2s per moment: 5s hold plus the queue's cooldown. */
+
   const { offer } = scenes;
+  /** ⚠️ THE COUNTER LIVES IN A REF, AND THE DEPENDENCY IS `offer`, NOT `scenes`.
+   *
+   *  Both halves were wrong first time, and together they made the preview play exactly one scene and
+   *  then stop — verified in a browser: no meme for twenty seconds after the first.
+   *
+   *  `useCutScenes()` returns a fresh object each render, so an effect depending on `scenes` re-runs
+   *  constantly. That re-ran the body, which reset `let i = 0`, so every subsequent offer reused the
+   *  id `preview-0` — and the queue deliberately ignores an id it has already shown. The preview
+   *  starved itself on its own duplicate ids. `offer` is a useCallback with no deps, so depending on
+   *  it directly makes this effect run once. */
+  const previewN = useRef(0);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (new URL(window.location.href).searchParams.get("memes") !== "preview") return;
+    const glyphs = Object.keys(MOMENT_MEANING);
+    const tick = () => {
+      const n = previewN.current++;
+      const emoji = glyphs[n % glyphs.length];
+      // No label: in a real meeting that line is the CARD's text, so passing the meaning here just
+      // printed it twice ("LEFT HANGING" over "Left hanging"). Omitting it matches the production
+      // shape and keeps the preview honest about the composition.
+      offer([{ id: `preview-${n}`, emoji }]);
+    };
+    tick();
+    const t = setInterval(tick, 6200);
+    return () => clearInterval(t);
+  }, [offer]);
   useEffect(() => {
     const moments: Moment[] = [];
     for (const n of graph.nodes ?? []) {
@@ -344,7 +401,7 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
         </div>
       ) : null}
       {graph.reaction ? <Reaction kind={graph.reaction.kind} label={graph.reaction.label} /> : null}
-      <CutScene moment={scenes.current} onDone={scenes.done} />
+      <CutScene moment={scenes.current} onDone={scenes.done} meme={memeFor} />
       {/* Always shown on the live surface, defaulting to "listening": this is the bot's own screen
           share, and it is ALWAYS listening while it is in the room. Passing nothing meant the one
           indicator that answers "is this working" was absent from the only view that needed it.

@@ -43,9 +43,51 @@ const MAX_QUEUED = 2;
 
 export type Moment = { id: string; emoji: string; label?: string };
 
+/** Which folder under public/memes/ each glyph draws from. The names are anh's, chosen while
+ *  collecting — this map is the only place the two vocabularies meet. */
+const FOLDER: Record<string, string> = {
+  "🤝": "agreement", "💯": "full-agreement", "✅": "settled", "💡": "new-idea",
+  "🔥": "strongest-claim", "😮": "that-landed", "👏": "worth-marking", "❓": "left-hanging",
+  "🎉": "milestone", "🙌": "everyone-aligned", "✨": "worth-keeping",
+};
+
+/** A meme needs reading time an emoji does not — a punchline, a caption, a beat of animation. */
+const MEME_DURATION = 5000;
+
+type MemeIndex = Record<string, string[]>;
+
+/** Everything played in THIS call, so a folder is exhausted before anything repeats.
+ *
+ *  ⚠️ Keyed by URL, and duplicates across folders are therefore NOT deduped by this alone — the same
+ *  Drake gif copied into agreement/ and settled/ has two URLs. That is deliberate for now: comparing
+ *  file CONTENT would need hashing every file, and anh explicitly chose "just copy the file". The
+ *  practical effect is small (two of eleven folders would have to fire in one call), and the fix if
+ *  it ever bites is a hash in the API route, not here. */
+const played = new Set<string>();
+
+/** Pick a meme for a moment, or null to fall back to the emoji scene.
+ *
+ *  Random, because the folder IS the taxonomy: if an image is in agreement/ it fits any agreement,
+ *  so choosing between them is a matter of variety rather than accuracy. No model call, no latency,
+ *  on a path that must never stall a live meeting. */
+export function pickMeme(emoji: string, index: MemeIndex | null): string | null {
+  const folder = FOLDER[emoji];
+  if (!folder || !index) return null;
+  const all = index[folder];
+  if (!all?.length) return null;
+  const fresh = all.filter((u) => !played.has(u));
+  // Exhausted rather than empty: once every meme in the folder has played, start the folder again
+  // rather than silently dropping to the emoji scene for the rest of the call.
+  const pool = fresh.length ? fresh : all;
+  if (!fresh.length) for (const u of all) played.delete(u);
+  const chosen = pool[Math.floor(Math.random() * pool.length)];
+  played.add(chosen);
+  return chosen;
+}
+
 /** What each glyph is FOR. The emoji alone is ambiguous at 140px — 🔥 could be "this is great" or
  *  "this is on fire, badly" — so the scene always names the reason underneath it. */
-const MEANING: Record<string, string> = {
+export const MOMENT_MEANING: Record<string, string> = {
   "🔥": "Strongest claim yet",
   "😮": "That landed",
   "💡": "New idea",
@@ -59,7 +101,7 @@ const MEANING: Record<string, string> = {
   "✅": "Settled",
 };
 
-export function CutScene({ moment, onDone }: { moment: Moment | null; onDone: () => void }) {
+export function CutScene({ moment, onDone, meme }: { moment: Moment | null; onDone: () => void; meme?: string | null }) {
   // REDUCED MOTION IS NOT A SHORTER CUT SCENE — it is a still one.
   //
   // The global rule in globals.css clamps every animation to 1ms, which is right for a slide-in and
@@ -77,13 +119,25 @@ export function CutScene({ moment, onDone }: { moment: Moment | null; onDone: ()
 
   useEffect(() => {
     if (!moment) return;
-    const t = setTimeout(onDone, still ? STILL_DURATION : DURATION);
+    // A meme holds longer than a glyph — see MEME_DURATION. Reduced motion still shortens it: the
+    // preference is about movement, and a looping gif is movement.
+    const t = setTimeout(onDone, still ? STILL_DURATION : meme ? MEME_DURATION : DURATION);
     return () => clearTimeout(t);
-  }, [moment, onDone, still]);
+  }, [moment, onDone, still, meme]);
 
   if (!moment) return null;
-  const meaning = MEANING[moment.emoji] ?? "Reaction";
-  const anim = (name: string) => (still ? undefined : `${name} ${DURATION}ms cubic-bezier(0.22, 1, 0.36, 1) both`);
+  const meaning = MOMENT_MEANING[moment.emoji] ?? "Reaction";
+  /** ⚠️ THE KEYFRAMES MUST RUN FOR EXACTLY AS LONG AS THE SCENE IS HELD.
+   *
+   *  These animations END AT OPACITY 0 — the exit is the tail of the keyframe, not a separate step.
+   *  So hardcoding DURATION here while holding a meme for MEME_DURATION meant the animation finished
+   *  at 3.4s and the remaining 1.6s was a dimmed board with an invisible meme on it. Caught in a
+   *  screenshot: a ghosted gif behind fully-legible cards, which reads as a rendering fault rather
+   *  than a moment.
+   *
+   *  One number drives both, so the two can never disagree again. */
+  const hold = meme ? MEME_DURATION : DURATION;
+  const anim = (name: string) => (still ? undefined : `${name} ${hold}ms cubic-bezier(0.22, 1, 0.36, 1) both`);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-40 grid place-items-center" aria-live="polite">
@@ -107,12 +161,27 @@ export function CutScene({ moment, onDone }: { moment: Moment | null; onDone: ()
             aria-hidden
           />
         )}
-        <span
-          className="text-[132px] leading-none"
-          style={{ animation: anim("cutGlyph"), filter: "drop-shadow(0 18px 34px rgba(16,24,40,0.16))" }}
-        >
-          {moment.emoji}
-        </span>
+        {meme ? (
+          /* ⚠️ THE LABEL STAYS UNDERNEATH. A meme alone is a reaction with no stated cause — funny to
+             whoever gets the reference, opaque to the client in the room who is watching their own
+             meeting. The image carries the feeling; the line below still says what the moment WAS.
+             Capped rather than full-bleed for the same reason the glyph is: the board must stay
+             visible as shape around it, so the scene reads as the room dimming rather than a modal. */
+          // eslint-disable-next-line @next/next/no-img-element -- animated gif; next/image would kill the animation
+          <img
+            src={meme}
+            alt=""
+            className="max-h-[52vh] max-w-[62vw] rounded-2xl object-contain"
+            style={{ animation: anim("cutGlyph"), boxShadow: "0 26px 60px -20px rgba(16,24,40,0.42)" }}
+          />
+        ) : (
+          <span
+            className="text-[132px] leading-none"
+            style={{ animation: anim("cutGlyph"), filter: "drop-shadow(0 18px 34px rgba(16,24,40,0.16))" }}
+          >
+            {moment.emoji}
+          </span>
+        )}
 
         <div className="mt-7 flex flex-col items-center gap-2" style={{ animation: anim("cutText") }}>
           <span className="text-[13px] font-bold uppercase tracking-[0.18em] text-neutral-400">

@@ -25,3 +25,7 @@ next-env.d.ts
 .next-task/
 .next-verify/
 .next-meet/
+
+# Meme database — collected locally, deliberately NOT in this PUBLIC repo.
+# The app reads it from disk; the images are yours and stay on your machine.
+public/memes/
