@@ -294,7 +294,11 @@ esac
 # faster and more accurate than retyping a name his own notes already hold.
 echo
 b "  what is this call about?"
-PROJECTS="$(node bin/vault-projects.mjs 2>/dev/null || true)"
+# Same rule as the learning loop below: absent vault, absent feature, no noise. The `|| true` already
+# swallowed the error, but testing for the file says WHY there is no list instead of showing an empty
+# prompt that looks like a bug.
+PROJECTS=""
+[ -f bin/vault-projects.mjs ] && PROJECTS="$(node bin/vault-projects.mjs 2>/dev/null || true)"
 if [ -n "$PROJECTS" ]; then
   echo "$PROJECTS" | sed 's/^/     /'
   echo
@@ -429,13 +433,23 @@ done
 # A call that never reaches the vault may as well not have happened — the vault is where anh actually
 # thinks, and "losing the thread" is the bottleneck this whole product exists to fix. One way only:
 # meeting → vault, never the reverse, because speech-to-text mishears and must never edit his prose.
+# ⚠️ THE WHOLE BLOCK IS OPTIONAL, because this script also ships in a standalone repo that has no
+# vault and no bin/meeting-to-vault.mjs. Calling a missing script printed a node stack trace at the
+# end of every meeting there — the last thing a first-time user sees, and it reads as "this is
+# broken" rather than "this part is not for you". A feature that depends on a personal notes system
+# must be absent quietly when that system is absent.
 LATEST="$(ls -t "$HOME/.minami/meetings" 2>/dev/null | grep -v '^index.md$' | head -1)"
-if [ -n "$LATEST" ]; then
+if [ -n "$LATEST" ] && [ -f bin/meeting-to-vault.mjs ]; then
   echo
-  b "  syncing to Second Brain"
+  b "  syncing to your notes"
   node bin/meeting-to-vault.mjs "$LATEST" ${PROJECT_SLUG:+--project "$PROJECT_SLUG"} 2>&1 | sed 's/^/  /'
   # Reaches every device, and is what makes the note real rather than a file on one Mac.
-  bash "$HOME/secondBrain/bin/sync.sh" "minami: $LATEST" >/dev/null 2>&1 && dim "vault synced" || dim "vault sync skipped"
+  if [ -x "$HOME/secondBrain/bin/sync.sh" ]; then
+    bash "$HOME/secondBrain/bin/sync.sh" "minami: $LATEST" >/dev/null 2>&1 && dim "vault synced" || dim "vault sync skipped"
+  fi
+elif [ -n "$LATEST" ]; then
+  echo
+  dim "meeting saved to ~/.minami/meetings/$LATEST"
 fi
 
 echo
