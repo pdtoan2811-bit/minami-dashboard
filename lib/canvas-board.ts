@@ -391,6 +391,33 @@ export function createBoard() {
      *  no timestamps. Topics are never removed: a topic usually has surviving children, and undoing a
      *  card should not orphan the rest of a branch. Edges touching the node go with it, or the board
      *  is left drawing a line to something that no longer exists. */
+    /** Delete one specific card, by id or by exact label.
+     *
+     *  ⚠️ SAME BOOKKEEPING AS removeLast, AND FOR THE SAME REASONS — see the note there. A node that
+     *  leaves without its index entries is worse than one that stays: `seenLabels` would refuse to
+     *  ever recreate that card, so a point deleted by mistake could never be said again, silently,
+     *  for the rest of the meeting.
+     *
+     *  Topics are refused. Deleting one orphans everything under it, and the thing anh wants gone is
+     *  always a card — a topic that should not exist is empty, and `prune` is for that. */
+    removeById: (idOrLabel: string) => {
+      const want = idOrLabel.trim().toLowerCase();
+      const i = nodes.findIndex(
+        (n) => n.kind !== "topic" && (n.id === idOrLabel || n.label.trim().toLowerCase() === want),
+      );
+      if (i < 0) return null;
+      const dying = nodes[i];
+      for (const n of nodes) if (n.parent === dying.id) n.parent = dying.parent;
+      const [gone] = nodes.splice(i, 1);
+      const key = gone.label.trim().toLowerCase();
+      seenLabels.delete(key);
+      if (cardByLabel.get(key) === gone.id) cardByLabel.delete(key);
+      for (let j = edges.length - 1; j >= 0; j--) {
+        if (edges[j].from === gone.id || edges[j].to === gone.id) edges.splice(j, 1);
+      }
+      return gone;
+    },
+
     removeLast: () => {
       for (let i = nodes.length - 1; i >= 0; i--) {
         if (nodes[i].kind === "topic") continue;

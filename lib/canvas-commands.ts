@@ -26,6 +26,7 @@ export type Command =
   | { kind: "card"; cardKind: "note" | "decision" | "action" | "question"; text: string }
   | { kind: "fix"; from: string; to: string }
   | { kind: "memes"; on: boolean }
+  | { kind: "delete"; text: string }
   | { kind: "undo" }
   | { kind: "tidy" };
 
@@ -158,6 +159,7 @@ export function describeCommand(c: Command): string {
     case "topic": return `topic: ${c.text}`;
     case "card": return `${c.cardKind}: ${c.text}`;
     case "memes": return c.on ? "memes on" : "memes off";
+    case "delete": return `delete "${c.text}"`;
     case "fix": return `${c.from} → ${c.to}`;
     case "undo": return "remove last card";
     case "tidy": return "tidy the board";
@@ -176,6 +178,7 @@ export function describeCommand(c: Command): string {
  *  The vocabulary write is a CALLBACK rather than an import, so this module stays free of node:fs and
  *  the caller keeps ownership of scope — ingest teaches the universal file, the dock can choose. */
 export type CommandBoard = {
+  removeById?: (idOrLabel: string) => { id: string; label: string } | null;
   topicId: (name: string) => string;
   cards: () => Array<{ id: string; label: string; detail?: string }>;
   reviseById: (r: { id: string; label?: string; detail?: string }) => boolean;
@@ -199,6 +202,10 @@ export function applyCommand(
   c: Command,
   rememberFix: (from: string, to: string) => void,
 ): string {
+  if (c.kind === "delete") {
+    const gone = host.board.removeById?.(c.text);
+    return gone ? `deleted "${gone.label}"` : `no card called "${c.text}"`;
+  }
   if (c.kind === "memes") {
     host.memesOff = !c.on;
     return c.on ? "memes on" : "memes off";

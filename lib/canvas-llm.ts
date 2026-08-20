@@ -891,6 +891,7 @@ export async function interpretRequest(
     `  {"kind":"topic","text":"the new topic name"}\n` +
     `  {"kind":"tidy"}                      — clean up / reorganise the board\n` +
     `  {"kind":"undo"}                      — remove the last thing\n` +
+    `  {"kind":"delete","text":"<exact card label>"}  — remove a SPECIFIC card they named\n` +
     `  {"kind":"memes","on":true|false}     — turn the fun/meme reactions on or off\n` +
     `  {"kind":"react","emoji":"🎉"}         — mark this as a moment; pick from 🔥 😮 💡 ❓ 👏 🤝 💯 ✅ 🎉 🙌 ✨\n` +
     `  {"kind":"none"}                      — they were not asking it to do anything\n\n` +

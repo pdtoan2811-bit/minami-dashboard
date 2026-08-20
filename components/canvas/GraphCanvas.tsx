@@ -369,10 +369,33 @@ export function GraphCanvas({ graph, thinking, fit }: {
   const placedRef = useRef<Placed[]>(placed);
   placedRef.current = placed;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSelected(null); };
+    /** ⚠️ DELETE ACTS ON A SELECTION, NEVER ON A GUESS. A bare keystroke that removed "the last card"
+     *  would fire while anh is talking and take away whatever had just landed — which on a shared
+     *  screen is indistinguishable from the board malfunctioning. Selecting first makes the target
+     *  explicit and visible to the room before anything disappears.
+     *
+     *  Ignored while typing: the dock's inputs live in the same document, and backspacing a typo in
+     *  the rename field must not delete a card behind it. */
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setSelected(null); return; }
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (!selected) return;
+      const node = byId.get(selected);
+      if (!node || node.kind === "topic") return;   // topics go via prune, see canvas-board
+      e.preventDefault();
+      const label = node.label;
+      setSelected(null);
+      void fetch("/api/canvas/control", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "delete", text: label }),
+      }).catch(() => { /* the board is authoritative; a failed delete simply leaves the card */ });
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [selected, byId]);
   // A card that vanishes mid-meeting (merged away by tidy) must not leave the board dimmed forever
   // around a selection that no longer exists.
   useEffect(() => { if (selected && !byId.has(selected)) setSelected(null); }, [selected, byId]);

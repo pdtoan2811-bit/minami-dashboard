@@ -62,6 +62,7 @@ type Session = {
   board: {
     cards: () => Array<{ id: string; label: string; detail?: string }>;
     reviseById: (r: { id: string; label?: string; detail?: string }) => boolean;
+    removeById?: (idOrLabel: string) => { id: string; label: string } | null;
     react?: (id: string, emoji: string) => boolean;
     removeLast: () => ({ id: string; label: string } | null);
     restore: (n: unknown) => boolean;
@@ -306,6 +307,18 @@ export async function POST(req: Request) {
     const saved = saveTemplate(name, topics);
     if (!saved) return Response.json({ ok: false, error: "no topics on the board yet" }, { status: 400 });
     return Response.json({ ok: true, template: saved.name, topics: saved.topics });
+  }
+
+  /** Delete one card, named or selected. Undo-able: it goes on the same stack as `undo`, so a
+   *  mis-click is one click back rather than a point lost. */
+  if (body.action === "delete") {
+    const target = (body.text || "").trim();
+    if (!target) return Response.json({ ok: false, error: "which card?" }, { status: 400 });
+    const gone = s.board.removeById?.(target) ?? null;
+    if (!gone) return Response.json({ ok: false, error: "no card by that name" }, { status: 404 });
+    (s.undone ??= []).push(gone);
+    await repaint(req, s);
+    return Response.json({ ok: true, deleted: gone.label });
   }
 
   /** Remove topics that hold nothing — see canvas-board.pruneEmptyTopics. Safe mid-call: an empty
