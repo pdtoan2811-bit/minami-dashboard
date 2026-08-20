@@ -795,7 +795,13 @@ export async function POST(req: Request) {
         // Labels already on the board, so the judge can hang this utterance UNDER an earlier point
         // instead of starting a fourth parallel thread about the same thing. Capped inside
         // deriveActions at the last 25 — a whole meeting of labels costs more and decides less.
-        s.board.cards().map((c) => c.label),
+        /** ⚠️ AN EDITED CARD IS MARKED, not silently identical to a generated one.
+         *
+         *  The judge is told to revise and merge freely, which is right for its own output and wrong
+         *  for a person's. Without a marker anh's correction is just another label to improve, and it
+         *  reverts within a chunk or two — visibly, on a shared screen. The pin is the whole reason
+         *  editing is worth having. */
+        s.board.cards().map((c) => ((c as { edited?: boolean }).edited ? `${c.label}  [EDITED BY A PERSON — do not change]` : c.label)),
         {
           cfg: mode.derive, spend, revise: true, context: s.context,
           /** The lines immediately BEFORE this chunk. `said` was already appended to s.lines above,

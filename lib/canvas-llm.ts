@@ -1015,6 +1015,11 @@ REVISE when this chunk makes an existing card clearer, sharper, or corrects it. 
 mangles names and numbers on first mention and usually gets them right the second time, and people
 routinely start a thought vaguely and only land it a minute later. Both are revisions, not new cards.
 MERGE when two cards on the board turned out to be the same point said twice.
+
+⚠️ NEVER revise, merge away or re-word a card marked [EDITED BY A PERSON]. Someone in the room read
+that card, disagreed with it, and typed what was actually meant. They were there and you were not.
+You may still hang new cards under it, and you may contradict it with a NEW card if the conversation
+later says otherwise — but the words themselves are theirs and stay exactly as written.
 Name a target EXACTLY as it appears above or the action is discarded. Prefer revising an existing
 card over adding one that is nearly the same.\n\n`
       : "") +
@@ -1233,7 +1238,9 @@ Use ONLY ids from the list. Return {"revise":[],"merge":[]} if the board is genu
 but read it properly first: a board of a dozen cards written a few seconds apart by someone hearing
 the meeting for the first time usually has at least one duplicate or one fuzzy label.`,
       },
-      { role: "user", content: `BOARD\n${list}\n\nRECENT TRANSCRIPT\n${recent.slice(-2500)}` },
+      { role: "user", content: `⚠️ A card marked [EDITED BY A PERSON] was corrected by hand during the call. Never merge it away or
+re-word it — you may still nest things under it. Leave its text exactly as written.\n\n` +
+    `BOARD\n${list}\n\nRECENT TRANSCRIPT\n${recent.slice(-2500)}` },
     ],
     5000,
     120_000,

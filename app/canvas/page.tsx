@@ -105,7 +105,11 @@ export default function CanvasPage() {
      *  Pinning on the FIRST frame rather than from the URL is deliberate. The meeting id is Recall's
      *  bot id and does not exist until the bot has joined, so the launcher cannot put it in the URL it
      *  opens. The first board to arrive is by definition this tab's meeting. */
-    let pinned: string | null = null;
+    /** ⚠️ AN EXPLICIT ?meeting= WINS OVER THE FIRST FRAME. Pinning on first frame is right for the
+     *  launcher, which cannot know the id in advance — but it made a deliberate URL useless: opening
+     *  ?meeting=X still showed whichever meeting published most recently, which is exactly wrong when
+     *  the reason you typed the id was to look at something other than the live call. */
+    let pinned: string | null = q.get("meeting");
     const accept = (next: Graph) => {
       if (!Array.isArray(next.nodes)) return;
       const mid = typeof next.meetingId === "string" ? next.meetingId : "";
@@ -193,7 +197,7 @@ export default function CanvasPage() {
     void tick();
     const poll = setInterval(tick, 4000);
 
-    const es = new EventSource("/api/canvas?stream=1");
+    const es = new EventSource(`/api/canvas?stream=1${pinned ? `&meeting=${encodeURIComponent(pinned)}` : ""}`);
     es.onmessage = (e) => {
       feed.current = "live";
       try { accept(JSON.parse(e.data) as Graph); }

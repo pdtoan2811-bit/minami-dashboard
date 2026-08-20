@@ -62,6 +62,13 @@ export type GNode = {
    *  be mistaken for something someone said: they render ghosted, they are wiped the instant the
    *  first real card lands, and they are stripped before anything is archived. */
   placeholder?: boolean;
+  /** Edited by hand during the call.
+   *
+   *  ⚠️ THIS IS GROUND TRUTH, AND THE JUDGE IS TOLD SO. A person who retypes a card was in the room,
+   *  heard what was actually said, and disagreed with the machine. Letting the next chunk revise that
+   *  away — which it would, since revising is what it is told to do — makes editing pointless and
+   *  faintly insulting: the correction visibly reverts on a screen everyone is watching. */
+  edited?: boolean;
   /** Emoji reactions accumulated on this node during the call. The fun layer, attached to meaning
    *  rather than floating: a 🎉 sits ON the decision that earned it. */
   reactions?: { emoji: string; count: number }[];

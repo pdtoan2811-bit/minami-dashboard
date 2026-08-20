@@ -400,6 +400,32 @@ export function createBoard() {
      *
      *  Topics are refused. Deleting one orphans everything under it, and the thing anh wants gone is
      *  always a card — a topic that should not exist is empty, and `prune` is for that. */
+    /** Replace a card's words with a person's, and mark it as theirs.
+     *
+     *  Goes through the same index maintenance as a revision — the label is a key in `cardByLabel`
+     *  and `seenLabels`, so changing it without updating both leaves later `under`/merge targets
+     *  resolving to a name nobody can see. */
+    editById: (id: string, next: { label?: string; detail?: string }) => {
+      const node = nodes.find((n) => n.id === id || n.label.trim().toLowerCase() === id.trim().toLowerCase());
+      if (!node || node.kind === "topic") return null;
+      if (next.label?.trim()) {
+        const label = next.label.trim().slice(0, 120);
+        const oldKey = node.label.trim().toLowerCase();
+        const newKey = label.toLowerCase();
+        // Refuse a rename onto another live card, for the same reason reviseCard does.
+        const clash = cardByLabel.get(newKey);
+        if (clash && clash !== node.id && nodes.some((x) => x.id === clash)) return null;
+        seenLabels.delete(oldKey);
+        if (cardByLabel.get(oldKey) === node.id) cardByLabel.delete(oldKey);
+        node.label = label;
+        seenLabels.add(newKey);
+        cardByLabel.set(newKey, node.id);
+      }
+      if (next.detail !== undefined) node.detail = next.detail.trim().slice(0, 200) || undefined;
+      node.edited = true;
+      return node;
+    },
+
     removeById: (idOrLabel: string) => {
       const want = idOrLabel.trim().toLowerCase();
       const i = nodes.findIndex(

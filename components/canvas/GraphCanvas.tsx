@@ -11,8 +11,10 @@
 // on focus and pulls back when focus changes, which is what makes the map feel like it's following
 // the conversation rather than being dragged.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CardActions } from "@/components/canvas/CardActions";
 import {
-  KIND_SIZE, branchColor, layout, nodeHeight, widthOf, type Graph, type Placed,
+  KIND_SIZE, branchColor, layout, nodeHeight, widthOf,
+  type Graph, type Placed, type GNode,
 } from "@/lib/canvas-graph";
 import { EDGE_LABEL, planEdges } from "@/lib/edge-routing";
 import { GraphNode } from "@/components/canvas/GraphNode";
@@ -757,7 +759,11 @@ export function GraphCanvas({ graph, thinking, fit }: {
           </div>
         ))}
       </div>
-    </div>
+          {/* ⚠️ NOT `present` ONLY. The bot's 720p render never receives clicks, so this is invisible
+          there anyway, and gating it would mean the surface anh actually drives is the one without
+          controls. */}
+      <CardActions node={selected ? (byId.get(selected) as unknown as GNode | undefined) ?? null : null} onClose={() => setSelected(null)} />
+</div>
   );
 }
 

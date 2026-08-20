@@ -63,6 +63,7 @@ type Session = {
     cards: () => Array<{ id: string; label: string; detail?: string }>;
     reviseById: (r: { id: string; label?: string; detail?: string }) => boolean;
     removeById?: (idOrLabel: string) => { id: string; label: string } | null;
+    editById?: (id: string, next: { label?: string; detail?: string }) => { id: string; label: string } | null;
     react?: (id: string, emoji: string) => boolean;
     removeLast: () => ({ id: string; label: string } | null);
     restore: (n: unknown) => boolean;
@@ -307,6 +308,17 @@ export async function POST(req: Request) {
     const saved = saveTemplate(name, topics);
     if (!saved) return Response.json({ ok: false, error: "no topics on the board yet" }, { status: 400 });
     return Response.json({ ok: true, template: saved.name, topics: saved.topics });
+  }
+
+  /** Replace a card's words with a person's. Marks it edited, which pins it against the judge and
+   *  the tidy pass — see GNode.edited. */
+  if (body.action === "edit") {
+    const id = (body.from || "").trim();
+    if (!id) return Response.json({ ok: false, error: "which card?" }, { status: 400 });
+    const done = s.board.editById?.(id, { label: body.text, detail: body.to });
+    if (!done) return Response.json({ ok: false, error: "no such card, or that name is taken" }, { status: 404 });
+    await repaint(req, s);
+    return Response.json({ ok: true, edited: done.label });
   }
 
   /** Delete one card, named or selected. Undo-able: it goes on the same stack as `undo`, so a
