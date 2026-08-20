@@ -32,6 +32,7 @@ const DRY = process.argv.includes("--dry");
  *  private by construction — including every future file, which is the point. */
 const ALLOW_DIRS = [
   "app/canvas",
+  "app/api/templates",
   "app/api/canvas",
   "app/api/memes",
   "components/canvas",
@@ -46,9 +47,16 @@ const ALLOW_FILES = [
   "server/canvas-vocab.mjs", "server/canvas-vocab.d.mts",
   "server/canvas-entities.mjs", "server/canvas-entities.d.mts",
   "server/canvas-budget.mjs",
+  /** ⚠️ ADDED AFTER AN AUDIT CAUGHT IT MISSING. Two shipped routes import this, and it was not on the
+   *  list — so the standalone repo would have failed to compile the moment templates landed. That is
+   *  the failure mode of an allowlist: it is correct by default and silently incomplete the day a new
+   *  file joins the subsystem. Worth the trade, but it needs auditing whenever the pipeline grows. */
+  "server/canvas-templates.mjs", "server/canvas-templates.d.mts",
   // the operator surface
   "bin/minami-meet.mjs", "bin/Minami Call.command", "bin/meme-preview.command",
   "bin/minami-setup.mjs", "bin/meetings.mjs", "bin/stt-compare.mjs",
+  // The pre-flight is exactly what a newcomer needs: it proves their keys work by USING them.
+  "bin/Minami Preflight.command", "bin/preflight-chunk.mjs",
   /** ⚠️ THE STYLESHEET IS NOT OPTIONAL, AND OMITTING IT SHIPPED A REPO THAT COULD NOT RUN.
    *
    *  The cut scene calls its keyframes BY NAME — cutWash, cutRing, cutGlyph, cutText — and they live

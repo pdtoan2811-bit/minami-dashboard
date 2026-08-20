@@ -373,6 +373,9 @@ if [ -n "$TPLS" ]; then
   echo "$TPLS" | sed 's/^/     /'
   dim "enter to skip"
   read -r -p "  number: " TNUM
+  # Digits only. `sed -n "abcp"` prints its own usage error into the middle of a launch, which reads
+  # as a crash at exactly the moment anh is about to dial into a call.
+  case "$TNUM" in (*[!0-9]*) TNUM="" ;; esac
   if [ -n "$TNUM" ]; then
     TEMPLATE="$(echo "$TPLS" | sed -n "${TNUM}p" | sed 's/^[0-9]*\. //; s/ — .*//')"
     [ -n "$TEMPLATE" ] && ok "$TEMPLATE"
