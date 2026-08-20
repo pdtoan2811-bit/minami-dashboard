@@ -114,7 +114,13 @@ export function archiveMeeting({ title, startedAt, minutes, graph, transcript = 
 
     const speakers = [...new Set(transcript.map((l) => l.split(":")[0]).filter((s) => s && s.length < 40))];
 
-    writeFileSync(join(dir, "notes.md"), notesMarkdown({ title, startedAt, minutes, speakers, graph, models }));
+    /** ⚠️ THE NOTE GETS THE DERIVED NAME TOO, not the raw title.
+     *
+     *  `name` already falls back to the biggest topic when the title is the generic word "Meeting" —
+     *  that is why the FOLDER is called 2026-08-20_1158-Second-Brain. But the note was handed the raw
+     *  `title`, so the same meeting opened with "# Meeting" while its own directory knew better. The
+     *  file you actually read was the one place the good name did not reach. */
+    writeFileSync(join(dir, "notes.md"), notesMarkdown({ title: name, startedAt, minutes, speakers, graph, models }));
     writeFileSync(
       join(dir, "canvas.json"),
       JSON.stringify({ meetingId, title, startedAt, minutes, cost, models, graph }, null, 2),
