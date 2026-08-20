@@ -30,7 +30,18 @@ const FILE = process.env.CANVAS_VOCAB_FILE || `${process.env.HOME}/.minami/canva
 /** Seeded from the terms already observed being mangled in real meetings. */
 const SEED = {
   terms: [
-    "Minami", "mind map", "canvas", "Recall.ai", "Ownego", "qone", "QSortby",
+    /** ⚠️ ORDER IS NOT COSMETIC — asrPrompt sends only the FIRST 40 and the rest never reach the ear.
+     *
+     *  "Claude" and "Anthropic" sat far down this list and were cut, while "CLAUDE.md" survived. So
+     *  the ear was handed a list whose only legal Claude-shaped spellings were a filename and two
+     *  compounds, and it wrote what it was allowed to write: "còn Claude thì để hỏi nhanh" came back
+     *  as "còn CLAUDE.md thì để hỏi nhanh", and on the next pass even "Claude Code" became
+     *  "CLAUDE.md Code".
+     *
+     *  A spelling list promotes anything it omits to whatever it contains. Where a short name and a
+     *  longer one are both said, the SHORT one matters more — it is said far more often, and it is
+     *  the one with somewhere wrong to land. */
+    "Claude", "Claude Code", "Anthropic", "Minami", "mind map", "canvas", "Recall.ai", "Ownego", "qone", "QSortby",
     /** ⚠️ "Easy Vision AI" WAS SEEDED HERE AS IF IT WERE THE PRODUCT NAME. It is not — it is the
      *  MISHEARING of it. The vault's own project note says `title: Ecvision` and never once says
      *  "Easy Vision", yet this list taught the ear the wrong spelling on every single call, then the
@@ -50,8 +61,13 @@ const SEED = {
     "workflow", "agent", "context", "memory", "deploy", "vector search", "embedding",
     "prompt", "token", "latency", "endpoint", "webhook", "repo", "branch", "commit",
     "database", "schema", "migration", "cache", "queue", "pipeline", "transcript",
-    "diarization", "Claude Code", "Claude CLI", "CLAUDE.md", "Cursor", "Figma", "Notion",
+    "diarization",     /** ⚠️ "CLAUDE.md" IS DELIBERATELY NOT HERE. It is a filename: almost never said out loud, and
+     *  close enough to "Claude" that its presence in a spelling list corrupts the far more common
+     *  word. It stays in `fixes` below — "cloud md" → CLAUDE.md — which is where a rarely-spoken
+     *  spelling belongs: applied when it is actually heard, never offered as a candidate. */
+    "Claude CLI", "Cursor", "Figma", "Notion",
     "Obsidian", "Shopify", "Astro", "Next.js", "Remotion", "Playwright", "Supabase",
+
   ],
   fixes: {
     // Every one of these was observed in a real transcript, not imagined.

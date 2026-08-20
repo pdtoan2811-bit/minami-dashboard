@@ -670,8 +670,14 @@ WHAT YOU ARE READING — a live speech-to-text transcript, not writing
 It is imperfect in two specific ways, and both are your problem to handle:
 
 1. WORDS ARE MISHEARD, especially names, products and numbers, and especially on first mention.
-   If a word looks like a mangled version of a name you can see in KNOWN NAMES or on the board, it
-   almost certainly is that name — use the correct spelling. If a phrase is garbled beyond reading,
+   If a word is GARBLED — not a word anyone would write — and it resembles a name in KNOWN NAMES,
+   it is probably that name; use the correct spelling. "cloud cli" is Claude CLI.
+   ⚠️ BUT A SHORTER REAL NAME IS NOT A MANGLED LONGER ONE. If what was said is itself a perfectly
+   good word or product name, leave it exactly as it is, even when a longer entry in the list looks
+   similar. "Claude" is not a mis-hearing of "CLAUDE.md"; "deploy" is not "deployment pipeline". The
+   list exists to fix spelling, never to promote a word into a different thing — a card that renames
+   what someone said is worse than one that never mentions it.
+   If a phrase is garbled beyond reading,
    do not guess what it might have been and do not build a card on it. A card invented from noise is
    worse than a missing card: it is put on a screen in front of the people who were talking.
 
