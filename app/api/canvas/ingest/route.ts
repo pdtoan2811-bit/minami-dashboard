@@ -25,13 +25,13 @@
 // The TIDY pass now runs continuously in the background (see TIDY_EVERY) — it is the counterweight
 // that makes judging every utterance affordable, and it had never once run during a meeting.
 
-import { deriveActions, glossaryFrom, noSpend, refineBoard, transcribe, warmUpCards, type RawAction } from "@/lib/canvas-llm";
+import { deriveActions, glossaryFrom, interpretRequest, noSpend, refineBoard, transcribe, warmUpCards, type RawAction } from "@/lib/canvas-llm";
 import { createBoard, type Board } from "@/lib/canvas-board";
 import { resolveMode } from "@/lib/canvas-modes";
 // Plain ESM helper, shared with the standalone receiver which cannot import TS.
 import { archiveMeeting } from "@/server/canvas-archive.mjs";
 import { asrPrompt, correctLines, loadVocab, saveVocab } from "@/server/canvas-vocab.mjs";
-import { parseCommand, describeCommand, applyCommand, type Command, type CommandHost } from "@/lib/canvas-commands";
+import { parseCommand, describeCommand, applyCommand, addressesMinami, type Command, type CommandHost } from "@/lib/canvas-commands";
 import { trace } from "@/lib/canvas-trace";
 import { createEntityIndex, type EntityIndex } from "@/server/canvas-entities.mjs";
 
@@ -564,14 +564,49 @@ export async function POST(req: Request) {
   const armed = !!s.commandUntil && Date.now() < s.commandUntil;
   const commands: Command[] = [];
   const plain: string[] = [];
+  /** Addressed Minami, matched no verb. These get a second, semantic reading below. */
+  const unrecognised: string[] = [];
   for (const line of heard) {
     const c = parseCommand(line) ?? (armed ? parseCommand(`Minami ${line}`) : null);
     if (c) {
       commands.push(c);
       console.log(`[command]${armed ? " (armed)" : ""} ${describeCommand(c)}`);
       trace("command", `${armed ? "" : "(unarmed) "}${describeCommand(c)}`);
+    } else {
+      // Still transcript either way — a request is also something that was said, and the judge may
+      // legitimately make a card from it.
+      plain.push(line);
+      if (addressesMinami(line)) unrecognised.push(line);
     }
-    else plain.push(line);
+  }
+
+  /** ⚠️ SPOKEN TO, NOT UNDERSTOOD — the case that used to be silence.
+   *
+   *  The verb table matches a fixed list of openings, so anything phrased differently fell through as
+   *  though nobody had spoken: "thỉnh thoảng thì nó bắt được". Worse, a vocabulary you must recite is
+   *  a vocabulary you must PERFORM in front of a client — "cái hệ thống command có vẻ nó hơi lộ".
+   *
+   *  So a line that clearly addressed Minami and matched nothing gets read for INTENT instead. Off
+   *  the response path, like the judge, for the same reason: this must never be why a chunk is slow.
+   *  It applies to the live board when it lands, which is a second or two later — the same latency a
+   *  card already has. */
+  if (unrecognised.length) {
+    const line = unrecognised[unrecognised.length - 1];
+    void interpretRequest(line, {
+      cfg: mode.derive, spend,
+      topics: s.board.topicNames(),
+      cards: s.board.cards().map((c) => c.label),
+    })
+      .then(async (raw) => {
+        if (!raw || s.ended) return;
+        const c = raw as unknown as Command;
+        const host: CommandHost = s as unknown as CommandHost;
+        const said = applyCommand(host, c, (from, to) => { s.fixes = { ...(s.fixes ?? {}), [from.toLowerCase()]: to }; });
+        console.log(`[command] (understood) ${said}`);
+        trace("command", `understood: ${said}`);
+        await publish(req, s, body.title);
+      })
+      .catch(() => { /* an unread request is exactly what it was before */ });
   }
   // One click, one command. Leaving the window open would turn the rest of the sentence — and the
   // rest of the meeting's small talk — into commands.

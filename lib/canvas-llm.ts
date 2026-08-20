@@ -850,6 +850,59 @@ const ACTIONS_SCHEMA = {
   },
 } as const;
 
+/** WHAT DID HE ACTUALLY ASK FOR — a semantic reading of a line addressed to Minami.
+ *
+ *  ⚠️ THE SECOND ATTEMPT, NEVER THE FIRST. The regex verb table stays exactly where it is: it is
+ *  instant, free, and right about the phrasings anh uses most. This runs only when Minami was
+ *  clearly spoken to and none of those patterns matched — the case that used to be silence.
+ *
+ *  The complaint was precise: "thỉnh thoảng thì nó bắt được" (sometimes it catches it) and "cái hệ
+ *  thống command có vẻ nó hơi lộ" (the command system is a bit conspicuous). Both come from the same
+ *  root — a fixed vocabulary forces you to remember and then PERFORM the magic words in front of
+ *  people. Understanding the request instead means "Minami làm cho anh một cái card về pricing" and
+ *  "Minami ghi lại cái này" are the same act, and neither has to be recited.
+ *
+ *  Returns null generously. A line addressed to Minami that is not a request — "Minami đang vẽ đấy",
+ *  said ABOUT it to someone else — must do nothing, and doing nothing is always the safe answer.
+ */
+export async function interpretRequest(
+  line: string,
+  opts: { cfg?: CanvasMode["derive"]; spend?: Spend; topics?: string[]; cards?: string[] } = {},
+): Promise<null | Record<string, unknown>> {
+  const user =
+    `Someone in a meeting spoke to an assistant called Minami. What are they asking it to DO?\n\n` +
+    `THEY SAID: ${line.slice(0, 400)}\n\n` +
+    (opts.topics?.length ? `TOPICS ON THE BOARD: ${opts.topics.slice(0, 12).join(", ")}\n` : "") +
+    (opts.cards?.length ? `CARDS ON THE BOARD: ${opts.cards.slice(-10).join(" | ")}\n` : "") +
+    `\nReturn ONE of these, as JSON:\n` +
+    `  {"kind":"card","cardKind":"note|decision|action|question|risk|milestone","text":"…"}\n` +
+    `  {"kind":"topic","text":"the new topic name"}\n` +
+    `  {"kind":"tidy"}                      — clean up / reorganise the board\n` +
+    `  {"kind":"undo"}                      — remove the last thing\n` +
+    `  {"kind":"memes","on":true|false}     — turn the fun/meme reactions on or off\n` +
+    `  {"kind":"react","emoji":"🎉"}         — mark this as a moment; pick from 🔥 😮 💡 ❓ 👏 🤝 💯 ✅ 🎉 🙌 ✨\n` +
+    `  {"kind":"none"}                      — they were not asking it to do anything\n\n` +
+    `RULES\n` +
+    `- "text" must be in the SAME LANGUAGE they spoke, tightened to one clear line, max ~12 words.\n` +
+    `- Strip the address: "Minami làm cho anh một cái card về pricing" -> text is about pricing only.\n` +
+    `- If they are talking ABOUT Minami rather than TO it, return {"kind":"none"}.\n` +
+    `- If you are unsure what they want, return {"kind":"none"}. Doing nothing is safe; guessing is not.`;
+  try {
+    const out = await chat(
+      [{ role: "system", content: "You return only JSON." }, { role: "user", content: user }],
+      600, 9_000,
+      { model: opts.cfg?.model, spend: opts.spend },
+    );
+    const first = out.indexOf("{"), last = out.lastIndexOf("}");
+    if (first < 0 || last <= first) return null;
+    const parsed = JSON.parse(out.slice(first, last + 1));
+    if (!parsed || typeof parsed.kind !== "string" || parsed.kind === "none") return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 /** WARM-UP CARDS from the meeting context, before anyone has spoken.
  *
  *  ⚠️ THESE ARE A MIMIC, NOT A PREDICTION, and the prompt has to say so or the model writes confident

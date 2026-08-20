@@ -54,6 +54,17 @@ function fold(s: string): { folded: string; map: number[] } {
  *  yet — a missed command is worse than a missed word, because anh will assume the feature is broken. */
 const WAKE = /\b(minami|mi\s*nami|mi\s*na\s*mi|minamino|midami|my\s*nami)\b[\s,.:!–—-]*/;
 
+/** Was Minami spoken to at all?
+ *
+ *  ⚠️ THIS IS THE DIFFERENCE BETWEEN "not for me" AND "I did not understand". The verb table matches
+ *  a fixed list of openings, so anything phrased differently — "Minami làm cho anh một cái card về
+ *  pricing" — fell through as though nobody had spoken. Reported directly: "thỉnh thoảng thì nó bắt
+ *  được", sometimes it catches it. Knowing the line WAS addressed is what lets a second, semantic
+ *  attempt happen instead of silence. */
+export function addressesMinami(line: string): boolean {
+  return WAKE.test(fold(line).folded);
+}
+
 /** Longest patterns first: "new topic" must win over "note", and "khong phai" must be tried before a
  *  bare capture verb swallows the whole sentence. */
 const VERBS: Array<{ re: RegExp; make: (payload: string) => Command | null }> = [
