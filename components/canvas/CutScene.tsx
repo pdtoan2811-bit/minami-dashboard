@@ -41,7 +41,18 @@ const COOLDOWN = 2600;
 /** Anything past this in one burst is filed to the cards and never shown big. */
 const MAX_QUEUED = 2;
 
-export type Moment = { id: string; emoji: string; label?: string };
+export type Moment = {
+  id: string;
+  emoji: string;
+  label?: string;
+  /** The card's own detail line — WHY this moment happened, in the speakers' own words.
+   *
+   *  ⚠️ Without it the scene announces that Minami reacted and never says to what. "WORTH MARKING"
+   *  over a gif tells a room the machine had a feeling; it does not tell them which thing they just
+   *  said earned it, which is the entire value of marking a moment in front of the people who made
+   *  it. The label is the claim, this is the substance. */
+  detail?: string;
+};
 
 /** Which folder under public/memes/ each glyph draws from. The names are anh's, chosen while
  *  collecting — this map is the only place the two vocabularies meet. */
@@ -209,6 +220,18 @@ export function CutScene({ moment, onDone, meme }: { moment: Moment | null; onDo
           {moment.label ? (
             <span className="max-w-[min(680px,72vw)] text-center text-[26px] font-semibold leading-snug tracking-[-0.01em] text-neutral-800">
               {moment.label}
+            </span>
+          ) : null}
+          {/* Quieter and smaller than the label on purpose: a cut scene is read at a glance from
+              across a video call, so the hierarchy has to survive being skimmed. The label is what
+              was decided; this is what was said about it. Clamped to two lines — past that it stops
+              being a caption and starts being a card, which the board already renders. */}
+          {moment.detail ? (
+            <span
+              className="max-w-[min(620px,68vw)] text-center text-[16px] leading-snug text-neutral-500"
+              style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+            >
+              {moment.detail}
             </span>
           ) : null}
         </div>

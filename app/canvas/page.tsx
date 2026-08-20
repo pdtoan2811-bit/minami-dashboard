@@ -23,6 +23,21 @@ import { TranscriptPanel, type DebugLine, type Report, type Segment } from "@/co
  *  NOT the demo graph. Seeding with DEMO_GRAPH meant the bot screen-shared a fictional pilot meeting
  *  into a real room until the first SSE frame arrived — and a placeholder that looks exactly like
  *  real output is the worst kind. Empty is honest. */
+/** Stand-in card text for ?memes=preview, one per moment — see the note where it is used. */
+const PREVIEW_CARDS: Record<string, [string, string]> = {
+  "🤝": ["Chốt dùng Hetzner cho staging", "Cả hai bên đồng ý sau khi so chi phí với box hiện tại."],
+  "💯": ["Ai cũng đồng ý bỏ bước duyệt thủ công", "Ba người xác nhận cùng lúc — không ai phản đối."],
+  "✅": ["Deploy vào thứ sáu", "Đã chốt lịch, Tùng phụ trách phần vector search."],
+  "💡": ["Dùng transcript cũ để test lại pipeline", "Không cần chờ họp thật mới biết ear có đúng không."],
+  "🔥": ["Chi phí giảm ba lần nếu bỏ reasoning tokens", "Đo trên cùng một prompt: 15s xuống 3.3s."],
+  "😮": ["Mất 23% chunk trong cuộc họp hôm qua", "56 trên 246 chunk không tới được canvas."],
+  "👏": ["Tùng tự viết xong phần schema migration", "Không ai nhờ, làm luôn trong buổi tối."],
+  "❓": ["Có nên giữ transcript trong repo không?", "Chưa ai trả lời — để lại cho buổi sau."],
+  "🎉": ["Meme cut scene chạy được rồi", "Từ folder tới màn hình, không cần họp thật để test."],
+  "🙌": ["Cả phòng thống nhất bỏ bản Enterprise", "Không còn ai giữ ý kiến ngược lại."],
+  "✨": ["\"Board là bộ nhớ, không phải bản ghi\"", "Câu này đáng giữ lại cho phần positioning."],
+};
+
 const BLANK: Graph = { rev: 0, title: "Meeting", status: "live", nodes: [{ id: "root", kind: "topic", label: "Meeting" }], edges: [] };
 
 export default function CanvasPage() {
@@ -291,10 +306,14 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
     const tick = () => {
       const n = previewN.current++;
       const emoji = glyphs[n % glyphs.length];
-      // No label: in a real meeting that line is the CARD's text, so passing the meaning here just
-      // printed it twice ("LEFT HANGING" over "Left hanging"). Omitting it matches the production
-      // shape and keeps the preview honest about the composition.
-      offer([{ id: `preview-${n}`, emoji }]);
+      /** Representative card text, not the meaning line.
+       *
+       *  The preview showed a bare meme with only "WORTH MARKING" above it, because passing the
+       *  meaning as the label printed it twice. Blank is no better: a scene judged without the words
+       *  a real one carries is not the scene that will play in a meeting. These read like cards this
+       *  board actually produces, so what anh watches is what he will get. */
+      const sample = PREVIEW_CARDS[emoji];
+      offer([{ id: `preview-${n}`, emoji, label: sample?.[0], detail: sample?.[1] }]);
     };
     tick();
     // ⚠️ MUST EXCEED MEME_DURATION + COOLDOWN (7500 + 2600). Offer faster than scenes can play and
@@ -307,7 +326,7 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
     const moments: Moment[] = [];
     for (const n of graph.nodes ?? []) {
       for (const r of n.reactions ?? []) {
-        moments.push({ id: `${n.id}:${r.emoji}`, emoji: r.emoji, label: n.label });
+        moments.push({ id: `${n.id}:${r.emoji}`, emoji: r.emoji, label: n.label, detail: n.detail });
       }
     }
     if (moments.length) offer(moments);
