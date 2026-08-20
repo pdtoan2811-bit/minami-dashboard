@@ -708,8 +708,12 @@ memorable thing this board does, and also the easiest thing to ruin by overusing
   🙌 the whole room converged, not just two people
   ✨ worth remembering later — a phrasing or insight to keep, even if nothing was decided
 
-Set it to null on almost every card. Roughly one card in six should carry one — an emoji on every
-card means none of them is a moment. But DO set it when people actually agree: that is the single
+About one card in THREE should carry one. Not every card — an emoji on everything means none of them
+is a moment — but be generous rather than sparing. This was tuned to one in six and measured too
+quiet in real use: a thirteen-minute call produced almost no cut scenes, and the room noticed the
+board was accurate long before it noticed the board was alive. A meeting has more genuine moments in
+it than one every six cards, and the cost of marking one that was merely good is a few seconds of
+screen; the cost of missing the moment everyone felt is the whole point of the feature. But DO set it when people actually agree: that is the single
 most common thing worth marking in a meeting, and a board that never reacts to an agreement is
 missing the moment it exists to catch.
 

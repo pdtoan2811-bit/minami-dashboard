@@ -36,10 +36,17 @@ const DURATION = 3400;
 /** Reduced-motion hold. Shorter because none of the 3.4s is arrival or exit any more — it is all
  *  hold, and a still image needs only long enough to be read. */
 const STILL_DURATION = 2200;
-/** Minimum quiet between two cut scenes. Long enough that two in a row read as two events. */
-const COOLDOWN = 2600;
-/** Anything past this in one burst is filed to the cards and never shown big. */
-const MAX_QUEUED = 2;
+/** Minimum quiet between two cut scenes. Long enough that two in a row read as two events.
+ *
+ *  ⚠️ RAISING THE JUDGE'S EMOJI RATE DOES NOTHING ON ITS OWN. A scene now holds 7.5s, and anything
+ *  offered while one is playing beyond MAX_QUEUED is RETIRED rather than deferred — so asking the
+ *  judge for more moments without widening this just throws more of them away, silently, and the
+ *  board looks exactly as quiet as before. The two numbers have to move together. */
+const COOLDOWN = 1800;
+/** Anything past this in one burst is filed to the cards and never shown big. Three rather than two:
+ *  a lively stretch of meeting genuinely produces three things worth marking, and at 7.5s + 1.8s a
+ *  burst of three costs ~28s of screen — noticeable, bounded, and still not a slideshow. */
+const MAX_QUEUED = 3;
 
 export type Moment = {
   id: string;
