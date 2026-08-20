@@ -49,6 +49,15 @@ const ALLOW_FILES = [
   // the operator surface
   "bin/minami-meet.mjs", "bin/Minami Call.command", "bin/meme-preview.command",
   "bin/minami-setup.mjs", "bin/meetings.mjs", "bin/stt-compare.mjs",
+  /** ⚠️ THE STYLESHEET IS NOT OPTIONAL, AND OMITTING IT SHIPPED A REPO THAT COULD NOT RUN.
+   *
+   *  The cut scene calls its keyframes BY NAME — cutWash, cutRing, cutGlyph, cutText — and they live
+   *  here, as do .canvas-surface, .broadcast and the light-surface input colours. Without it the
+   *  board renders unstyled and every cut scene animates to nothing. It is 911 lines of which only
+   *  ~49 are canvas-specific; the rest is dashboard styling that is harmless, and cherry-picking CSS
+   *  by hand is an excellent way to silently break a visual system. Whole file, scrubbed like the
+   *  rest. */
+  "app/globals.css",
 ];
 
 /** ⚠️ DELIBERATELY ABSENT, and each for a reason:
@@ -203,6 +212,105 @@ if (existsSync(join(SRC, "public/memes/README.md"))) {
  *  make the standalone repo unmaintainable: every improvement lost on the next push from upstream.
  *  The CODE is owned by minami-meet and overwritten every time; the PACKAGING is owned by the repo. */
 const scaffold = {
+  /** ⚠️ WITHOUT THESE THE REPO IS NOT A PROJECT, IT IS A FOLDER OF FILES.
+   *
+   *  The first sync shipped 54 files and no package.json, tsconfig, next.config, postcss config or
+   *  root layout — so `npm install` had nothing to install, `@/` resolved to nothing, and Next
+   *  refused to start for want of app/layout.tsx. It passed a privacy audit and could not run. A
+   *  standalone repo that does not start is worse than no repo: it wastes the time of everyone who
+   *  clones it and it makes the project look abandoned on arrival. */
+  "package.json": JSON.stringify({
+    name: "minami-meet",
+    version: "0.1.0",
+    private: false,
+    description: "A bot joins your Google Meet, listens, and draws a live mind map you screen-share back",
+    scripts: {
+      dev: "next dev",
+      build: "next build",
+      start: "next start",
+      receiver: "node server/recall-receiver.mjs",
+    },
+    // Only what the shipped code imports. Verified by grepping the extracted tree rather than
+    // copied from upstream, which carries a dashboard's worth of dependencies this does not use.
+    dependencies: { next: "^15.5.22", react: "19.0.0", "react-dom": "19.0.0" },
+    devDependencies: {
+      "@tailwindcss/postcss": "^4.0.0", "@types/node": "^22", "@types/react": "^19",
+      "@types/react-dom": "^19", tailwindcss: "^4.0.0", typescript: "^5",
+    },
+  }, null, 2) + "\n",
+
+  "tsconfig.json": JSON.stringify({
+    compilerOptions: {
+      target: "ES2022", lib: ["dom", "dom.iterable", "esnext"], allowJs: true, skipLibCheck: true,
+      strict: true, noEmit: true, esModuleInterop: true, module: "esnext",
+      moduleResolution: "bundler", resolveJsonModule: true, isolatedModules: true,
+      jsx: "preserve", incremental: true,
+      plugins: [{ name: "next" }],
+      // The @/ alias every shipped file imports through. Without this nothing resolves.
+      paths: { "@/*": ["./*"] },
+    },
+    include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+    exclude: ["node_modules"],
+  }, null, 2) + "\n",
+
+  "next.config.mjs": `/** @type {import('next').NextConfig} */
+// Deliberately minimal. Upstream carries a webpack override that cuts an unrelated subsystem out of
+// the edge bundle; none of that code is here, so shipping the workaround would just be cargo cult.
+const nextConfig = {
+  // Lets a second instance use its own build dir, so the meeting app and any other Next app on the
+  // machine do not fight over .next.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
+};
+export default nextConfig;
+`,
+
+  "postcss.config.mjs": `const config = { plugins: { "@tailwindcss/postcss": {} } };
+export default config;
+`,
+
+  "app/layout.tsx": `import type { Metadata } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "minami-meet",
+  description: "A live mind map of your meeting",
+};
+
+/** ⚠️ The canvas is a LIGHT surface inside a dark shell, and globals.css is written for exactly that
+ *  arrangement — including the rule that gives form controls a dark colour on the light board. Change
+ *  the classes here and the cut scene and the command dock change with them. */
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" className="dark">
+      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">{children}</body>
+    </html>
+  );
+}
+`,
+
+  LICENSE: `MIT License
+
+Copyright (c) ${new Date().getFullYear()} minami-meet contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`,
+
   ".gitignore": `node_modules/\n.next/\n.next-*/\n.env.local\n*.log\n\n# Bring your own memes. The folders ship; the images are yours.\npublic/memes/**/*.gif\npublic/memes/**/*.png\npublic/memes/**/*.jpg\npublic/memes/**/*.webp\n`,
 
   ".env.example": `# The two keys this needs, and nothing else.\n\n# https://recall.ai — puts a bot in the call and streams per-participant audio\nRECALL_API_KEY=\nRECALL_REGION=us-west-2\n\n# https://openrouter.ai — the ear (audio in) and the judge (cards out)\nOPENROUTER_API_KEY=\n\n# Any long random string. Shared by the receiver and the app; without it ingest is refused.\nCANVAS_INGEST_TOKEN=\n\n# Optional. Defaults are in lib/canvas-modes.ts and are the ones actually in use.\n# CANVAS_STT_MODEL=omni:google/gemini-3-flash-preview\n# CANVAS_SILENCE_MS=1000\n`,
