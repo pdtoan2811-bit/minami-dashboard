@@ -47,6 +47,10 @@ const COOLDOWN = 1800;
  *  a lively stretch of meeting genuinely produces three things worth marking, and at 7.5s + 1.8s a
  *  burst of three costs ~28s of screen — noticeable, bounded, and still not a slideshow. */
 const MAX_QUEUED = 3;
+/** How long a moment may wait for the queue before it stops being a moment. Past this it is dropped
+ *  rather than played late: a cut scene for something said two minutes ago confuses a room more than
+ *  it delights it. */
+const MAX_DEFER = 90_000;
 
 export type Moment = {
   id: string;
@@ -256,6 +260,8 @@ export function useCutScenes() {
   const [current, setCurrent] = useState<Moment | null>(null);
   const queue = useRef<Moment[]>([]);
   const shown = useRef(new Set<string>());
+  /** When each moment was first offered — see the deferral note in offer(). */
+  const firstSeen = useRef(new Map<string, number>());
   const lastEnded = useRef(0);
   /** Bumped whenever the queue gains something, purely to re-run the advance effect below. The queue
    *  itself is a ref — it must survive a remount — and a ref changing cannot wake an effect. */
@@ -265,9 +271,25 @@ export function useCutScenes() {
     let added = false;
     for (const m of moments) {
       if (shown.current.has(m.id) || queue.current.some((q) => q.id === m.id)) continue;
+      // First time this moment has been offered. The graph is re-sent whole on every frame, so this
+      // is what lets a deferred moment be told apart from a stale one later.
+      if (!firstSeen.current.has(m.id)) firstSeen.current.set(m.id, Date.now());
       if (queue.current.length < MAX_QUEUED) {
         queue.current.push(m);
         added = true;
+      } else if (Date.now() - (firstSeen.current.get(m.id) ?? 0) < MAX_DEFER) {
+        /** ⚠️ DEFERRED, NOT RETIRED — and this was the "memes stopped firing" bug.
+         *
+         *  Overflow used to be marked shown, i.e. dropped forever. That is right for a burst of five
+         *  from one relate pass, and badly wrong for the way moments actually arrive now: the graph is
+         *  re-sent WHOLE on every frame, so a tab that connects or reloads mid-call offers every
+         *  reaction on the board at once. Three played and everything else was burned — permanently,
+         *  silently, including moments that had never been seen.
+         *
+         *  Leaving it unqueued costs nothing: the next frame is seconds away and will offer it again.
+         *  The anti-slideshow intent is preserved by MAX_DEFER instead — a moment that has been
+         *  waiting too long has stopped being a moment, and only THEN is it dropped. */
+        continue;
       } else {
         // Overflow is RETIRED, not deferred. The graph is re-sent whole on every frame, so a moment
         // merely skipped comes back on the next render and plays later — turning one six-reaction

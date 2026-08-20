@@ -204,12 +204,19 @@ export function createBoard() {
    *  A topic and a card sharing a label meant the wrong node was edited or destroyed, and the caller
    *  was told it succeeded. Passing the node it already found removes the round trip entirely. */
   const reviseCard = (
-    a: { target?: string; label?: string; detail?: string; state?: string; kind?: string },
+    a: { target?: string; label?: string; detail?: string; state?: string; kind?: string; emoji?: string },
     direct?: GNode,
   ) => {
     const id = direct ? direct.id : cardByLabel.get((a.target ?? "").trim().toLowerCase());
     const node = direct ?? (id ? nodes.find((n) => n.id === id) : undefined);
     if (!node) return false;
+    /** ⚠️ A REVISION MAY ALSO MARK A MOMENT, and this used to be thrown away.
+     *
+     *  `emoji` was honoured only where a card is CREATED, so the judge marking an existing card —
+     *  which is what it does when a point it already captured turns out to be the important one —
+     *  produced nothing. Later in a call almost every action is a revise rather than a new card, so
+     *  the moments quietly dried up exactly as the meeting got good. */
+    if (a.emoji && !node.reactions?.length) node.reactions = [{ emoji: a.emoji, count: 1 }];
     if (a.label) {
       const next = a.label.slice(0, 90);
       // Refuse a relabel that would collide with a DIFFERENT live card. cardByLabel.set would
