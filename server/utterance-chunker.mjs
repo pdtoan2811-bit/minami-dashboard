@@ -141,6 +141,50 @@ function rms(buf, from, to) {
  *  wrapping it costs 44 bytes and removes ffmpeg from the live path entirely — no subprocess per
  *  chunk, which on a CAX11 running the bot and the pipeline together is the difference between a
  *  spawn storm and arithmetic. */
+/** LOUDER, BUT NEVER CLIPPED — gain applied to an utterance before the ear hears it.
+ *
+ *  Asked for as "increase volume 150% to 200%" to fix mishearings, and the instinct is right: a quiet
+ *  utterance is genuinely harder to transcribe. A FIXED multiplier is not, and would make the problem
+ *  worse on exactly the chunks that are currently fine — 16-bit PCM saturates at ±32767, so doubling
+ *  audio that already peaks near full scale does not make it louder, it squares off the waveform.
+ *  Clipping is distortion, and distortion is what an ASR mishears.
+ *
+ *  So the ratio is MEASURED per chunk: bring the peak up to `targetPeak`, and never by more than
+ *  `maxGain`. A quiet chunk gets the full 2x anh asked for; one that is already loud gets ~1.0 and is
+ *  left alone. The gain actually applied is returned so it can be logged — if it is pinned at 2.0
+ *  every time, the microphone is the thing to fix, not the software.
+ *
+ *  Peak rather than RMS deliberately: RMS normalisation of speech with pauses in it chases the
+ *  silence and over-amplifies room noise, which buys a new class of mishearing.
+ */
+export function normalisePcm(pcm, { targetPeak = 0.89, maxGain = 2.0 } = {}) {
+  const samples = Math.floor(pcm.length / 2);
+  if (!samples) return { pcm, gain: 1, peakBefore: 0, peakAfter: 0 };
+
+  let peak = 0;
+  for (let i = 0; i < samples; i++) {
+    const v = Math.abs(pcm.readInt16LE(i * 2));
+    if (v > peak) peak = v;
+  }
+  const peakBefore = peak / 32767;
+  // Digital silence, or so close that amplifying it only raises the noise floor.
+  if (peakBefore < 0.002) return { pcm, gain: 1, peakBefore, peakAfter: peakBefore };
+
+  const gain = Math.min(maxGain, targetPeak / peakBefore);
+  // Already loud enough — leave the samples untouched rather than round-tripping them for nothing.
+  if (gain <= 1.01) return { pcm, gain: 1, peakBefore, peakAfter: peakBefore };
+
+  const out = Buffer.allocUnsafe(pcm.length);
+  for (let i = 0; i < samples; i++) {
+    const v = Math.round(pcm.readInt16LE(i * 2) * gain);
+    // Hard limit is unreachable by construction (gain is derived from the peak) — it is here because
+    // a rounding error at the very peak sample must not wrap a +32768 into a loud negative click.
+    out.writeInt16LE(v > 32767 ? 32767 : v < -32768 ? -32768 : v, i * 2);
+  }
+  if (pcm.length % 2) out[pcm.length - 1] = pcm[pcm.length - 1];
+  return { pcm: out, gain, peakBefore, peakAfter: Math.min(1, peakBefore * gain) };
+}
+
 export function wav(pcm, sampleRate = 16000) {
   const h = Buffer.alloc(44);
   h.write("RIFF", 0);

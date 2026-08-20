@@ -288,6 +288,8 @@ export async function POST(req: Request) {
   let body: {
     meetingId?: string; speaker?: string | null; audio?: string; format?: string; context?: string;
     speechMs?: number; totalMs?: number; event?: string; title?: string;
+    /** Gain the receiver applied before sending — see normalisePcm. */
+    gain?: number;
     /** Start from a saved meeting shape — see server/canvas-templates.mjs. */
     template?: string;
   };
@@ -855,7 +857,8 @@ export async function POST(req: Request) {
    *  the terms that get mangled are disproportionately at the END of a long sentence — so the panel
    *  hid exactly the evidence it exists to show. (Measured: a clip scored 5/10 on terminology when
    *  read from this line and 10/10 when read from the model's actual reply.) trace() caps at 300. */
-  trace("hear", `[${mode.transcribe.model.replace(/^omni:/, "")}] ${speaker ?? "?"}: ${heard.join(" ")}`, sttMs);
+  const gainNote = body.gain && body.gain > 1.01 ? ` [gain x${body.gain}]` : "";
+  trace("hear", `[${mode.transcribe.model.replace(/^omni:/, "")}]${gainNote} ${speaker ?? "?"}: ${heard.join(" ")}`, sttMs);
   if (sttMs > (body.totalMs ?? 10_000)) {
     console.warn(`[timing] ⚠ the ear is slower than real time (${sttMs}ms for ${body.totalMs ?? "?"}ms of audio) — the board will fall behind`);
   }

@@ -26,7 +26,7 @@
 //   CANVAS_INGEST_TOKEN    bearer token for that endpoint
 
 import { createWsServer } from "./ws-min.mjs";
-import { createChunker, wav, BYTES_PER_MS } from "./utterance-chunker.mjs";
+import { createChunker, wav, normalisePcm, BYTES_PER_MS } from "./utterance-chunker.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -165,7 +165,23 @@ function noteFailure(msg) {
 
 /** The request body for one utterance. Split out of send() so a retry re-sends byte-identical audio
  *  without rebuilding 200KB of base64 each time. */
+/** How loud an utterance may be made before it reaches the ear.
+ *
+ *  2.0 is anh's own number ("150% to 200%"). It is a CEILING, not a setting: the gain actually used
+ *  is measured per chunk, so a loud utterance is left alone. Lower it if amplified room noise ever
+ *  becomes the problem instead. */
+const MIC_GAIN_MAX = Number(process.env.CANVAS_MIC_GAIN_MAX || 2.0);
+
 function bodyFor(chunk) {
+  /** ⚠️ APPLIED HERE, ONCE, ON THE WAY OUT. Not in the chunker, because the chunker's speech
+   *  detection is calibrated against the levels Recall actually sends and would start seeing speech
+   *  in amplified silence. The ear gets the loud copy; every decision about what counts as speech is
+   *  still made on the original. */
+  const boosted = normalisePcm(chunk.pcm, { maxGain: MIC_GAIN_MAX });
+  if (boosted.gain > 1.01) {
+    stats.boosted = (stats.boosted ?? 0) + 1;
+    log(`  gain x${boosted.gain.toFixed(2)} (peak ${boosted.peakBefore.toFixed(2)} → ${boosted.peakAfter.toFixed(2)})`);
+  }
   return {
     // ⚠️ WITHOUT THIS EVERY MEETING SHARES ONE BOARD.
     //
@@ -183,8 +199,11 @@ function bodyFor(chunk) {
     totalMs: Math.round(chunk.totalMs),
     // WAV rather than mp3: Recall already delivers exactly what the STT endpoint wants, so this is a
     // 44-byte header instead of an ffmpeg subprocess per utterance.
-    audio: wav(chunk.pcm).toString("base64"),
+    audio: wav(boosted.pcm).toString("base64"),
     format: "wav",
+    // Reported so the trace can show it. If this is pinned at the ceiling every chunk, the microphone
+    // is the thing to fix and no amount of software will do it as well.
+    gain: +boosted.gain.toFixed(2),
   };
 }
 
