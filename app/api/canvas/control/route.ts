@@ -68,6 +68,7 @@ type Session = {
     topicId: (name: string) => string;
     /** The board's topic names, for saving its shape as a template. */
     topicNames?: () => string[];
+    pruneEmptyTopics?: () => string[];
     apply: (a: Record<string, unknown>, lines: string[]) => unknown;
     graph: (meta?: Record<string, unknown>) => unknown;
     cards2?: never;
@@ -302,6 +303,14 @@ export async function POST(req: Request) {
     const saved = saveTemplate(name, topics);
     if (!saved) return Response.json({ ok: false, error: "no topics on the board yet" }, { status: 400 });
     return Response.json({ ok: true, template: saved.name, topics: saved.topics });
+  }
+
+  /** Remove topics that hold nothing — see canvas-board.pruneEmptyTopics. Safe mid-call: an empty
+   *  topic has no children, so nothing is orphaned, and the room simply sees the clutter disappear. */
+  if (body.action === "prune") {
+    const dropped = s.board.pruneEmptyTopics?.() ?? [];
+    if (dropped.length) await repaint(req, s);
+    return Response.json({ ok: true, dropped });
   }
 
   /** Memes on or off, for the rest of this call. */

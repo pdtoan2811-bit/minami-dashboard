@@ -724,6 +724,12 @@ A whole conversation should end up with roughly 3 to 6 of them, not one per fact
 "OpenAI Lumen" and "OpenAI Sore" and "OpenAI Models" — one subject seen three times. Before inventing
 a name, check KNOWN TOPICS and reuse anything that could plausibly hold this card.
 
+⚠️ A TOPIC IS SOMETHING THE MEETING SPENT TIME ON, never merely a word that was said. "Pricing" is a
+topic when people discussed pricing; it is NOT a topic because someone mentioned the word once. Tool
+names, product names and technical terms are almost never topics — they are what the discussion is
+made of, not what it is about. If this chunk is unclear or half a sentence, do NOT resolve it by
+attaching it to the nearest familiar-sounding name. Return nothing and wait for the rest.
+
 ⚠️ A TOPIC MUST NAME THE SUBJECT, NOT THE ACTIVITY. These are BANNED as topic names, in any language,
 because they describe what a meeting IS rather than what it is ABOUT:
   "Thảo luận chung", "Khởi động", "Triển khai", "Chung", "Tổng quan", "Nội dung", "Vấn đề",

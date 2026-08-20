@@ -768,14 +768,28 @@ export async function POST(req: Request) {
       // ENTITIES FIRST, then whatever topics already exist. The judge reuses a name from this list
       // before inventing one, so the board's backbone becomes the things actually being discussed
       // rather than a cluster name improvised from a single ten-second breath.
-      const backbone = [
+      /** ⚠️ ENTITIES ARE FOR SPELLING, NOT FOR STRUCTURE. They used to be prepended here and handed
+       *  to the judge under the heading "KNOWN TOPICS — reuse these names when they fit".
+       *
+       *  The entity index holds every proper noun and craft term heard in the call — Hetzner, deploy,
+       *  workflow, mind map, Minami. Presenting those as TOPICS told the judge they were subjects it
+       *  should reuse, and when speech was unclear reusing a plausible name is the path of least
+       *  resistance. Observed live on 2026-08-21: a 29-card board whose topics were OCR, Link,
+       *  Hetzner, Context, workflow, deploy, mind map, Second Brain and Ownego — a vocabulary list
+       *  wearing the shape of an agenda. Anh named it on the call himself: "AI dùng topic cũ, không
+       *  biết topic hiện tại".
+       *
+       *  Topics now come only from the board — things that really were established as subjects. The
+       *  entity names still reach the judge, under KNOWN NAMES, which is where a spelling belongs. */
+      const backbone = s.board.topicNames();
+      const names = [
+        ...glossaryFrom(s.lines.slice(-RECENT)),
         ...s.entities.entities().slice(0, 8).map((e) => e.name),
-        ...s.board.topicNames(),
       ];
       actions = await deriveActions(
         [...new Set(backbone)],
         said.join("\n"),
-        glossaryFrom(s.lines.slice(-RECENT)),
+        [...new Set(names)],
         // Labels already on the board, so the judge can hang this utterance UNDER an earlier point
         // instead of starting a fourth parallel thread about the same thing. Capped inside
         // deriveActions at the last 25 — a whole meeting of labels costs more and decides less.

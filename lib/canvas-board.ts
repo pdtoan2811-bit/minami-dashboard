@@ -267,6 +267,27 @@ export function createBoard() {
       return gone.length;
     },
 
+    /** Drop topics nothing hangs off.
+     *
+     *  ⚠️ AN EMPTY TOPIC IS EVIDENCE OF A MISTAKE, not of a subject. A topic earns its place by
+     *  holding something that was said; one with no children is a name the judge reached for and then
+     *  never used — which is exactly what a vocabulary term looks like after it has been mistaken for
+     *  an agenda. Observed live: nine of fifteen topics on a real board held nothing at all.
+     *
+     *  Safe by construction: nothing is parented to them, so nothing is orphaned by their removal. */
+    pruneEmptyTopics: () => {
+      const held = new Set(nodes.map((n) => n.parent).filter(Boolean) as string[]);
+      const dead = nodes.filter((n) => n.kind === "topic" && n.id !== "root" && !held.has(n.id));
+      for (const d of dead) {
+        const key = d.label.trim().toLowerCase();
+        seenLabels.delete(key);
+        if (cardByLabel.get(key) === d.id) cardByLabel.delete(key);
+        const i = nodes.findIndex((n) => n.id === d.id);
+        if (i >= 0) nodes.splice(i, 1);
+      }
+      return dead.map((d) => d.label);
+    },
+
     topicNames: () => nodes.filter((n) => n.kind === "topic" && n.id !== "root").map((n) => n.label),
     cards: () => nodes.filter((n) => n.kind !== "topic"),
     topicId,
