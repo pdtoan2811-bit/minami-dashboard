@@ -283,7 +283,10 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
       offer([{ id: `preview-${n}`, emoji }]);
     };
     tick();
-    const t = setInterval(tick, 6200);
+    // ⚠️ MUST EXCEED MEME_DURATION + COOLDOWN (7500 + 2600). Offer faster than scenes can play and
+    // the queue overflows — and overflow is RETIRED, not deferred, so moments would be silently
+    // dropped and the preview would show fewer memes than it claimed to.
+    const t = setInterval(tick, 10500);
     return () => clearInterval(t);
   }, [offer]);
   useEffect(() => {

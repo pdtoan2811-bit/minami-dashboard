@@ -704,6 +704,9 @@ memorable thing this board does, and also the easiest thing to ruin by overusing
   😮 something surprising — a number, a risk, a reversal
   👏 someone did something worth marking
   ❓ a real question left hanging
+  🎉 something SHIPPED or was reached — a milestone landed, not merely agreed
+  🙌 the whole room converged, not just two people
+  ✨ worth remembering later — a phrasing or insight to keep, even if nothing was decided
 
 Set it to null on almost every card. Roughly one card in six should carry one — an emoji on every
 card means none of them is a moment. But DO set it when people actually agree: that is the single
@@ -829,7 +832,14 @@ const ACTIONS_SCHEMA = {
           relation: { type: ["string", "null"], enum: ["answers", "blocks", "depends", "contradicts", null] },
           // Strict schema requires EVERY property in `required`; optionality is expressed as a null
           // union, never by omitting the key. Getting that wrong is a 400 at request time.
-          emoji: { type: ["string", "null"], enum: ["🔥", "😮", "💡", "❓", "👏", "🤝", "💯", "✅", null] },
+          // ⚠️ MUST STAY IN SYNC WITH MOMENT_MEANING IN CutScene.tsx AND THE FOLDERS UNDER
+          // public/memes/. 🎉 🙌 ✨ existed in the meaning map and in the cut-scene renderer but NOT
+          // here, so the judge could never emit them: three folders anh had collected memes into
+          // were unreachable, and nothing said so.
+          emoji: {
+            type: ["string", "null"],
+            enum: ["🔥", "😮", "💡", "❓", "👏", "🤝", "💯", "✅", "🎉", "🙌", "✨", null],
+          },
         },
       },
     },

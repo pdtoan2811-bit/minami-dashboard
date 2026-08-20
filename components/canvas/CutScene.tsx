@@ -51,8 +51,13 @@ const FOLDER: Record<string, string> = {
   "🎉": "milestone", "🙌": "everyone-aligned", "✨": "worth-keeping",
 };
 
-/** A meme needs reading time an emoji does not — a punchline, a caption, a beat of animation. */
-const MEME_DURATION = 5000;
+/** A meme needs far more time on screen than a glyph does.
+ *
+ *  An emoji is read instantly — it is one shape and you already know it. A meme has to be SEEN, then
+ *  recognised, then found funny, and a gif also has a loop to get through. 5s was measured against a
+ *  real collection and still cut them off mid-beat. 7.5s is roughly two loops of a short reaction gif
+ *  and long enough for the joke to land before the board comes back. */
+const MEME_DURATION = 7500;
 
 type MemeIndex = Record<string, string[]>;
 
@@ -167,13 +172,27 @@ export function CutScene({ moment, onDone, meme }: { moment: Moment | null; onDo
              meeting. The image carries the feeling; the line below still says what the moment WAS.
              Capped rather than full-bleed for the same reason the glyph is: the board must stay
              visible as shape around it, so the scene reads as the room dimming rather than a modal. */
-          // eslint-disable-next-line @next/next/no-img-element -- animated gif; next/image would kill the animation
-          <img
-            src={meme}
-            alt=""
-            className="max-h-[52vh] max-w-[62vw] rounded-2xl object-contain"
-            style={{ animation: anim("cutGlyph"), boxShadow: "0 26px 60px -20px rgba(16,24,40,0.42)" }}
-          />
+          /* ⚠️ THE EMOJI STAYS. It is the one part of the scene that says WHAT KIND of moment this is
+             without anyone having to read: a meme is a feeling, the glyph is the category. Dropping
+             it for the image meant a room saw a reaction and had to work out what Minami thought had
+             happened. Rendered as a badge on the corner so it reads instantly at screen-share size
+             without covering the joke. */
+          <span className="relative inline-block" style={{ animation: anim("cutGlyph") }}>
+            {/* eslint-disable-next-line @next/next/no-img-element -- animated gif; next/image would kill the animation */}
+            <img
+              src={meme}
+              alt=""
+              className="max-h-[52vh] max-w-[62vw] rounded-2xl object-contain"
+              style={{ boxShadow: "0 26px 60px -20px rgba(16,24,40,0.42)" }}
+            />
+            <span
+              className="absolute -bottom-5 -left-5 grid size-[92px] place-items-center rounded-full bg-white text-[50px] leading-none"
+              style={{ boxShadow: "0 12px 30px -8px rgba(16,24,40,0.34)" }}
+              aria-hidden
+            >
+              {moment.emoji}
+            </span>
+          </span>
         ) : (
           <span
             className="text-[132px] leading-none"
