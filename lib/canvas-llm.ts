@@ -850,6 +850,37 @@ const ACTIONS_SCHEMA = {
   },
 } as const;
 
+/** WARM-UP CARDS from the meeting context, before anyone has spoken.
+ *
+ *  ⚠️ THESE ARE A MIMIC, NOT A PREDICTION, and the prompt has to say so or the model writes confident
+ *  claims nobody made. It is asked for the AGENDA — the things this call is likely to cover — phrased
+ *  as subjects rather than statements. "Pricing" is a fine ghost; "We agreed on pricing" is a lie.
+ *
+ *  Small budget and a short deadline on purpose: this runs while a bot is joining and must never be
+ *  the reason a call starts slowly. If it fails, the board simply opens empty as it always did.
+ */
+export async function warmUpCards(context: string, opts: { cfg?: CanvasMode["derive"]; spend?: Spend } = {}): Promise<string[]> {
+  const user =
+    `A meeting is about to start. This is what it is about:\n${context.slice(0, 400)}\n\n` +
+    `List 3-5 SUBJECTS this call will probably cover — the agenda, not conclusions.\n` +
+    `Each 2-6 words, a noun phrase, in the SAME LANGUAGE as the context above.\n` +
+    `Never write a claim, a decision or anything phrased as something someone said.\n` +
+    `Return JSON: {"cards":["…","…"]}`;
+  try {
+    const out = await chat(
+      [{ role: "system", content: "You return only JSON." }, { role: "user", content: user }],
+      700, 12_000,
+      { model: opts.cfg?.model, spend: opts.spend },
+    );
+    const first = out.indexOf("{"), last = out.lastIndexOf("}");
+    if (first < 0 || last <= first) return [];
+    const parsed = JSON.parse(out.slice(first, last + 1));
+    return Array.isArray(parsed.cards) ? parsed.cards.filter((c: unknown) => typeof c === "string").slice(0, 5) : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function deriveActions(
   knownTopics: string[],
   lines: string,

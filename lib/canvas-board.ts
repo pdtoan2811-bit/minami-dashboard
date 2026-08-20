@@ -234,6 +234,39 @@ export function createBoard() {
     edges,
     /** Topic labels created so far. Handed to the next judge call so parallel chunks converge on one
      *  name for a subject instead of each inventing their own. */
+    /** Draw the warm-up cards. Ghosts under the seeded topic, so the shape of the call is visible
+     *  before the first word — see GNode.placeholder for why they must stay distinguishable. */
+    seedPlaceholders: (labels: string[], parent?: string) => {
+      let n = 0;
+      for (const raw of labels.slice(0, 5)) {
+        const label = raw.trim().slice(0, 90);
+        if (!label) continue;
+        const id = `ph${++n}`;
+        nodes.push({ id, kind: "note", label, parent: parent ?? "root", placeholder: true });
+      }
+      return n;
+    },
+
+    /** ⚠️ CALLED THE MOMENT ANYTHING REAL ARRIVES, and deliberately not keyed on which card.
+     *
+     *  A placeholder that outlives the first real utterance stops being a warm-up and becomes a lie
+     *  on a screen anh is sharing. They go all at once, and they leave nothing behind: not in
+     *  seenLabels, not in cardByLabel, or a later merge or rename could resolve onto a ghost. */
+    clearPlaceholders: () => {
+      const gone = nodes.filter((n) => n.placeholder);
+      if (!gone.length) return 0;
+      for (const g of gone) {
+        const key = g.label.trim().toLowerCase();
+        seenLabels.delete(key);
+        if (cardByLabel.get(key) === g.id) cardByLabel.delete(key);
+        const i = nodes.findIndex((n) => n.id === g.id);
+        if (i >= 0) nodes.splice(i, 1);
+      }
+      // Anything that had been hung under a ghost goes back to the root rather than vanishing with it.
+      for (const n of nodes) if (n.parent && !nodes.some((x) => x.id === n.parent)) n.parent = "root";
+      return gone.length;
+    },
+
     topicNames: () => nodes.filter((n) => n.kind === "topic" && n.id !== "root").map((n) => n.label),
     cards: () => nodes.filter((n) => n.kind !== "topic"),
     topicId,

@@ -328,6 +328,14 @@ function Shell({
       style={{
         width: size.w,
         minHeight: h,
+        /** ⚠️ A WARM-UP CARD MUST NOT LOOK LIKE A REAL ONE, at any distance.
+         *
+         *  These are drawn from the meeting's context before anyone speaks, so the board opens with
+         *  the shape of the call instead of the blank screen anh had to apologise for on camera. The
+         *  entire safety of that idea is that nobody in the room can mistake one for something that
+         *  was said — so they sit faint and desaturated, which reads as "not yet" rather than as
+         *  content. They are also wiped server-side the instant the first real card lands. */
+        ...(n.placeholder ? { opacity: 0.34, filter: "saturate(0.4)" } : {}),
         // No CSS transition: positions arrive already eased, from the single rAF loop in GraphCanvas
         // that also draws the edges. Transitioning here as well would double-animate and, worse,
         // desynchronise the cards from the branches connecting them.

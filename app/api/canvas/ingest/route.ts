@@ -25,7 +25,7 @@
 // The TIDY pass now runs continuously in the background (see TIDY_EVERY) — it is the counterweight
 // that makes judging every utterance affordable, and it had never once run during a meeting.
 
-import { deriveActions, glossaryFrom, noSpend, refineBoard, transcribe, type RawAction } from "@/lib/canvas-llm";
+import { deriveActions, glossaryFrom, noSpend, refineBoard, transcribe, warmUpCards, type RawAction } from "@/lib/canvas-llm";
 import { createBoard, type Board } from "@/lib/canvas-board";
 import { resolveMode } from "@/lib/canvas-modes";
 // Plain ESM helper, shared with the standalone receiver which cannot import TS.
@@ -326,6 +326,19 @@ export async function POST(req: Request) {
       }
       console.log(`[ingest] seeded: ${ctx.slice(0, 80)}`);
       await publish(req, s, undefined);
+      /** WARM-UP. Off the response path: the launcher is waiting on this call to dispatch a bot, and
+       *  a board that opens two seconds later is worth nothing next to a call that starts two seconds
+       *  later. If it fails or is slow, the board simply opens empty exactly as before. */
+      void warmUpCards(ctx, { cfg: resolveMode(null).derive })
+        .then(async (labels) => {
+          if (!labels.length || s.ended) return;
+          // Only ever onto a board nobody has spoken into yet — a late warm-up must not appear
+          // underneath real cards that have already landed.
+          if (s.board.cards().some((c) => !("placeholder" in c) || !c.placeholder)) return;
+          const n = s.board.seedPlaceholders(labels, s.topic ? s.board.topicId(s.topic) : undefined);
+          if (n) { console.log(`[ingest] warm-up: ${n} placeholder card(s)`); await publish(req, s, undefined); }
+        })
+        .catch(() => {});
     }
     return Response.json({ ok: true, seeded: ctx || null, topic: s.topic ?? null });
   }
@@ -359,6 +372,10 @@ export async function POST(req: Request) {
     else if (s.queued > 0) console.log(`[ingest] drained ${s.queued} in-flight judge(s) before archiving`);
 
     const minutes = +((Date.now() - s.startedAt) / 60000).toFixed(1);
+    // ⚠️ STRIPPED FROM THE RECORD. A ghost that survives into the archive becomes indistinguishable
+    // from something that was said — and the archive is what the vault, the notes and anh's memory
+    // are all built on. They were never content; they must not become history.
+    s.board.clearPlaceholders();
     const graph = s.board.graph({ ...(body.title ? { title: body.title } : {}), status: "ended" });
 
     // THE DURABLE RECORD. Until this existed a meeting produced a live board and nothing you could
@@ -730,6 +747,13 @@ export async function POST(req: Request) {
     // The RECENT window, not the whole meeting — see the note on RECENT. This is both the fix for the
     // quadratic cost and the thing that makes "grounded" mean what it says.
     const recent = s.lines.slice(-RECENT);
+    /** ⚠️ WIPE THE WARM-UP BEFORE THE FIRST REAL CARD IS DRAWN, not after. Applying first would put a
+     *  real card on a board still showing ghosts, and for one frame the room cannot tell which is
+     *  which — on a screen being shared, that single frame is the whole risk of the feature. */
+    if (actions.length) {
+      const wiped = s.board.clearPlaceholders();
+      if (wiped) console.log(`[ingest] warm-up cleared (${wiped}) — real cards arriving`);
+    }
     for (const a of actions) if (s.board.apply(a, recent)) added++;
     // The single most useful line in the panel: "12 proposed → 0 on the board" is the signature of a
     // grounding or dedup rule quietly eating everything, which has happened more than once.

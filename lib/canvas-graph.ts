@@ -54,6 +54,14 @@ export type GNode = {
   detail?: string;
   /** Short chips — "scope", "pricing", "blocker". Give the map texture at a glance. */
   tags?: string[];
+  /** A WARM-UP card, drawn from the meeting context before anyone has spoken.
+   *
+   *  ⚠️ NOT REAL CONTENT, and the whole design rests on that staying true. An empty board at the top
+   *  of a call reads as broken — anh had to say "sao nó không vẽ nhỉ?" out loud to a guest while it
+   *  sat blank. A few faint cards showing what the call is ABOUT fix that, but only if they can never
+   *  be mistaken for something someone said: they render ghosted, they are wiped the instant the
+   *  first real card lands, and they are stripped before anything is archived. */
+  placeholder?: boolean;
   /** Emoji reactions accumulated on this node during the call. The fun layer, attached to meaning
    *  rather than floating: a 🎉 sits ON the decision that earned it. */
   reactions?: { emoji: string; count: number }[];
