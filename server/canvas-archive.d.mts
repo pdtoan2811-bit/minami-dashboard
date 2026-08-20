@@ -14,4 +14,13 @@ export function archiveMeeting(input: {
   transcript?: string[];
   cost?: number;
   meetingId?: string;
+  /** Which models produced this board. Recorded per meeting because the answer changes. */
+  models?: {
+    ears: string[];
+    judge: string | null;
+    tidy: string | null;
+    relate: string | null;
+    language: string | null;
+    room: boolean;
+  } | null;
 }): string | null;

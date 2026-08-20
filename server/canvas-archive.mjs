@@ -42,7 +42,7 @@ const HEADING = {
   milestone: "Milestones", requirement: "Requirements", quote: "Moments", note: "Notes", aside: "Asides",
 };
 
-function notesMarkdown({ title, startedAt, minutes, speakers, graph }) {
+function notesMarkdown({ title, startedAt, minutes, speakers, graph, models }) {
   const cards = (graph.nodes ?? []).filter((n) => n.kind !== "topic");
   const topicOf = new Map((graph.nodes ?? []).filter((n) => n.kind === "topic").map((t) => [t.id, t.label]));
 
@@ -51,7 +51,15 @@ function notesMarkdown({ title, startedAt, minutes, speakers, graph }) {
     "",
     `- **When:** ${new Date(startedAt).toISOString().replace("T", " ").slice(0, 16)} · ${minutes} min`,
     speakers.length ? `- **Present:** ${speakers.join(", ")}` : null,
-    `- **Captured by:** Minami`,
+    /** ⚠️ NAME THE MODELS IN THE NOTE, not only in the JSON. The question this answers arrives weeks
+     *  later — "why is this board so much worse than that one?" — and by then nobody remembers which
+     *  ear was in use that week. The ear has moved between whisper, qwen, Blaze and an omni model,
+     *  and each move changed the output visibly. A record that cannot be attributed to what produced
+     *  it cannot be compared with anything. */
+    models
+      ? `- **Captured by:** Minami · heard by ${(models.ears ?? []).join(" + ") || "?"} · judged by ${models.judge ?? "?"}` +
+        `${models.language && models.language !== "auto" ? ` · language ${models.language}` : ""}${models.room ? " · room mode" : ""}`
+      : `- **Captured by:** Minami`,
     "",
   ].filter(Boolean);
 
@@ -79,7 +87,7 @@ function notesMarkdown({ title, startedAt, minutes, speakers, graph }) {
  * Write one meeting to disk. Returns the folder path, or null if writing failed — a failed archive
  * must never throw into the end-of-meeting path and lose the rest of the shutdown.
  */
-export function archiveMeeting({ title, startedAt, minutes, graph, transcript = [], cost = 0, meetingId }) {
+export function archiveMeeting({ title, startedAt, minutes, graph, transcript = [], cost = 0, meetingId, models = null }) {
   try {
     /** ── THE NAME ────────────────────────────────────────────────────────────────────────────
      *  Was `YYYY-MM-DD-<title>`, and both halves were wrong.
@@ -106,10 +114,10 @@ export function archiveMeeting({ title, startedAt, minutes, graph, transcript = 
 
     const speakers = [...new Set(transcript.map((l) => l.split(":")[0]).filter((s) => s && s.length < 40))];
 
-    writeFileSync(join(dir, "notes.md"), notesMarkdown({ title, startedAt, minutes, speakers, graph }));
+    writeFileSync(join(dir, "notes.md"), notesMarkdown({ title, startedAt, minutes, speakers, graph, models }));
     writeFileSync(
       join(dir, "canvas.json"),
-      JSON.stringify({ meetingId, title, startedAt, minutes, cost, graph }, null, 2),
+      JSON.stringify({ meetingId, title, startedAt, minutes, cost, models, graph }, null, 2),
     );
     writeFileSync(
       join(dir, "transcript.md"),

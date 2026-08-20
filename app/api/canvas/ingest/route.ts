@@ -118,6 +118,20 @@ type Session = {
   cost: number;
   /** Set the moment the meeting ends. Async work in flight checks this before touching the board. */
   ended: boolean;
+  /** Every ear that actually transcribed something in this call.
+   *
+   *  ⚠️ NOT the configured default. The ear can be switched mid-meeting from the dock, and it has
+   *  been — repeatedly, while working out which model could hold Vietnamese with English terms. A
+   *  board archived with "the default was gemini" would be a record of the config, not of what
+   *  produced these cards. This is a Set because two ears in one meeting is a real thing that
+   *  happens, and the honest answer is then both. */
+  ears?: Set<string>;
+  /** The thinking models in use, recorded when the first chunk is judged.
+   *
+   *  Read at `end`, where `mode` is not yet in scope — and taken from the session rather than
+   *  re-resolved so an A/B arm chosen for this meeting is what gets recorded, not whatever the
+   *  default happens to be by the time it finishes. */
+  derive?: { judge: string; tidy: string; relate: string };
   /** Judges currently talking to the model, mapped to WHEN they started. They no longer share a
    *  queue, so `end` drains this rather than the chain — see the note on head-of-line blocking. The
    *  timestamp is what makes the backlog gate self-healing; see JUDGE_CEILING_MS. */
@@ -351,6 +365,18 @@ export async function POST(req: Request) {
     // read the next morning — the canvas is in-memory by design and dies with the call.
     const archived = archiveMeeting({
       meetingId: id,
+      /** WHAT MADE THIS BOARD. Recorded per meeting because the answer changes: the ear has moved
+       *  between whisper, qwen, Blaze and an omni model, and a board is only comparable with another
+       *  board if you know which produced it. Reading an archive six weeks later and being unable to
+       *  say what heard it is how a model regression goes unnoticed. */
+      models: {
+        ears: [...(s.ears ?? [])],
+        judge: s.derive?.judge ?? null,
+        tidy: s.derive?.tidy ?? null,
+        relate: s.derive?.relate ?? null,
+        language: s.sttLang ?? null,
+        room: !!s.room,
+      },
       title: body.title || "Meeting",
       startedAt: s.startedAt,
       minutes,
@@ -442,6 +468,8 @@ export async function POST(req: Request) {
     const ear = s.stt || s.sttLang !== undefined || s.room
       ? { ...mode.transcribe, ...(s.stt ? { model: s.stt } : {}), ...(s.sttLang !== undefined ? { language: s.sttLang || undefined } : {}), ...roomOpt }
       : mode.transcribe;
+    (s.ears ??= new Set()).add(ear.model);
+    s.derive ??= { judge: mode.derive.model, tidy: mode.derive.tidyModel, relate: mode.derive.relateModel };
     const r = await transcribe(
       ear,
       audio,

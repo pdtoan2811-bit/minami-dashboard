@@ -225,6 +225,10 @@ const scaffold = {
     private: false,
     description: "A bot joins your Google Meet, listens, and draws a live mind map you screen-share back",
     scripts: {
+      // First thing a newcomer runs. It fills .env.local interactively, generates the shared token,
+      // and CALLS each service to prove the credential works rather than that it is merely present.
+      setup: "node bin/minami-setup.mjs",
+      doctor: "node bin/minami-setup.mjs --check",
       dev: "next dev",
       build: "next build",
       start: "next start",
@@ -340,9 +344,13 @@ anyone taking notes.
 
 ## Running it
 
-    cp .env.example .env.local     # add two API keys
     npm install
+    npm run setup                  # asks for the two keys, generates the rest, verifies both
     ./bin/Minami\\ Call.command    # or: npm run dev, then open /canvas
+
+\`npm run setup\` is interactive and does not print secrets. It calls Recall and OpenRouter to prove
+each key works — "present" is not "works", and a rotated key looks identical to a good one in a file.
+\`npm run doctor\` re-runs the checks read-only and exits non-zero if anything is missing.
 
 The launcher starts the app, the audio receiver and a tunnel, then puts a bot in the meeting you give
 it. Share the tab it opens.
