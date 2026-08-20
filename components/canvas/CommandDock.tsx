@@ -34,7 +34,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type Panel = null | "add" | "rename" | "say" | "voice" | "ear";
+type Panel = null | "add" | "rename" | "say" | "voice" | "ear" | "react";
 
 type Preview = { matches: number; cards: Array<{ id: string; before: string; after: string }> } | null;
 
@@ -100,6 +100,9 @@ export function CommandDock() {
   const [cmdText, setCmdText] = useState("");
   const [ear, setEar] = useState<string>("");
   /** The dictionary as it stands, so a correction is edited rather than guessed at. */
+  /** Optimistic, corrected by the server's reply. The board is the source of truth (graph.memes);
+   *  this only drives the button's own look. */
+  const [memesOn, setMemesOn] = useState(true);
   const [dict, setDict] = useState<{ universal: { from: string; to: string }[]; call: { from: string; to: string }[] } | null>(null);
   const [room, setRoom] = useState(false);
   const [roster, setRoster] = useState<string[]>([]);
@@ -177,6 +180,23 @@ export function CommandDock() {
 
   /** Loaded when the panel opens, not on mount: it is a real read of a file on every call, and the
    *  dock is mounted for the whole meeting. */
+  async function toggleMemes() {
+    const d = await call({ action: "memes", on: !memesOn });
+    if (!d) return;
+    setMemesOn(d.memes !== false);
+    setFlash({ msg: d.memes !== false ? "Memes on" : "Memes off — cut scenes stay as emoji" });
+  }
+
+  /** ⚠️ ATTACHES TO THE NEWEST CARD, and says which one. The judge marks about one card in six and
+   *  is reading text — it cannot hear the room, or know that the thing just agreed took three weeks.
+   *  Anh can. Naming the card in the flash is what stops this feeling like it fired into the void. */
+  async function react(emoji: string) {
+    const d = await call({ action: "react", emoji });
+    if (!d) return;
+    setFlash({ msg: `${emoji}  ${String(d.card ?? "").slice(0, 44)}` });
+    setPanel(null);
+  }
+
   async function loadDict() {
     const d = await call({ action: "dictionary" });
     if (d) setDict({ universal: d.universal ?? [], call: d.call ?? [] });
@@ -319,6 +339,22 @@ export function CommandDock() {
       ) : null}
 
       {/* ── ADD CARD — voice and text side by side ──────────────────────────────────────────── */}
+      {panel === "react" ? (
+        <Sheet title="Mark this moment" sub="Plays a cut scene on the newest card" onClose={() => setPanel(null)}>
+          <div className="grid w-[420px] grid-cols-6 gap-1.5">
+            {[["🤝","Agreement"],["💯","Full agreement"],["✅","Settled"],["💡","New idea"],["🔥","Strongest claim"],["😮","That landed"],["👏","Worth marking"],["❓","Left hanging"],["🎉","Milestone"],["🙌","Everyone aligned"],["✨","Worth keeping"]].map(([e, name]) => (
+              <button
+                key={e}
+                onClick={() => react(e)}
+                disabled={busy}
+                title={name}
+                className="grid aspect-square place-items-center rounded-lg border border-neutral-200 bg-white text-[22px] transition-colors hover:border-neutral-400 hover:bg-neutral-50 disabled:opacity-40"
+              >{e}</button>
+            ))}
+          </div>
+        </Sheet>
+      ) : null}
+
       {panel === "add" ? (
         <Sheet title="Add a card" sub="Speak it or type it — both work, side by side" onClose={() => { setPanel(null); setText(""); }}>
           <div className="w-[460px]">
@@ -491,6 +527,10 @@ export function CommandDock() {
           icon={<IconRoom />}
         >{room ? (roster.length ? `Room · ${roster.length}` : "Room") : "Room"}</Btn>
         <Sep />
+        <Btn onClick={() => setPanel(panel === "react" ? null : "react")} active={panel === "react"} icon={<span className="text-[13px] leading-none">🎉</span>}>React</Btn>
+        <Btn onClick={toggleMemes} active={memesOn} icon={<span className="text-[13px] leading-none">{memesOn ? "🖼️" : "🚫"}</span>}>
+          {memesOn ? "Memes" : "Memes off"}
+        </Btn>
         <Btn onClick={() => setPanel(panel === "add" ? null : "add")} active={panel === "add"} icon={<IconPlus />}>Add card</Btn>
         <Btn
           onClick={() => { const next = panel === "rename" ? null : "rename"; setPanel(next); if (next) void loadDict(); }}

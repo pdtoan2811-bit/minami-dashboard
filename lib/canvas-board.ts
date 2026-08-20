@@ -359,6 +359,18 @@ export function createBoard() {
       return true;
     },
 
+    /** Attach a reaction to an existing card, which is what makes a cut scene fire for it.
+     *
+     *  Separate from reviseById because a reaction is not a revision: it changes nothing about what
+     *  the card SAYS, and passing it through the revise path would drag the label-collision and
+     *  dedup rules over a field none of them are about. */
+    react: (id: string, emoji: string) => {
+      const node = nodes.find((n) => n.id === id);
+      if (!node) return false;
+      node.reactions = [{ emoji, count: 1 }];
+      return true;
+    },
+
     reviseById: (r: { id: string; label?: string; detail?: string }) => {
       const node = nodes.find((n) => n.id === r.id);
       if (!node) return false;

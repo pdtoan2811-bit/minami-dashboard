@@ -135,6 +135,9 @@ type Session = {
   stt?: string;
   /** Language pin for this meeting: "vi", "en", or "" for auto-detect. */
   sttLang?: string;
+  /** Set by "tắt meme" or the dock toggle. Memes are anh's own curation, but a room can still turn
+   *  out to be the wrong one — a client joins late, a call turns serious. */
+  memesOff?: boolean;
   /** Several people sharing one microphone — see TranscribeEngine.room. */
   room?: boolean;
   /** Names discovered in the room so far, fed back so labels stay stable between chunks. */
@@ -226,6 +229,7 @@ async function publish(req: Request, s: Session, title?: string) {
   const graph = s.board.graph({
     ...(title ? { title } : {}),
     subtitle: `${s.utterances} utterances · ${s.board.cards().length} cards`,
+    memes: !s.memesOff,
   });
   /** Every frame says who it belongs to. The server keys boards on this, and a viewer pins itself to
    *  the first meeting it sees — together that is what stops one meeting's screen-share from ever

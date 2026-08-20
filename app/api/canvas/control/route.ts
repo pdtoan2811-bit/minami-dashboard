@@ -57,9 +57,11 @@ type Session = {
    *  board that meeting owns — without it, every dock action (rename, undo, tidy) would land in the
    *  legacy bucket and a pinned viewer would never see the change. */
   id?: string;
+  memesOff?: boolean;
   board: {
     cards: () => Array<{ id: string; label: string; detail?: string }>;
     reviseById: (r: { id: string; label?: string; detail?: string }) => boolean;
+    react?: (id: string, emoji: string) => boolean;
     removeLast: () => ({ id: string; label: string } | null);
     restore: (n: unknown) => boolean;
     topicId: (name: string) => string;
@@ -114,7 +116,7 @@ async function repaint(req: Request, s: Session) {
       // first casualty — 401 on every publish while audio kept flowing, so the shared board simply
       // stopped updating with nothing on screen to say why.
       headers: { "content-type": "application/json", ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
-      body: JSON.stringify({ ...(s.board.graph({ status: "live" }) as object), meetingId: s.id ?? "" }),
+      body: JSON.stringify({ ...(s.board.graph({ status: "live" }) as object), meetingId: s.id ?? "", memes: !s.memesOff }),
     });
   } catch (e) {
     console.error("[control] repaint failed:", e instanceof Error ? e.message : e);
@@ -129,7 +131,7 @@ export async function POST(req: Request) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
-  let body: { action?: string; from?: string; to?: string; scope?: string; seconds?: number; kind?: string; text?: string; preview?: boolean; model?: string; lang?: string; room?: boolean };
+  let body: { action?: string; from?: string; to?: string; scope?: string; seconds?: number; kind?: string; text?: string; preview?: boolean; model?: string; lang?: string; room?: boolean; on?: boolean; emoji?: string };
   try { body = await req.json(); } catch { return Response.json({ ok: false, error: "invalid JSON" }, { status: 400 }); }
 
   /** Clamp every free-text field before it reaches a parser. Measured by the audit: a 2MB `text`
@@ -285,6 +287,30 @@ export async function POST(req: Request) {
   /** LIST THE DICTIONARY. Adding corrections blind is how the same rule gets typed three times and
    *  how anh cannot tell whether a name is already handled. "Is Easy Vision already mapped?" was
    *  unanswerable from inside a call until this existed. */
+  /** Memes on or off, for the rest of this call. */
+  if (body.action === "memes") {
+    s.memesOff = body.on === false;
+    await repaint(req, s);
+    return Response.json({ ok: true, memes: !s.memesOff });
+  }
+
+  /** ⚠️ A MOMENT ANH CALLS HIMSELF. The judge marks roughly one card in six, and it is judging text —
+   *  it cannot hear the room laugh, or know that the thing just agreed took three weeks to get to.
+   *  He can. The reaction is attached to the newest card so the cut scene has something true to name,
+   *  rather than inventing a card for it. */
+  if (body.action === "react") {
+    const emoji = String(body.emoji || "").trim();
+    if (!emoji) return Response.json({ ok: false, error: "need an emoji" }, { status: 400 });
+    const cards = s.board.cards();
+    const target = cards[cards.length - 1];
+    if (!target) return Response.json({ ok: false, error: "no card to react to yet" }, { status: 400 });
+    if (!s.board.react?.(target.id, emoji)) {
+      return Response.json({ ok: false, error: "could not attach the reaction" }, { status: 500 });
+    }
+    await repaint(req, s);
+    return Response.json({ ok: true, emoji, card: target.label });
+  }
+
   if (body.action === "dictionary") {
     const vocab = loadVocab();
     return Response.json({

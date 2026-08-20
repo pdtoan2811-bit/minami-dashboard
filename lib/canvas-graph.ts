@@ -105,6 +105,10 @@ export type Graph = {
    *  the winner's cards to their customer. Every frame now says who it belongs to, and a viewer pins
    *  itself to the first one it sees. */
   meetingId?: string;
+  /** Whether cut scenes may play memes. Carried on the BOARD rather than kept in the browser so the
+   *  dock button and the spoken "tắt meme" are the same switch, it survives a tab reload, and every
+   *  viewer of the meeting agrees. Absent means on. */
+  memes?: boolean;
   title?: string;
   subtitle?: string;
   status?: "live" | "paused" | "ended";

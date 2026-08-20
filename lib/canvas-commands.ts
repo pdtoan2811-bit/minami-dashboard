@@ -25,6 +25,7 @@ export type Command =
   | { kind: "topic"; text: string }
   | { kind: "card"; cardKind: "note" | "decision" | "action" | "question"; text: string }
   | { kind: "fix"; from: string; to: string }
+  | { kind: "memes"; on: boolean }
   | { kind: "undo" }
   | { kind: "tidy" };
 
@@ -56,6 +57,15 @@ const WAKE = /\b(minami|mi\s*nami|mi\s*na\s*mi|minamino|midami|my\s*nami)\b[\s,.
 /** Longest patterns first: "new topic" must win over "note", and "khong phai" must be tried before a
  *  bare capture verb swallows the whole sentence. */
 const VERBS: Array<{ re: RegExp; make: (payload: string) => Command | null }> = [
+  /** ── memes off, and back on ────────────────────────────────────────────────────────────────
+   *
+   *  Matched against the DIACRITIC-FOLDED line like every verb here, so "tắt meme" arrives as
+   *  "tat meme". Vietnamese first because that is what actually gets said mid-call, and this is a
+   *  command anh reaches for precisely when he cannot afford to fiddle with a trackpad — a client
+   *  joined late, or the call just turned serious. */
+  { re: /^(tat meme|tat cut scene|no memes|stop memes|memes off)\b[\s,:.-]*/, make: () => ({ kind: "memes", on: false }) },
+  { re: /^(bat meme|mo meme|memes on)\b[\s,:.-]*/, make: () => ({ kind: "memes", on: true }) },
+
   // ── set the topic ──────────────────────────────────────────────────────────────────────────
   { re: /^(chu de moi|chu de|new topic|topic|section moi|new section)\b[\s,:.-]*/,
     make: (t) => (t ? { kind: "topic", text: t } : null) },
@@ -136,6 +146,7 @@ export function describeCommand(c: Command): string {
   switch (c.kind) {
     case "topic": return `topic: ${c.text}`;
     case "card": return `${c.cardKind}: ${c.text}`;
+    case "memes": return c.on ? "memes on" : "memes off";
     case "fix": return `${c.from} → ${c.to}`;
     case "undo": return "remove last card";
     case "tidy": return "tidy the board";
@@ -166,6 +177,9 @@ export type CommandHost = {
   topic?: string;
   forceTidy?: boolean;
   undone?: unknown[];
+  /** Set by "tắt meme". The session carries it; publish() puts it on the board so every viewer
+   *  agrees and it survives a tab reload. */
+  memesOff?: boolean;
 };
 
 /** Returns a short human line describing what happened, for logging and for the on-screen flash. */
@@ -174,6 +188,10 @@ export function applyCommand(
   c: Command,
   rememberFix: (from: string, to: string) => void,
 ): string {
+  if (c.kind === "memes") {
+    host.memesOff = !c.on;
+    return c.on ? "memes on" : "memes off";
+  }
   if (c.kind === "topic") {
     host.topic = c.text;
     host.board.topicId(c.text);

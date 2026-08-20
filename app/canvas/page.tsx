@@ -246,11 +246,25 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
    *  and, on a folder of two, exhaust it instantly. */
   const sceneId = scenes.current?.id ?? null;
   const sceneEmoji = scenes.current?.emoji ?? "";
-  const memeFor = useMemo(
-    () => (sceneId ? pickMeme(sceneEmoji, memes) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sceneId is the identity that matters
-    [sceneId, memes],
-  );
+  /** ⚠️ CHOSEN ONCE PER MOMENT, AND NEVER CHANGED MID-SCENE.
+   *
+   *  The meme index loads asynchronously, so on the FIRST moment of a call `memes` was still null
+   *  when the scene started — it rendered the emoji, then swapped to a gif a beat later when the
+   *  fetch landed. Caught in a trace: `RENDER c2:🎉 meme: null` twice, then the same moment
+   *  re-rendering with /memes/milestone/siuuu.gif. On the one surface whose whole job is to feel
+   *  deliberate, that reads as a glitch.
+   *
+   *  A ref keyed on the moment id fixes both halves: the pick happens once, and a late-arriving index
+   *  cannot rewrite a scene that is already playing. The next moment gets the full collection. */
+  const memePick = useRef<{ id: string; src: string | null } | null>(null);
+  if (sceneId && memePick.current?.id !== sceneId) {
+    memePick.current = {
+      id: sceneId,
+      // graph.memes === false is "tắt meme", from the dock or by voice. Absent means on.
+      src: memes && graph.memes !== false ? pickMeme(sceneEmoji, memes) : null,
+    };
+  }
+  const memeFor = sceneId ? memePick.current?.src ?? null : null;
 
   /** ?memes=preview — play every moment back to back, so a collection can be judged in one sitting.
    *
