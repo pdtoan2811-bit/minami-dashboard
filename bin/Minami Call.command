@@ -213,9 +213,28 @@ b "  3/4  tunnel"
 # `tunnel_up` therefore proves the url end-to-end with an actual request before trusting it, and
 # replaces the tunnel if it cannot. Any HTTP response counts as alive; only a connection failure (000)
 # is death.
+# ⚠️ THIS MACHINE IS NOT THE CONSUMER OF THE TUNNEL URL. Recall's servers are.
+#
+# A first version asked "can curl reach it from here?", which conflates two different failures. On
+# 2026-08-20 a launch hung for minutes on a tunnel that was working perfectly: cloudflared had
+# registered, the receiver answered locally, and `dig` resolved the hostname — but the system
+# resolver would not, because four utun VPN interfaces sit in the DNS path. curl said "Could not
+# resolve host" and returned 000; `curl --resolve` against the same IP returned 200.
+#
+# So a local DNS failure was blocking a meeting the bot could have joined. The probe now falls back
+# to resolving the name itself and connecting by IP: if the tunnel answers that way, it IS reachable
+# from the internet, whatever this Mac's resolver believes.
 tunnel_reachable() {
   [ -n "${1:-}" ] || return 1
-  [ "$(curl -s -o /dev/null -m 8 -w '%{http_code}' "$1" 2>/dev/null)" != "000" ]
+  local host code ip
+  host="${1#https://}"
+  code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null)"
+  [ "$code" != "000" ] && return 0
+  # System resolver failed. Ask DNS directly and connect by address before believing it is down.
+  ip="$(dig +short +time=3 +tries=1 "$host" 2>/dev/null | grep -m1 -E '^[0-9.]+$')"
+  [ -n "$ip" ] || return 1
+  code="$(curl -s -o /dev/null -m 5 --resolve "${host}:443:${ip}" -w '%{http_code}' "$1" 2>/dev/null)"
+  [ "$code" != "000" ]
 }
 
 tunnel_up() {
@@ -233,13 +252,25 @@ tunnel_up() {
   : > "$STATE/tunnel.log"
   nohup cloudflared tunnel --url "http://localhost:${RECV_PORT}" > "$STATE/tunnel.log" 2>&1 &
   TUNNEL_PID=$!
-  for _ in $(seq 1 45); do
+  # ⚠️ SHOW THE WAIT. This loop probed silently, and a probe that can take 5s plus a sleep meant the
+  # launcher could sit on "3/4 tunnel" with a blank screen for minutes — indistinguishable from a
+  # crash. cloudflared itself says "it may take some time to be reachable"; the operator deserves to
+  # be told the same thing while it happens.
+  local waited=0
+  for _ in $(seq 1 30); do
     host=$(grep -aoE "https://[a-z0-9-]+\.trycloudflare\.com" "$STATE/tunnel.log" | head -1)
-    # ⚠️ PRINTED IS NOT THE SAME AS READY. cloudflared logs the hostname before it can serve, so a bot
+    # PRINTED IS NOT READY. cloudflared logs the hostname before the edge serves it, so a bot
     # dispatched the instant the url appears can miss the first seconds of a call — or all of it.
-    if tunnel_reachable "$host"; then printf '%s' "$host" > "$STATE/receiver-url.txt"; printf '%s' "$host"; return 0; fi
-    sleep 1
+    if tunnel_reachable "$host"; then
+      printf '\r\033[K' >&2
+      printf '%s' "$host" > "$STATE/receiver-url.txt"; printf '%s' "$host"; return 0
+    fi
+    waited=$((waited + 2))
+    printf '\r  \033[2mwaiting for the tunnel to answer — %ss%s\033[0m' "$waited" "${host:+ · ${host#https://}}" >&2
+    sleep 2
   done
+  printf '\r\033[K' >&2
+  [ -n "${host:-}" ] && printf '  \033[2mlast url seen: %s\033[0m\n' "$host" >&2
   return 1
 }
 
