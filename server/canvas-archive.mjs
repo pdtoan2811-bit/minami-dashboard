@@ -146,7 +146,49 @@ export function archiveMeeting({ title, startedAt, minutes, graph, transcript = 
 
     return dir;
   } catch (e) {
-    console.error("[archive] failed:", e instanceof Error ? e.message : e);
+    /** ⚠️ A FAILED ARCHIVE IS TOTAL, SILENT DATA LOSS, AND THIS USED TO BE ONE LOG LINE.
+     *
+     *  Proven on 2026-08-20: a one-word bug in the note builder threw, this catch swallowed it, the
+     *  meeting ended "successfully" having created an empty directory, and the entire record — board,
+     *  transcript, everything anyone said — was gone. There is nothing to recover from: the canvas is
+     *  in memory by design and the audio was never stored.
+     *
+     *  So the failure now does two things it did not do. It DUMPS the raw payload somewhere a human
+     *  can find, because a JSON blob is recoverable and silence is not. And it SHOUTS, because the
+     *  one thing worse than losing a meeting is losing it quietly enough that nobody notices for a
+     *  week. */
+    const why = e instanceof Error ? e.message : String(e);
+    console.error(`\n[archive] ✗✗ FAILED TO WRITE THE RECORD: ${why}`);
+    /** ⚠️ THE RESCUE IS A LADDER, CHEAPEST-TO-LOSE LAST.
+     *
+     *  The first version dumped one JSON blob containing the graph — and when the graph itself was
+     *  what could not be serialised, the rescue threw for the same reason the archive had. A fallback
+     *  that shares a failure mode with the thing it is backing up is not a fallback.
+     *
+     *  The transcript is the irreplaceable part: the board is DERIVED from it and could be rebuilt,
+     *  the audio was never stored, and nothing else in this system remembers what was said. So it is
+     *  saved on its own rung, as plain text, with no dependency on anything else surviving. */
+    const stamp = Date.now();
+    const rungs = [
+      ["full", () => JSON.stringify({ error: why, meetingId, title, startedAt, minutes, cost, models, graph, transcript }, null, 2), "json"],
+      ["without the board", () => JSON.stringify({ error: why, meetingId, title, startedAt, minutes, cost, transcript }, null, 2), "json"],
+      ["transcript only", () => (transcript ?? []).map(String).join("\n"), "md"],
+    ];
+    let saved = false;
+    for (const [what, build, ext] of rungs) {
+      try {
+        mkdirSync(ROOT, { recursive: true });
+        const rescue = join(ROOT, `UNSAVED-${stamp}.${ext}`);
+        writeFileSync(rescue, build());
+        console.error(`[archive] ✗✗ rescued (${what}) to ${rescue}`);
+        saved = true;
+        break;
+      } catch { /* try the next rung */ }
+    }
+    if (!saved) {
+      console.error(`[archive] ✗✗ EVERY RESCUE FAILED. THIS MEETING IS LOST.`);
+      console.error(`[archive] ✗✗ ${(transcript ?? []).length} transcript lines, ${(graph?.nodes ?? []).length} nodes.`);
+    }
     return null;
   }
 }

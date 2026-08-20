@@ -181,16 +181,23 @@ b "  2/4  audio receiver"
 # this then started a SECOND receiver that loses the race for :8787 and dies silently, leaving the
 # meeting pointed at whichever one won. If something is already listening, use it and leave it alone;
 # whoever started it also owns stopping it.
-if lsof -nP -iTCP:"$RECV_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  ok "already listening on :${RECV_PORT} — reusing it"
+# ⚠️ ANSWERING, NOT MERELY LISTENING. This asked lsof whether the port was bound — the same
+# "the process exists so it must work" mistake that has now cost a meeting twice, once on this port
+# and once on the tunnel. A wedged receiver holds its socket open exactly like a healthy one.
+receiver_alive() { [ "$(curl -s -o /dev/null -m 4 -w '%{http_code}' "http://127.0.0.1:${RECV_PORT}/" 2>/dev/null)" != "000" ]; }
+
+if receiver_alive; then
+  ok "already answering on :${RECV_PORT} — reusing it"
+elif lsof -nP -iTCP:"$RECV_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  no "something holds :${RECV_PORT} but does not answer — stop it first:"
+  dim "lsof -nP -iTCP:${RECV_PORT} -sTCP:LISTEN"
+  read -r -p "  enter to close "; exit 1
 else
   nohup node server/recall-receiver.mjs > "$STATE/receiver.log" 2>&1 &
   RECV_PID=$!
-  sleep 2
+  for _ in $(seq 1 15); do receiver_alive && break; sleep 1; done
 fi
-if ! lsof -nP -iTCP:"$RECV_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  no "receiver did not start — see $STATE/receiver.log"; read -r -p "  enter to close "; exit 1
-fi
+receiver_alive || { no "receiver did not come up — see $STATE/receiver.log"; tail -8 "$STATE/receiver.log"; read -r -p "  enter to close "; exit 1; }
 ok "receiver ready on :${RECV_PORT} → :${PORT}"
 
 # ── 3. the tunnel ───────────────────────────────────────────────────────────────────────────────
@@ -440,11 +447,33 @@ fi
 # re-dispatching paid bots at it is the wrong answer.
 REJOINS=0
 MAX_REJOINS=3
+# ⚠️ THE APP AND THE RECEIVER ARE WATCHED BUT NEVER RESTARTED, AND THAT IS DELIBERATE.
+#
+# For the tunnel, healing is right: a replacement costs a rejoin and the bot has nothing to lose. For
+# these two the cure is worse than the disease. The app holds every live board in memory, so
+# restarting it mid-call throws away the meeting anh is presenting. The receiver holds the bot's open
+# websocket, and Recall does not reconnect to a socket that dropped.
+#
+# So they get the thing that was actually missing: somebody looking. On 2026-08-19 the app degraded to
+# 3.8s responses and nothing noticed for twelve minutes — not because recovery was hard, but because
+# no one was watching. A warning anh can act on beats an automatic action that destroys the call.
+app_alive()      { [ "$(curl -s -o /dev/null -m 6 -w '%{http_code}' "http://127.0.0.1:${PORT}/api/canvas" 2>/dev/null)" != "000" ]; }
+
 watch_tunnel() {
-  local fails=0
+  local fails=0 appbad=0 recvbad=0
   while kill -0 "$BOT_PID" 2>/dev/null; do
     sleep 15
     kill -0 "$BOT_PID" 2>/dev/null || return 0
+
+    if app_alive; then appbad=0; else
+      appbad=$((appbad + 1))
+      [ "$appbad" = 2 ] && printf '\n  \033[31m✗\033[0m the app on :%s has stopped answering — the board will not update.\n     \033[2mit is NOT restarted on purpose: that would discard the live board. see %s\033[0m\n' "$PORT" "$STATE/oncall-app.log"
+    fi
+    if receiver_alive; then recvbad=0; else
+      recvbad=$((recvbad + 1))
+      [ "$recvbad" = 2 ] && printf '\n  \033[31m✗\033[0m the receiver on :%s has stopped answering — no audio is arriving.\n     \033[2mnot restarted: it holds the bot'"'"'s websocket. see %s\033[0m\n' "$RECV_PORT" "$STATE/receiver.log"
+    fi
+
     if tunnel_reachable "$HOST"; then
       fails=0
     else
