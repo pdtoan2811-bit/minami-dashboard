@@ -93,6 +93,16 @@ const recentLines = (s: { lines: string[] }) => s.lines.slice(-RECENT);
  *  Six concurrent judges at ~3s each is comfortably inside one 10s chunk window. */
 const MAX_QUEUED_JUDGES = 6;
 
+/** How long the board may go without gaining a single card before Minami stops trusting the judge and
+ *  writes the words down verbatim instead. See the dead-man's switch, below.
+ *
+ *  Ninety seconds is chosen against how a real meeting reads on a shared screen, not against the
+ *  pipeline: a gap that long is the point where anh starts glancing at the canvas instead of talking,
+ *  and where the room starts to notice it too. It is also long enough that ordinary quiet — a demo, a
+ *  tangent, someone else holding the floor — passes through untouched, because ordinary quiet does not
+ *  arrive as forty-five characters of substantive speech chunk after chunk. */
+const DEAD_MAN_MS = 90_000;
+
 /** How often the board consolidates itself, in utterances.
  *
  *  ⚠️ THIS NEVER RAN. `refineBoard` has existed for weeks and the live path never called it — the
@@ -178,6 +188,8 @@ type Session = {
    *  one, and two utterances landing together would otherwise both propose the same topic and both
    *  create it. Transcription is NOT serialised — it does not touch the board. */
   chain: Promise<unknown>;
+  /** When the board last actually gained a card. The dead-man's switch reads this — see DEAD_MAN_MS. */
+  lastCardAt: number;
 };
 
 /** Meetings in flight. On globalThis so a Next hot-reload in dev doesn't strand a live call. */
@@ -228,7 +240,7 @@ function session(id: string): Session {
     s = {
       id, board: createBoard(), lines: [], startedAt: Date.now(), touchedAt: Date.now(), inflight: new Map(),
       utterances: 0, cost: 0, ended: false, queued: 0, dropped: 0, chain: Promise.resolve(), topic: undefined,
-      entities: createEntityIndex(loadVocab()),
+      entities: createEntityIndex(loadVocab()), lastCardAt: Date.now(),
     };
     store.set(id, s);
   }
@@ -857,6 +869,7 @@ export async function POST(req: Request) {
         );
         if (node) {
           s.board.editById?.(node.id, {});   // pins it: a raw quote must not be "improved" later
+          s.lastCardAt = Date.now();         // a rescue is still a card — don't also trip the dead-man's switch
           trace("judge", `judge unavailable — kept the words verbatim instead`, Date.now() - tJudge);
           return { added: 1 };
         }
@@ -878,6 +891,48 @@ export async function POST(req: Request) {
     // The single most useful line in the panel: "12 proposed → 0 on the board" is the signature of a
     // grounding or dedup rule quietly eating everything, which has happened more than once.
     trace("judge", `${actions.length} proposed → ${added} card(s) on the board`, Date.now() - tJudge);
+
+    /** ⚠️ THE DEAD-MAN'S SWITCH — the last line of defence, and the only one that covers the failure
+     *  mode that has actually cost meetings.
+     *
+     *  Every other guard here fires on an ERROR. The failures that hurt did not error. On 2026-08-21
+     *  the judge returned a successful, well-formed, empty actions array for eight consecutive
+     *  substantive utterances: clean logs, HTTP 200 throughout, every component reporting healthy, and
+     *  a board that did not move while anh presented. The cause was five separate "return nothing"
+     *  rules that were individually reasonable and collectively made silence the default — but the
+     *  cause is not the point. The point is that NOTHING NOTICED. A pipeline can only be trusted to
+     *  the extent it can tell the difference between "nothing worth saying" and "I have stopped
+     *  working", and from the inside those are the same 200.
+     *
+     *  So stop asking why, and watch the outcome instead: if real speech keeps arriving and the board
+     *  has not gained a card in DEAD_MAN_MS, quit trusting the judge and put the words up verbatim.
+     *
+     *  Three things keep this from becoming noise:
+     *    · it needs SUBSTANCE — a longer line than the throw-path rescue, because this one is acting
+     *      on suspicion rather than a real error;
+     *    · a rescue card IS a card, so lastCardAt moves and the next one cannot fire for another full
+     *      window — at most one verbatim line per DEAD_MAN_MS, never a stream;
+     *    · it is pinned, so the tidy pass will not later rewrite a raw quote into a summary.
+     *
+     *  A plain true sentence on the board is worse than a good card and enormously better than a gap,
+     *  and anh cannot debug this from inside a client call. That trade is the whole design. */
+    if (added) s.lastCardAt = Date.now();
+    else if (Date.now() - s.lastCardAt >= DEAD_MAN_MS) {
+      const raw = said.join(" ").replace(/^[^:]*:\s*/, "").trim();
+      if (raw.length >= 45) {
+        const node = s.board.apply(
+          { op: "card", kind: "note", label: raw.slice(0, 90), detail: raw.length > 90 ? raw.slice(0, 200) : undefined, source: raw, topic: s.topic },
+          recent,
+        );
+        if (node) {
+          s.board.editById?.(node.id, {});
+          s.lastCardAt = Date.now();
+          added = 1;
+          console.warn(`[ingest] dead-man's switch — no card in ${DEAD_MAN_MS / 1000}s of speech, kept the words verbatim`);
+          trace("judge", `board went quiet for ${DEAD_MAN_MS / 1000}s — kept the words verbatim`, Date.now() - tJudge);
+        }
+      }
+    }
     return { added };
   })();
   // Tracked so `end` can drain judges that are no longer on the chain. Registered before the

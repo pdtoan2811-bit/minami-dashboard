@@ -26,7 +26,8 @@
     "serve": "bash bin/serve.sh",
     "deploy": "bash bin/deploy.sh",
     "dev:iterate": "NODE_ENV=development NEXT_DIST_DIR=.next-dev PORT=3001 next dev",
-    "kb": "node public/kb/serve.mjs"
+    "kb": "node public/kb/serve.mjs",
+    "check": "tsx scripts/regression.mts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",

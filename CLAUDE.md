@@ -191,3 +191,30 @@ bash .claude/skills/minami-flow/orient.sh
 
 Two or more sessions in the tree means work in a worktree (`node bin/task.mjs new <name>`), always.
 The `minami-flow` skill has the full decision table, the merge gates and the deploy gate.
+
+## The live canvas: run `npm run check` before AND after touching it
+
+`app/canvas`, `app/api/canvas/*`, `lib/canvas-*`, `server/*` and `bin/Minami Call.command` run in
+**real client meetings, often while the meeting is happening**. There is no staging and no rollback
+window — a regression ships to a shared screen in front of a customer.
+
+```bash
+npm run check     # ~7s, ~1¢ of model calls
+```
+
+Eighteen checks, every one of them a thing that has already cost a real call. It is not a general
+test suite and should not become one; it is the specific list of ways this pipeline has failed.
+
+**The failure mode it exists for is not a crash.** Four separate fixes in one day each caused the
+next problem, and every one produced clean logs, HTTP 200s and healthy-looking components:
+
+- an empty transcription (which the prompt *orders* for silence) treated as an error → 502 → retry → drop
+- a receiver that answered the health check correctly while forwarding audio nowhere
+- a tunnel check that accepted `api.trycloudflare.com` because *something* replied
+- five individually-reasonable "return nothing" rules that together made silence the judge's default
+
+So: **the pipeline cannot tell "nothing worth saying" from "I have stopped working"** — both are a
+200 with an empty board. `DEAD_MAN_MS` in the ingest route is the answer to that (if real speech
+keeps arriving and no card lands for 90s, the words go up verbatim, pinned), and `npm run check`
+is the answer to *me*. Run it, then make the change, then run it again. A green run before an edit
+is what makes a red run after it mean something.
