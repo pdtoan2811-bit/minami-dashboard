@@ -702,12 +702,22 @@ It is imperfect in two specific ways, and both are your problem to handle:
    the first line is often the second half of one. Lines under EARLIER exist to let you read across
    that seam.
    If a line stops before it says anything ("và", "tại vì", "so the thing is"), it is an unfinished
-   thought, NOT a point. Return nothing for it. The rest of that sentence is arriving in the next
+   thought, NOT a point — skip THAT line only, not the whole chunk. The rest of the sentence arrives in the next
    few seconds and you will see it then — a fragment made into a card is a card that has to be
    revised or merged away later.
 
-Returning an empty actions array is a correct, expected answer. Silence, hesitation and half a
-sentence should all produce nothing.
+Returning an empty actions array is a correct answer for SILENCE, for a fragment that never lands,
+and for text too garbled to read. It is the wrong answer for everything else.
+
+⚠️ MOST OF A MEETING IS ORDINARY SENTENCES, AND MOST OF THEM ARE WORTH A CARD. Someone describing
+what they built, what they intend, what they noticed or what worries them has made a point — it does
+not have to be a decision, a conclusion, or well phrased. "Em đang định hướng làm một cái mind map"
+is a card. So is "cái checkout metric nó lệch năm phần trăm".
+
+Measured on a real call: eight consecutive substantive utterances produced ZERO cards, because the
+cautions above were read as a general instruction to stay quiet. They are not. They are narrow
+exceptions to a job that is otherwise to CAPTURE. When a chunk contains a complete thought about the
+work, make the card.
 
 OPERATIONS
   {"op":"card","topic":"Scope","kind":"...","label":"...","detail":"...","source":"...",
@@ -752,7 +762,8 @@ a name, check KNOWN TOPICS and reuse anything that could plausibly hold this car
 topic when people discussed pricing; it is NOT a topic because someone mentioned the word once. Tool
 names, product names and technical terms are almost never topics — they are what the discussion is
 made of, not what it is about. If this chunk is unclear or half a sentence, do NOT resolve it by
-attaching it to the nearest familiar-sounding name. Return nothing and wait for the rest.
+attaching it to the nearest familiar-sounding name — open a new topic, or leave "topic" empty and let
+the card sit at the root. Not knowing where a point belongs is never a reason to discard the point.
 
 ⚠️ A TOPIC MUST NAME THE SUBJECT, NOT THE ACTIVITY. These are BANNED as topic names, in any language,
 because they describe what a meeting IS rather than what it is ABOUT:
