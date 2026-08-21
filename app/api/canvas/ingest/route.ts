@@ -916,8 +916,14 @@ export async function POST(req: Request) {
      *
      *  A plain true sentence on the board is worse than a good card and enormously better than a gap,
      *  and anh cannot debug this from inside a client call. That trade is the whole design. */
+    /** ⚠️ `?? Date.now()` IS NOT DEFENSIVE PADDING. A meeting in progress when this file reloads keeps
+     *  the session object it already had, which has no lastCardAt at all — that object was built by
+     *  the previous version of this module and a hot reload does not migrate it. Without the fallback
+     *  the comparison is `Date.now() - undefined`, which is NaN, and NaN >= anything is false: the
+     *  switch would silently never arm for exactly the call that is running while I edit. That is the
+     *  same hot-reload trap that has produced a day of "the fix is in and nothing changed". */
     if (added) s.lastCardAt = Date.now();
-    else if (Date.now() - s.lastCardAt >= DEAD_MAN_MS) {
+    else if (Date.now() - (s.lastCardAt ??= Date.now()) >= DEAD_MAN_MS) {
       const raw = said.join(" ").replace(/^[^:]*:\s*/, "").trim();
       if (raw.length >= 45) {
         const node = s.board.apply(
