@@ -77,6 +77,10 @@ if (!TOKEN && !OPEN) {
  *  said. Grounding is supposed to mean "traceable to THIS", and a window is what makes that true. */
 const RECENT = 60;
 
+/** The grounding window, in one place — the judge and its fallback must agree on what "recent" means
+ *  or a verbatim card could be rejected as ungrounded against a different slice of the transcript. */
+const recentLines = (s: { lines: string[] }) => s.lines.slice(-RECENT);
+
 /** How many utterances may be waiting to be judged before we start skipping.
  *
  *  2 is deliberately tight. Utterances arrive roughly every 10s and a judge call takes 2-6s, so a
@@ -813,6 +817,30 @@ export async function POST(req: Request) {
     } catch (e) {
       trace("error", `judge failed — ${e instanceof Error ? e.message.slice(0, 120) : "unknown"}`, Date.now() - tJudge);
       console.error("[ingest] derive failed:", e instanceof Error ? e.message : e);
+
+      /** ⚠️ DEGRADE, DO NOT DROP. A failed judge used to lose the minute entirely — the words were
+       *  heard, transcribed and paid for, and then thrown away because the model that shapes them
+       *  into a card was unavailable.
+       *
+       *  During an important meeting a plain, true line on the board beats a gap. So the utterance
+       *  goes up verbatim as a note, marked so nobody mistakes it for Minami's own summary, and
+       *  marked EDITED so the tidy pass does not later rewrite a raw quote into something it thinks
+       *  is tidier.
+       *
+       *  Only on a THROW. A judge returning zero actions is usually correct — silence, a fragment,
+       *  small talk — and turning every one of those into a card would bury the board in noise. */
+      const raw = said.join(" ").replace(/^[^:]*:\s*/, "").trim();
+      if (raw.length >= 25) {
+        const node = s.board.apply(
+          { op: "card", kind: "note", label: raw.slice(0, 90), detail: raw.length > 90 ? raw.slice(0, 200) : undefined, source: raw, topic: s.topic },
+          recentLines(s),
+        );
+        if (node) {
+          s.board.editById?.(node.id, {});   // pins it: a raw quote must not be "improved" later
+          trace("judge", `judge unavailable — kept the words verbatim instead`, Date.now() - tJudge);
+          return { added: 1 };
+        }
+      }
       return { added: 0 };
     }
     let added = 0;

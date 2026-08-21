@@ -1086,6 +1086,15 @@ ${opts.before}\n\n`
       lastErr = e instanceof Error ? e.message.slice(0, 80) : "unknown";
     }
   }
+  /** ⚠️ "I JUDGED AND FOUND NOTHING" AND "I COULD NOT JUDGE" ARE DIFFERENT ANSWERS.
+   *
+   *  Both used to return an empty array, so a dead model, an exhausted budget and a chunk of small
+   *  talk were indistinguishable to the caller — which is why the caller's fallback for a broken
+   *  judge could never fire: it hung off a catch that nothing ever threw.
+   *
+   *  An empty array now means the model answered and had nothing to add, which is common and correct.
+   *  A throw means it never answered at all, which is rare and worth reacting to. */
+  if (lastErr) throw new Error(`judge unavailable: ${lastErr}`);
   return [];
 }
 

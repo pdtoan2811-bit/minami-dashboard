@@ -346,6 +346,40 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
    *  It marks a REAL card and picks the glyph from what that card IS, so a forced moment still tells
    *  the truth about the thing it points at. It never invents a card, and it stays quiet when the
    *  board is empty — a meeting that has produced nothing has nothing to celebrate. */
+  /** ⚠️ SPEECH ARRIVING BUT NOTHING LANDING — the failure shape this product keeps having.
+   *
+   *  Three times now a call has continued while the board quietly stopped: a 401 on publish, a stalled
+   *  judge chain, an empty transcription treated as an error. Every component reported itself healthy
+   *  each time, and the only symptom was a board anh eventually noticed was stale — usually minutes
+   *  later, mid-sentence, in front of someone.
+   *
+   *  The board already carries both numbers in its subtitle ("77 utterances · 26 cards"), so this
+   *  needs no extra polling: if utterances keep climbing while cards do not, something between the ear
+   *  and the board is broken, and the room should be told BY the board rather than by anh noticing. */
+  const stallRef = useRef({ utt: 0, cards: 0, since: Date.now() });
+  const [stalled, setStalled] = useState<number | null>(null);
+  useEffect(() => {
+    const m = /(\d+)\s+utterance\w*\s*·\s*(\d+)\s+card/i.exec(graph.subtitle ?? "");
+    if (!m) return;
+    const utt = +m[1], cards = +m[2];
+    const st = stallRef.current;
+    // Cards moved, or nothing has been said yet: healthy either way, reset the clock.
+    if (cards !== st.cards || utt === st.utt) {
+      stallRef.current = { utt, cards, since: Date.now() };
+      setStalled(null);
+      return;
+    }
+    /** ⚠️ THE BASELINE MUST NOT MOVE WHILE STALLED. Advancing `utt` on every frame made `heard` the
+     *  delta since the LAST frame — always 1 — so the "three utterances" condition could never be met
+     *  and the warning never fired. Caught by exercising the logic against a controlled clock rather
+     *  than waiting to see it in a meeting. The baseline resets only when cards actually move. */
+    const heard = utt - st.utt;
+    const secs = Math.round((Date.now() - st.since) / 1000);
+    // Three utterances is enough to rule out one quiet chunk; 90s is longer than any legitimate
+    // judge leg, including the tidy pass.
+    setStalled(heard >= 3 && secs >= 90 ? secs : null);
+  }, [graph.subtitle]);
+
   const lastSceneAt = useRef(Date.now());
   useEffect(() => { if (scenes.current) lastSceneAt.current = Date.now(); }, [scenes.current?.id]);
   useEffect(() => {
@@ -472,6 +506,16 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
         </div>
       ) : null}
       {graph.reaction ? <Reaction kind={graph.reaction.kind} label={graph.reaction.label} /> : null}
+      {/* Deliberately quiet and deliberately NOT hidden in the debug panel: the whole point is that it
+          reaches anh without him having gone looking. It says what is wrong and what to do, because a
+          warning that only says "something is wrong" mid-meeting is another thing to worry about. */}
+      {stalled ? (
+        <div className="pointer-events-none absolute left-1/2 top-4 z-40 -translate-x-1/2">
+          <div className="rounded-full border border-amber-300/70 bg-amber-50/95 px-3.5 py-1.5 text-[12.5px] font-medium text-amber-900 shadow-sm backdrop-blur">
+            Minami is hearing you but no cards are landing — {Math.round(stalled / 60)} min. Open debug, or restart the app after the call.
+          </div>
+        </div>
+      ) : null}
       <CutScene moment={scenes.current} onDone={scenes.done} meme={memeFor} />
       {/* Always shown on the live surface, defaulting to "listening": this is the bot's own screen
           share, and it is ALWAYS listening while it is in the room. Passing nothing meant the one
