@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_GRAPH, type GNode, type Graph } from "@/lib/canvas-graph";
 import { GraphCanvas } from "@/components/canvas/GraphCanvas";
-import { CutScene, useCutScenes, pickMeme, MOMENT_MEANING, type Moment } from "@/components/canvas/CutScene";
+import { CutScene, useCutScenes, pickMeme, MOMENT_MEANING, KIND_EMOJI, type Moment } from "@/components/canvas/CutScene";
 import { Presence } from "@/components/canvas/Presence";
 import { CommandDock } from "@/components/canvas/CommandDock";
 import { DebugPanel } from "@/components/canvas/DebugPanel";
@@ -335,6 +335,37 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
     }
     if (moments.length) offer(moments);
   }, [graph, offer]);
+
+  /** ⚠️ A GUARANTEED FLOOR: at least one moment a minute, whatever the judge decided.
+   *
+   *  Asked for directly — "around 1 minute I need at least 1 meme/emoji fired" — and the reason is
+   *  visible in the data: on a live call TEN cards in a row carried no emoji at all, so nothing ever
+   *  fired. Raising the queue limits would have changed nothing, because the supply was zero. A
+   *  minimum cannot depend on the judge being in the mood.
+   *
+   *  It marks a REAL card and picks the glyph from what that card IS, so a forced moment still tells
+   *  the truth about the thing it points at. It never invents a card, and it stays quiet when the
+   *  board is empty — a meeting that has produced nothing has nothing to celebrate. */
+  const lastSceneAt = useRef(Date.now());
+  useEffect(() => { if (scenes.current) lastSceneAt.current = Date.now(); }, [scenes.current?.id]);
+  useEffect(() => {
+    const MIN_GAP = 60_000;
+    const t = setInterval(() => {
+      if (Date.now() - lastSceneAt.current < MIN_GAP) return;
+      const cards = (graph.nodes ?? []).filter((n) => n.kind !== "topic" && !n.placeholder);
+      if (!cards.length) return;
+      // Newest first: the room is far more interested in what was just said than in minute three.
+      const pick = cards[cards.length - 1];
+      lastSceneAt.current = Date.now();
+      offer([{
+        id: `beat:${pick.id}:${Math.floor(Date.now() / MIN_GAP)}`,
+        emoji: KIND_EMOJI[pick.kind] ?? "💡",
+        label: pick.label,
+        detail: pick.detail,
+      }]);
+    }, 10_000);
+    return () => clearInterval(t);
+  }, [graph, offer, scenes]);
 
   const empty = (graph.nodes ?? []).length <= 1;
 

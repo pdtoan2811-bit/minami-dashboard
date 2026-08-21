@@ -181,9 +181,25 @@ async function transcribeOmni(
       text = "";
     }
   }
-  // A refusal or an empty completion must not read as silence — it is a failure, and the caller's
-  // ladder should see it as one.
-  if (!text) throw new Error("omni: empty completion");
+  /** ⚠️ AN EMPTY REPLY IS SILENCE, NOT A FAILURE — and treating it as one stopped a live meeting.
+   *
+   *  This threw, on the reasoning that a refusal should not be mistaken for silence. But the system
+   *  message above ORDERS the model to return an empty string when a chunk has no speech in it:
+   *  "nếu đoạn ghi âm KHÔNG có lời nói nào … hãy trả về ĐÚNG một chuỗi rỗng". So the model obeyed,
+   *  and the caller treated obedience as an error.
+   *
+   *  What that cost, observed on a real call on 2026-08-21: every quiet chunk became a 502, the
+   *  receiver retried it three times (two extra paid calls and ~6s each), then dropped it — and with
+   *  a quiet microphone producing many ambiguous chunks, the board simply stopped growing while
+   *  audio kept flowing and every component reported itself healthy.
+   *
+   *  The transport and API failures still throw — `data.error` is checked above, before this. Reaching
+   *  here means a 200 with nothing in it, which is exactly what a pause sounds like. Ingest already
+   *  handles no-speech gracefully; it was never being allowed to. */
+  if (!text) {
+    console.log("[omni] nothing said in this chunk");
+    return { lines: [], speakers: 0, profile: "omni" };
+  }
   const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   return { lines, speakers: 0, profile: "omni" };
 }
@@ -714,7 +730,9 @@ memorable thing this board does, and also the easiest thing to ruin by overusing
   🙌 the whole room converged, not just two people
   ✨ worth remembering later — a phrasing or insight to keep, even if nothing was decided
 
-About one card in THREE should carry one. Not every card — an emoji on everything means none of them
+SET ONE ON ABOUT ONE CARD IN THREE. This is a requirement, not a suggestion — a board that goes a
+whole minute without marking anything has failed at the one thing it does that a transcript cannot.
+Measured on a real call: ten cards in a row carried none, and the room saw nothing happen. Not every card — an emoji on everything means none of them
 is a moment — but be generous rather than sparing. This was tuned to one in six and measured too
 quiet in real use: a thirteen-minute call produced almost no cut scenes, and the room noticed the
 board was accurate long before it noticed the board was alive. A meeting has more genuine moments in

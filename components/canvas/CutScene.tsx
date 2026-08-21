@@ -42,11 +42,15 @@ const STILL_DURATION = 2200;
  *  offered while one is playing beyond MAX_QUEUED is RETIRED rather than deferred — so asking the
  *  judge for more moments without widening this just throws more of them away, silently, and the
  *  board looks exactly as quiet as before. The two numbers have to move together. */
-const COOLDOWN = 1800;
+const COOLDOWN = 900;
 /** Anything past this in one burst is filed to the cards and never shown big. Three rather than two:
  *  a lively stretch of meeting genuinely produces three things worth marking, and at 7.5s + 1.8s a
  *  burst of three costs ~28s of screen — noticeable, bounded, and still not a slideshow. */
-const MAX_QUEUED = 3;
+/** ⚠️ NOT A THROTTLE ANY MORE — a burst guard. Anh asked for no ceiling on how many moments fire, and
+ *  the real limit is physical: a scene holds the screen 7.5s, so the board can show at most ~7 in a
+ *  minute whatever this says. 12 means a lively stretch queues instead of being thrown away, while a
+ *  runaway judge still cannot turn the board into a slideshow it never recovers from. */
+const MAX_QUEUED = 12;
 /** How long a moment may wait for the queue before it stops being a moment. Past this it is dropped
  *  rather than played late: a cut scene for something said two minutes ago confuses a room more than
  *  it delights it. */
@@ -114,6 +118,13 @@ export function pickMeme(emoji: string, index: MemeIndex | null): string | null 
 
 /** What each glyph is FOR. The emoji alone is ambiguous at 140px — 🔥 could be "this is great" or
  *  "this is on fire, badly" — so the scene always names the reason underneath it. */
+/** A sensible glyph for a card the judge did not mark, used only by the heartbeat below. Derived
+ *  from what the card IS, so a forced moment still tells the truth about the thing it points at. */
+export const KIND_EMOJI: Record<string, string> = {
+  decision: "✅", action: "👏", question: "❓", risk: "😮",
+  milestone: "🎉", requirement: "💡", quote: "✨", note: "💡", aside: "🙌",
+};
+
 export const MOMENT_MEANING: Record<string, string> = {
   "🔥": "Strongest claim yet",
   "😮": "That landed",
