@@ -255,12 +255,24 @@ export function createBoard() {
     /** Draw the warm-up cards. Ghosts under the seeded topic, so the shape of the call is visible
      *  before the first word — see GNode.placeholder for why they must stay distinguishable. */
     seedPlaceholders: (labels: string[], parent?: string) => {
+      /** ⚠️ WARM-UP REPLACES, IT NEVER ACCUMULATES. Every launch attempt seeds a fresh set, and the
+       *  ghosts are only cleared when real speech arrives. On 2026-08-21 a dead tunnel meant speech
+       *  never arrived, so three relaunches left FIFTEEN ghost cards stacked on one board — three
+       *  copies of "Conversational AI evolution" among them — and anh saw a canvas full of things
+       *  nobody had said.
+       *
+       *  ⚠️ And the ids were `ph1..ph5` every time, so the second batch DUPLICATED the first batch's
+       *  ids. Two nodes sharing an id breaks every lookup that assumes uniqueness: nest, merge,
+       *  revise and delete would each act on whichever copy findIndex reached first. */
+      for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i].placeholder) nodes.splice(i, 1);
       let n = 0;
+      const seen = new Set<string>();
       for (const raw of labels.slice(0, 5)) {
         const label = raw.trim().slice(0, 90);
-        if (!label) continue;
-        const id = `ph${++n}`;
-        nodes.push({ id, kind: "note", label, parent: parent ?? "root", placeholder: true });
+        // Also dedupe within a batch: a model asked twice for "the agenda" repeats itself.
+        if (!label || seen.has(label.toLowerCase())) continue;
+        seen.add(label.toLowerCase());
+        nodes.push({ id: `ph${Date.now().toString(36)}${++n}`, kind: "note", label, parent: parent ?? "root", placeholder: true });
       }
       return n;
     },

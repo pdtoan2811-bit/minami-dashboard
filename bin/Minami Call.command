@@ -184,7 +184,14 @@ b "  2/4  audio receiver"
 # ⚠️ ANSWERING, NOT MERELY LISTENING. This asked lsof whether the port was bound — the same
 # "the process exists so it must work" mistake that has now cost a meeting twice, once on this port
 # and once on the tunnel. A wedged receiver holds its socket open exactly like a healthy one.
-receiver_alive() { [ "$(curl -s -o /dev/null -m 4 -w '%{http_code}' "http://127.0.0.1:${RECV_PORT}/" 2>/dev/null)" != "000" ]; }
+# Identity, not liveness — same reason as tunnel_reachable. An older receiver without the marker is
+# treated as not ours and replaced, which is safe at startup because no bot has connected yet.
+receiver_alive() {
+  case "$(curl -s -m 4 "http://127.0.0.1:${RECV_PORT}/" 2>/dev/null | head -c 64)" in
+    (*minami-receiver*) return 0 ;;
+  esac
+  return 1
+}
 
 if receiver_alive; then
   ok "already answering on :${RECV_PORT} — reusing it"
@@ -231,17 +238,27 @@ b "  3/4  tunnel"
 # So a local DNS failure was blocking a meeting the bot could have joined. The probe now falls back
 # to resolving the name itself and connecting by IP: if the tunnel answers that way, it IS reachable
 # from the internet, whatever this Mac's resolver believes.
+# ⚠️ "SOMETHING ANSWERED" IS NOT THE QUESTION — "DID MY RECEIVER ANSWER" IS.
+#
+# This accepted any HTTP response as proof of life. On 2026-08-21 the url extraction below matched
+# https://api.trycloudflare.com — Cloudflare's own API host, not a tunnel — and that host replies 405,
+# which is not a connection failure. So the check passed, a bot was dispatched at Cloudflare's API,
+# and a 52-minute meeting streamed its audio into nothing while every log stayed clean.
+#
+# The receiver now answers "minami-receiver ok" and this looks for that. A wrong-but-live host can no
+# longer impersonate it.
 tunnel_reachable() {
   [ -n "${1:-}" ] || return 1
-  local host code ip
+  local host body ip
   host="${1#https://}"
-  code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null)"
-  [ "$code" != "000" ] && return 0
+  body="$(curl -s -m 5 "$1" 2>/dev/null | head -c 64)"
+  case "$body" in (*minami-receiver*) return 0 ;; esac
   # System resolver failed. Ask DNS directly and connect by address before believing it is down.
   ip="$(dig +short +time=3 +tries=1 "$host" 2>/dev/null | grep -m1 -E '^[0-9.]+$')"
   [ -n "$ip" ] || return 1
-  code="$(curl -s -o /dev/null -m 5 --resolve "${host}:443:${ip}" -w '%{http_code}' "$1" 2>/dev/null)"
-  [ "$code" != "000" ]
+  body="$(curl -s -m 5 --resolve "${host}:443:${ip}" "$1" 2>/dev/null | head -c 64)"
+  case "$body" in (*minami-receiver*) return 0 ;; esac
+  return 1
 }
 
 tunnel_up() {
@@ -265,7 +282,11 @@ tunnel_up() {
   # be told the same thing while it happens.
   local waited=0
   for _ in $(seq 1 30); do
-    host=$(grep -aoE "https://[a-z0-9-]+\.trycloudflare\.com" "$STATE/tunnel.log" | head -1)
+    # ⚠️ EXCLUDE api.trycloudflare.com — cloudflared logs the API it talks to BEFORE it prints the
+    # quick tunnel's own hostname, and `head -1` therefore picked Cloudflare's API. A quick-tunnel
+    # hostname is several hyphenated words; the API host is one.
+    host=$(grep -aoE "https://[a-z0-9-]+\.trycloudflare\.com" "$STATE/tunnel.log" \
+             | grep -v '//api\.' | grep -E '//[a-z0-9]+(-[a-z0-9]+){2,}\.' | head -1)
     # PRINTED IS NOT READY. cloudflared logs the hostname before the edge serves it, so a bot
     # dispatched the instant the url appears can miss the first seconds of a call — or all of it.
     if tunnel_reachable "$host"; then

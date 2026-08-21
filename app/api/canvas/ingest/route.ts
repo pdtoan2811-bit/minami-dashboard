@@ -326,6 +326,26 @@ export async function POST(req: Request) {
   /** SEED — sent once, before the first word. Sets the subject the judge should name topics after,
    *  and opens the board with that topic so the very first card has somewhere sensible to land. */
   if (body.event === "seed") {
+    /** ⚠️ A SEED ON A SESSION THAT NEVER STARTED MEANS A RELAUNCH — START CLEAN.
+     *
+     *  The launcher seeds under the id "pending", because the real meeting id is Recall's bot id and
+     *  does not exist until the bot connects. So every launch attempt lands on the SAME session, and
+     *  a failed attempt leaves its board behind for the next one to inherit.
+     *
+     *  Observed 2026-08-21: a dead tunnel meant no audio ever arrived, anh relaunched three times, and
+     *  the board he finally saw held fifteen warm-up ghosts — three copies of the same five — with
+     *  zero utterances behind them. A canvas full of things nobody had said.
+     *
+     *  Zero utterances is the safe test: a session that has heard nothing has nothing worth keeping,
+     *  so this can never discard a real meeting. One that HAS heard something is left alone. */
+    if (s.utterances === 0 && s.board.cards().length) {
+      const dropped = s.board.cards().length;
+      s.board = createBoard();
+      s.entities = createEntityIndex();
+      s.lines = [];
+      console.log(`[ingest] relaunch on an unstarted session — cleared ${dropped} leftover card(s)`);
+      trace("skip", `relaunch: cleared ${dropped} card(s) from an attempt that never started`);
+    }
     /** A TEMPLATE IS A HAND-MADE WARM-UP. It seeds the backbone the judge hangs things under —
      *  "agenda nó khá là rõ… nó cứ pick từ đấy nó đỡ bị lạc". Topics are REAL, not ghosts: anh chose
      *  them deliberately before the call, which is exactly the difference between a template and the

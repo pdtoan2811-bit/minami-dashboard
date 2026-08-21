@@ -37,8 +37,16 @@ const MAX_MESSAGE = 16 * 1024 * 1024;
  */
 export function createWsServer({ port, onMessage, onOpen, onClose, authorize }) {
   const server = createServer((_req, res) => {
+    /** ⚠️ THE HEALTH RESPONSE IDENTIFIES ITSELF, and that is the whole point.
+     *
+     *  It used to answer a generic "ok". The launcher then asked only "did anything answer?", so on
+     *  2026-08-21 a bot was dispatched at https://api.trycloudflare.com — Cloudflare's own API host,
+     *  which the tunnel-url regex had matched by mistake. It replies 405, which is not a connection
+     *  failure, so the check passed and a 52-minute call sent its audio nowhere.
+     *
+     *  "Something answered" is not the question. "Did MY receiver answer" is. */
     res.writeHead(200, { "content-type": "text/plain" });
-    res.end("ok\n");
+    res.end("minami-receiver ok");
   });
 
   server.on("upgrade", (req, socket) => {
