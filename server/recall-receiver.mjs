@@ -216,6 +216,8 @@ function bodyFor(chunk) {
 let chunker = null;
 
 createWsServer({
+  // "ok" only when this receiver can actually forward — see ws-min for why.
+  health: () => (INGEST ? "ok" : "dry-run"),
   port: PORT,
   // Anyone who finds the tunnel hostname can otherwise push audio into your meeting pipeline. A
   // shared token in the query string is what Recall's realtime_endpoints URL can actually carry.

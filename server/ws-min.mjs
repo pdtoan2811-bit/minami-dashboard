@@ -35,7 +35,7 @@ const MAX_MESSAGE = 16 * 1024 * 1024;
  * @param {() => void} [o.onClose]
  * @param {(req: import("node:http").IncomingMessage) => boolean} [o.authorize] reject before upgrade
  */
-export function createWsServer({ port, onMessage, onOpen, onClose, authorize }) {
+export function createWsServer({ port, onMessage, onOpen, onClose, authorize, health }) {
   const server = createServer((_req, res) => {
     /** ⚠️ THE HEALTH RESPONSE IDENTIFIES ITSELF, and that is the whole point.
      *
@@ -45,8 +45,16 @@ export function createWsServer({ port, onMessage, onOpen, onClose, authorize }) 
      *  failure, so the check passed and a 52-minute call sent its audio nowhere.
      *
      *  "Something answered" is not the question. "Did MY receiver answer" is. */
+    /** ⚠️ IDENTITY IS NOT ENOUGH — IT MUST SAY WHETHER IT CAN DO THE JOB.
+     *
+     *  A receiver with no CANVAS_INGEST_URL runs in DRY RUN: it accepts the bot, logs every chunk and
+     *  forwards nothing. It answers this endpoint exactly like a working one, so a launcher that
+     *  checks for the marker alone will happily reuse it and the board stays empty for the whole call.
+     *  Observed 2026-08-21 on a live meeting: audio arriving, chunks logged, zero cards.
+     *
+     *  So the answer carries the mode, and the launcher refuses anything that is not "ok". */
     res.writeHead(200, { "content-type": "text/plain" });
-    res.end("minami-receiver ok");
+    res.end(`minami-receiver ${health?.() ?? "ok"}`);
   });
 
   server.on("upgrade", (req, socket) => {

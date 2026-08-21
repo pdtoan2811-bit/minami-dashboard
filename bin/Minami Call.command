@@ -186,15 +186,32 @@ b "  2/4  audio receiver"
 # and once on the tunnel. A wedged receiver holds its socket open exactly like a healthy one.
 # Identity, not liveness — same reason as tunnel_reachable. An older receiver without the marker is
 # treated as not ours and replaced, which is safe at startup because no bot has connected yet.
+# ⚠️ "ok" ONLY. A receiver with no CANVAS_INGEST_URL runs in DRY RUN — it accepts the bot, logs every
+# chunk and forwards nothing — and it identifies itself exactly like a working one. Reusing one costs
+# a whole meeting: audio arriving, chunks logged, zero cards, every log clean. Seen 2026-08-21 after a
+# receiver was restarted by hand without the launcher's environment.
 receiver_alive() {
   case "$(curl -s -m 4 "http://127.0.0.1:${RECV_PORT}/" 2>/dev/null | head -c 64)" in
-    (*minami-receiver*) return 0 ;;
+    (*"minami-receiver ok"*) return 0 ;;
+    (*minami-receiver*)      return 2 ;;   # ours, but not able to forward
   esac
   return 1
 }
 
-if receiver_alive; then
+receiver_alive; RECV_STATE=$?
+if [ "$RECV_STATE" = "0" ]; then
   ok "already answering on :${RECV_PORT} — reusing it"
+elif [ "$RECV_STATE" = "2" ]; then
+  # Ours, but useless. Safe to replace: it is forwarding nothing, so nothing is lost by restarting it.
+  no "the receiver on :${RECV_PORT} is in DRY RUN — it would log your meeting and forward none of it"
+  dim "replacing it…"
+  for pid in $(pgrep -f "node server/recall-receiver.mjs" 2>/dev/null); do kill "$pid" 2>/dev/null; done
+  sleep 2
+  nohup node server/recall-receiver.mjs > "$STATE/receiver.log" 2>&1 &
+  RECV_PID=$!
+  for _ in $(seq 1 15); do receiver_alive && break; sleep 1; done
+  receiver_alive || { no "receiver did not come back — see $STATE/receiver.log"; tail -8 "$STATE/receiver.log"; read -r -p "  enter to close "; exit 1; }
+  ok "receiver replaced and forwarding"
 elif lsof -nP -iTCP:"$RECV_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   no "something holds :${RECV_PORT} but does not answer — stop it first:"
   dim "lsof -nP -iTCP:${RECV_PORT} -sTCP:LISTEN"
