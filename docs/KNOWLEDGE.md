@@ -49,6 +49,7 @@ recycle one.
 | [`14-agents.md`](knowledge/14-agents.md) | §14 | ~3,000 | Standing agents: identity + home folder ≠ cwd, scaffold vs adopt, the onboarding interview, the unattended task runner (and why it polls), attribution rules, HQ and `bin/agent.mjs`. |
 | [`15-teams.md`](knowledge/15-teams.md) | §15 | ~2,600 | Teams: templates → standing agents, a product's three lifespans (run · record · repo block), the chain runner, and why a handoff is a file rather than a payload. |
 | [`17-meeting-canvas.md`](knowledge/17-meeting-canvas.md) | §17 | ~1,900 | `/canvas`: audio → transcript → ReactFlow board. Why using a chat LLM as the transcriber costs latency, accuracy *and* money, OpenRouter's STT catalogue with prices, and the specified-but-unbuilt replacement. |
+| [`18-meeting-launch.md`](knowledge/18-meeting-launch.md) | §18 | ~1,500 | Getting Minami into a call: the two launchers, the receiver on :8787, the cloudflared quick tunnel, and the shared `bin/tunnel-lib.sh`. Why this Mac's DNS opinion is not the question, and the 1800s negative-cache trap that made the launcher poison its own probe. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~9,400 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -123,6 +124,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Team CLI | `bin/team.mjs` | **shipped** | what the repo's CLAUDE.md team block names — see §15.3 |
 | Meeting canvas | `lib/mimo.ts` + `lib/audio.ts` + `app/api/canvas/live` | **partial** | works off a hardcoded mp3. Still no audio-capture leg, so nothing "joins" a call yet — see §17 |
 | Canvas A/B harness | `lib/canvas-modes.ts` + `?mode=` + the panel scorecard | **shipped** | 3 arms, one variable each, `report` event per run. Verified end-to-end 2026-08-10: control produced nothing in 175s, real-ASR arm got first transcript in 1.4s — see §17 |
+| Meeting launch | `bin/Minami Call.command` + `bin/meet-now.sh` + `bin/tunnel-lib.sh` | **shipped** | app :3011 → receiver :8787 → quick tunnel → Recall. Shared probe verified against a live tunnel 2026-08-24 (detects in ~1s; the poisoned-cache path detected never) — see §18 |
 
 ---
 

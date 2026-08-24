@@ -8,6 +8,29 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-08-24
+- **Meeting launch is a documented subsystem now** (§18, new `docs/knowledge/18-meeting-launch.md`) —
+  the two launchers, the receiver, the tunnel and the Recall dispatch had no owning doc, so four
+  incidents' worth of hard-won tunnel logic lived only in shell comments.
+- **The launcher stopped poisoning its own DNS** (§18) — `trycloudflare.com` publishes an SOA minimum
+  of 1800, so the probe fired at the hostname the instant cloudflared prints it earns an NXDOMAIN that
+  the resolver pins for 30 minutes, and every later probe in the run reads that lie. The `dig`
+  fallback was a bare `dig`, so it drank from the same poisoned cache. New `tunnel_dns()` resolves via
+  `@1.1.1.1` → `@8.8.8.8` → local. Detection went from never to ~1s on a tunnel that was live the
+  whole time.
+  *Reported by user: "stuck on step 3 and cannot launch"*
+- **The tunnel wait is a wall clock, not a pass count** (§18) — the old loop ran 30 passes and added a
+  flat `+2` to the on-screen counter each pass, so the number described the loop's assumptions rather
+  than the time. `TUNNEL_WAIT=180`, real elapsed shown against the real deadline, and the give-up
+  message now separates "printed but never answered" (retry) from "no url at all" (read the log) —
+  `tunnel.log` reports PASS on every pre-check either way, which is why a working tunnel read as a
+  network fault.
+  *Reported by user: "take so long to answer"*
+- **`bin/tunnel-lib.sh` — one copy of the tunnel probe, sourced by both launchers** (§18) —
+  `meet-now.sh` still carried the generation-one logic and therefore all three bugs `Minami
+  Call.command` had already paid for: any-response-counts liveness, `head -1` picking Cloudflare's own
+  api host, and dispatching a bot the moment a hostname is *printed* rather than served.
+
 ### 2026-08-12
 - **A queued message is now visible in the chat log for all three of its lives** (§5f-bis) — waiting
   (dashed bubble in the transcript, rendered off `agent.queued` so reconcile can't wipe it), running as

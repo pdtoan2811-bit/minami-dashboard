@@ -56,7 +56,12 @@ set +a
 PORT="${PORT:-3010}"
 RECV_PORT="${RECALL_RECEIVER_PORT:-8787}"
 URL_FILE="$HOME/.minami/receiver-url.txt"
+TUNNEL_WAIT=180        # seconds to give a fresh quick tunnel — see bin/tunnel-lib.sh
 mkdir -p "$HOME/.minami"
+
+# The shared tunnel probe. Sourced after the cd above, so $PWD is the app dir.
+# shellcheck source=bin/tunnel-lib.sh
+. "$PWD/bin/tunnel-lib.sh" || { echo "✗ missing bin/tunnel-lib.sh"; exit 1; }
 
 echo "▸ 1/5  meeting app (its own port and build dir — the dashboard is never touched)"
 # ⚠️ THIS USED TO RUN `bash bin/serve.sh --force`, AND THAT KILLED EVERY OPEN CLAUDE CHAT.
@@ -102,14 +107,33 @@ sleep 2
 grep -a "recall-receiver on" "$HOME/.minami/receiver.log" | tail -1 | sed 's/^/      /' || echo "      (no banner yet)"
 
 echo "▸ 4/5  tunnel for Recall to dial into"
-if ! curl -s -o /dev/null --max-time 6 "$(cat "$URL_FILE" 2>/dev/null || echo http://0)" 2>/dev/null; then
+# ⚠️ THIS STEP CARRIED EVERY TUNNEL BUG THE OTHER LAUNCHER HAD ALREADY PAID TO FIX.
+#
+# Three of them, and each one has cost a meeting in bin/Minami Call.command's history:
+#   1. the reuse check was `curl -o /dev/null`, which counts ANY response as alive — so Cloudflare's
+#      own api host answering 405 read as "my receiver is up";
+#   2. `head -1` on the log picks that api host, because cloudflared logs it before its own hostname;
+#   3. it broke out of the wait the moment a hostname was PRINTED, which is seconds before the edge
+#      serves it — dispatching a paid bot at a url that does not resolve yet.
+# All three now come from bin/tunnel-lib.sh, shared with the interactive launcher, so this cannot
+# drift back. The wait is a wall clock, not a pass count: see TUNNEL_WAIT and the lib's notes on the
+# 30-minute negative-cache trap that makes the first probe poison the ones after it.
+if ! tunnel_reachable "$(cat "$URL_FILE" 2>/dev/null || true)"; then
   pkill -f "cloudflared tunnel --url http://localhost:${RECV_PORT}" 2>/dev/null || true
-  nohup cloudflared tunnel --url "http://localhost:${RECV_PORT}" > "$HOME/.minami/tunnel-${RECV_PORT}.log" 2>&1 &
-  for i in $(seq 1 30); do
-    host=$(grep -aoE "https://[a-z0-9-]+\.trycloudflare\.com" "$HOME/.minami/tunnel-${RECV_PORT}.log" | head -1 || true)
-    [ -n "$host" ] && { echo "$host" > "$URL_FILE"; break; }
-    sleep 1
+  TUNNEL_LOG="$HOME/.minami/tunnel-${RECV_PORT}.log"
+  : > "$TUNNEL_LOG"
+  nohup cloudflared tunnel --url "http://localhost:${RECV_PORT}" > "$TUNNEL_LOG" 2>&1 &
+  started=$SECONDS; elapsed=0; host=""
+  while [ "$elapsed" -lt "$TUNNEL_WAIT" ]; do
+    host="$(tunnel_host_from_log "$TUNNEL_LOG")"
+    if tunnel_reachable "$host"; then printf '%s' "$host" > "$URL_FILE"; break; fi
+    host=""
+    sleep 2
+    elapsed=$((SECONDS - started))
+    printf '\r\033[K      waiting for the tunnel to answer — %ss / %ss' "$elapsed" "$TUNNEL_WAIT"
   done
+  printf '\r\033[K'
+  [ -n "$host" ] || { echo "      ✗ tunnel never answered in ${elapsed}s — see $TUNNEL_LOG"; exit 1; }
 fi
 HOST=$(cat "$URL_FILE")
 [ -n "$HOST" ] || { echo "      ✗ no tunnel hostname"; exit 1; }

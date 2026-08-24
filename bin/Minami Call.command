@@ -31,6 +31,7 @@ mkdir -p "$STATE"
 PORT=3011              # never 3010
 RECV_PORT=8787
 DIST=".next-meet"
+TUNNEL_WAIT=180        # seconds to give a fresh quick tunnel — see tunnel_up()
 
 b()  { printf "\033[1m%s\033[0m\n" "$1"; }
 ok() { printf "  \033[32m✓\033[0m %s\n" "$1"; }
@@ -244,39 +245,11 @@ b "  3/4  tunnel"
 # `tunnel_up` therefore proves the url end-to-end with an actual request before trusting it, and
 # replaces the tunnel if it cannot. Any HTTP response counts as alive; only a connection failure (000)
 # is death.
-# ⚠️ THIS MACHINE IS NOT THE CONSUMER OF THE TUNNEL URL. Recall's servers are.
-#
-# A first version asked "can curl reach it from here?", which conflates two different failures. On
-# 2026-08-20 a launch hung for minutes on a tunnel that was working perfectly: cloudflared had
-# registered, the receiver answered locally, and `dig` resolved the hostname — but the system
-# resolver would not, because four utun VPN interfaces sit in the DNS path. curl said "Could not
-# resolve host" and returned 000; `curl --resolve` against the same IP returned 200.
-#
-# So a local DNS failure was blocking a meeting the bot could have joined. The probe now falls back
-# to resolving the name itself and connecting by IP: if the tunnel answers that way, it IS reachable
-# from the internet, whatever this Mac's resolver believes.
-# ⚠️ "SOMETHING ANSWERED" IS NOT THE QUESTION — "DID MY RECEIVER ANSWER" IS.
-#
-# This accepted any HTTP response as proof of life. On 2026-08-21 the url extraction below matched
-# https://api.trycloudflare.com — Cloudflare's own API host, not a tunnel — and that host replies 405,
-# which is not a connection failure. So the check passed, a bot was dispatched at Cloudflare's API,
-# and a 52-minute meeting streamed its audio into nothing while every log stayed clean.
-#
-# The receiver now answers "minami-receiver ok" and this looks for that. A wrong-but-live host can no
-# longer impersonate it.
-tunnel_reachable() {
-  [ -n "${1:-}" ] || return 1
-  local host body ip
-  host="${1#https://}"
-  body="$(curl -s -m 5 "$1" 2>/dev/null | head -c 64)"
-  case "$body" in (*minami-receiver*) return 0 ;; esac
-  # System resolver failed. Ask DNS directly and connect by address before believing it is down.
-  ip="$(dig +short +time=3 +tries=1 "$host" 2>/dev/null | grep -m1 -E '^[0-9.]+$')"
-  [ -n "$ip" ] || return 1
-  body="$(curl -s -m 5 --resolve "${host}:443:${ip}" "$1" 2>/dev/null | head -c 64)"
-  case "$body" in (*minami-receiver*) return 0 ;; esac
-  return 1
-}
+# tunnel_dns / tunnel_reachable / tunnel_host_from_log live in bin/tunnel-lib.sh, with the four
+# incidents that shaped them. They are shared with bin/meet-now.sh, which used to carry its own
+# generation-one copy of this logic and every bug those incidents fixed.
+# shellcheck source=bin/tunnel-lib.sh
+. "$APP_DIR/bin/tunnel-lib.sh" || { echo "✗ missing bin/tunnel-lib.sh"; exit 1; }
 
 tunnel_up() {
   local existing host code
@@ -297,25 +270,39 @@ tunnel_up() {
   # launcher could sit on "3/4 tunnel" with a blank screen for minutes — indistinguishable from a
   # crash. cloudflared itself says "it may take some time to be reachable"; the operator deserves to
   # be told the same thing while it happens.
-  local waited=0
-  for _ in $(seq 1 30); do
-    # ⚠️ EXCLUDE api.trycloudflare.com — cloudflared logs the API it talks to BEFORE it prints the
-    # quick tunnel's own hostname, and `head -1` therefore picked Cloudflare's API. A quick-tunnel
-    # hostname is several hyphenated words; the API host is one.
-    host=$(grep -aoE "https://[a-z0-9-]+\.trycloudflare\.com" "$STATE/tunnel.log" \
-             | grep -v '//api\.' | grep -E '//[a-z0-9]+(-[a-z0-9]+){2,}\.' | head -1)
+  # ⚠️ 60s WAS NOT ENOUGH, AND THE COUNTER LIED ABOUT IT. This ran 30 passes and added a flat 2 to the
+  # displayed number each pass — a counter that describes the loop's *assumptions*, not the clock. A
+  # pass that also spends 5s in curl and 3s in dig still printed "+2".
+  # Worse, 30 passes is only ~60s of budget, and a quick tunnel's hostname routinely needs longer than
+  # that to go live at the edge: on 2026-08-24 the tunnel was serving at ~110s and this had already
+  # given up at ~65s. So a WORKING tunnel was declared dead and anh was sent to read a log whose every
+  # line says PASS. Budget by the wall clock and print the wall clock, so the number on screen is the
+  # same number the deadline is measured against.
+  local started=$SECONDS elapsed=0
+  while [ "$elapsed" -lt "$TUNNEL_WAIT" ]; do
+    host=$(tunnel_host_from_log "$STATE/tunnel.log")
     # PRINTED IS NOT READY. cloudflared logs the hostname before the edge serves it, so a bot
     # dispatched the instant the url appears can miss the first seconds of a call — or all of it.
     if tunnel_reachable "$host"; then
       printf '\r\033[K' >&2
       printf '%s' "$host" > "$STATE/receiver-url.txt"; printf '%s' "$host"; return 0
     fi
-    waited=$((waited + 2))
-    printf '\r  \033[2mwaiting for the tunnel to answer — %ss%s\033[0m' "$waited" "${host:+ · ${host#https://}}" >&2
     sleep 2
+    elapsed=$((SECONDS - started))
+    printf '\r\033[K  \033[2mwaiting for the tunnel to answer — %ss / %ss%s\033[0m' \
+      "$elapsed" "$TUNNEL_WAIT" "${host:+ · ${host#https://}}" >&2
   done
   printf '\r\033[K' >&2
-  [ -n "${host:-}" ] && printf '  \033[2mlast url seen: %s\033[0m\n' "$host" >&2
+  # Two very different failures used to read identically, and the log cannot tell them apart: a healthy
+  # cloudflared logs PASS on every pre-check whether or not its hostname ever went live. If a hostname
+  # was printed, the tunnel exists and is merely slower than the budget — that is a retry, not a bug
+  # hunt. Note the exiting trap kills this tunnel, so a retry builds a new one; nothing is reused.
+  if [ -n "${host:-}" ]; then
+    printf '  \033[2mgave up after %ss — %s was printed but never answered\033[0m\n' "$elapsed" "${host#https://}" >&2
+    printf '  \033[2mthat is usually just a slow edge; run this again before reading the log\033[0m\n' >&2
+  else
+    printf '  \033[2mcloudflared never printed a tunnel url in %ss\033[0m\n' "$elapsed" >&2
+  fi
   return 1
 }
 
