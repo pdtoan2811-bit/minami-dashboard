@@ -200,6 +200,45 @@ Two implementation notes worth keeping:
   `usage: {include: true}` flag is deprecated and inert), and calls are billed per leg — a failed
   request is deliberately not counted, since OpenRouter doesn't charge for it.
 
+### The board follows the room's language — including the strings WE write
+
+The judge has always been told to write in the language people are speaking ("Vietnamese in,
+Vietnamese out"), and the reason it is given is load-bearing: *the board is screen-shared back to the
+people who are talking, so a card they cannot read is worse than no card.*
+
+**We never applied that rule to ourselves.** Every string the app wrote was hardcoded English, sitting
+directly on top of Vietnamese content:
+
+```
+MILESTONE                     ← ours, English, 10px tracked caps
+Meme cut scene chạy được rồi  ← theirs, Vietnamese
+```
+
+Two places: `MOMENT_MEANING` in `CutScene.tsx` (the cut-scene caption — the one moment that takes the
+whole screen in front of a client) and the `Presence` badge, which is on screen for the *entire call*
+and so is the more conspicuous of the two.
+
+`lib/canvas-lang.ts` now holds the per-language tables plus the detection. Three decisions worth
+keeping:
+
+- **Detected, not configured.** `sttLang` exists, but it configures the *ear*, not the room: it is
+  often unset, and it is one value for a call that code-switches. The board is better evidence — it is
+  what the judge wrote, in the language it decided each point was made in.
+- **Two independent signals, both with a floor.** Diacritic ratio alone flips an English board to
+  Vietnamese on a single "Hà Nội"; Vietnamese function words alone miss a bare line like "Deploy vào
+  thứ sáu". Either may say yes; neither may on one hit.
+- **Topics are excluded, and an empty board means "no evidence", not "English".** Topics are short
+  noun phrases and often bare English product names, so a board judged on its headings reads English
+  while every card under it is Vietnamese. With no cards at all `CutScene` falls back to reading the
+  moment itself — which is what keeps `?memes=preview` honest, since its sample cards are Vietnamese
+  but never join the graph.
+
+⚠️ **The Chrome overlay carries a copy of these tables and a port of the detector.** It lives in
+another repo (`~/Minami/extension`) and reads `GET /api/canvas?stream=1` to mirror reactions onto
+whatever tab is being demoed; no endpoint serves the caption text, so it cannot receive them. A glyph missing from a table still renders with the
+generic caption, so adding one to the judge's `emoji` enum degrades rather than breaks — but the two
+still have to move together.
+
 ### Not measured / not researched
 
 Arm C has never been run. Chunk size has never been swept. Both arms above are a **single sample** on

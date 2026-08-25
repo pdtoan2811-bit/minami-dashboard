@@ -8,6 +8,16 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-08-25
+- **The canvas's own strings now follow the meeting's language** (§17) — new `lib/canvas-lang.ts`.
+  The judge already wrote cards in the language people were speaking; everything the *app* wrote was
+  hardcoded English sitting on top of it, so a Vietnamese call got "MILESTONE" stamped over "Meme cut
+  scene chạy được rồi". Fixed in the cut-scene caption and the presence badge. Language is **detected
+  from the board**, not read from `sttLang` — that configures the ear, is often unset, and is one
+  value for a call that code-switches. Detection uses two independent signals (diacritic ratio,
+  Vietnamese function words), each with a floor, so one borrowed proper noun cannot flip a board.
+  The Chrome overlay in `~/Minami/extension` carries a copy of the tables and a port of the detector.
+
 ### 2026-08-24
 - **Meeting launch is a documented subsystem now** (§18, new `docs/knowledge/18-meeting-launch.md`) —
   the two launchers, the receiver, the tunnel and the Recall dispatch had no owning doc, so four

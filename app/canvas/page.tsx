@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_GRAPH, type GNode, type Graph } from "@/lib/canvas-graph";
 import { GraphCanvas } from "@/components/canvas/GraphCanvas";
 import { CutScene, useCutScenes, pickMeme, MOMENT_MEANING, KIND_EMOJI, type Moment } from "@/components/canvas/CutScene";
+import { boardLang } from "@/lib/canvas-lang";
 import { Presence } from "@/components/canvas/Presence";
 import { CommandDock } from "@/components/canvas/CommandDock";
 import { DebugPanel } from "@/components/canvas/DebugPanel";
@@ -226,6 +227,27 @@ export default function CanvasPage() {
 /** Canvas + floating chrome. Shared by every mode so the shared view and the demo view can't drift. */
 function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "thinking" | "idle" }) {
   const status = graph.status ?? "live";
+
+  /** THE ROOM'S LANGUAGE, read off the board itself.
+   *
+   *  Everything the judge writes already follows the language people are speaking; everything the app
+   *  wrote itself was hardcoded English sitting on top of it. This is the single value that fixes
+   *  that, and it is derived rather than configured because `sttLang` describes the EAR — it is often
+   *  unset, and it is one value for a call that code-switches.
+   *
+   *  Recomputed only when the node list changes, not on every frame: it walks every label and detail
+   *  on the board, and a cut scene must never be the thing that makes a repaint late.
+   *
+   *  ⚠️ null MEANS "NO EVIDENCE YET", NOT "ENGLISH". Topics are excluded — they are short noun phrases
+   *  and often bare English product names, so a board judged on its headings reads English while
+   *  every card under them is Vietnamese. With no cards at all there is no meeting language to
+   *  follow, and CutScene falls back to reading the moment itself. That is what makes ?memes=preview
+   *  honest: its sample cards are Vietnamese but never join the graph, so a board-only answer would
+   *  caption them in English — the exact bug, reproduced inside the tool used to check for it. */
+  const lang = useMemo(() => {
+    const cards = (graph.nodes ?? []).filter((n) => n.kind !== "topic" && !n.placeholder);
+    return cards.length ? boardLang(cards) : null;
+  }, [graph.nodes]);
 
   /** Which memes exist. null until loaded, which behaves identically to having collected none:
    *  every moment falls back to the emoji scene. That is the whole reason anh can fill one folder at
@@ -516,14 +538,14 @@ function Stage({ graph, presence }: { graph: Graph; presence?: "listening" | "th
           </div>
         </div>
       ) : null}
-      <CutScene moment={scenes.current} onDone={scenes.done} meme={memeFor} />
+      <CutScene moment={scenes.current} onDone={scenes.done} meme={memeFor} lang={lang} />
       {/* Always shown on the live surface, defaulting to "listening": this is the bot's own screen
           share, and it is ALWAYS listening while it is in the room. Passing nothing meant the one
           indicator that answers "is this working" was absent from the only view that needed it.
           Hidden while the board is empty, because the empty state already says it — larger, centred
           and in the same breath as everything else. Two things saying "listening" in two corners is
           how the frame ended up looking unfinished. */}
-      {empty ? null : <Presence state={presence ?? "listening"} />}
+      {empty ? null : <Presence state={presence ?? "listening"} lang={lang ?? "en"} />}
       {/* Controls live in their own layer, revealed by pointer proximity — see CommandDock for why
           they must not be permanently visible on a tab that is being screen-shared. */}
       {/* NOT gated on `empty`. The presence pill is hidden before the first card because there is

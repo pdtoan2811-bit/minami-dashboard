@@ -30,6 +30,7 @@
 // saver, and stops meaning anything.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MOMENT_MEANING_BY_LANG, momentMeaning, detectLang, type Lang } from "@/lib/canvas-lang";
 
 /** Total time on screen, matched to the keyframes in globals.css. */
 const DURATION = 3400;
@@ -125,21 +126,27 @@ export const KIND_EMOJI: Record<string, string> = {
   milestone: "🎉", requirement: "💡", quote: "✨", note: "💡", aside: "🙌",
 };
 
-export const MOMENT_MEANING: Record<string, string> = {
-  "🔥": "Strongest claim yet",
-  "😮": "That landed",
-  "💡": "New idea",
-  "❓": "Left hanging",
-  "👏": "Worth marking",
-  "🤝": "Agreement",
-  "🙌": "Everyone's aligned",
-  "✨": "Worth keeping",
-  "💯": "Full agreement",
-  "🎉": "Milestone",
-  "✅": "Settled",
-};
+/** ⚠️ THE MEANINGS MOVED, AND THEY MOVED BECAUSE THEY WERE ENGLISH-ONLY.
+ *
+ *  This table used to live here as a flat Record<string, string> of English phrases, rendered
+ *  directly over Vietnamese card labels: "MILESTONE" stamped on "Meme cut scene chạy được rồi". The
+ *  per-language tables and the board-language detection are in lib/canvas-lang.ts; this re-export
+ *  exists only so the English keys remain enumerable for `?memes=preview`. */
+export const MOMENT_MEANING = MOMENT_MEANING_BY_LANG.en;
 
-export function CutScene({ moment, onDone, meme }: { moment: Moment | null; onDone: () => void; meme?: string | null }) {
+export function CutScene({
+  moment,
+  onDone,
+  meme,
+  lang,
+}: {
+  moment: Moment | null;
+  onDone: () => void;
+  meme?: string | null;
+  /** The board's language — see boardLang(). null/undefined means the board has no cards yet and
+   *  therefore no language to follow, in which case the moment's own words are the only evidence. */
+  lang?: Lang | null;
+}) {
   // REDUCED MOTION IS NOT A SHORTER CUT SCENE — it is a still one.
   //
   // The global rule in globals.css clamps every animation to 1ms, which is right for a slide-in and
@@ -164,7 +171,7 @@ export function CutScene({ moment, onDone, meme }: { moment: Moment | null; onDo
   }, [moment, onDone, still, meme]);
 
   if (!moment) return null;
-  const meaning = MOMENT_MEANING[moment.emoji] ?? "Reaction";
+  const meaning = momentMeaning(moment.emoji, lang ?? detectLang([moment.label, moment.detail]));
   /** ⚠️ THE KEYFRAMES MUST RUN FOR EXACTLY AS LONG AS THE SCENE IS HELD.
    *
    *  These animations END AT OPACITY 0 — the exit is the tail of the keyframe, not a separate step.

@@ -1,4 +1,5 @@
 "use client";
+import { PRESENCE_LABEL, type Lang } from "@/lib/canvas-lang";
 // Minami's presence: what she is doing right now.
 //
 // Without this the canvas is ambiguous in the worst way — a pause while the model thinks looks
@@ -14,7 +15,16 @@
 // whose whole job is to be noticed from the corner of your eye, rendered too small to notice. It is
 // now roughly double, with a live halo behind it, because peripheral vision responds to movement and
 // area, not to detail.
-export function Presence({ state }: { state: "listening" | "thinking" | "idle" }) {
+export function Presence({
+  state,
+  lang = "en",
+}: {
+  state: "listening" | "thinking" | "idle";
+  /** ⚠️ THE LONGEST-LIVED STRING ON THE BOARD. A cut scene holds the screen for three seconds; this
+   *  badge is there for the whole call — which makes it the most conspicuous thing to leave in
+   *  English on a Vietnamese meeting. Defaults to English so an unwired caller is unchanged. */
+  lang?: Lang;
+}) {
   /** ── A STATUS LIGHT, NOT A BUTTON ──────────────────────────────────────────────────────────
    *  This was briefly clickable, and anh could not find it — "I see no button". Correct: a badge
    *  whose entire visual job is to look passive cannot also advertise an action. The controls moved
@@ -30,9 +40,9 @@ export function Presence({ state }: { state: "listening" | "thinking" | "idle" }
    *  the information — the fact that something is animating is. Frosted rather than solid white so
    *  it sits ON the canvas instead of on top of it. */
   const cfg = {
-    listening: { label: "Listening", color: "#0f9d6e" },
-    thinking: { label: "Thinking", color: "#2a6fd6" },
-    idle: { label: "Idle", color: "#9ca3af" },
+    listening: { label: PRESENCE_LABEL[lang].listening, color: "#0f9d6e" },
+    thinking: { label: PRESENCE_LABEL[lang].thinking, color: "#2a6fd6" },
+    idle: { label: PRESENCE_LABEL[lang].idle, color: "#9ca3af" },
   }[state];
 
   const live = state !== "idle";
