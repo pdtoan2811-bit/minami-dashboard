@@ -80,7 +80,7 @@ const PREVIEW_PROMPT = `End every reply whose work produced something viewable �
 [{"kind":"url","target":"http://localhost:3000","label":"the dashboard"},{"kind":"file","target":"/absolute/path/to/file.md","label":"the note"},{"kind":"cmd","target":"npm run kb","label":"open the KB"}]
 \`\`\`
 
-kind "url" = reachable from THIS machine's browser right now (verify the server is actually up before claiming it); "file" = absolute path to a file worth opening; "cmd" = a command the user runs to see it. 1-4 entries, labels under 5 words. Omit the block entirely when the turn produced nothing viewable (a question answered, a config change with nothing to look at) — an empty or speculative block is worse than none.`;
+kind "url" = reachable from THIS machine's browser right now (verify the server is actually up before claiming it); "file" = absolute path to a file worth opening; "cmd" = a command the user runs to see it. 1-4 entries, labels under 5 words. A running localhost URL is the preview that matters most: whenever the work can be seen in a local server — a page changed, an app running, a dev server started — put that url FIRST, even if files were also written. Omit the block entirely when the turn produced nothing viewable (a question answered, a config change with nothing to look at) — an empty or speculative block is worse than none.`;
 
 // Fan-out: propose parallel subagents for divisible work, and default to PROCEEDING — the whole
 // reason this is a mode is that "shall I fan out?" as a question costs a round-trip to a user who

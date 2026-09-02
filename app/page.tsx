@@ -28,7 +28,7 @@ import BrowserLightbox from "@/components/BrowserLightbox";
 import { FlowStrip } from "@/components/FlowStrip";
 import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
-import { splitPreviewBlock, type Preview } from "@/lib/preview-block";
+import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
@@ -1550,20 +1550,29 @@ const PreviewChips = memo(function PreviewChips({ previews, onOpenFile }: { prev
     <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
       <span className="text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">Preview</span>
       {previews.map((p, i) => {
-        const tint = p.kind === "url" ? "#7ab8e0" : p.kind === "file" ? "#1f8a5c" : "#b98cff";
+        // Localhost is the #1 case by decree: a running app beats a file diff, so its chip is the
+        // one PRIMARY action — accent-tinted, host:port spelled out — and everything else stays a
+        // quiet secondary. The parser already sorted it first (see lib/preview-block.ts).
+        const local = isLocalUrl(p);
+        const tint = local ? "var(--sakura)" : p.kind === "url" ? "#7ab8e0" : p.kind === "file" ? "#1f8a5c" : "#b98cff";
         const Icon = p.kind === "url" ? Globe : p.kind === "file" ? FileText : SquareTerminal;
         const act = p.kind === "url"
           ? () => window.open(p.target, "_blank", "noopener")
           : p.kind === "file"
             ? () => onOpenFile(p.target)
             : () => { navigator.clipboard?.writeText(p.target).then(() => { setCopied(p.target); setTimeout(() => setCopied(null), 1500); }); };
+        const host = local ? p.target.replace(/^https?:\/\//, "").replace(/\/$/, "") : null;
         return (
           <button key={i} onClick={act}
             title={p.kind === "url" ? p.target : p.kind === "file" ? p.target : `copy: ${p.target}`}
-            className="flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors hover:bg-white/[0.06]"
-            style={{ borderColor: tint + "55", background: tint + "12" }}>
+            className={`flex max-w-full items-center gap-1.5 rounded-lg border transition-colors hover:bg-white/[0.06] ${local ? "px-2.5 py-1 text-[11px]" : "px-2 py-1 text-[11px]"}`}
+            style={local
+              ? { borderColor: "color-mix(in srgb, var(--sakura) 60%, transparent)", background: "color-mix(in srgb, var(--sakura) 14%, transparent)" }
+              : { borderColor: tint + "55", background: tint + "12" }}>
             <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} />
-            <span className="min-w-0 truncate text-[10.5px] text-neutral-200">{copied === p.target ? "copied ✓" : p.label}</span>
+            <span className={`min-w-0 truncate text-[10.5px] ${local ? "font-medium text-neutral-100" : "text-neutral-200"}`}>{copied === p.target ? "copied ✓" : p.label}</span>
+            {/* The address itself, so "the dashboard" never needs a hover to know WHERE. */}
+            {host && <span className="shrink-0 font-mono text-[9.5px]" style={{ color: tint }}>{host}</span>}
           </button>
         );
       })}

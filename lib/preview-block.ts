@@ -47,6 +47,20 @@ export function splitPreviewBlock(text: string): { body: string; previews: Previ
       (p.kind === "url" || p.kind === "file" || p.kind === "cmd") &&
       typeof p.target === "string" && p.target.length > 0)
     .slice(0, 4)
-    .map((p) => ({ kind: p.kind, target: p.target, label: typeof p.label === "string" && p.label ? p.label : p.target }));
+    .map((p) => ({ kind: p.kind, target: p.target, label: typeof p.label === "string" && p.label ? p.label : p.target }))
+    // Localhost first regardless of authored order — it's the #1 preview by decree (a running app
+    // beats a file diff), and the prompt asking for that ordering is a request, not a guarantee.
+    // Array.prototype.sort is stable, so everything else keeps its authored order.
+    .sort((a, b) => Number(isLocalUrl(b)) - Number(isLocalUrl(a)));
   return { body, previews };
+}
+
+/** The chip row's primary case: a url on this machine. Hostname check, not substring — a remote
+ *  url with "localhost" in its path must not get the crown. */
+export function isLocalUrl(p: Preview): boolean {
+  if (p.kind !== "url") return false;
+  try {
+    const h = new URL(p.target).hostname;
+    return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "0.0.0.0";
+  } catch { return false; }
 }

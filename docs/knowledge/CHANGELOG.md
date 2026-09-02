@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-02
+- **Localhost is the primary preview** (§5c) — prompt orders it first, the parser stable-sorts it
+  first regardless, and its chip renders as the one accent-tinted primary action with host:port
+  visible. Hostname-checked (`isLocalUrl`), not substring-matched.
 - **AgentBoard: the subagent fleet as a roster, not pills** (§4) — one row per running agent with
   type badge, assignment, current inner tool, tool count and a per-agent timer (`LiveTask.since`,
   stamped at `task_started`; deliberately absent on adopted background tasks). Finished agents stay

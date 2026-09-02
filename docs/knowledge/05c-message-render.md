@@ -88,6 +88,13 @@ Decisions that will look odd without their reasons:
   since `TurnRow` renders both pipelines' turns identically.
 - Chips render **above `FileChips`**: the block is the reply's deliberate answer to "where do I
   look", FileChips is derived exhaust; the intentional signal outranks the inferred one.
+- **Localhost is the #1 preview by decree** (Thomas, 2026-09-02): a running app beats a file diff.
+  Three layers enforce it so no single one has to be trusted — the prompt asks for the localhost url
+  first, `splitPreviewBlock` stable-sorts it first anyway (a prompt is a request, not a guarantee),
+  and the chip renders as the one primary action: sakura accent, host:port spelled out beside the
+  label so "the dashboard" never needs a hover to know where. `isLocalUrl` checks the parsed
+  hostname, not a substring — a remote url with "localhost" in its path must not get the crown.
+  No localhost → no primary; the row stays all-secondary, which is the correct quiet state.
 
 ### Gotchas
 - The seam is gated on **`sawThinking`**, which the *deltas* set — not the block start. Some setups
