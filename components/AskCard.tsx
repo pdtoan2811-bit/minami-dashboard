@@ -17,6 +17,13 @@
 // 4. **The Other row follows its text.** Text in the field means the row is part of the answer, and no
 //    click can withdraw it — only clearing the field can. Selection and free text are one state, so
 //    there is no gesture that leaves a typed answer on screen that Send won't send.
+// 5. **A preview is shown where its option is.** The tool schema lets the model attach `preview` to an
+//    option — the mockup/snippet/plan that the description can only gesture at. This card dropped it
+//    silently, so a question written to be decided by comparing two previews arrived as two one-line
+//    descriptions and the reason to prefer either was invisible. It renders INSIDE the option row, in
+//    the one scrolling region, because that is the only place a block of arbitrary length cannot push
+//    "Send answer" off the bottom of a short pane (see the layout note below — that bug is why this
+//    card is a flex column at all).
 import { useRef, useState } from "react";
 import type { AgentQuestion } from "@/lib/use-agent";
 
@@ -34,6 +41,11 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   const [sel, setSel] = useState<Record<number, string[]>>({});
   const [other, setOther] = useState<Record<number, string>>({}); // free-text "Other" per question
   const [skipped, setSkipped] = useState<Record<number, boolean>>({});
+  // Explicit preview open/close, keyed `${questionIndex}:${label}`. Absent means "follow the selection"
+  // — the schema calls preview "rendered when this option is focused", and selecting is what focus
+  // means with a mouse. So choosing an option shows you what you chose, and an explicit toggle still
+  // wins in both directions (peek at one you haven't picked; collapse one you have).
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const otherRef = useRef<HTMLInputElement>(null);
 
   const n = questions.length;
@@ -169,6 +181,9 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
             one that's invisible if you assume every question is a radio group. */}
         <p className={`mt-1 flex items-center gap-1 text-[10px] ${multi ? "font-medium text-[var(--sakura)]" : "text-neutral-500"}`}>
           {multi ? <>☑ Select <strong className="font-semibold">all that apply</strong>{nPicked > 0 && <span className="text-neutral-500">· {nPicked} selected</span>}</> : <>◉ Select one</>}
+          {/* Said here as well as on the rows: when a question is written to be decided by comparing
+              previews, a collapsed row gives no sign that the deciding material is one click away. */}
+          {q.options.some((o) => o.preview) && <span className="text-neutral-500">· previews available</span>}
         </p>
 
       </div>
@@ -178,7 +193,12 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
           Scrollbar deliberately NOT hidden here (it is elsewhere in this app): when the list is taller
           than the pane, that bar is the only thing telling you there are more options below. */}
       <div className="mt-1.5 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-0.5">
-        {q.options.map((o) => <Row key={o.label} multi={multi} on={picked.includes(o.label)} onClick={() => toggle(o.label)} label={o.label} description={o.description} />)}
+        {q.options.map((o) => {
+          const on = picked.includes(o.label);
+          const k = `${qi}:${o.label}`;
+          return <Row key={o.label} multi={multi} on={on} onClick={() => toggle(o.label)} label={o.label} description={o.description}
+            preview={o.preview} previewOpen={open[k] ?? on} onTogglePreview={() => setOpen((p) => ({ ...p, [k]: !(p[k] ?? on) }))} />;
+        })}
 
         {/* "Other" is the last row of the same list, not a stray input below it — so exactly one
             thing is ever highlighted, and what's highlighted is what gets sent. */}
@@ -215,8 +235,9 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
 
 // One option, full width. The marker is the affordance: a circle fills for single-select, a box gets a
 // tick for multi — so "can I pick more than one?" is answered before you click anything.
-function Row({ multi, on, onClick, label, description, children }: {
-  multi: boolean; on: boolean; onClick: () => void; label: string; description?: string; children?: React.ReactNode;
+function Row({ multi, on, onClick, label, description, preview, previewOpen, onTogglePreview, children }: {
+  multi: boolean; on: boolean; onClick: () => void; label: string; description?: string;
+  preview?: string; previewOpen?: boolean; onTogglePreview?: () => void; children?: React.ReactNode;
 }) {
   return (
     <div onClick={onClick} role="button" tabIndex={0}
@@ -233,6 +254,28 @@ function Row({ multi, on, onClick, label, description, children }: {
           <span className={`block text-xs font-medium ${on ? "text-white" : "text-neutral-300"}`}>{label}</span>
           {description && <span className="mt-0.5 block text-[10px] leading-snug text-neutral-500">{description}</span>}
           {children}
+          {/* Block elements are spelled as `block` spans on purpose: this subtree is inside the row's
+              `<span>`, and a real <pre>/<div> there is invalid nesting that React will hydrate into a
+              different DOM than it rendered on the server. */}
+          {preview && (
+            <>
+              <button onClick={(e) => { e.stopPropagation(); onTogglePreview?.(); }}
+                // The row itself answers Enter/Space by selecting. Without this the same keypress both
+                // toggled the preview and picked the option — one key, two decisions.
+                onKeyDown={(e) => e.stopPropagation()}
+                className="mt-1 text-[10px] text-neutral-500 transition-colors hover:text-[var(--sakura)]">
+                {previewOpen ? "⌄ hide preview" : "› preview"}
+              </button>
+              {previewOpen && (
+                // Clicks land on the text, not the row: a preview is there to be read and copied, and
+                // dragging to select it must not re-toggle the answer underneath.
+                <span onClick={(e) => e.stopPropagation()}
+                  className="mt-1 block max-h-40 cursor-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-white/10 bg-black/40 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-neutral-400">
+                  {preview}
+                </span>
+              )}
+            </>
+          )}
         </span>
       </div>
     </div>

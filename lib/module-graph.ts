@@ -80,13 +80,13 @@ export const NODES: ModuleNode[] = [
   { id: "c/NotifBell", label: "NotificationBell", sub: "deploy · build · merge alerts", layer: "component", row: 15 },
 
   // ── api routes ──────────────────────────────────────────────────────────
-  { id: "r/agent", label: "/api/agent/*", sub: "send · stream · stop\npermission · answer · mode · live", layer: "route", row: 0, pipeline: "live" },
+  { id: "r/agent", label: "/api/agent/*", sub: "send · stream · stop\npermission · answer · mode · model · live", layer: "route", row: 0, pipeline: "live" },
   { id: "r/sessions", label: "/api/bento/sessions", sub: "grid list", layer: "route", row: 1, pipeline: "read" },
   { id: "r/session", label: "/api/bento/session/[id]", sub: "transcript page · ?before=", layer: "route", row: 2, pipeline: "read" },
   { id: "r/enrich", label: "/api/bento/enrich", sub: "Haiku labels", layer: "route", row: 3 },
   { id: "r/attach", label: "/api/bento/attach*", sub: "tech detection", layer: "route", row: 4 },
   { id: "r/accounts", label: "/api/accounts", sub: "token-slayer bridge", layer: "route", row: 5 },
-  { id: "r/fs", label: "/api/fs/list", sub: "folder browse", layer: "route", row: 6 },
+  { id: "r/fs", label: "/api/fs/*", sub: "list · paste · drop\nchoose (native macOS panel)", layer: "route", row: 6 },
   { id: "r/fsmkdir", label: "/api/fs/mkdir", sub: "create a topic's folder", layer: "route", row: 8 },
   { id: "r/events", label: "/api/events", sub: "tails the alert log", layer: "route", row: 9 },
   { id: "r/paste", label: "/api/fs/paste", sub: "writes a pasted image\n(fixed root, no path input)", layer: "route", row: 10 },

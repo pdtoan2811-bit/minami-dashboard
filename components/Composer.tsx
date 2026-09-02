@@ -272,6 +272,43 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
   // transcript for the thumbnail to come back after a reload.
   const [pasting, setPasting] = useState(0);
   const [pasteError, setPasteError] = useState<string | null>(null);
+  // dragenter/dragleave fire for every child element the pointer crosses, so a boolean flickers the
+  // overlay off the instant you move over the textarea inside the zone. Counting enters and leaves is
+  // the standard fix and the only one that survives nested children.
+  const [dragDepth, setDragDepth] = useState(0);
+
+  // Insert a path at the caret. Shared by paste, drop and the native panel so all three produce byte-
+  // identical text — the composer's contract is that the textarea is the only source of truth, and
+  // three subtly different insertions would be three different bugs downstream.
+  const insertPath = (p: string) => {
+    const el = ref.current;
+    if (!el) return;
+    // Quote a path containing spaces, matching the attach button: unquoted, every reader of this text
+    // (Claude, the thumbnail matcher, lib/agent/images.ts) stops at the first space — and the most
+    // common file anyone attaches on a Mac is "Screen Shot … .png".
+    const q = /\s/.test(p) ? `"${p}"` : p;
+    // Wherever the caret is NOW: an upload is async and the user may well have kept typing.
+    const at = el.selectionStart;
+    const before = el.value.slice(0, at);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    replaceRange(el, at, at, `${lead}${q} `);
+  };
+
+  const upload = (f: File, endpoint: "paste" | "drop") => {
+    setPasting((n) => n + 1);
+    fetch(`/api/fs/${endpoint}`, {
+      method: "POST",
+      headers: endpoint === "paste" ? { "content-type": f.type } : { "x-filename": encodeURIComponent(f.name || "drop") },
+      body: f,
+    })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d?.path) throw new Error(d?.error || `upload failed (${r.status})`);
+        insertPath(d.path);
+      })
+      .catch((err) => setPasteError(String(err?.message || err)))
+      .finally(() => setPasting((n) => n - 1));
+  };
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(e.clipboardData?.items || [])
@@ -284,25 +321,58 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
     if (files.length === 0) return;
     e.preventDefault();
     setPasteError(null);
+    for (const f of files) upload(f, "paste");
+  };
 
-    for (const f of files) {
-      setPasting((n) => n + 1);
-      fetch("/api/fs/paste", { method: "POST", headers: { "content-type": f.type }, body: f })
-        .then(async (r) => {
-          const d = await r.json().catch(() => ({}));
-          if (!r.ok || !d?.path) throw new Error(d?.error || `upload failed (${r.status})`);
-          const el = ref.current;
-          if (!el) return;
-          // Insert at wherever the caret is NOW — the upload is async and the user may well have kept
-          // typing. Pad so the path can't fuse with adjacent words and break the path regex.
-          const at = el.selectionStart;
-          const before = el.value.slice(0, at);
-          const lead = before && !/\s$/.test(before) ? " " : "";
-          replaceRange(el, at, at, `${lead}${d.path} `);
-        })
-        .catch((err) => setPasteError(String(err?.message || err)))
-        .finally(() => setPasting((n) => n - 1));
+  /**
+   * The real paths behind a drag, when the OS is willing to say.
+   *
+   * A file dragged out of Finder already exists on this machine, so its own path is the right answer:
+   * Claude edits the actual file instead of a snapshot, and nothing is copied. Chrome sometimes puts
+   * that path in the drag's `text/uri-list` as a `file://` URL — when it does, this is strictly better
+   * than uploading the bytes, and it is the ONLY way a dropped *folder* can be resolved at all (a
+   * directory has no bytes to fall back on).
+   *
+   * It is deliberately a best-effort read rather than something the feature depends on: whether the
+   * path is disclosed varies by browser and by where the drag started, so the drop handler treats this
+   * as an optimisation and falls back to bytes. See /api/fs/drop.
+   */
+  const pathsFromDrag = (dt: DataTransfer): string[] => {
+    const raw = dt.getData("text/uri-list") || dt.getData("text/plain") || "";
+    return raw.split(/\r?\n/).map((s) => s.trim())
+      .filter((s) => s && !s.startsWith("#") && /^file:\/\//i.test(s))
+      .map((s) => { try { return decodeURIComponent(new URL(s).pathname); } catch { return ""; } })
+      .filter(Boolean);
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    // Directories have to be detected HERE: webkitGetAsEntry is only valid while the event is being
+    // dispatched, and reading it after an await returns null.
+    const hasDir = Array.from(dt.items || []).some(
+      (it) => it.kind === "file" && (it as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory?: boolean } | null }).webkitGetAsEntry?.()?.isDirectory,
+    );
+    const real = pathsFromDrag(dt);
+    const files = Array.from(dt.files || []);
+    // Nothing droppable — let the event alone rather than swallowing a text drag between two fields.
+    if (!real.length && !files.length && !hasDir) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    setDragDepth(0);
+    setPasteError(null);
+
+    if (real.length) { real.forEach(insertPath); return; }
+
+    // A folder with no path disclosed is a dead end and must say so. Uploading it is not a fallback:
+    // `dt.files` reports a directory as a zero-byte File, so "attaching" it would silently produce an
+    // empty file with the folder's name — the worst outcome available, because it looks like it worked.
+    if (hasDir) {
+      setPasteError("macOS didn't share that folder's path — use the 📎 menu ▸ Choose folder…");
+      return;
     }
+    for (const f of files) upload(f, f.type.startsWith("image/") ? "paste" : "drop");
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -359,7 +429,16 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
   const lines = (value + (value.endsWith("\n") ? "​" : "")).split("\n");
 
   return (
-    <div className="relative min-w-0 flex-1">
+    <div className="relative min-w-0 flex-1"
+      // Only react to a drag carrying FILES. Without this check, selecting text in the transcript and
+      // dragging it across the composer lights up a "drop files" overlay for something that isn't one.
+      onDragEnter={(e) => { if (e.dataTransfer?.types?.includes("Files")) setDragDepth((n) => n + 1); }}
+      onDragLeave={() => setDragDepth((n) => Math.max(0, n - 1))}
+      // dragover must preventDefault on EVERY event or the drop is never allowed — the browser treats
+      // the absence of a preventDefault as "this element doesn't accept drops" and falls back to
+      // navigating the window to the dropped file, which throws away the whole chat.
+      onDragOver={(e) => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
+      onDrop={onDrop}>
       <div
         ref={mirror}
         aria-hidden
@@ -391,10 +470,20 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
       {/* An upload is a beat of dead time between Cmd-V and the path appearing; without this the
           composer looks like it ignored the paste. Absolute so it can't reflow the growing textarea. */}
       {(pasting > 0 || pasteError) && (
-        <div className="pointer-events-none absolute -top-5 left-0 text-[10px]">
+        <div className="pointer-events-none absolute -top-5 left-0 right-0 truncate text-[10px]">
           {pasting > 0
-            ? <span className="text-neutral-500">saving image{pasting > 1 ? `s (${pasting})` : ""}…</span>
+            ? <span className="text-neutral-500">saving file{pasting > 1 ? `s (${pasting})` : ""}…</span>
             : <span className="text-[#ef7c7c]">{pasteError}</span>}
+        </div>
+      )}
+      {/* pointer-events-none is load-bearing, not tidiness: an overlay that accepts the pointer becomes
+          the drop target's own child, which fires dragleave the moment it appears and cancels the drag
+          under the cursor. It must be visible and completely intangible. */}
+      {dragDepth > 0 && (
+        // Near-opaque, not a tint: the draft (or the placeholder) sits directly underneath and showed
+        // through the label, leaving two overlapping strings and neither legible.
+        <div className="pointer-events-none absolute -inset-1 z-10 flex items-center justify-center rounded-lg border border-dashed border-[var(--sakura)]/70 bg-neutral-900/95">
+          <span className="text-[11px] font-medium text-[var(--sakura)]">drop to attach — the path goes in the box</span>
         </div>
       )}
     </div>

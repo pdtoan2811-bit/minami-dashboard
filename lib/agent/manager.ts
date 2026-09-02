@@ -191,6 +191,10 @@ type Session = {
                    // refreshed client picks the sentence back up where it left off (reset per message)
   partialThinking: string; // same, for the reasoning stream
   sessionId: string | null; // the real Claude Code session id (for resume + file reconcile)
+  /** The model this session was BORN with. Recorded so setModel() can tell a real change from a no-op
+   *  — it is not a knob: nothing reads this to decide what runs, because by the time it is set the
+   *  `query()` is already built around it. See setModel for why a change means a respawn. */
+  model: string;
   subs: Set<Sub>;
   pending: Map<string, Pending>; // outstanding permission prompts
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -316,9 +320,10 @@ async function* inputGen(s: Session): AsyncGenerator<any> {
 
 // `model` overrides DEFAULT_MODEL for this session only, and is honoured just once — at creation,
 // where `query()` is built. A warm session keeps the model it was born with, exactly as a running CLI
-// session does (the same caveat lib/model-pins.ts states about account switching). The only caller
-// that passes it is the agent layer, where each agent pins its own tier; everything else omits it and
-// gets the box pin.
+// session does (the same caveat lib/model-pins.ts states about account switching). Callers: the agent
+// layer pins each agent's own tier, and the composer's model picker passes the pane's choice; everything
+// else omits it and gets the box pin. Because it is creation-only, the picker cannot change a warm
+// session by asking — it has to respawn it. See setModel().
 function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string, model?: string): Session {
   const existing = store.get(key);
   if (existing && !existing.closed) return existing;
@@ -326,7 +331,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: model || DEFAULT_MODEL, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -993,6 +998,62 @@ export function setMode(key: string, mode?: string): boolean {
   } catch { return false; /* not initialized yet */ }
 }
 
+/**
+ * Point this pane at a different model.
+ *
+ * **There is no such thing as changing a warm session's model.** The SDK builds `query()` around the
+ * model at creation and there is no control message to move it — the same shape of trap as
+ * `setPermissionMode()` (see canUseTool: the CLI *accepts* that call on a running query and then
+ * ignores it). A picker that POSTed a change and lit up green would be reporting a swap that never
+ * happened, and every subsequent turn would bill and behave as the old model with the UI insisting
+ * otherwise. So the only honest implementations are "refuse while live" or "respawn", and refusing
+ * makes the control useless in the case you actually want it — three turns into a conversation.
+ *
+ * Respawn it is: close the SDK subprocess and let the next send start a new one with `resume` set to
+ * this conversation's id. Context survives because it survives *on disk* — the CLI replays the JSONL,
+ * which is the same mechanism a pane reattaching after a server restart already relies on. What does
+ * NOT survive is anything that only existed inside the old process: a queued follow-up, a parked
+ * permission prompt (closeSession denies those), and the KV cache, so the first turn after a swap is a
+ * cold read of the transcript and costs accordingly.
+ *
+ * Refused mid-turn on purpose. Killing a subprocess that is streaming a reply loses the tail of that
+ * reply (it is only in `s.partial` until the turn's `result` lands) and orphans any tool call already
+ * running — the caller is told to stop the turn first rather than being silently half-obeyed.
+ *
+ * Returns `respawned` so the client knows to re-arm `resume` on its next send. A pane with no live
+ * session is the easy case and reports `ok` with no respawn: nothing exists yet to be born with the
+ * wrong model, and the choice simply rides in with the first message.
+ */
+export function setModel(key: string, model?: string): { ok: boolean; respawned?: boolean; reason?: string } {
+  const s = store.get(key);
+  if (!s || s.closed) return { ok: true };
+  if (s.busy) return { ok: false, reason: "a turn is in flight — stop it before switching model" };
+  // Compare resolved ids, not raw args: `undefined` means "the box pin", so undefined→DEFAULT_MODEL is
+  // a no-op and must not tear down a perfectly good session.
+  if (s.model === (model || DEFAULT_MODEL)) return { ok: true };
+
+  // No `notice` broadcast here, deliberately. NoticeStrip only renders while a pane is busy, and a swap
+  // is REFUSED while busy — so a notice sent from this path is unreachable at the moment it means
+  // something and would surface a turn late, attached to the next reply, reading as if it had just
+  // happened. The composer derives the same fact from state that cannot go stale: until the next send,
+  // the pane's picked model and the session's reported one disagree, and that disagreement IS
+  // "staged, not yet applied". See ModelPicker in app/page.tsx.
+
+  // Carry the live SSE subscribers across the respawn. closeSession() drops the Session object whose
+  // `subs` set they live in, and ensureSession() starts a fresh one that only adopts from `waiting` —
+  // so without this handover every pane watching this key goes silent until it is reloaded, which
+  // looks exactly like the swap having hung. `waiting` is precisely the parking lot for subscribers
+  // that exist before their session does, which is what these become for the next few hundred ms.
+  const orphans = new Set(s.subs);
+  closeSession(key);
+  if (orphans.size) {
+    const set = waiting.get(key) || new Set<Sub>();
+    for (const sub of orphans) set.add(sub);
+    waiting.set(key, set);
+  }
+  return { ok: true, respawned: true };
+}
+
 // Subscribe an SSE client. `exists` tells the route whether a live session backs this key at all (so a
 // refreshed client that reattaches to a session that already ended is told to fall back to the on-disk
 // view). The `replay` reconstructs the current state for a (re)connecting client: the session id, the
@@ -1022,7 +1083,9 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
   s.subs.add(sub);
   if (s.idleTimer) { clearTimeout(s.idleTimer); s.idleTimer = null; }
   const replay: AgentEvent[] = [];
-  if (s.sessionId) replay.push({ t: "init", sessionId: s.sessionId });
+  // `model` rides the replay too, or a pane that reattached (refresh, server restart) would show
+  // "default" for a session it can see is running — the SDK's own init only fires once, at spawn.
+  if (s.sessionId) replay.push({ t: "init", sessionId: s.sessionId, model: s.model });
   // `activity` rides along so a client that refreshed mid-tool-call resumes with the real label and a
   // correctly-offset elapsed clock, instead of falling back to a generic "working…".
   replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold, queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })) });

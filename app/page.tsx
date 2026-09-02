@@ -5,6 +5,10 @@ import { Segmented } from "@/components/ui/Segmented";
 import { NotificationBell } from "@/components/NotificationBell";
 import AutopilotTile from "@/components/AutopilotTile";
 import { useSetting } from "@/lib/use-settings";
+// The catalog, not lib/model-pins — that module reads ~/Minami's config with node:fs and can't be
+// imported into a client component. See its own comment: the split exists so one list of ids serves
+// both sides.
+import { SELECTABLE_MODELS } from "@/lib/model-catalog";
 import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
@@ -1528,13 +1532,15 @@ const FileChips = memo(function FileChips({ tools, onOpen }: { tools: AgentToolC
  *  is the most dangerous thing in this UI to be wrong about (see `perm` in ChatColumn); two renderings
  *  of it, drifting apart, is the failure mode worth spending a component to make impossible.
  */
-function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm }: {
+function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, sessionModel, onModel, busy }: {
   hold: boolean; onHold: (v: boolean) => void;
   planning: boolean; onPlan: (v: boolean) => void;
   perm: Exclude<AgentMode, "plan">; onPerm: (m: Exclude<AgentMode, "plan">) => void;
+  model: string | null; sessionModel: string | null; onModel: (m: string | null) => void; busy: boolean;
 }) {
   return (
     <>
+      <ModelPicker model={model} sessionModel={sessionModel} onPick={onModel} busy={busy} />
       {/* The brake. It lived in the flow panel's header, which is gone — and it is a SESSION control
           (like Plan/Code and the approval level), not a property of a view, so this row is where it
           always belonged. Armed, the server parks the next tool call instead of auto-approving it;
@@ -1563,6 +1569,91 @@ function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm }: {
           tone: m === "bypassPermissions" ? ("good" as const) : undefined,
         }))} />
     </>
+  );
+}
+
+/** Which model this pane's next turn runs on.
+ *
+ *  A dropdown rather than a `Segmented` like its neighbours, for a reason the row makes obvious: four
+ *  model names side by side is wider than the whole control row, and this row already folds into a
+ *  single pill when the pane is cramped. It is also the only control here whose options need a sentence
+ *  each — "which is the cheapest thing that will still get this right" is the actual question, and the
+ *  catalog's notes are the short answer.
+ *
+ *  **Disabled mid-turn on purpose.** Switching model tears the session down and resumes it (see
+ *  setModel on the server); doing that under a streaming reply would lose the tail of it. The server
+ *  refuses too — this just means you find out by seeing the control greyed rather than by clicking it
+ *  and reading an error.
+ */
+function ModelPicker({ model, sessionModel, onPick, busy }: {
+  model: string | null; sessionModel: string | null; onPick: (m: string | null) => void; busy: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  // Explicit pick wins; otherwise name what the LIVE session reported; otherwise say "default" rather
+  // than guessing a label. The box pin is env-overridable and lives in a server-only module, so the
+  // honest client-side answer before a session exists is that we don't know yet.
+  const shown = SELECTABLE_MODELS.find((m) => m.id === (model || sessionModel));
+  // A swap tears the old session down and the new one isn't born until the next send, so between those
+  // two moments the pane's pick and the session's last-reported model genuinely disagree — and that
+  // disagreement is exactly "chosen, not yet running". Derived rather than announced: a flag set at
+  // swap time would have to be cleared correctly on send, failure, revert and reattach, and any missed
+  // path leaves a dot claiming a pending swap that already happened.
+  const staged = !!model && !!sessionModel && model !== sessionModel;
+  return (
+    <div className="relative shrink-0">
+      <button onClick={() => setOpen((v) => !v)} disabled={busy}
+        title={busy
+          ? "Can't switch model while a turn is running — stop it first"
+          : staged
+            ? `${shown?.label || "This model"} starts on your next message — the conversation is resumed from disk, so nothing is lost`
+            : "Model for this chat. Switching restarts the session and resumes this conversation from disk."}
+        className={`flex shrink-0 items-center gap-1 rounded-lg border p-0.5 transition-colors ${
+          busy ? "border-white/10 text-neutral-600" : "border-white/10 text-neutral-400 hover:text-neutral-200"}`}>
+        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">
+          {/* A dot, not a word: this row folds into one pill on a cramped pane, so the indicator has to
+              cost ~4px. It reads as "pending" next to a name that has already changed. */}
+          {staged && <span className="mr-1 text-[var(--sakura)]">•</span>}
+          {shown?.label || "default"}<span className="ml-1 text-neutral-600">⌄</span>
+        </span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          {/* Upward, same as the folded mode pill's fold-out and for the same reason: this hangs off the
+              composer at the bottom of a pane whose root is `overflow-hidden`. */}
+          <div className="absolute bottom-full left-0 z-20 mb-1 w-64 overflow-hidden rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
+            {SELECTABLE_MODELS.map((m) => {
+              const on = m.id === (model || sessionModel);
+              return (
+                <button key={m.id} onClick={() => { onPick(m.id); setOpen(false); }}
+                  className={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
+                    on ? "bg-[var(--sakura)]/15" : "hover:bg-white/5"}`}>
+                  <span className={`block text-[11px] font-medium ${on ? "text-[var(--sakura)]" : "text-neutral-200"}`}>{m.label}</span>
+                  <span className="mt-0.5 block text-[10px] leading-snug text-neutral-500">{m.note}</span>
+                </button>
+              );
+            })}
+            {/* The escape hatch back to whatever this box is pinned to. Worth its own row rather than
+                being implied by "the first one": MINAMI_DASHBOARD_MODEL can point the pin anywhere, so
+                "the default" is not a synonym for any particular entry above. */}
+            <button onClick={() => { onPick(null); setOpen(false); }}
+              className="mt-0.5 block w-full rounded-lg px-2 py-1.5 text-left text-[10px] text-neutral-500 transition-colors hover:bg-white/5 hover:text-neutral-300">
+              Use this box's default
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** One row of the 📎 menu. Label plus the one-line reason you'd pick it over the row above. */
+function MenuRow({ label, hint, onClick }: { label: string; hint: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="block w-full rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/5">
+      <span className="block text-[11px] font-medium text-neutral-200">{label}</span>
+      <span className="mt-0.5 block text-[10px] leading-snug text-neutral-500">{hint}</span>
+    </button>
   );
 }
 
@@ -1780,7 +1871,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // below) instead of plain useState, which used to reset to "" every time ChatColumn unmounted.
   // Keyed by the same effectiveKey as the agent so the draft follows a session, not a pane slot.
   const [input, setInput] = useSetting<string>("draft:" + effectiveKey, "");
-  const [attachOpen, setAttachOpen] = useState(false); // file-attach picker
+  const [attachOpen, setAttachOpen] = useState(false); // the in-app (portable) folder browser
+  const [attachMenu, setAttachMenu] = useState(false); // 📎 → which picker?
+  const [nativeBusy, setNativeBusy] = useState(false); // a macOS panel is open ON THE MAC
+  const [attachErr, setAttachErr] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false); // Plan vs Code — default Code
   // Approval level in Code mode; persisted so your last choice (incl. bypass) becomes the default.
   // PER SESSION, with the last choice as the seed for the next new chat. It used to be one global key
@@ -1793,6 +1887,12 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // the UI agree instead of one of them quietly asking for approvals.
   const [permDefault, setPermDefault] = useSetting<Exclude<AgentMode, "plan">>("permMode", "bypassPermissions");
   const [perm, setPerm] = useSetting<Exclude<AgentMode, "plan">>("permMode:" + effectiveKey, permDefault);
+  // Model: same two-key shape as `perm` above, and for the same reason — the server applies it per
+  // session, so a global-only key would show one chat's model on top of another chat's session. `null`
+  // means "this box's pin" (lib/model-pins.ts), which is a server-side value the browser can't read;
+  // the picker resolves the label from what the live session reports instead of mirroring the id.
+  const [modelDefault, setModelDefault] = useSetting<string | null>("chatModel", null);
+  const [model, setModel] = useSetting<string | null>("chatModel:" + effectiveKey, modelDefault);
   const scrollRef = useRef<HTMLDivElement>(null);
   const agent = useAgent(effectiveKey);
   const isNew = !sessionId;
@@ -1941,10 +2041,40 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     ensureNotifyPermission(); // lazy — a real user gesture, which browsers want for this prompt
     const continuing = !sessionId && continueOn ? continueTarget : null;
     if (continuing) adoptedViaContinueRef.current = true; // so a rejected continue can be handed back
-    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || continuing?.id || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || continuing?.id || undefined, model, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
     if (continuing) setResumedFrom(continuing);
     setInput("");
   };
+  // One way to put a path in the box, used by the in-app browser, the macOS panel and (via Composer)
+  // drag-and-drop. Quoting a path that contains spaces is the whole reason this isn't inlined at each
+  // call site: unquoted it is ambiguous to every reader of this text — Claude, the thumbnail matcher,
+  // and the image inliner all stop at the first space — and the most common file anyone attaches on a
+  // Mac is "Screen Shot … .png".
+  const appendPath = (p: string) => {
+    const q = /\s/.test(p) ? `"${p}"` : p;
+    setInput((v) => (v ? v.replace(/\s*$/, " ") : "") + q + " ");
+  };
+
+  // Open the genuine macOS open panel. It appears on the machine running the server — which is this Mac
+  // and the point of the feature, but is why the in-app browser stays in the menu beside it for a pane
+  // opened from the phone. `nativeBusy` matters more than it looks: the panel is modal over there and
+  // invisible over here, so without it the browser just sits unresponsive-looking with no explanation.
+  const chooseNative = async (kind: "file" | "folder") => {
+    setAttachMenu(false); setAttachErr(null); setNativeBusy(true);
+    try {
+      const r = await fetch("/api/fs/choose", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind, start: cwd, multiple: true }),
+      });
+      const d = await r.json().catch(() => null);
+      if (d?.canceled) return;                       // ordinary outcome, not an error
+      if (!r.ok || d?.error) throw new Error(d?.error || `the file panel failed (${r.status})`);
+      for (const p of d.paths || []) appendPath(p);
+    } catch (e) {
+      setAttachErr(String((e as Error)?.message || e));
+    } finally { setNativeBusy(false); }
+  };
+
   // Both toggles flip local UI state immediately (optimistic — feels instant), then revert it if the
   // server-side changeMode() call turns out to have failed, so a network blip can't leave the toggle
   // showing a mode (e.g. "bypass") that the live session never actually switched to.
@@ -1958,6 +2088,17 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     setPerm(m);
     setPermDefault(m); // seed the next NEW chat only — never retroactively re-mode an existing one
     if (!planning) agent.changeMode(m).then((ok) => { if (!ok) setPerm(prev); });
+  };
+  // Same optimistic-then-revert contract as the two above. The difference is what "applied" means: a
+  // live session can't be re-modelled, so the server answers by tearing it down and the pane's next
+  // message resumes the conversation on the new model (agent.changeModel re-arms `resume` for that).
+  // With no live session there is nothing to tear down and the pick simply rides in with the first
+  // send — which is why this is safe to call unconditionally.
+  const setModelPick = (m: string | null) => {
+    const prev = model;
+    setModel(m);
+    setModelDefault(m); // seeds the next NEW chat, exactly like setPermDefault — never retroactive
+    agent.changeModel(m).then((ok) => { if (!ok) setModel(prev); });
   };
   // Follow the stream — but only while the reader is actually AT the bottom.
   //
@@ -2134,7 +2275,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
 
   const askBrowser = (text: string) => {
     if (!cwd || agent.busy) return;
-    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, model, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
   };
 
   // Away-tab notifications: tell the user when a background pane finishes, or needs them, while
@@ -2473,7 +2614,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           // at the other end of this same row. Two doors, ONE destination still holds — this chip and
           // the switch on the bento tile raise the same canvas.
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} />
+            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} busy={agent.busy} />
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
           </div>
@@ -2503,7 +2644,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
                 {/* Opens UPWARD: it hangs off the composer, which is already at the bottom of the pane,
                     so downward would render it outside the pane's `overflow-hidden` box. */}
                 <div className="absolute bottom-full left-0 z-20 mb-1 flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900 p-2 shadow-2xl">
-                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} />
+                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} busy={agent.busy} />
                 </div>
               </>
             )}
@@ -2514,6 +2655,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             transcript — so a pasted screenshot, a picked file, and the message you eventually send all
             agree by construction rather than by three code paths staying in sync. */}
         <div className="px-1"><ImageRefs text={input} /></div>
+        {/* The macOS panel is modal on the Mac and invisible in this tab. Without a word here, a pane
+            opened from another device looks like the 📎 did nothing at all. */}
+        {(nativeBusy || attachErr) && (
+          <span className={`px-1 pb-1 text-[10px] ${nativeBusy ? "text-neutral-500" : "text-[#ef7c7c]"}`}>
+            {nativeBusy ? "the file panel is open on the Mac — pick something there, or press Esc" : attachErr}
+          </span>
+        )}
         {/* The queued MESSAGES now render in the transcript, where you said them. What stays here is
             only the part that is about this control rather than about the conversation: what will
             happen when the current turn ends. Without a word here the alternative reading of a message
@@ -2535,8 +2683,26 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           // from under the cursor — and with queueing there are now TWO buttons over there to reach.
           onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setComposing(false); }}>
           {atLeast(dc, "tight") && (
-            <button onClick={() => setAttachOpen(true)} disabled={!cwd} title="Attach a file (inserts its path for Claude to read)"
-              className="shrink-0 self-end rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
+            <div className="relative shrink-0 self-end">
+              <button onClick={() => setAttachMenu((v) => !v)} disabled={!cwd || nativeBusy}
+                title="Attach a file or folder (inserts its path for Claude to read) — or just drag one in"
+                className="rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
+              {attachMenu && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setAttachMenu(false)} />
+                  {/* Upward, like every other fold-out down here: this hangs off the composer at the
+                      bottom of a pane whose root is `overflow-hidden`. */}
+                  <div className="absolute bottom-full left-0 z-20 mb-1 w-64 overflow-hidden rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
+                    <MenuRow label="Choose files…" hint="The real macOS panel — ⌘⇧G, favourites, search" onClick={() => chooseNative("file")} />
+                    <MenuRow label="Choose folder…" hint="Same panel, folders only" onClick={() => chooseNative("folder")} />
+                    {/* Kept, and kept last: the native panel opens on the Mac, so this is the only one
+                        that works from a pane open on the phone. */}
+                    <MenuRow label="Browse here" hint="In-app browser — works from any device" onClick={() => { setAttachMenu(false); setAttachOpen(true); }} />
+                    <p className="px-2 pb-1 pt-1.5 text-[10px] leading-snug text-neutral-600">…or drag files straight onto the box.</p>
+                  </div>
+                </>
+              )}
+            </div>
           )}
           <Composer
             value={input} onChange={setInput} onSubmit={submit}
@@ -2623,10 +2789,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         />
       )}
       {attachOpen && <FolderPicker pickFiles start={cwd} onClose={() => setAttachOpen(false)}
-        // Quote a path containing spaces. Unquoted it is ambiguous to every reader of this text —
-        // Claude, the thumbnail matcher, and the inliner all stop at the first space — and the most
-        // common file anyone attaches on a Mac is "Screen Shot … .png".
-        onPick={(p) => { const q = /\s/.test(p) ? `"${p}"` : p; setInput((v) => (v ? v.replace(/\s*$/, " ") : "") + q + " "); setAttachOpen(false); }} />}
+        onPick={(p) => { appendPath(p); setAttachOpen(false); }} />}
     </div>
     </DensityContext.Provider>
   );

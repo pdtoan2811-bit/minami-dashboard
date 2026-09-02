@@ -648,6 +648,50 @@ A `<textarea>` that grows to `MAX_H` (220px) and then scrolls, with a pixel-alig
 it that tints markdown syntax without touching metrics (that constraint is why bold renders as dimmed
 `**` rather than actual bold — a weight change would shift the text off the caret).
 
+#### Attaching: four ways in, one thing they all do
+
+Drag-and-drop, the 📎 menu's two native panels, the in-app browser and paste all end in the same
+one-line operation — **put an absolute path in the textarea**. That is not tidiness, it is the
+composer's contract (the textarea is the single source of truth for what Claude receives), and it is
+what lets `lib/agent/images.ts` inline a dropped screenshot for free, with no code path of its own.
+
+**The constraint that shapes all of it: a browser will not tell you a local file's path.**
+`<input type="file">` and the File System Access API both hand back bytes and a bare `name`; the path
+is withheld from web content and no flag returns it. So any browser-native picker forces a *copy* —
+Claude gets pointed at a snapshot, and an edit lands in a temp file. Fine for "look at this
+screenshot", quietly wrong for "change this module".
+
+Hence two distinct routes, and the menu names the difference rather than hiding it:
+
+- **`/api/fs/choose`** — the genuine AppKit open panel via `osascript`, returning a POSIX path. Bytes
+  never move, so this is the one to use when Claude should *edit* the file. `activate` is required or
+  the panel opens behind the browser and reads as a hang. Cancel arrives as exit 1 with `-128`, which
+  is an ordinary outcome and must not surface as an error. One panel at a time (`inFlight`), because
+  two modal dialogs stacked on the Mac steal the keyboard from each other. It opens on the machine
+  running the server — which is why the in-app browser stays in the menu as the portable option.
+- **`/api/fs/drop`** — the bytes fallback, when a drag discloses no path. Writes under
+  `~/.minami/drops/` (not the session cwd — same reasoning as `/api/fs/paste`: the dashboard drops into
+  every topic's folder and cannot edit their `.gitignore`s).
+
+Drag-and-drop tries for a reference before settling for a copy: Chrome sometimes puts the real path in
+the drag's `text/uri-list` as a `file://` URL, and when it does, that beats uploading. A dropped
+**folder** has no bytes to fall back on at all, so if the path isn't disclosed it must say so — Chrome
+reports a directory as a zero-byte `File`, and "attaching" that would write an empty file bearing the
+folder's name, which is the worst available outcome because it looks like it worked.
+
+> 🐛 **`my notes.ts` was saved as `my_20notes.ts`.** An HTTP header can't carry a space, so the client
+> percent-encodes the filename into `x-filename` — and the server never decoded it. `%20` reached the
+> sanitiser, whose allow-list excludes `%`, and got rewritten to `_20`. Decode before sanitising, and
+> keep the raw value if it isn't valid encoding. Caught by dropping a file whose name had a space in
+> it; a name without one would have passed forever.
+
+Two DOM details that are load-bearing rather than defensive: `dragover` must `preventDefault()` on
+*every* event or the drop is never allowed and the browser navigates the window to the dropped file
+(throwing away the chat), and the drop overlay must be `pointer-events-none` — an overlay that accepts
+the pointer becomes a child of the drop target and fires `dragleave` the instant it appears, cancelling
+the drag under the cursor. `dragenter`/`dragleave` are counted, not toggled, since they fire for every
+child crossed.
+
 > 🐛 **An empty chat input rendered as a tall, oddly-wrapped box.** `scrollHeight` on an empty
 > `<textarea>` reports the height of the wrapped **placeholder** — the browser lays that text out for
 > real — so the auto-grow was sizing the composer to a string the user hadn't typed. "Message Claude in

@@ -21,12 +21,85 @@ to a running session instead of starting a cold duplicate.
 `canUseTool` is the single hook for both tool-permission prompts and Claude's `AskUserQuestion`. It
 parks a promise in `s.pending` and blocks.
 
+> 🐛 **"The question doesn't show up until I hit F5" (fixed 2026-08-26).** `ask` and `permission` are
+> the only events in this pipeline that are **not** REPLACE semantics. Everything else — `activity`,
+> `hold`, `queued` — re-broadcasts its whole value on every change, which is what makes the stated
+> convention true: *a dropped SSE event self-heals on the next one*. A prompt is broadcast exactly
+> ONCE, when `canUseTool` parks its promise, and the only other copy is the replay a fresh `subscribe()`
+> is handed. So one lost delivery is permanent: the session sits at `phase=awaiting`, the composer says
+> "waiting on your answer", and the card that answers it never comes. A reload fixes it because a reload
+> re-subscribes — and nothing else did.
+>
+> The tell in the bug report is that both halves were visible at once: the *state* had healed (it is
+> re-broadcast) while the *prompt* had not (it isn't). Cause doesn't need identifying per-incident — a
+> suspended background tab, a socket the server hasn't noticed is dead, an `EventSource` that
+> reconnected at the transport level without the `onopen` counter firing all produce it.
+>
+> Fixed client-side, because the client is where the contradiction is observable: the server says this
+> pane is blocked on the user while the pane holds no prompt to show. Those two facts are broadcast
+> microseconds apart, so the gap is real only in flight; sustained past `AWAIT_HEAL_MS` (4s) it means
+> the prompt was lost, and the pane re-subscribes to get the replay. Once per episode, so a genuinely
+> stale phase can't spin. `attach()` deliberately isn't reused for this — it ends in `ensureStream()`,
+> which no-ops when a stream is already open; `resync()` drops the connection first, because replay
+> happens per subscribe.
+>
+> Verified by fault injection: dropping a single `ask` event client-side reproduced the stranded pane
+> exactly, and the watchdog recovered the card ~4s later with no reload. The happy path opened no extra
+> stream at all — the server log showed one `subscribe` for a normal ask, versus one plus an
+> `attach=1` for the injected one.
+
+> 🐛 **A schema field the UI never rendered — `options[].preview` (fixed 2026-08-26).** The
+> AskUserQuestion schema lets the model attach a `preview` to each option: the mockup, snippet or plan
+> the one-line `description` can only gesture at. `manager.ts` broadcasts `questions` verbatim, so the
+> field was *arriving* correctly the whole time — it was missing only from `AgentQuestion` in
+> `lib/use-agent.ts` and from `AskCard`. 27 questions across the local transcript history had shipped
+> a preview that the pane silently dropped, so a question written to be decided by comparing two
+> previews arrived as two one-line descriptions with the reason to prefer either invisible.
+>
+> The lesson generalises past this field: **a pass-through server plus a hand-written client type is a
+> place where schema additions go to die quietly.** Nothing errors — the data is simply not on screen,
+> and the model has no way to learn that what it sent was never shown.
+>
+> The preview renders *inside* the option row, in the card's one scrolling region, never as a new
+> pinned block. That is a direct consequence of §"AskCard layout": the card is clipped rather than
+> scrolled by its pane, so any block of arbitrary length placed outside that region can push "Send
+> answer" off the bottom — and an unanswerable ask holds the session at `phase=awaiting`, which is busy
+> forever (§8). Open/closed state defaults to following the selection (the schema's "focused" semantics
+> with a mouse) with an explicit per-option toggle that overrides in both directions, so several
+> previews can be compared side by side without committing to any of them.
+
 **Permission modes are enforced here, in `canUseTool` — not by the SDK.** Each session carries its own
 `s.mode`, and the hook decides before it ever prompts: `bypassPermissions` allows everything,
 `acceptEdits` allows the edit tools (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`), everything else asks.
 `AskUserQuestion` is exempt from all of it — it isn't a permission, it's Claude asking the human a
 question, and auto-answering it would throw the question away. The mode is still handed to the SDK at
 spawn time *and* on change, so the CLI's own state agrees; it just isn't trusted to be the enforcer.
+
+**The model is creation-only, so the composer's picker respawns rather than asks.** `query()` is built
+around a model and there is no control message to move a warm session onto another one — the same shape
+of trap as `setPermissionMode()` above. `setModel()` therefore closes the SDK subprocess and the pane's
+next send carries `resume`, so the conversation is picked back up *off disk* — the mechanism a pane
+reattaching after a server restart already depends on. What does not survive is anything that only
+existed inside the old process: queued follow-ups, parked permission prompts (`closeSession` denies
+them), and the KV cache, so the first turn after a swap is a cold read of the transcript. It refuses
+mid-turn, because killing a streaming subprocess loses the tail of the reply (`s.partial` until
+`result`) and orphans any running tool call.
+
+Two details are easy to get wrong and both were:
+
+- **The live SSE subscribers have to be handed over.** They live in the `Session` object `closeSession`
+  deletes, and `ensureSession` starts a fresh one that only adopts from `waiting` — so without moving
+  them there, every pane watching that key goes silent until reloaded, which looks like the swap hanging.
+- **`sentOnce` must be re-armed client-side.** It is what decides whether the next send passes `resume`;
+  it is true for any live pane, so missing it makes a model swap start a brand-new, context-less session
+  that looks like the same chat.
+
+The picker names the model the *session reported at init*, never one derived from a client-side copy of
+the pin — `lib/model-pins.ts` reads `~/Minami`'s config with `node:fs` and cannot be imported into a
+browser component, and mirroring the id to render a label is exactly the drift that file exists to
+prevent. "Chosen but not yet running" is likewise derived, from the pick and the reported model
+disagreeing, rather than announced: a `notice` cannot work here at all, since `NoticeStrip` renders only
+while a pane is busy and the swap is refused while busy.
 
 **`bypassPermissions` is this install's default** (`DEFAULT_PERMISSION_MODE`, overridable with
 `MINAMI_DASHBOARD_PERMISSION_MODE`) — Thomas's call for a local, single-user box. Note the asymmetry

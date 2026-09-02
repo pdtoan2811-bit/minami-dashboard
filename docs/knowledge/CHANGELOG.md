@@ -8,6 +8,46 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-02
+- **Attaching files: drag-and-drop, and the real macOS open panel** (§5e) — new `/api/fs/choose`
+  (`osascript`, returns a POSIX path so nothing is copied) and `/api/fs/drop` (bytes fallback into
+  `~/.minami/drops/`). The 📎 button became a menu naming the trade: native panel for files Claude
+  should *edit*, in-app browser for a pane opened from the phone. Drops prefer the real path from
+  `text/uri-list` and fall back to uploading; a dropped folder with no path says so rather than
+  attaching a zero-byte file. All four routes end in the same "put a path in the textarea" operation.
+  🐛 fixed on the way: a percent-encoded `x-filename` was never decoded, so `my notes.ts` was written
+  as `my_20notes.ts`.
+
+### 2026-08-26
+- **🐛 Prompts no longer strand a pane until F5** (§3) — `ask`/`permission` are the only non-REPLACE
+  events in the live pipeline: broadcast exactly once, with replay-on-subscribe as the sole second
+  chance. One lost delivery left the session at `phase=awaiting` with "waiting on your answer" showing
+  and no card, recoverable only by reloading. `useAgent` now watches for the contradiction (server
+  blocked on the user + pane holding no prompt) and re-subscribes after `AWAIT_HEAL_MS`, once per
+  episode. New `resync()` — `attach()` couldn't do it, since `ensureStream()` no-ops on an open stream.
+  Proven by fault injection, with the happy path opening no extra stream.
+- **AskCard renders `options[].preview`** (§3) — the AskUserQuestion schema field carrying a mockup,
+  snippet or plan per option. `manager.ts` had always broadcast it verbatim; it was missing from
+  `AgentQuestion` in `lib/use-agent.ts` and from the card, so 27 questions in local transcript history
+  shipped previews that were silently dropped. Renders inside the option row (the one scrolling
+  region) — never a new pinned block, or a long preview would push "Send answer" out of a short pane
+  and strand the session at `phase=awaiting`. Open state follows the selection by default, with an
+  explicit per-option toggle so previews can be compared without picking one.
+  Verified on `:3001` with a real 4-question ask at a 560px viewport: options clip and scroll, the
+  action row stays visible.
+- Checked while scoping this: the question cap is still **1–4**, in both CLI 2.1.241 and SDK 0.3.220.
+  No version has asked 5, and none of the 466 recorded asks had more than 4.
+- **Model picker in the composer's control row** (§3) — new `/api/agent/model` + `setModel()`, the
+  catalog from `lib/model-catalog.ts`, persisted per session with a global seed like `perm`. A warm
+  session's model can't be changed, so the swap tears the session down and the next send resumes the
+  conversation from disk; refused mid-turn. Two things this needed that aren't obvious: handing the live
+  SSE subscribers to `waiting` across the respawn, and re-arming `sentOnce` so the next send actually
+  passes `resume` instead of silently starting a context-less session. The pill names what the SESSION
+  reported at init (the pin is server-only and must not be mirrored client-side), and a sakura dot marks
+  a pick that hasn't started yet — derived from pick-vs-reported disagreeing, not from a flag.
+  Verified end-to-end on `:3001`: a chat started on Opus, swapped to Fable mid-conversation, then
+  recalled the codeword from before the swap and reported `claude-fable-5`.
+
 ### 2026-08-25
 - **The canvas's own strings now follow the meeting's language** (§17) — new `lib/canvas-lang.ts`.
   The judge already wrote cards in the language people were speaking; everything the *app* wrote was

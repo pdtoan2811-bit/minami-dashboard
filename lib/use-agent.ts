@@ -11,7 +11,11 @@ export type AgentToolCall = { name: string; input: unknown; id?: string; done?: 
 // `held` marks a prompt raised by the Flow view's brake rather than by the permission mode — the pane
 // renders it as "paused for review" (with the countdown `expiresAt` drives) instead of "needs approval".
 export type PermissionPrompt = { id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } | null;
-export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] };
+// `preview` is the AskUserQuestion schema's own field (SDK 0.3.220 / CLI 2.1.241): free-form content —
+// a mockup, a code snippet, a plan — that the model attaches to an option so the two can be compared
+// side by side. It rides through manager.ts untouched (the whole `questions` array is broadcast
+// verbatim), so it was always ARRIVING here; it was only ever missing from this type and from AskCard.
+export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] };
 export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 // `agent`/`status` only ride along on kind "task" — see manager.ts's AgentEvent for why.
@@ -19,6 +23,11 @@ export type Notice = { kind: string; text: string; at: number; agent?: string; s
 
 export { activityLabel, toolCategory, escalationHint } from "./agent/labels";
 export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem } from "./agent/labels";
+
+// How long "the server is blocked on you, and you have nothing to answer" must hold before the client
+// treats it as a lost prompt rather than one still in flight. Generous on purpose: the two facts travel
+// in the same broadcast burst, so any real gap is sub-second, and a resync costs a reconnect.
+const AWAIT_HEAL_MS = 4000;
 
 export function useAgent(paneKey: string) {
   const [turns, setTurns] = useState<AgentTurn[]>([]);
@@ -48,6 +57,9 @@ export function useAgent(paneKey: string) {
   // timer never depends on the two clocks agreeing.
   const [phaseStart, setPhaseStart] = useState<number>(() => Date.now());
   const [sessionId, setSessionId] = useState<string | null>(null);
+  // The model the live session reported at init — observed, never chosen. Null until a session exists,
+  // which is why the picker falls back to the word "default" rather than naming a model it is guessing.
+  const [sessionModel, setSessionModel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detached, setDetached] = useState(false); // an attach found no live server session
   const esRef = useRef<EventSource | null>(null);
@@ -146,7 +158,13 @@ export function useAgent(paneKey: string) {
       try { ev = JSON.parse(e.data); } catch { return; }
       switch (ev.t) {
         case "init":
-          setSessionId(ev.sessionId); sessionIdRef.current = ev.sessionId; break;
+          setSessionId(ev.sessionId); sessionIdRef.current = ev.sessionId;
+          // What this session is ACTUALLY on, reported by the SDK rather than assumed from the picker.
+          // The composer needs it because the box pin lives in lib/model-pins.ts, which reads ~/Minami's
+          // config off disk and so cannot be imported into a browser component — and mirroring the id
+          // client-side to render a "default" label is precisely the drift that file exists to prevent.
+          if (ev.model) setSessionModel(ev.model);
+          break;
         case "delta":
           lastDeltaAtRef.current = Date.now();
           setTurns((prev) => {
@@ -346,6 +364,17 @@ export function useAgent(paneKey: string) {
     esRef.current = es;
   }, [paneKey, reconcile, closeStream, applyActivity]);
 
+  // Force the server to REPLAY onto a stream that is already open.
+  //
+  // `attach()` cannot do this and shouldn't: it ends in ensureStream(), which no-ops when a stream
+  // exists — correct for its own callers (mount, reattach-after-release), useless here. Replay happens
+  // exactly once per subscribe, so getting it again means dropping the connection and taking a new one.
+  const resync = useCallback(() => {
+    closeStream();
+    attachingRef.current = true;
+    ensureStream(true);
+  }, [closeStream, ensureStream]);
+
   // Heal the stream when a backgrounded tab comes back. Mobile browsers freeze (and often outright
   // close) an EventSource while the tab is in the background, and coming back doesn't reliably fire the
   // reconnect path in ensureStream()'s onopen counter — so the pane sits frozen on whatever it last
@@ -438,6 +467,36 @@ export function useAgent(paneKey: string) {
     };
   }, [live, detached, closeStream, ensureStream, UNPIN_IDLE_MS, UNPIN_HIDDEN_MS]);
 
+  // ── The one-shot events, and why they need a watchdog ────────────────────────────────────────────
+  //
+  // `activity`, `hold` and `queued` are REPLACE semantics: the server re-broadcasts the whole value on
+  // every change, so a client that misses one is corrected by the next. That is the convention this
+  // pipeline is built on — and `ask`/`permission` are the exception to it. Each is broadcast exactly
+  // ONCE, at the moment canUseTool parks its promise (see manager.ts), and the only other copy is the
+  // replay handed to a fresh subscribe. So a single lost delivery is permanent: the session sits at
+  // `phase=awaiting`, the composer says "waiting on your answer", and the card that would answer it
+  // never arrives. Reloading the page fixes it because a reload re-subscribes — and nothing else did,
+  // which is exactly how this reads as "the question doesn't show up until I hit F5".
+  //
+  // A lost delivery has more than one cause and we do not need to know which one it was: a suspended
+  // background tab, a socket the server hasn't yet noticed is dead, an EventSource that reconnected at
+  // the transport level without the onopen counter firing. What they share is the observable state
+  // below.
+  //
+  // The inconsistency is self-evident and cheap: the server says this pane is BLOCKED ON THE USER while
+  // the pane holds no prompt to show. Those two facts are broadcast microseconds apart, so the gap is
+  // real only in flight — sustained, it means the prompt was lost. Re-subscribe and the replay returns
+  // it. Once per episode, never in a loop: if the resync produces nothing (a phase that is itself
+  // stale), `healed` stays set until the phase actually changes.
+  const healedRef = useRef(false);
+  useEffect(() => {
+    if (!live || detached) return;
+    if (activity.phase !== "awaiting" || pending || ask) { healedRef.current = false; return; }
+    if (healedRef.current) return;
+    const t = setTimeout(() => { healedRef.current = true; resync(); }, AWAIT_HEAL_MS);
+    return () => clearTimeout(t);
+  }, [live, detached, activity.phase, pending, ask, resync]);
+
   // Reattach to a still-running server session after a page refresh: open the stream and let the
   // server's snapshot rebuild the transcript (history + in-flight message + any pending prompt). If no
   // live session backs this pane, the server replies `detached` and we quietly fall back to disk.
@@ -492,7 +551,7 @@ export function useAgent(paneKey: string) {
 
   // Send a user message. `seed` = the existing (file) transcript to preserve when going live;
   // `resume` = the Claude session id to continue on the pane's first send.
-  const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[] }) => {
+  const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[]; model?: string | null }) => {
     const clean = text.trim();
     if (!clean || !opts.cwd) return;
     setError(null); setDetached(false); attachingRef.current = false;
@@ -511,7 +570,11 @@ export function useAgent(paneKey: string) {
     const adoptedHere = !sessionIdRef.current && !!opts.resume;
     if (adoptedHere) { setSessionId(opts.resume!); sessionIdRef.current = opts.resume!; }
     const usingResume = !sentOnce.current;
-    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined, hold: holdRef.current };
+    // `model` rides on every send, not just the first. It's creation-only on the server, so on a warm
+    // session it is simply ignored — but that means the pane's pick is authoritative on whichever send
+    // turns out to be the cold one, without this caller having to know which that is. Same reasoning as
+    // `mode` being re-applied per turn in sendMessage.
+    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined, hold: holdRef.current, model: opts.model || undefined };
     try {
       const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
@@ -560,6 +623,25 @@ export function useAgent(paneKey: string) {
     } catch (e) { setError(`Couldn't send that answer — try again (${String((e as Error)?.message || e)})`); }
   }, [ask, paneKey]);
 
+  // Point this pane at a different model. Returns whether it applied, so the composer's picker can
+  // revert rather than display a model the session isn't on — the same contract as changeMode().
+  //
+  // The interesting half is `respawned`. A warm session cannot change model (see setModel on the
+  // server), so the server tears it down; the conversation then has to be picked back up off disk,
+  // which means the NEXT send must carry `resume`. `sentOnce` is the flag that decides that, and it is
+  // true by now for any live pane — so re-arming it here is the whole handover. Miss this line and the
+  // swap silently starts a brand-new, context-less session that looks like the same chat, which is the
+  // exact failure `sentOnce`'s own comment documents from the idle-reap path.
+  const changeModel = useCallback(async (model: string | null): Promise<boolean> => {
+    try {
+      const r = await fetch("/api/agent/model", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, model }) });
+      const d = await r.json().catch(() => null);
+      if (!d?.ok) { if (d?.reason || d?.error) setError(d.reason || d.error); return false; }
+      if (d.respawned) sentOnce.current = false;
+      return true;
+    } catch (e) { setError(`Couldn't switch model — ${String((e as Error)?.message || e)}`); return false; }
+  }, [paneKey]);
+
   // Returns whether the server actually applied the mode change, so the caller (the Plan/Code and
   // approval-level toggles in app/page.tsx) can revert its own optimistic UI state on failure instead
   // of silently diverging from what the live session is really running under.
@@ -603,5 +685,5 @@ export function useAgent(paneKey: string) {
 
   // `elapsed` recomputes on every 1s tick above, so the caller gets a live-counting number for free.
   const elapsed = activity.phase === "idle" ? 0 : Math.max(0, Date.now() - phaseStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, setHold, stop };
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, sessionModel, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, setHold, stop };
 }
