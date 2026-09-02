@@ -108,10 +108,23 @@ decision there and nowhere else:
 |---|---|
 | **What isolates** | A new **blank** chat, when the project already has a pane open, in a git repo, not already in a worktree |
 | **What never isolates** | Reopening an existing session — it carries the cwd it was born in, because `--resume` is scoped to the directory the transcript is filed under (§1) |
-| **Switch** | `MINAMI_AUTO_ISOLATE=0`. Read on the server only, so a client can't disagree with it |
+| **Switch** | `MINAMI_AUTO_ISOLATE=0` globally; `git config minami.isolate off` per repo. Both read on the server only, so a client can't disagree |
 | **Backends** | `bin/task.mjs new --json` where it exists (ports, the node_modules link, the merge gates, the autopilot's view — one definition each); plain `git worktree` in any other repo |
 | **Way back** | `merge back` on the pane (`IsolatedBar`), and the autopilot for anyone who has it on |
 | **Cleanup** | Closing an isolated pane discards the tree **if it is pristine** — no commits ahead, nothing uncommitted |
+
+> 🐛 **A notes vault must not isolate — a compaction ran invisibly (2026-09-02).** secondBrain is
+> the machine's most-opened folder precisely because it holds shared context, and every overlapping
+> chat there got its own worktree: four piled up (`chat-2..chat-6`), holding uncommitted QSortby
+> notes, a wiki teardown, deck-kit's whole `handoff` feature, and — sharpest — a vault compaction
+> that ran to completion on `task/chat-6`, invisible to sync, Minami, every other session and every
+> other device, against a vault view 50 commits stale. In a repo without merge gates nothing ever
+> folds a tree back, so "isolated" quietly means "stranded". Isolation protects parallel CODE edits;
+> in a vault it destroys the one thing the session came for. Hence the per-repo opt-out:
+> `git config minami.isolate off` (set in secondBrain that day) — a git config, not an env list,
+> because the decision belongs to the repo and travels with the checkout. The stranded content was
+> rescued into `main` (rescue commit + two cherry-picks); the live `chat-6` compaction was left for
+> a deliberate reconcile.
 
 **Isolation must not move a chat off its own tile.** `project` is `basename(cwd)`, so without a fold a
 pane in `.minami-worktrees/chat` files itself under a new project called `chat` — the chat you just

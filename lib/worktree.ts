@@ -153,6 +153,17 @@ export async function isolate(cwd: string, label: string): Promise<Isolated | nu
   const info = await repoInfo(cwd);
   if (!info || info.isWorktree) return null;
 
+  // Per-repo opt-out: `git config minami.isolate off` in the repo itself. Isolation is a fit for
+  // code (parallel edits collide, merges have gates); it is actively wrong for a notes vault, where
+  // the whole point of starting a session there is the SHARED context — a chat isolated into a
+  // worktree reads a stale vault and writes notes that sync, Minami and every other session can't
+  // see. That is how a vault compaction once ran to completion invisibly (secondBrain chat-6,
+  // 2026-09-02). A git config rather than an env list because the decision belongs to the REPO —
+  // it travels with the checkout, needs no server restart, and `git config minami.isolate off` is
+  // something a session standing in the folder can do itself.
+  try { if ((await git(["config", "--get", "minami.isolate"], info.base)).trim() === "off") return null; }
+  catch { /* key unset — isolation stays on, the default */ }
+
   // Name allocation and creation are not atomic — `takenNames` reads the filesystem, `task new` writes
   // it — so two panes opened within the same second both pick `chat` and the second one loses. Retry
   // rather than surface it: the caller creates the pane either way, and a THROW here means the pane is
