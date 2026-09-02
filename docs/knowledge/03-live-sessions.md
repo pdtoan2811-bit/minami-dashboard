@@ -267,6 +267,17 @@ One-line contexts (tile, cramped status) don't get the board; `taskLabel` instea
 `4 agents · Explore ×3, Plan` (counts by type) rather than the old `subagent (Explore) +3`, and a
 single agent shows type AND clipped assignment.
 
+Second pass, same day — the board became **the bay**: one bordered container with a header
+(the *formation strip*: one breathing dot per running agent, parked solid when it lands) and rows
+on a shared 6-column grid, so a fleet aligns into a scannable table instead of ragged flex rows.
+Motion follows the pane's honesty rule (motion = a real event): `agentIn` on a row is a real
+launch, `agentBreathe` staggers by NEGATIVE delay (no dot waits dead for its first cycle, and the
+fleet doesn't strobe in sync — tempo matches activityShimmer's 2.4s so the live area inhales
+together), the current-tool and tool-count cells are KEYED on their text so the remount itself
+animates exactly when the agent moved, and `agentLand` pops the verdict glyph when a result
+actually arrives. All four classes are in the `prefers-reduced-motion` block. Meta cells render
+even when empty so columns hold their line.
+
 ### Gotchas
 - `settle()` must recompute the phase from what's *still* in flight after a tool result lands.
   Without it a finished tool's label stays on screen — the stale-label bug.

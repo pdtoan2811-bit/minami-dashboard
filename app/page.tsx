@@ -242,28 +242,52 @@ const TOOL_ICON: Record<ToolCategory, LucideIcon> = {
  *  `elapsed` prop, so the per-row timers tick with it — no interval of their own needed. */
 function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[] }) {
   if (!tasks.length && !finished.length) return null;
+  // One shared grid so four agents read as a table without being one — ragged flex rows made a
+  // fleet scannable only by reading every row. Columns: status dot · type · assignment (flexes) ·
+  // current tool · tool count · per-agent clock. Meta cells render even when empty so the columns
+  // hold their line.
+  const grid = "grid w-full grid-cols-[14px_auto_minmax(0,1fr)_auto_auto_auto] items-center gap-x-2 px-2.5 py-1 text-[10px]";
   return (
-    <span className="flex w-full max-w-xl flex-col gap-1">
-      {tasks.map((k) => (
-        <span key={k.id} className="flex min-w-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px]"
-          style={{ borderColor: TOOL_TINT.task + "30", background: TOOL_TINT.task + "0d" }}>
-          <Bot className="h-3 w-3 shrink-0 animate-pulse" style={{ color: TOOL_TINT.task }} strokeWidth={2.5} />
-          {k.agent && <span className="shrink-0 rounded px-1 py-px font-mono text-[9px] font-medium" style={{ background: TOOL_TINT.task + "1e", color: TOOL_TINT.task }}>{k.agent}</span>}
-          <span className="min-w-0 flex-1 truncate text-neutral-300" title={k.description}>{k.description}</span>
-          {k.lastTool && <span className="hidden shrink-0 italic text-neutral-500 sm:inline">{k.lastTool}</span>}
-          {typeof k.toolUses === "number" && k.toolUses > 0 && <span className="shrink-0 font-mono text-[9px] tabular-nums text-neutral-600">{k.toolUses} tools</span>}
-          {k.since && <span className="shrink-0 font-mono text-[9px] tabular-nums text-neutral-500">{fmtElapsed(Date.now() - k.since)}</span>}
+    <span className="agent-in flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.02]">
+      {/* The formation strip: one dot per agent, breathing while it flies, parked solid when it
+          lands. The fleet's size and health read here before a single word does. */}
+      <span className="flex items-center gap-2 px-2.5 py-1">
+        <span className="flex items-center gap-1">
+          {tasks.map((k, i) => (
+            <span key={k.id} className="agent-dot h-1.5 w-1.5 rounded-full" style={{ background: TOOL_TINT.task, animationDelay: `${-i * 0.35}s` }} />
+          ))}
+          {finished.map((n, i) => (
+            <span key={`f-${n.at}-${i}`} className="h-1.5 w-1.5 rounded-full opacity-40" style={{ background: n.status === "completed" ? TOOL_TINT.task : "#ef7c7c" }} />
+          ))}
+        </span>
+        <span className="text-[9px] font-semibold uppercase tracking-[0.09em] text-neutral-500">
+          agents · {tasks.length} working{finished.length ? ` · ${finished.length} done` : ""}
+        </span>
+      </span>
+      {tasks.map((k, i) => (
+        <span key={k.id} className={`agent-in ${grid} border-t border-white/[0.04]`}>
+          <span className="flex justify-center">
+            <span className="agent-dot h-1.5 w-1.5 rounded-full" style={{ background: TOOL_TINT.task, animationDelay: `${-i * 0.35}s` }} />
+          </span>
+          <span className="rounded px-1 py-px font-mono text-[9px] font-medium" style={{ background: TOOL_TINT.task + "1e", color: TOOL_TINT.task }}>{k.agent || "agent"}</span>
+          <span className="min-w-0 truncate text-neutral-300" title={k.description}>{k.description}</span>
+          {/* Keyed by the tool text: the span REMOUNTS when the agent moves to a new tool, so the
+              swap itself is the animation — motion exactly when something real happened, per the
+              house rule. Same trick on the counter. */}
+          <span key={k.lastTool || "-"} className={`${k.lastTool ? "agent-tick" : ""} hidden truncate text-right italic text-neutral-500 sm:inline`}>{k.lastTool || ""}</span>
+          <span key={`c${k.toolUses || 0}`} className={`${k.toolUses ? "agent-tick" : ""} text-right font-mono text-[9px] tabular-nums text-neutral-600`}>{k.toolUses ? `${k.toolUses} tools` : ""}</span>
+          <span className="text-right font-mono text-[9px] tabular-nums text-neutral-500">{k.since ? fmtElapsed(Date.now() - k.since) : ""}</span>
         </span>
       ))}
       {finished.map((n, i) => {
         const ok = n.status === "completed";
         const tint = ok ? TOOL_TINT.task : n.status === "stopped" ? "#9ca3af" : "#ef7c7c";
         return (
-          <span key={`${n.at}-${i}`} title={n.text} className="flex min-w-0 items-center gap-1.5 rounded-lg border border-white/[0.06] px-2 py-1 text-[10px] opacity-60">
-            <span className="w-3 shrink-0 text-center" style={{ color: tint }}>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
-            {n.agent && <span className="shrink-0 rounded px-1 py-px font-mono text-[9px]" style={{ background: tint + "1e", color: tint }}>{n.agent}</span>}
+          <span key={`${n.at}-${i}`} title={n.text} className={`agent-in ${grid} border-t border-white/[0.04] opacity-60`}>
+            <span className="agent-land text-center text-[10px] leading-none" style={{ color: tint }}>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
+            <span className="rounded px-1 py-px font-mono text-[9px]" style={{ background: tint + "1e", color: tint }}>{n.agent || "agent"}</span>
             {/* The notice text is "subagent <status>: <summary>" — the summary half is the payload. */}
-            <span className="min-w-0 flex-1 truncate text-neutral-400">{n.text.replace(/^subagent \w+: /, "")}</span>
+            <span className="col-span-4 min-w-0 truncate text-neutral-400">{n.text.replace(/^subagent \w+: /, "")}</span>
           </span>
         );
       })}

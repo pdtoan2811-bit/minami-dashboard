@@ -15,6 +15,9 @@ this to do a piece of work; read the subsystem's own doc.
   then reversed the same evening — the vault keeps per-chat isolation and its own
   `prune-worktrees.sh` now recycles finished branches instead (stale-claim aware, auto-merge,
   origin cleanup). Stranded content rescued into the vault's `main`; chat-6 reconciled.
+- **AgentBoard v2 — the bay** (§4): one container, formation-strip header (a breathing dot per
+  running agent), rows on a shared grid; motion keyed to real events only (launch, tool change,
+  landing), reduced-motion respected. Verified against a rendered mock before shipping.
 - **Stranded-chat rescue: `rehomeStrandedTranscript()`** (§9) — resuming a chat whose recycled
   worktree is gone now moves its transcript to the base folder's project dir and continues there.
   The 29 already-stranded secondBrain transcripts were migrated by hand the same day.

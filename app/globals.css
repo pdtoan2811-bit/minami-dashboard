@@ -211,6 +211,30 @@ body {
 .activity-idle .think-dot,
 .activity-idle .activity-label { animation: none; opacity: 1; }
 
+/* The subagent bay (AgentBoard, app/page.tsx). Same honesty rules as the activity line: every
+   motion is tied to a real event. A row rising in is a real launch; a breathing dot is a live
+   agent (staggered by NEGATIVE delay so the fleet never strobes in sync and no dot sits dead
+   waiting for its first cycle); a tick is the agent's current tool actually changing; the landing
+   pop is a result actually arriving. Nothing here loops to *look* busy — the breathe tempo is
+   activityShimmer's own 2.4s, so the whole live area inhales together. */
+@keyframes agentIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.agent-in { animation: agentIn 240ms ease-out both; }
+.agent-tick { animation: agentIn 200ms ease-out both; }
+@keyframes agentBreathe {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50%      { opacity: 1; transform: scale(1); }
+}
+.agent-dot { animation: agentBreathe 2.4s ease-in-out infinite; }
+@keyframes agentLand {
+  0%   { opacity: 0; transform: scale(0.4); }
+  60%  { opacity: 1; transform: scale(1.25); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.agent-land { animation: agentLand 320ms ease-out both; }
+
 /* The running-tab beacon. A tab is the ONLY place a background turn can announce itself — an
    unfocused pane is display:none, so its own activity line is unreadable — and the signal it had was
    a 6px dot on `animate-pulse`. Fading a 6px dot in and out is the wrong motion for that job: at the
@@ -380,6 +404,10 @@ body {
   .activity-label,
   .tab-live-ring,
   .tab-run-sweep::after,
+  .agent-in,
+  .agent-tick,
+  .agent-dot,
+  .agent-land,
   .animate-pulse {
     animation: none !important;
   }
