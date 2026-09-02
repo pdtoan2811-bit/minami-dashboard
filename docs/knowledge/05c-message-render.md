@@ -67,6 +67,28 @@ straight into "so X was wrong" — with no way to see where a tool result change
 `content_block_start` of type `thinking`, it broadcasts `\n---\n` into the thinking stream.
 `ThoughtBlock` splits on that seam and draws a numbered hairline between passes.
 
+### Preview chips — the reply names where to see the work (2026-09-02)
+
+The manager asks every session to end viewable work with a ` ```minami-preview ` fence holding
+`{kind, target, label}[]` (the writer half is `PREVIEW_PROMPT`, §3). The reader half is
+`lib/preview-block.ts` + `PreviewChips` in the shell: `TurnRow` calls `splitPreviewBlock()` on
+assistant text, hands the block-less body to `Markdown`, and renders chips where the fence sat —
+url → new tab, file → the shared FilePanel slot (same `onOpenFile` as FileChips), cmd → clipboard.
+Running model-suggested shell text on click would be an auto-approve nobody armed, hence copy.
+
+Decisions that will look odd without their reasons:
+- **A half-streamed block is hidden, not shown** — the fence is the tail of the reply by contract,
+  so suppressing everything from the opening fence loses nothing, and the alternative is raw JSON
+  flashing as a code block on every streaming reply that uses the contract.
+- **Broken JSON is hidden too** ("no chips" is the failure mode, never an error) — the block is
+  model-authored, and machine noise the reader never asked for is worse than silence.
+- **A fence with prose *after* it is left alone**: that's someone talking *about* the format (these
+  docs pasted into a chat, say), and stripping it would eat real content.
+- **Old conversations grow chips retroactively** — the same parser runs on turns rebuilt from disk,
+  since `TurnRow` renders both pipelines' turns identically.
+- Chips render **above `FileChips`**: the block is the reply's deliberate answer to "where do I
+  look", FileChips is derived exhaust; the intentional signal outranks the inferred one.
+
 ### Gotchas
 - The seam is gated on **`sawThinking`**, which the *deltas* set — not the block start. Some setups
   open thinking blocks with an empty body (see the `thinking: {display: "summarized"}` option in §3),

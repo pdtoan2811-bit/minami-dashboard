@@ -176,6 +176,8 @@ export const NODES: ModuleNode[] = [
   { id: "l/flowstack", label: "flow-stack.ts", sub: "calls → tech slugs\n(what it worked IN)", layer: "core", row: 18, pipeline: "live" },
   { id: "r/flow", label: "/api/flow/[id]", sub: "narratives only\nGET cached · POST writes", layer: "route", row: 14, pipeline: "live" },
   { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
+  { id: "r/fanout", label: "/api/agent/fanout", sub: "fan-out pill → respawn\n(prompt append is creation-only)", layer: "route", row: 15, pipeline: "live" },
+  { id: "l/previewblock", label: "preview-block.ts", sub: "```minami-preview → chips\n(the ending contract, reader half)", layer: "core", row: 21, pipeline: "live" },
 
   // ── Density: how much chrome a box may spend (KNOWLEDGE.md §5e) ─────────
   { id: "l/density", label: "density.ts", sub: "measured tiers + context\n(roomy · snug · tight · micro)", layer: "core", row: 20 },
@@ -395,4 +397,7 @@ export const EDGES: ModuleEdge[] = [
   // 2026-07-31, which was true only of the v1 panel that owned the pane's live state.
   { from: "l/useagent", to: "r/hold", kind: "http", label: "arm/release" },
   { from: "r/hold", to: "l/manager", kind: "import" },
+  { from: "l/useagent", to: "r/fanout", kind: "http", label: "toggle" },
+  { from: "r/fanout", to: "l/manager", kind: "import" },
+  { from: "app/page", to: "l/previewblock", kind: "import" },
 ];

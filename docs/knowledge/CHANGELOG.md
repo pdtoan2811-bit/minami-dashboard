@@ -9,6 +9,16 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-02
+- **Fan-out mode + the preview ending contract** (§3, §5c) — two composer-level features. (1) A ⑂
+  pill (default ON, fallback `MINAMI_DASHBOARD_FANOUT`) appends `FANOUT_PROMPT` at session
+  creation: propose parallel subagents for divisible work and proceed without asking; procedure in
+  the user-level `fanout` skill on this box. Creation-only like `model`, so the toggle mirrors the
+  model swap end to end (`/api/agent/fanout` → `setFanout()`, teardown + resume). (2) Every session
+  is asked to end viewable work with a ` ```minami-preview ` JSON block; `lib/preview-block.ts` +
+  `PreviewChips` render it as clickable chips (url/file/cmd) at the bottom of the reply — "where do
+  I preview this" stops being a follow-up question. Restructured on the way: the systemPrompt append
+  was bundled inside the `MCP_SERVERS` spread, so a browser-disabled install silently lost every
+  append; the append is now unconditional with per-piece gates.
 - **Model lineup: Fable 5.1 replaces Fable 5 in the picker** — per Anthropic's models page (checked
   this date), `claude-fable-5-1` is the current frontier tier (long-horizon agentic work, $10/$50
   per MTok) and Fable 5 is legacy. `lib/model-catalog.ts` offers 5.1; `lib/routing.ts` adds the tier

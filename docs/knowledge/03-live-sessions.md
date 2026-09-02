@@ -113,6 +113,30 @@ text block opens mid-turn, and `\n---\n` when a second thinking block does. Cont
 carry no delimiter of their own, and without them the pane renders two distinct passes as one
 paragraph — see §5c.
 
+### The system-prompt append: preview contract, fan-out, browser nudge (2026-09-02)
+
+Every session's `query()` carries `systemPrompt: { preset: "claude_code", append }` built from up to
+three pieces. It used to ride inside the `MCP_SERVERS` spread — an accident of birth (the browser
+nudge was the only append), and it silently meant a `MINAMI_DISABLE_BROWSER_TOOL=1` install got *no*
+append at all. Now the append is unconditional and only its pieces are gated:
+
+- **`PREVIEW_PROMPT`, always.** The ending contract: a reply that produced something viewable ends
+  with a fenced ` ```minami-preview ` block of `{kind: url|file|cmd, target, label}[]`. The shell
+  strips it and renders chips (§5c). This lives in the manager, not a skill, because a skill loads
+  when the model thinks it's relevant and an ending convention only works if it is unconditional.
+- **`FANOUT_PROMPT`, when the pane's fan-out pill is on (the default).** "Propose parallel subagents
+  for divisible work and proceed — the user pre-approved by enabling the mode." The pill's OFF state
+  is the marked one in the UI for the same reason. Fallback for panes that never chose:
+  `MINAMI_DASHBOARD_FANOUT` (unset/1 = on). The fuller procedure lives in the user-level `fanout`
+  skill (`~/.claude/skills/fanout/`), which is on the box, not in this repo.
+- **`BROWSER_PROMPT`, when the browser MCP is registered** — unchanged.
+
+`fanout` rides on every send like `model` and is creation-only for the same reason: an append can't
+be edited on a warm query. Mid-chat toggles go through `POST /api/agent/fanout` → `setFanout()`,
+which is `setModel()`'s twin — refuse while busy, otherwise teardown with the same
+subscriber-handover into `waiting`, `respawned: true`, and the client re-arms `resume` so the next
+send picks the conversation back up off disk under the new prompt.
+
 ### Gotchas
 - **Removing a session must remove both aliases**, identity-checked (`store.get(s.key) === s`),
   or cleanup for a dead session can delete a newer one that reclaimed the pane key.

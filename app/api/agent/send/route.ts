@@ -12,7 +12,7 @@ export const runtime = "nodejs";
 // separate request can't work for the first turn of a session.
 export async function POST(req: Request) {
   try {
-    const { key, cwd, message, mode, resume, hold, model } = await req.json();
+    const { key, cwd, message, mode, resume, hold, model, fanout } = await req.json();
     // typeof-guard before .trim(): a non-string truthy `message` (number, object, array) would otherwise
     // throw inside this try and come back as a 500 "message.trim is not a function" instead of the clean
     // 400 this validation is meant to produce.
@@ -37,7 +37,7 @@ export async function POST(req: Request) {
     // ignored, which is correct: the picker already respawned the session via /api/agent/model if the
     // choice actually changed. Validated there, not here; an unrecognised id arriving on this path just
     // rides through to the SDK, and the composer is the only caller that sets it.
-    const { sessionId } = sendMessage({ key, cwd, message: String(message), mode, resume, images, model: typeof model === "string" && model ? model : undefined, hold: typeof hold === "boolean" ? hold : undefined });
+    const { sessionId } = sendMessage({ key, cwd, message: String(message), mode, resume, images, model: typeof model === "string" && model ? model : undefined, hold: typeof hold === "boolean" ? hold : undefined, fanout: typeof fanout === "boolean" ? fanout : undefined });
     return Response.json({ ok: true, sessionId });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e) }, { status: 500 });

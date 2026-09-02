@@ -28,6 +28,7 @@ import BrowserLightbox from "@/components/BrowserLightbox";
 import { FlowStrip } from "@/components/FlowStrip";
 import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
+import { splitPreviewBlock, type Preview } from "@/lib/preview-block";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
@@ -1524,6 +1525,40 @@ const FileChips = memo(function FileChips({ tools, onOpen }: { tools: AgentToolC
   );
 });
 
+/** The other end of the ending contract (PREVIEW_PROMPT / lib/preview-block.ts): the chips a reply's
+ *  trailing ```minami-preview block becomes. Rendered where the fence sat — the bottom of the
+ *  message — so "where do I see the work?" is answered by the reply itself, not by asking again.
+ *  url opens a real tab (a localhost preview deserves a full window, and the in-app browser panel
+ *  belongs to the SESSION'S browsing, not ours); file reuses the same panel slot as FileChips; cmd
+ *  copies, because running model-suggested shell text on click is an auto-approve nobody armed. */
+const PreviewChips = memo(function PreviewChips({ previews, onOpenFile }: { previews: Preview[]; onOpenFile: (p: string) => void }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  if (!previews.length) return null;
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">Preview</span>
+      {previews.map((p, i) => {
+        const tint = p.kind === "url" ? "#7ab8e0" : p.kind === "file" ? "#1f8a5c" : "#b98cff";
+        const Icon = p.kind === "url" ? Globe : p.kind === "file" ? FileText : SquareTerminal;
+        const act = p.kind === "url"
+          ? () => window.open(p.target, "_blank", "noopener")
+          : p.kind === "file"
+            ? () => onOpenFile(p.target)
+            : () => { navigator.clipboard?.writeText(p.target).then(() => { setCopied(p.target); setTimeout(() => setCopied(null), 1500); }); };
+        return (
+          <button key={i} onClick={act}
+            title={p.kind === "url" ? p.target : p.kind === "file" ? p.target : `copy: ${p.target}`}
+            className="flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors hover:bg-white/[0.06]"
+            style={{ borderColor: tint + "55", background: tint + "12" }}>
+            <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} />
+            <span className="min-w-0 truncate text-[10.5px] text-neutral-200">{copied === p.target ? "copied ✓" : p.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+});
+
 /** The shared side slot's tab strip. Only rendered when both panels have something to show. */
 /** The three session controls — the brake, Plan vs Code, and the approval level.
  *
@@ -1532,15 +1567,33 @@ const FileChips = memo(function FileChips({ tools, onOpen }: { tools: AgentToolC
  *  is the most dangerous thing in this UI to be wrong about (see `perm` in ChatColumn); two renderings
  *  of it, drifting apart, is the failure mode worth spending a component to make impossible.
  */
-function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, sessionModel, onModel, busy }: {
+function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, sessionModel, onModel, fanout, onFanout, busy }: {
   hold: boolean; onHold: (v: boolean) => void;
   planning: boolean; onPlan: (v: boolean) => void;
   perm: Exclude<AgentMode, "plan">; onPerm: (m: Exclude<AgentMode, "plan">) => void;
-  model: string | null; sessionModel: string | null; onModel: (m: string | null) => void; busy: boolean;
+  model: string | null; sessionModel: string | null; onModel: (m: string | null) => void;
+  fanout: boolean; onFanout: (v: boolean) => void; busy: boolean;
 }) {
   return (
     <>
       <ModelPicker model={model} sessionModel={sessionModel} onPick={onModel} busy={busy} />
+      {/* Fan-out: whether the session's prompt carries the "propose agents and proceed" instruction.
+          ON is the default and the quiet state; OFF is the deliberate choice, so it gets the tint —
+          the inverse of `hold`, because here the notable condition is having opted OUT. Disabled
+          mid-turn for the same reason as the model picker: applying it to a warm session is a
+          teardown+resume, which must not happen under a streaming reply. */}
+      <button onClick={() => onFanout(!fanout)} disabled={busy}
+        title={busy
+          ? "Can't switch fan-out while a turn is running — stop it first"
+          : fanout
+            ? "Fan-out ON — Claude proposes parallel agents for divisible work and proceeds without asking. Click for solo."
+            : "Solo — Claude works single-threaded. Click to let it fan out subagents by default."}
+        className={`flex shrink-0 items-center rounded-lg border p-0.5 transition-colors ${
+          busy ? "border-white/10 text-neutral-600"
+          : fanout ? "border-white/10 text-neutral-400 hover:text-neutral-200"
+          : "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]"}`}>
+        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">{fanout ? "⑂ fan-out" : "⑂ solo"}</span>
+      </button>
       {/* The brake. It lived in the flow panel's header, which is gone — and it is a SESSION control
           (like Plan/Code and the approval level), not a property of a view, so this row is where it
           always belonged. Armed, the server parks the next tool call instead of auto-approving it;
@@ -1686,6 +1739,10 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
   /** Non-null only for the one row that is currently streaming. */
   live: LiveBits | null;
 }) {
+  // The ending contract: an assistant reply may close with a ```minami-preview block, which renders
+  // as chips instead of JSON. Cheap (one lastIndexOf on the common no-block path) — this runs per
+  // streamed token on the live row. User turns never carry the block, so skip even that.
+  const previewSplit = t.role === "assistant" && t.text ? splitPreviewBlock(t.text) : { body: t.text, previews: [] };
   return (
           // Inline style, not a class: `space-y-*` on the parent writes margin-top via `& > * + *`,
           // whose specificity beats any utility class this element could carry. An inline declaration
@@ -1704,7 +1761,7 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
               ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[15px] leading-[1.65] text-neutral-100 [overflow-wrap:anywhere]"
               : "w-full text-[15px] leading-[1.75] text-neutral-100/95 [overflow-wrap:anywhere]"}>
               {t.role === "assistant" && t.thinking && <ThoughtBlock text={t.thinking} live={!!t.streaming && !t.text} />}
-              {t.text && <Markdown text={t.text} />}
+              {t.text && <Markdown text={previewSplit.body} />}
               {/* Images the turn REFERS TO, rendered from their paths. Deliberately derived from the
                   text rather than from message content: `claude-sessions.ts` keeps only text blocks
                   when it rebuilds a user turn from disk, so an inline image block would render live
@@ -1712,6 +1769,10 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
                   a pasted screenshot and a folder-picker attachment display identically, with one
                   renderer and no second source of truth. */}
               <ImageRefs text={t.text} />
+              {/* Where to SEE the work, per the reply's own preview block. Above FileChips because it
+                  is the reply's deliberate answer to "where do I look", while FileChips is derived
+                  exhaust — the intentional signal outranks the inferred one. */}
+              <PreviewChips previews={previewSplit.previews} onOpenFile={onOpenFile} />
               {/* What this turn actually did to the filesystem, as chips you can open.
                   Deliberately OUTSIDE the `showTools` gate below: "which files changed" is the
                   outcome of a turn, not tool noise, and it's the one thing worth seeing even when
@@ -1893,6 +1954,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // the picker resolves the label from what the live session reports instead of mirroring the id.
   const [modelDefault, setModelDefault] = useSetting<string | null>("chatModel", null);
   const [model, setModel] = useSetting<string | null>("chatModel:" + effectiveKey, modelDefault);
+  // Fan-out: same two-key shape again. Default ON — the mode exists because "shall I fan out?" as a
+  // question was pure round-trip cost; a pane turns it off for surgical work, not the other way round.
+  const [fanoutDefault, setFanoutDefault] = useSetting<boolean>("chatFanout", true);
+  const [fanout, setFanout] = useSetting<boolean>("chatFanout:" + effectiveKey, fanoutDefault);
   const scrollRef = useRef<HTMLDivElement>(null);
   const agent = useAgent(effectiveKey);
   const isNew = !sessionId;
@@ -2041,7 +2106,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     ensureNotifyPermission(); // lazy — a real user gesture, which browsers want for this prompt
     const continuing = !sessionId && continueOn ? continueTarget : null;
     if (continuing) adoptedViaContinueRef.current = true; // so a rejected continue can be handed back
-    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || continuing?.id || undefined, model, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || continuing?.id || undefined, model, fanout, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
     if (continuing) setResumedFrom(continuing);
     setInput("");
   };
@@ -2099,6 +2164,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     setModel(m);
     setModelDefault(m); // seeds the next NEW chat, exactly like setPermDefault — never retroactive
     agent.changeModel(m).then((ok) => { if (!ok) setModel(prev); });
+  };
+  // The fan-out pill, same contract as setModelPick — optimistic, revert on refusal (busy turn).
+  const setFanoutPick = (v: boolean) => {
+    const prev = fanout;
+    setFanout(v);
+    setFanoutDefault(v);
+    agent.changeFanout(v).then((ok) => { if (!ok) setFanout(prev); });
   };
   // Follow the stream — but only while the reader is actually AT the bottom.
   //
@@ -2614,7 +2686,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           // at the other end of this same row. Two doors, ONE destination still holds — this chip and
           // the switch on the bento tile raise the same canvas.
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} busy={agent.busy} />
+            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} busy={agent.busy} />
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
           </div>
@@ -2644,7 +2716,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
                 {/* Opens UPWARD: it hangs off the composer, which is already at the bottom of the pane,
                     so downward would render it outside the pane's `overflow-hidden` box. */}
                 <div className="absolute bottom-full left-0 z-20 mb-1 flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900 p-2 shadow-2xl">
-                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} busy={agent.busy} />
+                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} busy={agent.busy} />
                 </div>
               </>
             )}

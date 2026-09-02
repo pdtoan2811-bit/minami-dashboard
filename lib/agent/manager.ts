@@ -69,6 +69,29 @@ const MCP_SERVERS: NonNullable<Options["mcpServers"]> | undefined = BROWSER_TOOL
 // session doesn't get instructions about a tool it can't see.
 const BROWSER_PROMPT = `When you use the browser tools, take a screenshot after navigating and after any action that changes what's on screen. The browser is headless and a human is watching those screenshots in a live panel — an accessibility snapshot is invisible to them.`;
 
+// The ending contract. The pane renders this block as clickable preview chips (see PreviewChips in
+// the shell) — the whole point is that "where do I see the work?" stops being a follow-up question.
+// Appended to EVERY dashboard session regardless of cwd, which is why it lives here and not in a
+// skill: a skill loads when the model decides it's relevant, and an ending convention only works if
+// it is unconditional.
+const PREVIEW_PROMPT = `End every reply whose work produced something viewable — a page, a file, a document, a build, a screenshot — with a fenced code block of language \`minami-preview\` as the LAST thing in the message, containing a JSON array of previews:
+
+\`\`\`minami-preview
+[{"kind":"url","target":"http://localhost:3000","label":"the dashboard"},{"kind":"file","target":"/absolute/path/to/file.md","label":"the note"},{"kind":"cmd","target":"npm run kb","label":"open the KB"}]
+\`\`\`
+
+kind "url" = reachable from THIS machine's browser right now (verify the server is actually up before claiming it); "file" = absolute path to a file worth opening; "cmd" = a command the user runs to see it. 1-4 entries, labels under 5 words. Omit the block entirely when the turn produced nothing viewable (a question answered, a config change with nothing to look at) — an empty or speculative block is worse than none.`;
+
+// Fan-out: propose parallel subagents for divisible work, and default to PROCEEDING — the whole
+// reason this is a mode is that "shall I fan out?" as a question costs a round-trip to a user who
+// already said yes by turning it on. Gated per-session (see ensureSession) so the pill can turn it
+// off for surgical single-file work where a swarm is noise.
+const FANOUT_PROMPT = `When a task has independently workable parts — multiple files to sweep, several questions to research, review from more than one angle — briefly state a fan-out plan (which agents, what each covers) and then IMMEDIATELY proceed with it using the Agent tool with parallel invocations; the user has pre-approved fan-out by enabling this mode, so do not wait for a yes. Stay solo only when the task is genuinely serial or trivial. The user-level "fanout" skill, if listed, has the fuller procedure.`;
+
+// Default for panes that haven't chosen (and the send route's fallback). On by default per the
+// mode's design; a box that wants opt-in instead sets MINAMI_DASHBOARD_FANOUT=0.
+const DEFAULT_FANOUT = process.env.MINAMI_DASHBOARD_FANOUT !== "0";
+
 // "bypassPermissions" auto-approves every tool with no prompt — powerful, and the configured default
 // on this box (Thomas's explicit call: every prompt on a local, single-user machine is friction he
 // pays for and never wanted). Override per install with MINAMI_DASHBOARD_PERMISSION_MODE.
@@ -195,6 +218,10 @@ type Session = {
    *  — it is not a knob: nothing reads this to decide what runs, because by the time it is set the
    *  `query()` is already built around it. See setModel for why a change means a respawn. */
   model: string;
+  /** Whether this session was BORN with the fan-out instruction in its system prompt. Creation-time
+   *  only, same trap as `model`: an append can't be edited on a warm query, so setFanout() answers a
+   *  mid-chat toggle the way setModel() does — teardown, and the next send resumes from disk. */
+  fanout: boolean;
   subs: Set<Sub>;
   pending: Map<string, Pending>; // outstanding permission prompts
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -324,14 +351,14 @@ async function* inputGen(s: Session): AsyncGenerator<any> {
 // layer pins each agent's own tier, and the composer's model picker passes the pane's choice; everything
 // else omits it and gets the box pin. Because it is creation-only, the picker cannot change a warm
 // session by asking — it has to respawn it. See setModel().
-function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string, model?: string): Session {
+function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string, model?: string, fanout?: boolean): Session {
   const existing = store.get(key);
   if (existing && !existing.closed) return existing;
 
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: model || DEFAULT_MODEL, subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: model || DEFAULT_MODEL, fanout: fanout ?? DEFAULT_FANOUT, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -427,7 +454,15 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // spread it explicitly so this override adds to, rather than replaces, everything the
       // subprocess already needs (PATH, HOME, ANTHROPIC_API_KEY, token-slayer's active credential).
       env: { ...process.env, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: AUTOCOMPACT_PCT },
-      ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS, systemPrompt: { type: "preset", preset: "claude_code", append: BROWSER_PROMPT } } : {}),
+      // The append is unconditional now (the preview contract applies to every session); only the
+      // browser nudge stays tied to the browser tool actually being registered, and only the fan-out
+      // instruction to the pill. mcpServers rides separately — it was only ever bundled with
+      // systemPrompt because both were born in the same MCP_SERVERS spread.
+      systemPrompt: {
+        type: "preset", preset: "claude_code",
+        append: [PREVIEW_PROMPT, ...(s.fanout ? [FANOUT_PROMPT] : []), ...(MCP_SERVERS ? [BROWSER_PROMPT] : [])].join("\n\n"),
+      },
+      ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS } : {}),
       ...(resume ? { resume } : {}),
     } as any,
   });
@@ -801,7 +836,7 @@ function handleSystem(s: Session, m: any) {
 }
 
 // Send a user message; creates the session on first call (with resume/mode) or feeds the live one.
-export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; hold?: boolean; model?: string; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
+export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; hold?: boolean; model?: string; fanout?: boolean; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
   // A session object existing (and not closed) means its SDK process is already warm — this is just
   // the next turn. Otherwise ensureSession() below is about to spin up a brand-new `query()`, which is
   // the actual ~1-2s cold start `spawning` narrates; a resumed (on-disk) conversation still pays this
@@ -823,7 +858,7 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   }
   // An absent mode means "whatever this install defaults to"; an explicit one always wins.
   const wanted = opts.mode === undefined ? DEFAULT_PERMISSION_MODE : safeMode(opts.mode);
-  const s = ensureSession(opts.key, opts.cwd, wanted, opts.resume, opts.model);
+  const s = ensureSession(opts.key, opts.cwd, wanted, opts.resume, opts.model, opts.fanout);
   // Refresh the heartbeat every turn, not only at creation. A pane can sit warm for hours between
   // messages, and a claim whose age is measured from `claimedAt` would expire under an owner who is
   // demonstrably still there. `ensureSession` above already staked it on the cold path; this is the
@@ -1044,6 +1079,27 @@ export function setModel(key: string, model?: string): { ok: boolean; respawned?
   // so without this handover every pane watching this key goes silent until it is reloaded, which
   // looks exactly like the swap having hung. `waiting` is precisely the parking lot for subscribers
   // that exist before their session does, which is what these become for the next few hundred ms.
+  const orphans = new Set(s.subs);
+  closeSession(key);
+  if (orphans.size) {
+    const set = waiting.get(key) || new Set<Sub>();
+    for (const sub of orphans) set.add(sub);
+    waiting.set(key, set);
+  }
+  return { ok: true, respawned: true };
+}
+
+// The fan-out half of setModel's contract, and the same mechanics for the same reason: the fan-out
+// instruction is a system-prompt append, fixed at query() creation, so a warm session's can't be
+// edited — only replaced. Teardown here, and the pane's next send resumes the conversation from disk
+// with (or without) the instruction. `respawned` tells the client to re-arm `resume`, exactly as for
+// a model swap.
+export function setFanout(key: string, fanout: boolean): { ok: boolean; respawned?: boolean; reason?: string } {
+  const s = store.get(key);
+  if (!s || s.closed) return { ok: true }; // no live session — the flag just applies at the next send
+  if (s.busy) return { ok: false, reason: "a turn is in flight — stop it before switching fan-out" };
+  if (s.fanout === fanout) return { ok: true };
+  // Same subscriber handover as setModel — see the comment there for why `waiting` is the parking lot.
   const orphans = new Set(s.subs);
   closeSession(key);
   if (orphans.size) {

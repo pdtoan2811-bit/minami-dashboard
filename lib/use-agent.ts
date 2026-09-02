@@ -551,7 +551,7 @@ export function useAgent(paneKey: string) {
 
   // Send a user message. `seed` = the existing (file) transcript to preserve when going live;
   // `resume` = the Claude session id to continue on the pane's first send.
-  const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[]; model?: string | null }) => {
+  const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[]; model?: string | null; fanout?: boolean }) => {
     const clean = text.trim();
     if (!clean || !opts.cwd) return;
     setError(null); setDetached(false); attachingRef.current = false;
@@ -574,7 +574,9 @@ export function useAgent(paneKey: string) {
     // session it is simply ignored — but that means the pane's pick is authoritative on whichever send
     // turns out to be the cold one, without this caller having to know which that is. Same reasoning as
     // `mode` being re-applied per turn in sendMessage.
-    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined, hold: holdRef.current, model: opts.model || undefined };
+    // `fanout` rides like `model` and for the same reason: creation-only server-side, so sending it
+    // every turn makes the pill authoritative on whichever send happens to be the cold one.
+    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined, hold: holdRef.current, model: opts.model || undefined, fanout: opts.fanout };
     try {
       const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
@@ -642,6 +644,18 @@ export function useAgent(paneKey: string) {
     } catch (e) { setError(`Couldn't switch model — ${String((e as Error)?.message || e)}`); return false; }
   }, [paneKey]);
 
+  // changeModel's twin for the fan-out pill — same respawn contract, same `sentOnce` re-arm. See
+  // changeModel above for why missing that re-arm silently forks a context-less session.
+  const changeFanout = useCallback(async (fanout: boolean): Promise<boolean> => {
+    try {
+      const r = await fetch("/api/agent/fanout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, fanout }) });
+      const d = await r.json().catch(() => null);
+      if (!d?.ok) { if (d?.reason || d?.error) setError(d.reason || d.error); return false; }
+      if (d.respawned) sentOnce.current = false;
+      return true;
+    } catch (e) { setError(`Couldn't switch fan-out — ${String((e as Error)?.message || e)}`); return false; }
+  }, [paneKey]);
+
   // Returns whether the server actually applied the mode change, so the caller (the Plan/Code and
   // approval-level toggles in app/page.tsx) can revert its own optimistic UI state on failure instead
   // of silently diverging from what the live session is really running under.
@@ -685,5 +699,5 @@ export function useAgent(paneKey: string) {
 
   // `elapsed` recomputes on every 1s tick above, so the caller gets a live-counting number for free.
   const elapsed = activity.phase === "idle" ? 0 : Math.max(0, Date.now() - phaseStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, sessionModel, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, setHold, stop };
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, sessionModel, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, setHold, stop };
 }
