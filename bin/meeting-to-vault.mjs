@@ -58,7 +58,7 @@ const linked = (text) => {
   for (const t of terms) {
     // Longest-first (sorted above) so "Minami Dashboard" wins over "Minami", and only the FIRST
     // occurrence is linked — a note where every mention is a link is unreadable.
-    const re = new RegExp(`(?<!\\\\[)\\\\b${t.replace(/[.*+?^${}()|[\]\\\\]/g, "\\\\$&")}\\\\b(?!\\\\])`, "i");
+    const re = new RegExp(`(?<!\\[)\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b(?!\\])`, "i");
     if (re.test(out) && !out.includes(`[[${t}`)) out = out.replace(re, `[[${t}]]`);
   }
   return out;
