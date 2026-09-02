@@ -9,6 +9,18 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-02
+- **Model lineup: Fable 5.1 replaces Fable 5 in the picker** — per Anthropic's models page (checked
+  this date), `claude-fable-5-1` is the current frontier tier (long-horizon agentic work, $10/$50
+  per MTok) and Fable 5 is legacy. `lib/model-catalog.ts` offers 5.1; `lib/routing.ts` adds the tier
+  with Fable 5 demoted to a legacy row like Opus 4.8 — **5.1 must sort before 5 in `MODELS`**,
+  because `tierFromModel` matches by substring and `claude-fable-5-1` contains `claude-fable-5`.
+  `server/metrics-server.js` mirrors the price. The box pin stays `claude-opus-5`. Old Fable 5
+  sessions still tier and price correctly via their own legacy row.
+  🐛 found on the way: `npm run check` was red on "tunnel url skips api.trycloudflare" — not a
+  regression in the guard, a stale check. e7ed996 moved the `//api\.` filter into `bin/tunnel-lib.sh`
+  with the rest of the tunnel helpers, and the check still grepped only `Minami Call.command`. The
+  check now reads the file the guard lives in. Lesson: a source-grep check must move when the source
+  it greps is refactored, or it fails green code.
 - **Attaching files: drag-and-drop, and the real macOS open panel** (§5e) — new `/api/fs/choose`
   (`osascript`, returns a POSIX path so nothing is copied) and `/api/fs/drop` (bytes fallback into
   `~/.minami/drops/`). The 📎 button became a menu naming the trade: native panel for files Claude

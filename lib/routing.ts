@@ -7,7 +7,7 @@
 // from 2026-09-01 the standard rate is $3/$15 — bump the row then or the savings bar under-reports
 // what Sonnet turns actually cost.
 
-export type Tier = "Haiku 4.5" | "Sonnet 5" | "Opus 5" | "Opus 4.8" | "Fable 5";
+export type Tier = "Haiku 4.5" | "Sonnet 5" | "Opus 5" | "Opus 4.8" | "Fable 5" | "Fable 5.1";
 
 export const MODELS: {
   tier: Tier;
@@ -22,14 +22,17 @@ export const MODELS: {
   { tier: "Opus 5", id: "claude-opus-5", in: 5, out: 25, tint: "#b98cff", note: "judgement · default" },
   // Same $5/$25 as Opus 5 — kept so historical events still tier + price correctly.
   { tier: "Opus 4.8", id: "claude-opus-4-8", in: 5, out: 25, tint: "#8f7ab8", note: "legacy · pre-2026-07-29" },
-  { tier: "Fable 5", id: "claude-fable-5", in: 10, out: 50, tint: "#f0a868", note: "hardest reasoning only" },
+  // Fable 5.1 BEFORE Fable 5: tierFromModel matches by substring, and "claude-fable-5-1" contains
+  // "claude-fable-5" — reversed, every 5.1 session would be labelled as the legacy tier.
+  { tier: "Fable 5.1", id: "claude-fable-5-1", in: 10, out: 50, tint: "#f0a868", note: "hardest reasoning only" },
+  { tier: "Fable 5", id: "claude-fable-5", in: 10, out: 50, tint: "#d99a5e", note: "legacy · pre-2026-09" },
 ];
 
 export const ROUTING_RULES: { work: string; tier: Tier; why: string }[] = [
   { work: "grep / glob, read logs, fetch one number, check a status", tier: "Haiku 4.5", why: "finding ≠ thinking — 5× cheaper than Opus" },
   { work: "summarise, draft a reply, build a task, light review", tier: "Sonnet 5", why: "near-Opus quality, ~2.5× cheaper" },
   { work: "decide, complex code, final synthesis, anything a human reads", tier: "Opus 5", why: "judgement work — don't downgrade" },
-  { work: "very long autonomous run, hardest reasoning", tier: "Fable 5", why: "only when Opus visibly struggles — 2× Opus" },
+  { work: "very long autonomous run, hardest reasoning", tier: "Fable 5.1", why: "only when Opus visibly struggles — 2× Opus" },
 ];
 
 // Resolve a real model id (e.g. "claude-sonnet-5") to its tier/price/tint. Unknown ids fall back to

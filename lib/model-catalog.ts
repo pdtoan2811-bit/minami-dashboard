@@ -12,6 +12,6 @@
 export const SELECTABLE_MODELS: { id: string; label: string; note: string }[] = [
   { id: "claude-opus-5", label: "Opus 5", note: "Top tier. Judgement, ambiguity, code that has to be right." },
   { id: "claude-sonnet-5", label: "Sonnet 5", note: "Fast and capable. The right default for high-volume work." },
-  { id: "claude-fable-5", label: "Fable 5", note: "Writing-leaning." },
+  { id: "claude-fable-5-1", label: "Fable 5.1", note: "Frontier. Long-horizon agents; when Opus falls short. 2× Opus price." },
   { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", note: "Cheapest. Mechanical passes, scans, summaries." },
 ];

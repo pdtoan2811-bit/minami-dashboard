@@ -78,7 +78,10 @@ console.log("\n\x1b[1m  OPERATOR CHECKS\x1b[0m");
 {
   const launcher = readFileSync(new URL("../bin/Minami Call.command", import.meta.url), "utf8");
   check("tunnel check demands our marker", launcher.includes("minami-receiver"), "'anything answered' let a bot stream to Cloudflare's API");
-  check("tunnel url skips api.trycloudflare", launcher.includes("//api\\."), "cloudflared logs its API host first");
+  // The api-host filter moved to bin/tunnel-lib.sh with the rest of the tunnel helpers (e7ed996);
+  // the launcher sources it, so that file is where the guard must exist.
+  const tunnelLib = readFileSync(new URL("../bin/tunnel-lib.sh", import.meta.url), "utf8");
+  check("tunnel url skips api.trycloudflare", tunnelLib.includes("//api\\."), "cloudflared logs its API host first");
   check("dry-run receiver is refused", launcher.includes('"minami-receiver ok"'), "a dry-run receiver forwards nothing but says it is fine");
   const ws = readFileSync(new URL("../server/ws-min.mjs", import.meta.url), "utf8");
   check("receiver reports its mode", ws.includes("health?.()"), "identity is not capability");
