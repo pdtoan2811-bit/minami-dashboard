@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { sendMessage } from "@/lib/agent/manager";
 import { imageBlocksFor } from "@/lib/agent/images";
+import { rehomeStrandedTranscript } from "@/lib/worktree";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,8 +25,18 @@ export async function POST(req: Request) {
     // instead, with something a human can act on.
     let stat: fs.Stats | null = null;
     try { stat = fs.statSync(cwd); } catch { /* missing or unreadable — reported below */ }
+    // A missing cwd under .minami-worktrees is not a user mistake, it's a recycled tree (the vault
+    // prunes finished chat worktrees on every sync). The chat's WORK survived — it was merged into
+    // the base branch before the tree was removed — so the conversation continues there: move its
+    // transcript into the base folder's project dir and resume against the repo its work became
+    // part of. Only with `resume`: a NEW chat aimed at a dead worktree path really is an error.
+    let home = String(cwd);
+    if (!stat && resume) {
+      const rehomed = rehomeStrandedTranscript(home, String(resume));
+      if (rehomed) { home = rehomed; try { stat = fs.statSync(home); } catch { /* fall through */ } }
+    }
     if (!stat) return Response.json({ error: `folder does not exist: ${cwd}` }, { status: 400 });
-    if (!stat.isDirectory()) return Response.json({ error: `not a folder: ${cwd}` }, { status: 400 });
+    if (!stat.isDirectory()) return Response.json({ error: `not a folder: ${home}` }, { status: 400 });
     // Any image path the message mentions — pasted, or picked with the attach button — is read here
     // and sent inline, so Claude sees the picture in the same turn instead of spending a Read call on
     // it. The path stays in the text regardless: that is what survives into the transcript (user turns
@@ -37,7 +48,7 @@ export async function POST(req: Request) {
     // ignored, which is correct: the picker already respawned the session via /api/agent/model if the
     // choice actually changed. Validated there, not here; an unrecognised id arriving on this path just
     // rides through to the SDK, and the composer is the only caller that sets it.
-    const { sessionId } = sendMessage({ key, cwd, message: String(message), mode, resume, images, model: typeof model === "string" && model ? model : undefined, hold: typeof hold === "boolean" ? hold : undefined, fanout: typeof fanout === "boolean" ? fanout : undefined });
+    const { sessionId } = sendMessage({ key, cwd: home, message: String(message), mode, resume, images, model: typeof model === "string" && model ? model : undefined, hold: typeof hold === "boolean" ? hold : undefined, fanout: typeof fanout === "boolean" ? fanout : undefined });
     return Response.json({ ok: true, sessionId });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e) }, { status: 500 });

@@ -15,6 +15,9 @@ this to do a piece of work; read the subsystem's own doc.
   then reversed the same evening — the vault keeps per-chat isolation and its own
   `prune-worktrees.sh` now recycles finished branches instead (stale-claim aware, auto-merge,
   origin cleanup). Stranded content rescued into the vault's `main`; chat-6 reconciled.
+- **Stranded-chat rescue: `rehomeStrandedTranscript()`** (§9) — resuming a chat whose recycled
+  worktree is gone now moves its transcript to the base folder's project dir and continues there.
+  The 29 already-stranded secondBrain transcripts were migrated by hand the same day.
 - **Localhost is the primary preview** (§5c) — prompt orders it first, the parser stable-sorts it
   first regardless, and its chip renders as the one accent-tinted primary action with host:port
   visible. Hostname-checked (`isLocalUrl`), not substring-matched.

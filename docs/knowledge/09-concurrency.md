@@ -134,6 +134,17 @@ decision there and nowhere else:
 > tree is kept with a "needs a human" line), and deletes tree + branch + origin branch. `sync.sh`
 > rebases with `--rebase-merges` so those merge commits survive syncing. The per-repo opt-out
 > stays available for repos that genuinely want it; the vault just isn't one.
+>
+> 🐛 **Recycling a tree stranded its chats (found same day, by Thomas).** A transcript's home under
+> `~/.claude/projects` is derived from its cwd, so removing a worktree orphaned every conversation
+> born in it — reopening one died on the send route's `folder does not exist`. The work itself was
+> fine (merged before removal); only the resume mechanics broke, because `--resume` finds a session
+> by id inside the project dir its cwd maps to. Fix, both halves: the 29 stranded secondBrain
+> transcripts were moved into the vault root's project dir, and `rehomeStrandedTranscript()`
+> (`lib/worktree.ts`, called from the send route) now does that move automatically when a resume
+> points at a vanished `TREES_DIR` cwd whose base still exists — rename not copy, so one session id
+> can never have two homes and two rival writers (the §9 corruption). Only with `resume`: a NEW
+> chat aimed at a dead worktree path really is an error.
 
 **Isolation must not move a chat off its own tile.** `project` is `basename(cwd)`, so without a fold a
 pane in `.minami-worktrees/chat` files itself under a new project called `chat` — the chat you just

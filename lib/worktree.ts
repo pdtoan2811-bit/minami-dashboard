@@ -26,6 +26,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isFresh, readClaim, TREES_DIR, worktreeOf } from "./worktree-claim";
 
@@ -284,5 +285,54 @@ export async function discardIfPristine(dir: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * A chat whose worktree has been recycled can still be continued — in the repo the tree came from.
+ *
+ * The other half of the recycling story. Worktrees are deliberately temporary now (secondBrain's
+ * `prune-worktrees.sh` merges finished branches and removes their trees on every sync), but a
+ * transcript's home directory under `~/.claude/projects` is derived from its cwd — so removing a
+ * tree stranded every conversation born in it: reopening one hit the send route's cwd check with
+ * "folder does not exist: …/.minami-worktrees/chat-6". The CONTENT of those chats was already
+ * merged into the base branch; only the resume mechanics were broken, because `--resume` finds a
+ * session by id inside the project dir its cwd maps to.
+ *
+ * So: move the transcript (and its sidechain dir, if any) into the BASE folder's project dir and
+ * answer with that folder for the session to resume in. The base is where the branch was merged,
+ * so the chat continues against exactly the files its own work became part of. Rename, not copy —
+ * two homes for one session id would let two panes spawn rival writers, the §9 corruption.
+ *
+ * Returns the base folder to resume in, or null when this isn't that situation (cwd not under
+ * TREES_DIR, base gone too, no such transcript) — the caller then falls through to its normal
+ * "does not exist" refusal.
+ */
+export function rehomeStrandedTranscript(cwd: string, sessionId: string): string | null {
+  const m = new RegExp(`^(.*)/${TREES_DIR.replace(/\./g, "\\.")}/[^/]+/?$`).exec(cwd);
+  if (!m) return null;
+  const base = m[1];
+  try { if (!fs.statSync(base).isDirectory()) return null; } catch { return null; }
+  // The CLI's project-dir slug: every non-alphanumeric character becomes "-". Matches the observed
+  // on-disk form ("/Users/x/secondBrain/.minami-worktrees/chat-2" → "-Users-x-secondBrain--minami-worktrees-chat-2").
+  const slug = (p: string) => p.replace(/[^a-zA-Z0-9]/g, "-");
+  const projects = path.join(os.homedir(), ".claude", "projects");
+  const src = path.join(projects, slug(cwd), sessionId + ".jsonl");
+  const toDir = path.join(projects, slug(base));
+  const dst = path.join(toDir, sessionId + ".jsonl");
+  try {
+    if (fs.existsSync(dst)) return base; // already rehomed — a reload racing an earlier rehome
+    if (!fs.existsSync(src)) return null;
+    fs.mkdirSync(toDir, { recursive: true });
+    fs.renameSync(src, dst);
+    // Sidechain dir (subagent transcripts) rides along; losing it only loses subagent detail, so
+    // a failure here must not undo the rehome that already happened.
+    const side = path.join(projects, slug(cwd), sessionId);
+    if (fs.existsSync(side) && !fs.existsSync(path.join(toDir, sessionId))) {
+      try { fs.renameSync(side, path.join(toDir, sessionId)); } catch { /* detail, not the chat */ }
+    }
+    return base;
+  } catch {
+    return null;
   }
 }
