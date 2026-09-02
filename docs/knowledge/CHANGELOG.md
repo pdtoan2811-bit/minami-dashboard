@@ -9,6 +9,12 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-02
+- **AgentBoard: the subagent fleet as a roster, not pills** (§4) — one row per running agent with
+  type badge, assignment, current inner tool, tool count and a per-agent timer (`LiveTask.since`,
+  stamped at `task_started`; deliberately absent on adopted background tasks). Finished agents stay
+  in the same list dimmed with a verdict glyph. One-line contexts say `4 agents · Explore ×3, Plan`
+  instead of `subagent (Explore) +3`. Fan-out mode made fleets the common case; this makes them
+  legible.
 - **Fan-out mode + the preview ending contract** (§3, §5c) — two composer-level features. (1) A ⑂
   pill (default ON, fallback `MINAMI_DASHBOARD_FANOUT`) appends `FANOUT_PROMPT` at session
   creation: propose parallel subagents for divisible work and proceed without asking; procedure in

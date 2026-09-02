@@ -22,7 +22,7 @@ export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions"
 export type Notice = { kind: string; text: string; at: number; agent?: string; status?: "completed" | "failed" | "stopped" };
 
 export { activityLabel, toolCategory, escalationHint } from "./agent/labels";
-export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem } from "./agent/labels";
+export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem, LiveTask } from "./agent/labels";
 
 // How long "the server is blocked on you, and you have nothing to answer" must hold before the client
 // treats it as a lost prompt rather than one still in flight. Generous on purpose: the two facts travel

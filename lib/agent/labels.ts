@@ -20,7 +20,11 @@ export type ActivityPhase =
 /** A tool call that has started and not yet returned its result. */
 export type LiveTool = { id: string; name: string; label: string; parentId?: string | null };
 /** A running subagent (Task tool) or background task. */
-export type LiveTask = { id: string; description: string; agent?: string; lastTool?: string; toolUses?: number };
+export type LiveTask = { id: string; description: string; agent?: string; lastTool?: string; toolUses?: number;
+  /** Server clock at task_started — lets the pane show per-agent elapsed instead of one shared timer
+   *  that says nothing about which agent has been grinding. Optional: absent on background tasks
+   *  adopted from a REPLACE snapshot (their true start predates our first sight of them). */
+  since?: number };
 
 /** One entry of the agent's TodoWrite plan. Rendered as a live checklist — see TodoChecklist in
  *  app/page.tsx. Sourced straight from a TodoWrite tool call's `input.todos`, which is already
@@ -236,14 +240,23 @@ export function inputFromPartial(name: string, buf: string): Record<string, stri
   }
 }
 
-/** The most informative running subagent, rendered as one line. */
+/** Running subagents as one line — the tile and cramped contexts, where the AgentBoard (app/page.tsx)
+ *  doesn't fit. With several agents the old "subagent (Explore) +3" named one and hid the rest behind
+ *  a count; a fleet reads as a fleet: "4 agents · Explore ×3, Plan". */
 function taskLabel(tasks: LiveTask[]): string {
   const t = tasks[tasks.length - 1];
   if (!t) return "working…";
-  const who = t.agent ? `subagent (${t.agent})` : t.description ? `subagent: ${clip(t.description, 30)}` : "subagent";
-  const more = tasks.length > 1 ? ` +${tasks.length - 1}` : "";
-  const detail = t.lastTool ? ` · ${t.lastTool}` : "";
-  return `${who}${more}${detail}`;
+  if (tasks.length === 1) {
+    // Type AND assignment when both exist — "Explore" alone forces guessing what it was sent to do.
+    const who = t.agent && t.description ? `${t.agent}: ${clip(t.description, 28)}`
+      : t.agent ? `subagent (${t.agent})` : t.description ? `subagent: ${clip(t.description, 30)}` : "subagent";
+    return `${who}${t.lastTool ? ` · ${t.lastTool}` : ""}`;
+  }
+  const byType = new Map<string, number>();
+  for (const k of tasks) byType.set(k.agent || "agent", (byType.get(k.agent || "agent") || 0) + 1);
+  const kinds = [...byType.entries()].map(([a, n]) => (n > 1 ? `${a} ×${n}` : a));
+  const shown = kinds.slice(0, 3).join(", ") + (kinds.length > 3 ? ", …" : "");
+  return `${tasks.length} agents · ${shown}`;
 }
 
 /**

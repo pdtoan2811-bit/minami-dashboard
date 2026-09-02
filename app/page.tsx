@@ -9,7 +9,7 @@ import { useSetting } from "@/lib/use-settings";
 // imported into a client component. See its own comment: the split exists so one list of ids serves
 // both sides.
 import { SELECTABLE_MODELS } from "@/lib/model-catalog";
-import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice } from "@/lib/use-agent";
+import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
 import ThoughtBlock from "@/components/ThoughtBlock";
@@ -232,6 +232,45 @@ const TOOL_ICON: Record<ToolCategory, LucideIcon> = {
  * during a silent 90s Bash the label doesn't change, and without a ticking number the pane is
  * indistinguishable from a hung one.
  */
+/** The subagent fleet, one row per agent — what replaced the 9px pills that made a fan-out feel like
+ *  guessing. The pills showed the agent TYPE and hid the assignment, so four parallel "Explore"s were
+ *  indistinguishable; rows give each agent its description, its current tool, a tool count, and its
+ *  OWN elapsed (per-agent `since` from the server — the turn's shared timer says nothing about which
+ *  agent is grinding). Finished agents stay in the same list, dimmed with a verdict glyph, so the
+ *  fleet reads as one roster from launch to landing rather than two disconnected pill groups.
+ *  `Date.now()` in render is safe here: every full-size caller re-renders each second on the ticking
+ *  `elapsed` prop, so the per-row timers tick with it — no interval of their own needed. */
+function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[] }) {
+  if (!tasks.length && !finished.length) return null;
+  return (
+    <span className="flex w-full max-w-xl flex-col gap-1">
+      {tasks.map((k) => (
+        <span key={k.id} className="flex min-w-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px]"
+          style={{ borderColor: TOOL_TINT.task + "30", background: TOOL_TINT.task + "0d" }}>
+          <Bot className="h-3 w-3 shrink-0 animate-pulse" style={{ color: TOOL_TINT.task }} strokeWidth={2.5} />
+          {k.agent && <span className="shrink-0 rounded px-1 py-px font-mono text-[9px] font-medium" style={{ background: TOOL_TINT.task + "1e", color: TOOL_TINT.task }}>{k.agent}</span>}
+          <span className="min-w-0 flex-1 truncate text-neutral-300" title={k.description}>{k.description}</span>
+          {k.lastTool && <span className="hidden shrink-0 italic text-neutral-500 sm:inline">{k.lastTool}</span>}
+          {typeof k.toolUses === "number" && k.toolUses > 0 && <span className="shrink-0 font-mono text-[9px] tabular-nums text-neutral-600">{k.toolUses} tools</span>}
+          {k.since && <span className="shrink-0 font-mono text-[9px] tabular-nums text-neutral-500">{fmtElapsed(Date.now() - k.since)}</span>}
+        </span>
+      ))}
+      {finished.map((n, i) => {
+        const ok = n.status === "completed";
+        const tint = ok ? TOOL_TINT.task : n.status === "stopped" ? "#9ca3af" : "#ef7c7c";
+        return (
+          <span key={`${n.at}-${i}`} title={n.text} className="flex min-w-0 items-center gap-1.5 rounded-lg border border-white/[0.06] px-2 py-1 text-[10px] opacity-60">
+            <span className="w-3 shrink-0 text-center" style={{ color: tint }}>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
+            {n.agent && <span className="shrink-0 rounded px-1 py-px font-mono text-[9px]" style={{ background: tint + "1e", color: tint }}>{n.agent}</span>}
+            {/* The notice text is "subagent <status>: <summary>" — the summary half is the payload. */}
+            <span className="min-w-0 flex-1 truncate text-neutral-400">{n.text.replace(/^subagent \w+: /, "")}</span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: { activity: ActivityState; elapsed: number; compact?: boolean; busy?: boolean; hideTime?: boolean; notices?: Notice[] }) {
   // `busy` without a phase shouldn't happen (the server always sets one), but if the two ever
   // disagree, err toward animating: a silent blank line is the exact failure we're fixing.
@@ -277,37 +316,10 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: {
             {extras.length > 4 && <span className="text-[9px] text-neutral-600">+{extras.length - 4}</span>}
           </span>
         )}
-        {/* Running subagents, with the inner tool they're on — otherwise a 3-minute Task is opaque. */}
-        {!compact && activity.tasks.map((k) => (
-          <span key={k.id} className="flex items-center gap-1 rounded-full border px-1.5 py-px text-[9px]" style={{ borderColor: TOOL_TINT.task + "45", color: TOOL_TINT.task }}>
-            <Bot className="h-2.5 w-2.5" strokeWidth={2.5} />
-            {k.agent || k.description}{k.lastTool ? ` · ${k.lastTool}` : ""}{k.toolUses ? ` · ${k.toolUses} tools` : ""}
-          </span>
-        ))}
       </span>
-      {/* Subagents that already finished — pulled onto their own row, dimmed with a ✓/✗/⏹ instead of a
-          live tool. Used to live crammed onto the status line above, jockeying for space with the
-          dots/label/timer/extras/running-tasks — with several subagents (a common pattern in this repo:
-          parallel investigations) that line filled up and wrapped into a jumble. A dedicated row below
-          keeps the live status line readable regardless of how many subagents finished this turn. This
-          in turn replaced an even older design, where each finished subagent appended its own
-          full-sentence line (NoticeStrip's "task" notices) that stacked up at the bottom of the chat as
-          the turn went on. Full text still available on hover. */}
-      {finished.length > 0 && (
-        <span className="flex flex-wrap gap-1">
-          {finished.map((n, i) => {
-            const ok = n.status === "completed";
-            const nTint = ok ? TOOL_TINT.task : "#ef7c7c";
-            return (
-              <span key={`${n.at}-${i}`} title={n.text} className="flex items-center gap-1 rounded-full border px-1.5 py-px text-[9px] opacity-70" style={{ borderColor: nTint + "45", color: nTint }}>
-                <Bot className="h-2.5 w-2.5" strokeWidth={2.5} />
-                {n.agent || "subagent"}
-                <span>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
-              </span>
-            );
-          })}
-        </span>
-      )}
+      {/* The fleet, one row per agent — see AgentBoard for the lineage (full-sentence notices → inline
+          pills → this). Compact contexts skip it and rely on taskLabel's one-liner instead. */}
+      {!compact && <AgentBoard tasks={activity.tasks} finished={finished} />}
     </span>
   );
 }

@@ -796,6 +796,7 @@ function handleSystem(s: Session, m: any) {
         id: m.tool_use_id || m.task_id,
         description: m.description || m.workflow_name || "task",
         agent: m.subagent_type,
+        since: Date.now(),
       });
       touch(s, "tool");
       break;

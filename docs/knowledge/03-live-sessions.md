@@ -246,6 +246,27 @@ disagree, because there is only one source.
 
 Phases: `idle · spawning · thinking · responding · tool · awaiting · retrying · compacting`.
 
+### Subagents: the AgentBoard, and per-agent `since` (2026-09-02)
+
+A fan-out used to render as 9px pills on the status line — agent *type* only, so four parallel
+"Explore"s were indistinguishable, and the roster wrapped into a jumble. Full-size panes now render
+**AgentBoard** (app/page.tsx): one row per running agent — pulsing bot, type badge, the actual
+*assignment* (`description`), the inner tool it's currently on (`task_progress.last_tool_name`), a
+tool-use count, and a per-agent timer. Finished agents stay in the same list, dimmed with ✓/✗/⏹
+(their data comes from the "task" notices, same as the old finished-pill row — hover for the full
+summary). This is the third design: full-sentence notice lines → inline pills → the board.
+
+`LiveTask.since` is stamped server-side at `task_started` for the per-agent timer — the turn's
+shared elapsed says nothing about which agent has been grinding. Deliberately absent on background
+tasks adopted from a `background_tasks_changed` REPLACE snapshot: their true start predates our
+first sight of them, and a fabricated timestamp would render as a confident lie. The rows tick
+without their own interval because every full-size ActivityLine caller already re-renders on the 1s
+elapsed tick.
+
+One-line contexts (tile, cramped status) don't get the board; `taskLabel` instead says
+`4 agents · Explore ×3, Plan` (counts by type) rather than the old `subagent (Explore) +3`, and a
+single agent shows type AND clipped assignment.
+
 ### Gotchas
 - `settle()` must recompute the phase from what's *still* in flight after a tool result lands.
   Without it a finished tool's label stays on screen — the stale-label bug.
