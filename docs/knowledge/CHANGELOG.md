@@ -11,8 +11,10 @@ this to do a piece of work; read the subsystem's own doc.
 ### 2026-09-02
 - **Per-repo isolation opt-out: `git config minami.isolate off`** (§9) — born from the secondBrain
   strandings (four worktrees piled up; a vault compaction ran invisibly in one — full post-mortem
-  in §9). Checked in `isolate()` before any name allocation; unset means on. Set in secondBrain the
-  same day; stranded content rescued into the vault's `main`.
+  in §9). Checked in `isolate()` before any name allocation; unset means on. Set in secondBrain,
+  then reversed the same evening — the vault keeps per-chat isolation and its own
+  `prune-worktrees.sh` now recycles finished branches instead (stale-claim aware, auto-merge,
+  origin cleanup). Stranded content rescued into the vault's `main`; chat-6 reconciled.
 - **Localhost is the primary preview** (§5c) — prompt orders it first, the parser stable-sorts it
   first regardless, and its chip renders as the one accent-tinted primary action with host:port
   visible. Hostname-checked (`isLocalUrl`), not substring-matched.

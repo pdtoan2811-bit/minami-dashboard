@@ -125,6 +125,15 @@ decision there and nowhere else:
 > because the decision belongs to the repo and travels with the checkout. The stranded content was
 > rescued into `main` (rescue commit + two cherry-picks); the live `chat-6` compaction was left for
 > a deliberate reconcile.
+>
+> **Reversed the same evening — recycling beat opting out.** Thomas wants the fresh-branch-per-chat
+> flow ("new branches everytime"), so secondBrain's `minami.isolate off` was removed and the
+> pile-up was fixed at its actual root: the vault's own `bin/prune-worktrees.sh` (run by every
+> `sync.sh`) now treats a claim with a >30min-stale heartbeat as dead rather than live-forever,
+> auto-merges clean unclaimed finished branches into main (`--no-ff`; any conflict aborts and the
+> tree is kept with a "needs a human" line), and deletes tree + branch + origin branch. `sync.sh`
+> rebases with `--rebase-merges` so those merge commits survive syncing. The per-repo opt-out
+> stays available for repos that genuinely want it; the vault just isn't one.
 
 **Isolation must not move a chat off its own tile.** `project` is `basename(cwd)`, so without a fold a
 pane in `.minami-worktrees/chat` files itself under a new project called `chat` — the chat you just
