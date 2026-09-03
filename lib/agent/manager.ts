@@ -14,10 +14,13 @@
 // accepts a mid-session change and then ignores it). safeMode() clamps any unrecognised string to
 // "default", so only an explicit, recognised value can ever widen permissions.
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
+import pathMod from "node:path";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
 import { DASHBOARD_MODEL } from "../model-pins";
-import { releaseClaim, touchClaim } from "../worktree-claim";
+import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
+import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
 // effort"). Opus 5 is the current top-tier model (see the claude-api skill's model table); "default
@@ -162,6 +165,9 @@ export type AgentEvent =
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
   | { t: "result"; subtype: string; costUsd?: number } // turn finished
   | { t: "busy"; busy: boolean }
+  // The placement pass moved this conversation to a new folder (see relocate); the pane must adopt
+  // the cwd and re-arm `resume`, exactly like a model swap's `respawned`.
+  | { t: "relocated"; cwd: string; text: string }
   | { t: "error"; message: string };
 
 type Decision = { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string };
@@ -222,6 +228,11 @@ type Session = {
    *  only, same trap as `model`: an append can't be edited on a warm query, so setFanout() answers a
    *  mid-chat toggle the way setModel() does — teardown, and the next send resumes from disk. */
   fanout: boolean;
+  /** Every file this session has WRITTEN (edit-tool targets), across all turns — the placement
+   *  pass's evidence. Writes only, deliberately: a research sweep READS everywhere, and moving a
+   *  chat because it grepped another repo would relocate half the box. Capped; the decision needs
+   *  a pattern, not a census. */
+  writePaths: string[];
   subs: Set<Sub>;
   pending: Map<string, Pending>; // outstanding permission prompts
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -358,7 +369,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: model || DEFAULT_MODEL, fanout: fanout ?? DEFAULT_FANOUT, subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: model || DEFAULT_MODEL, fanout: fanout ?? DEFAULT_FANOUT, writePaths: [], subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -385,6 +396,14 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   // Called by the SDK for any tool the user's config doesn't already auto-approve, AND for the
   // AskUserQuestion tool (Claude's clarifying question). We surface it and block until the user acts.
   const canUseTool = async (toolName: string, input: unknown): Promise<Decision> => {
+    // Placement evidence, recorded before ANY decision branch — this hook is the one point every
+    // tool call passes through regardless of mode (the server enforces bypass itself, so a bypass
+    // session still lands here). Only edit-tool targets count; see `writePaths` on the type.
+    if (EDIT_TOOLS.has(toolName) && s.writePaths.length < 200) {
+      const p = (input as { file_path?: string; notebook_path?: string }) || {};
+      const target = p.file_path || p.notebook_path;
+      if (typeof target === "string" && target.startsWith("/")) s.writePaths.push(target);
+    }
     // The mode is enforced HERE, not just handed to the SDK at spawn time. `setPermissionMode()` on a
     // running query is accepted and then silently ignored by the CLI — measured: flip a warm session to
     // bypassPermissions, it answers ok, and the very next Bash write still raises a prompt. Since this
@@ -661,6 +680,9 @@ function handleMessage(s: Session, m: any) {
       broadcast(s, { t: "activity", activity: activityOf(s) });
       broadcast(s, { t: "busy", busy: false });
       scheduleIdle(s);
+      // The one moment a chat can change folders: the turn is over, nothing is queued, nothing is
+      // parked. Fire-and-forget — the pass re-checks those guards after its own awaits.
+      void placementPass(s).catch(() => { /* placement is an optimisation, never a failure */ });
       break;
     }
   }
@@ -1109,6 +1131,109 @@ export function setFanout(key: string, fanout: boolean): { ok: boolean; respawne
     waiting.set(key, set);
   }
   return { ok: true, respawned: true };
+}
+
+// ── the placement pass ─────────────────────────────────────────────────────────────────────────
+// Runs at the end of an idle turn and answers one question: is this chat living in the right
+// folder? Two wrong answers it can fix, both born from the same habit (chats START in the vault
+// because the context lives there, but the WORK often lives elsewhere):
+//
+//   · The chat's writes concentrate in another repo → relocate it there. The vault stays readable
+//     from anywhere (global context, absolute paths), the target repo's own CLAUDE.md/skills load,
+//     and the board re-tiles the chat under the project it actually belongs to.
+//   · The chat wrote its (lazy-mode) home repo while another chat shares it → NOW it earns the
+//     worktree that lazy mode declined at birth.
+//
+// Both act through relocate(): the same teardown-and-resume every other "can't change a warm
+// session" feature uses — move the transcript, tell the panes, close; the next send resumes from
+// disk in the new home. Guarded to idle moments only: no in-flight turn, no parked prompt, no
+// queued follow-up. Scoped to lazy-mode repos on purpose — in an eager repo (code), a chat editing
+// a second repo is usually a deliberate cross-repo fix, and yanking it away would be automation
+// fighting intent. The vault declared itself context-first; that declaration is the licence.
+
+/** Nearest enclosing git checkout of a path, walking up to the first `.git`. Cached per directory —
+ *  the pass runs over ≤200 paths that mostly share a few parents. */
+const repoRootCache = new Map<string, string | null>();
+function repoRootOf(p: string): string | null {
+  let d = p;
+  const seen: string[] = [];
+  for (let i = 0; i < 24; i++) {
+    const hit = repoRootCache.get(d);
+    if (hit !== undefined) { for (const x of seen) repoRootCache.set(x, hit); return hit; }
+    seen.push(d);
+    try { if (fsSync.existsSync(pathMod.join(d, ".git"))) { for (const x of seen) repoRootCache.set(x, d); return d; } } catch { /* unreadable — keep walking */ }
+    const up = pathMod.dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  for (const x of seen) repoRootCache.set(x, null);
+  return null;
+}
+
+const real = (p: string) => { try { return fsSync.realpathSync(p); } catch { return p; } };
+
+/** Another live session whose cwd is this same checkout — the contention that makes a home write
+ *  worth isolating. Keyed sessions only (skip the `live:` aliases, which would double-count). */
+function contendedHome(s: Session, home: string): boolean {
+  const h = real(home);
+  for (const [k, o] of store) {
+    if (o === s || o.closed || k !== o.key) continue;
+    if (real(o.cwd) === h) return true;
+  }
+  return false;
+}
+
+/** Tear the session down and point the conversation at a new folder. The transcript moves FIRST —
+ *  it is what makes the next `resume` find the chat in its new home; a teardown before a failed
+ *  move would strand the conversation exactly like a recycled worktree used to. */
+function relocate(s: Session, newCwd: string, text: string) {
+  if (!s.sessionId) return;
+  if (!moveTranscriptHome(s.sessionId, s.cwd, newCwd)) return;
+  // Broadcast BEFORE closing: closeSession drops the Session whose `subs` these live in. The pane
+  // uses this to adopt the new cwd and re-arm `resume` — and to say what happened, because a chat
+  // that silently changes folders reads as a bug, not a feature.
+  broadcast(s, { t: "relocated", cwd: newCwd, text });
+  const orphans = new Set(s.subs);
+  closeSession(s.key);
+  if (orphans.size) {
+    const set = waiting.get(s.key) || new Set<Sub>();
+    for (const sub of orphans) set.add(sub);
+    waiting.set(s.key, set);
+  }
+}
+
+async function placementPass(s: Session): Promise<void> {
+  if (s.closed || s.busy || s.pending.size || s.queued.length || s.hold || !s.sessionId) return;
+  if (!s.writePaths.length) return;
+  if (worktreeOf(s.cwd)) return; // already isolated — its placement is settled
+  const home = repoRootOf(s.cwd);
+  if (!home) return;
+  if ((await isolateMode(home)) !== "lazy") return;
+  if (s.closed || s.busy) return; // the await above raced a new turn — stand down
+
+  const counts = new Map<string, number>();
+  for (const p of s.writePaths) {
+    const r = repoRootOf(p);
+    if (r) counts.set(real(r), (counts.get(real(r)) || 0) + 1);
+  }
+  const homeReal = real(home);
+  let away: { root: string; n: number } | null = null;
+  for (const [root, n] of counts) {
+    if (root !== homeReal && (!away || n > away.n)) away = { root, n };
+  }
+  // Two writes into one other repo is a pattern; one could be a stray drop. Vault writes don't
+  // veto the move (Thomas: the target repo owns an interleaved chat — capture works from anywhere).
+  if (away && away.n >= 2) {
+    relocate(s, away.root, `moved to ${away.root.replace(/^\/Users\/[^/]+/, "~")} — that's where this chat's work is`);
+    return;
+  }
+  if ((counts.get(homeReal) || 0) >= 1 && contendedHome(s, home)) {
+    try {
+      const iso = await isolate(s.cwd, "chat", "turn");
+      if (!iso || s.closed || s.busy) return;
+      relocate(s, iso.dir, `isolated into ${iso.name} — this chat writes here and another chat is present`);
+    } catch { /* isolation is an optimisation; the shared folder still works */ }
+  }
 }
 
 // Subscribe an SSE client. `exists` tells the route whether a live session backs this key at all (so a

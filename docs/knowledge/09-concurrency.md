@@ -108,7 +108,7 @@ decision there and nowhere else:
 |---|---|
 | **What isolates** | A new **blank** chat, when the project already has a pane open, in a git repo, not already in a worktree |
 | **What never isolates** | Reopening an existing session — it carries the cwd it was born in, because `--resume` is scoped to the directory the transcript is filed under (§1) |
-| **Switch** | `MINAMI_AUTO_ISOLATE=0` globally; `git config minami.isolate off` per repo. Both read on the server only, so a client can't disagree |
+| **Switch** | `MINAMI_AUTO_ISOLATE=0` globally; `git config minami.isolate off\|lazy` per repo. All read on the server only, so a client can't disagree |
 | **Backends** | `bin/task.mjs new --json` where it exists (ports, the node_modules link, the merge gates, the autopilot's view — one definition each); plain `git worktree` in any other repo |
 | **Way back** | `merge back` on the pane (`IsolatedBar`), and the autopilot for anyone who has it on |
 | **Cleanup** | Closing an isolated pane discards the tree **if it is pristine** — no commits ahead, nothing uncommitted |
@@ -145,6 +145,33 @@ decision there and nowhere else:
 > points at a vanished `TREES_DIR` cwd whose base still exists — rename not copy, so one session id
 > can never have two homes and two rival writers (the §9 corruption). Only with `resume`: a NEW
 > chat aimed at a dead worktree path really is an error.
+
+### The placement pass — a chat follows its work (2026-09-02)
+
+Thomas's chats mostly START in the vault (context, capture, target-unknown-yet) while the WORK
+often lands in another repo — the thread ledger showed a vault-born chat editing `~/ecomIntel-demo`
+from inside a vault worktree that protected nothing. Interviewed (10 answers), the design is:
+
+- **`minami.isolate lazy`** (set in secondBrain): the repo declines the birth-time worktree.
+  Most vault chats only read; no tree, no churn, no recycler debt.
+- **The placement pass** (`placementPass`, `lib/agent/manager.ts`) runs when a turn ends idle —
+  no queue, no parked prompt, no hold. Evidence is `s.writePaths` (edit-tool targets recorded in
+  `canUseTool`, which every call passes through even under bypass — the server enforces modes
+  itself). WRITES only, deliberately: research reads everywhere, and moving a chat because it
+  grepped another repo would relocate half the box. Two outcomes, both through `relocate()`:
+  - ≥2 writes into one other repo → **move there**. Vault writes don't veto (the target repo owns
+    an interleaved chat — capture works from any cwd via the global context). Board re-tiles it.
+  - ≥1 write in the lazy home while another live session shares it → **now** it earns the tree
+    (`isolate(cwd, label, "turn")`).
+- **`relocate()`** = `moveTranscriptHome()` (the §9 rescue's primitive, extracted) + a `relocated`
+  broadcast + the standard teardown-with-subscriber-handover. Transcript moves FIRST — a teardown
+  before a failed move would strand the chat exactly like a recycled tree used to. Client side:
+  `relocatedTo` outranks every cwd the pane's props know, `sentOnce` re-arms, and a persistent
+  green bar says where the chat now lives (NoticeStrip can't carry it — it renders only during a
+  live turn, and relocation happens precisely when the turn ends).
+- **Scoped to lazy repos on purpose.** In an eager (code) repo, editing a second repo is usually a
+  deliberate cross-repo fix; auto-yanking the session would be automation fighting intent. The
+  vault declared itself context-first; that declaration is the licence.
 
 **Isolation must not move a chat off its own tile.** `project` is `basename(cwd)`, so without a fold a
 pane in `.minami-worktrees/chat` files itself under a new project called `chat` — the chat you just

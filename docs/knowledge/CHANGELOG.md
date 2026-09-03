@@ -15,6 +15,11 @@ this to do a piece of work; read the subsystem's own doc.
   then reversed the same evening — the vault keeps per-chat isolation and its own
   `prune-worktrees.sh` now recycles finished branches instead (stale-claim aware, auto-merge,
   origin cleanup). Stranded content rescued into the vault's `main`; chat-6 reconciled.
+- **The placement pass: a chat follows its work** (§9) — `minami.isolate lazy` (vault: set) skips
+  the birth worktree; at idle turn-ends the server reads the session's write targets and either
+  relocates the chat to the repo its work is in (≥2 writes there; transcript moves with it, board
+  re-tiles, pane shows a green moved-bar) or grants the worktree lazy mode declined once the home
+  repo is written under contention. Designed from a 10-question interview; scoped to lazy repos.
 - **AgentBoard v2 — the bay** (§4): one container, formation-strip header (a breathing dot per
   running agent), rows on a shared grid; motion keyed to real events only (launch, tool change,
   landing), reduced-motion respected. Verified against a rendered mock before shipping.

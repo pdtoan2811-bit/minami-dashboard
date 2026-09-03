@@ -355,7 +355,7 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: {
 // `restarting` shares the amber warning language used by the account alert: it's the one notice that
 // arrives BEFORE the disruption (the deploy script warning panes it's about to swap the server out from
 // under them), so it has to read as "act now", not as after-the-fact grey chatter like `aborted`.
-const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af", restarting: "#f0a868" };
+const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af", restarting: "#f0a868", relocated: "#6cc4a1" };
 function NoticeStrip({ notices }: { notices: Notice[] }) {
   const rest = notices.filter((n) => n.kind !== "task");
   if (!rest.length) return null;
@@ -2068,7 +2068,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // aggregate cwd (whichever session sorted first), and a topic collapses on basename(cwd) — so ~/work/api
   // and ~/personal/api share one topic whose cwd belongs to only one of them. Prefer the resumed session's
   // own cwd; fall back to the topic cwd only for a blank/new pane that has no session of its own yet.
-  const cwd = (sessionId && cur?.cwd) || cwdProp || sessions[0]?.cwd || "";
+  // `relocatedTo` outranks everything: the placement pass moved the conversation (transcript and
+  // all) to a new folder mid-pane, so every cwd the props know is stale until the next full reload.
+  const cwd = agent.relocatedTo || (sessionId && cur?.cwd) || cwdProp || sessions[0]?.cwd || "";
   const proj = sessions[0]?.project || cwd.split("/").filter(Boolean).pop() || "";
   // Fetched history sits in front of the polled window. Drop anything at or past the window's lower
   // bound so a page and the tail can't double-render the same turn if the window shifted between fetches.
@@ -2552,6 +2554,16 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             most need to be told where it will write — the empty "New chat in …" state is the moment
             before you type the instruction, and the old placement only rendered once a transcript
             existed, i.e. after the first turn had already run somewhere. */}
+        {/* The placement pass moved this conversation — say so persistently, in the same slot the
+            isolation bar uses and for the same reason: where a chat writes is the one fact that
+            must never be ambient. NoticeStrip can't carry this (it renders only during a live
+            turn, and relocation happens precisely when the turn is over). */}
+        {agent.relocatedTo && (
+          <div className="agent-in mx-auto mb-1 flex items-center gap-1.5 rounded-full border border-[#6cc4a1]/30 bg-[#6cc4a1]/10 px-3 py-1 text-[11px] text-[#6cc4a1]">
+            <span>↪</span>
+            <span>moved to <code className="text-[10px]">{agent.relocatedTo.replace(/^\/Users\/[^/]+/, "~")}</code> — this chat's work lives there; it continues in that folder</span>
+          </div>
+        )}
         {isolated ? (
           <IsolatedBar cwd={cwdProp} busy={agent.busy} />
         ) : agentsHere > 1 ? (

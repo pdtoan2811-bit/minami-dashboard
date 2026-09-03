@@ -149,21 +149,41 @@ function isOwnRepo(base: string): boolean {
  * a worktree, or switched off — because "carry on in the shared folder" is a normal answer and callers
  * should not have to distinguish it from a failure.
  */
-export async function isolate(cwd: string, label: string): Promise<Isolated | null> {
+/**
+ * How a repo wants isolation to behave — `git config minami.isolate` in the repo itself.
+ *
+ * A git config rather than an env list because the decision belongs to the REPO: it travels with
+ * the checkout, needs no server restart, and a session standing in the folder can set it itself.
+ *
+ *  · **eager** (unset, the default) — every overlapping blank chat gets a worktree at birth. Right
+ *    for code, where parallel edits collide and the first write can land seconds into turn one.
+ *  · **lazy** — chats share the checkout until one actually WRITES a file here while another chat
+ *    is present; only then does it earn a tree (the placement pass, §3/§9, does the move at the
+ *    next turn boundary). Right for a context-first folder like the vault: most chats born there
+ *    only read it, and 2026-09-02's pile-up was worktrees created for chats that never wrote one
+ *    vault file — plus a vault compaction running invisibly in a tree nobody merged.
+ *  · **off** — never isolate here, regardless of contention.
+ */
+export type IsolateMode = "eager" | "lazy" | "off";
+export async function isolateMode(base: string): Promise<IsolateMode> {
+  try {
+    const v = (await git(["config", "--get", "minami.isolate"], base)).trim();
+    if (v === "off") return "off";
+    if (v === "lazy") return "lazy";
+  } catch { /* key unset */ }
+  return "eager";
+}
+
+export async function isolate(cwd: string, label: string, stage: "birth" | "turn" = "birth"): Promise<Isolated | null> {
   if (!AUTO_ISOLATE) return null;
   const info = await repoInfo(cwd);
   if (!info || info.isWorktree) return null;
 
-  // Per-repo opt-out: `git config minami.isolate off` in the repo itself. Isolation is a fit for
-  // code (parallel edits collide, merges have gates); it is actively wrong for a notes vault, where
-  // the whole point of starting a session there is the SHARED context — a chat isolated into a
-  // worktree reads a stale vault and writes notes that sync, Minami and every other session can't
-  // see. That is how a vault compaction once ran to completion invisibly (secondBrain chat-6,
-  // 2026-09-02). A git config rather than an env list because the decision belongs to the REPO —
-  // it travels with the checkout, needs no server restart, and `git config minami.isolate off` is
-  // something a session standing in the folder can do itself.
-  try { if ((await git(["config", "--get", "minami.isolate"], info.base)).trim() === "off") return null; }
-  catch { /* key unset — isolation stays on, the default */ }
+  const mode = await isolateMode(info.base);
+  if (mode === "off") return null;
+  // A lazy repo declines the birth-time tree — the placement pass calls back with stage "turn"
+  // if this chat ever writes here under contention.
+  if (mode === "lazy" && stage === "birth") return null;
 
   // Name allocation and creation are not atomic — `takenNames` reads the filesystem, `task new` writes
   // it — so two panes opened within the same second both pick `chat` and the second one loses. Retry
@@ -313,26 +333,38 @@ export function rehomeStrandedTranscript(cwd: string, sessionId: string): string
   if (!m) return null;
   const base = m[1];
   try { if (!fs.statSync(base).isDirectory()) return null; } catch { return null; }
+  return moveTranscriptHome(sessionId, cwd, base) ? base : null;
+}
+
+/**
+ * Move one conversation's on-disk home from one folder's project dir to another's. The primitive
+ * under both rescue paths: a recycled tree's stranded chat (rehomeStrandedTranscript) and the
+ * placement pass relocating a live chat to the repo its work is actually in (§3). `--resume` finds
+ * a session by id inside the project dir its cwd maps to, so moving the file IS moving the chat.
+ * Rename, not copy — one session id in two project dirs would let two panes spawn rival writers
+ * into one JSONL, the §9 corruption.
+ */
+export function moveTranscriptHome(sessionId: string, fromCwd: string, toCwd: string): boolean {
   // The CLI's project-dir slug: every non-alphanumeric character becomes "-". Matches the observed
   // on-disk form ("/Users/x/secondBrain/.minami-worktrees/chat-2" → "-Users-x-secondBrain--minami-worktrees-chat-2").
   const slug = (p: string) => p.replace(/[^a-zA-Z0-9]/g, "-");
   const projects = path.join(os.homedir(), ".claude", "projects");
-  const src = path.join(projects, slug(cwd), sessionId + ".jsonl");
-  const toDir = path.join(projects, slug(base));
+  const src = path.join(projects, slug(fromCwd), sessionId + ".jsonl");
+  const toDir = path.join(projects, slug(toCwd));
   const dst = path.join(toDir, sessionId + ".jsonl");
   try {
-    if (fs.existsSync(dst)) return base; // already rehomed — a reload racing an earlier rehome
-    if (!fs.existsSync(src)) return null;
+    if (fs.existsSync(dst)) return true; // already moved — a reload racing an earlier move
+    if (!fs.existsSync(src)) return false;
     fs.mkdirSync(toDir, { recursive: true });
     fs.renameSync(src, dst);
     // Sidechain dir (subagent transcripts) rides along; losing it only loses subagent detail, so
-    // a failure here must not undo the rehome that already happened.
-    const side = path.join(projects, slug(cwd), sessionId);
+    // a failure here must not undo the move that already happened.
+    const side = path.join(projects, slug(fromCwd), sessionId);
     if (fs.existsSync(side) && !fs.existsSync(path.join(toDir, sessionId))) {
       try { fs.renameSync(side, path.join(toDir, sessionId)); } catch { /* detail, not the chat */ }
     }
-    return base;
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
