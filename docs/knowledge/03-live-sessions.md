@@ -135,7 +135,11 @@ append at all. Now the append is unconditional and only its pieces are gated:
   nearest thing named "compact" is the VAULT's consolidation — chat-6's stranded branch carried two
   vault-compaction commits born exactly that way. The append says: keep working, the harness
   auto-compacts at `AUTOCOMPACT_PCT`%, and file-level "compaction" (vault routines, memory skills)
-  runs only on explicit request, never as a context remedy. The visible half is the composer's
+  runs only on explicit request, never as a context remedy — and (added same day, with evidence)
+  never SELF-ESTIMATE remaining context: a session declaring "I'm near the end of my context" was
+  measured at 83k of 1M — **8%** — with zero compactions ever fired on this box. Manual `/compact`
+  was verified end-to-end the same day (recorded as a real local command; the ~$0.13 result is the
+  summarization call itself). The visible half is the composer's
   context meter: `s.ctxUsed` (input + cache reads/writes of the newest TOP-LEVEL assistant message —
   a subagent's usage describes its own context, not the main loop's) rides a REPLACE-semantics
   `ctx` event plus the reconnect snapshot; the window is derived client-side from the session model

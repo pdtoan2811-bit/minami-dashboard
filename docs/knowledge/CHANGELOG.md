@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-03
+- **False scarcity, measured** (§3) — the session that inspired the meter claimed "near the end of
+  my context" at 83k/1M (8%); no dashboard session has ever reached the 60% auto-compact line.
+  CONTEXT_PROMPT now forbids self-estimating remaining context. `/compact` verified end-to-end.
 - **Context meter + /compact button + guardrail** (§3) — the composer shows window fill (amber 45%,
   red 80%; click = `/compact`), the server broadcasts `ctx` from top-level assistant usage, and
   every session's prompt now says context pressure is the harness's problem — never a reason to

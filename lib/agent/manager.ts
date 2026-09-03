@@ -100,7 +100,7 @@ const DEFAULT_FANOUT = process.env.MINAMI_DASHBOARD_FANOUT !== "0";
 // carried two vault-compaction commits born exactly this way, and another session answered a task
 // with "it's a fresh session with the spec" rather than keep working. Context pressure is the
 // HARNESS's problem; say so.
-const CONTEXT_PROMPT = `If your context window runs low mid-task: keep working. The harness auto-compacts the conversation at ${AUTOCOMPACT_PCT}% and preserves what matters — a shrinking context is never a reason to stop, hand off to "a fresh session", or run any file-level compaction. In particular, NEVER respond to context pressure by compacting or reorganising the user's vault/notes (secondBrain consolidation, memory compaction skills, or similar) — those rewrite his knowledge base and run only when he explicitly asks.`;
+const CONTEXT_PROMPT = `Never estimate your own remaining context — you cannot measure it and such guesses run far too low (a session here declared "I'm near the end of my context" at a MEASURED 8% of its 1M-token window). The user sees the real fill as a meter; the harness auto-compacts the conversation at ${AUTOCOMPACT_PCT}%. So if the context feels short mid-task: keep working. It is never a reason to stop, hand off to "a fresh session", ration your replies, or run any file-level compaction. In particular, NEVER respond to context pressure by compacting or reorganising the user's vault/notes (secondBrain consolidation, memory compaction skills, or similar) — those rewrite his knowledge base and run only when he explicitly asks.`;
 
 // "bypassPermissions" auto-approves every tool with no prompt — powerful, and the configured default
 // on this box (Thomas's explicit call: every prompt on a local, single-user machine is friction he
