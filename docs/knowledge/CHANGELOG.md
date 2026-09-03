@@ -9,6 +9,10 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-03
+- **🐛 The model pill said "default" while riding legacy Fable 5** (§3) — a pane's stored pick
+  (`claude-fable-5`) stopped matching the catalog when 5.1 replaced it, and the pill's fallback
+  label hid the mismatch for a day at 2× Opus price. Unknown ids now render their raw name;
+  "default" only when genuinely unknown.
 - **False scarcity, measured** (§3) — the session that inspired the meter claimed "near the end of
   my context" at 83k/1M (8%); no dashboard session has ever reached the 60% auto-compact line.
   CONTEXT_PROMPT now forbids self-estimating remaining context. `/compact` verified end-to-end.

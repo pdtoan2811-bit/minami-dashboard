@@ -1718,7 +1718,10 @@ function ModelPicker({ model, sessionModel, onPick, busy }: {
           {/* A dot, not a word: this row folds into one pill on a cramped pane, so the indicator has to
               cost ~4px. It reads as "pending" next to a name that has already changed. */}
           {staged && <span className="mr-1 text-[var(--sakura)]">•</span>}
-          {shown?.label || "default"}<span className="ml-1 text-neutral-600">⌄</span>
+          {/* An id the catalog no longer offers must still be NAMED, not filed under "default" —
+              a pane pinned to legacy Fable 5 read "default" for a day while every send silently
+              rode the 2× price tier. "default" is only honest when we genuinely don't know. */}
+          {shown?.label || (model || sessionModel)?.replace(/^claude-/, "").replace(/-\d{8}$/, "") || "default"}<span className="ml-1 text-neutral-600">⌄</span>
         </span>
       </button>
       {open && (
