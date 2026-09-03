@@ -9,6 +9,11 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-03
+- **The shared-folder banner learns about lazy repos** (§9) — `GET /api/worktree` now returns the
+  repo's `minami.isolate` mode, and the amber "will overwrite each other" warning only fires for
+  eager repos. Lazy (the vault): a quiet neutral line — sharing is the designed state, the
+  placement pass isolates on the first contended write. `off`: no banner. Unknown reads as eager,
+  because the safe default for a warning is to fire.
 - **🐛 Background agents survive the turn boundary on the board** (§4) — `result` no longer wipes
   still-running tasks; phase stays `tool` while they fly, and the pane shows the bay in the banner
   slot when idle-with-agents (+3min grace so landings are seen).

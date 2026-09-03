@@ -1,4 +1,4 @@
-import { AUTO_ISOLATE, discardIfPristine, isolate, mergeBack, repoInfo } from "@/lib/worktree";
+import { AUTO_ISOLATE, discardIfPristine, isolate, isolateMode, mergeBack, repoInfo } from "@/lib/worktree";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,5 +36,10 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   const cwd = new URL(req.url).searchParams.get("cwd") || "";
   if (!cwd) return Response.json({ enabled: AUTO_ISOLATE, repo: null });
-  return Response.json({ enabled: AUTO_ISOLATE, repo: await repoInfo(cwd) });
+  const repo = await repoInfo(cwd);
+  // `mode` rides along so the shared-folder banner can tell a DANGEROUS overlap (eager repo, two
+  // writers, one branch) from a DESIGNED one (lazy repo — the placement pass isolates on the first
+  // contended write). The git config lives server-side; without this the client can only assume
+  // eager and cry wolf at every vault chat.
+  return Response.json({ enabled: AUTO_ISOLATE, repo, mode: repo ? await isolateMode(repo.base) : null });
 }

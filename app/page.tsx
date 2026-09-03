@@ -1947,6 +1947,20 @@ function IsolatedBar({ cwd, busy }: { cwd: string; busy: boolean }) {
   );
 }
 
+// The repo's isolation mode, cached per cwd — the shared-folder banner needs it to tell a dangerous
+// overlap from a designed one, and four panes on one topic should ask the server once, not four
+// times. A Map of promises so even concurrent first-askers coalesce. Unknown reads as eager (the
+// amber warning stays), because the safe default for a warning is to fire.
+const isoModeCache = new Map<string, Promise<string | null>>();
+function fetchIsoMode(cwd: string): Promise<string | null> {
+  let p = isoModeCache.get(cwd);
+  if (!p) {
+    p = fetch(`/api/worktree?cwd=${encodeURIComponent(cwd)}`).then((r) => r.json()).then((d) => d?.mode ?? null).catch(() => null);
+    isoModeCache.set(cwd, p);
+  }
+  return p;
+}
+
 function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx, count, showTools, agentsHere, openSids, collapsed, focused, onFocus, onOpenFlow, onPick, onLive, onBusy, onClose }: {
   paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string;
   /** This chat has its own git worktree (see `addPane`), so nothing it writes can collide. */
@@ -2079,6 +2093,14 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // all) to a new folder mid-pane, so every cwd the props know is stale until the next full reload.
   const cwd = agent.relocatedTo || (sessionId && cur?.cwd) || cwdProp || sessions[0]?.cwd || "";
   const proj = sessions[0]?.project || cwd.split("/").filter(Boolean).pop() || "";
+  // Only asked when the banner would show — a lone pane needs no verdict on a warning it won't render.
+  const [isoMode, setIsoMode] = useState<string | null>(null);
+  useEffect(() => {
+    if (!cwd || isolated || agentsHere <= 1) return;
+    let on = true;
+    fetchIsoMode(cwd).then((m) => { if (on) setIsoMode(m); });
+    return () => { on = false; };
+  }, [cwd, isolated, agentsHere]);
   // Fetched history sits in front of the polled window. Drop anything at or past the window's lower
   // bound so a page and the tail can't double-render the same turn if the window shifted between fetches.
   const windowStart = detail?.start ?? 0;
@@ -2585,10 +2607,21 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         {isolated ? (
           <IsolatedBar cwd={cwdProp} busy={agent.busy} />
         ) : agentsHere > 1 ? (
-          <div className="mx-auto mb-1 flex items-center gap-1.5 rounded-full border border-[#e0a33e]/30 bg-[#e0a33e]/10 px-3 py-1 text-[11px] text-[#e0a33e]">
-            <span>⚠</span>
-            <span>{agentsHere} agents are live in this folder — they share one branch and will overwrite each other</span>
-          </div>
+          // Same fact, two truths. In an eager repo an overlap is the §9 collision and deserves the
+          // alarm. In a LAZY repo sharing is the designed state — chats come here to read context,
+          // and the placement pass hands out a worktree the moment one writes under contention — so
+          // the amber "will overwrite each other" was crying wolf at every vault chat.
+          isoMode === "lazy" ? (
+            <div className="mx-auto mb-1 flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-neutral-500">
+              <span>⑂</span>
+              <span>{agentsHere} chats share this folder — fine for reading; a chat that writes here gets its own worktree automatically</span>
+            </div>
+          ) : isoMode === "off" ? null : (
+            <div className="mx-auto mb-1 flex items-center gap-1.5 rounded-full border border-[#e0a33e]/30 bg-[#e0a33e]/10 px-3 py-1 text-[11px] text-[#e0a33e]">
+              <span>⚠</span>
+              <span>{agentsHere} agents are live in this folder — they share one branch and will overwrite each other</span>
+            </div>
+          )
         ) : null}
         {!agent.live && isNew ? (
           <div className="mx-auto mt-16 max-w-sm text-center text-neutral-500">
