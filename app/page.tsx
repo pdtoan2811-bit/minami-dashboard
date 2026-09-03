@@ -8,7 +8,7 @@ import { useSetting } from "@/lib/use-settings";
 // The catalog, not lib/model-pins — that module reads ~/Minami's config with node:fs and can't be
 // imported into a client component. See its own comment: the split exists so one list of ids serves
 // both sides.
-import { SELECTABLE_MODELS } from "@/lib/model-catalog";
+import { SELECTABLE_MODELS, contextWindowFor } from "@/lib/model-catalog";
 import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
@@ -2458,6 +2458,22 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // When the transcript has it, this end of the row says the one thing the transcript doesn't: the
   // session is live and in which mode.
   const transcriptHasActivity = agent.busy && !!visible[visible.length - 1]?.streaming;
+  // The context meter: how full this conversation's window is, and the way out. Exists because a
+  // session near its limit used to be INVISIBLE until Claude started rationing its own replies
+  // ("it's a fresh session with the spec") or, worse, reached for the nearest thing named "compact"
+  // — in a vault cwd, the vault's own consolidation routine (see CONTEXT_PROMPT, §3). Quiet below
+  // half, amber approaching the auto-compact line, red past it; clicking sends /compact — the CLI's
+  // own manual compaction, the same one `compact_boundary` already narrates.
+  const ctxWindow = contextWindowFor(model || agent.sessionModel);
+  const ctxPct = agent.ctxUsed ? agent.ctxUsed / ctxWindow : 0;
+  const ctxEl = agent.ctxUsed && agent.live ? (
+    <button onClick={() => { if (!agent.busy) agent.send("/compact", { cwd, mode: effectiveMode, resume: sessionId || undefined, model, fanout }); }}
+      disabled={agent.busy}
+      title={`context: ${Math.round(agent.ctxUsed / 1000)}k of ${Math.round(ctxWindow / 1000)}k (${Math.round(ctxPct * 100)}%) — ${agent.busy ? "auto-compacts at 60%" : "click to compact the conversation now (keeps the thread, shrinks the history)"}`}
+      className={`shrink-0 font-mono text-[9px] tabular-nums transition-colors ${ctxPct >= 0.8 ? "text-red-400" : ctxPct >= 0.45 ? "text-[#e0a33e]" : "text-neutral-600"} ${agent.busy ? "" : "hover:text-neutral-300"}`}>
+      {Math.round(ctxPct * 100)}% ctx
+    </button>
+  ) : null;
   const statusEl = agent.stopping ? <span className="flex items-center gap-1 text-red-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />stopping…</span>
     : agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
     : transcriptHasActivity ? <><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</>
@@ -2796,7 +2812,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
             <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} busy={agent.busy} />
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
-            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
+            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{statusEl}</span>
           </div>
         ) : atLeast(dc, "tight") ? (
           // Cramped: the flow strip's row and the control row become ONE 22px bar. Nothing is removed —
@@ -2817,7 +2833,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
               {!planning && <span className={perm === "bypassPermissions" ? "text-green-400" : ""}>· {PERM_LABEL[perm]}</span>}
               <span className="text-neutral-600">⌄</span>
             </button>
-            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{statusEl}</span>
+            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{statusEl}</span>
             {modeOpen && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setModeOpen(false)} />

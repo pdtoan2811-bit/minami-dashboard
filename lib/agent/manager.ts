@@ -95,6 +95,13 @@ const FANOUT_PROMPT = `When a task has independently workable parts — multiple
 // mode's design; a box that wants opt-in instead sets MINAMI_DASHBOARD_FANOUT=0.
 const DEFAULT_FANOUT = process.env.MINAMI_DASHBOARD_FANOUT !== "0";
 
+// A session that watched its own context shrink used to invent its own remedies, and in a vault cwd
+// the nearest thing named "compact" is the VAULT's consolidation routine — chat-6's stranded branch
+// carried two vault-compaction commits born exactly this way, and another session answered a task
+// with "it's a fresh session with the spec" rather than keep working. Context pressure is the
+// HARNESS's problem; say so.
+const CONTEXT_PROMPT = `If your context window runs low mid-task: keep working. The harness auto-compacts the conversation at ${AUTOCOMPACT_PCT}% and preserves what matters — a shrinking context is never a reason to stop, hand off to "a fresh session", or run any file-level compaction. In particular, NEVER respond to context pressure by compacting or reorganising the user's vault/notes (secondBrain consolidation, memory compaction skills, or similar) — those rewrite his knowledge base and run only when he explicitly asks.`;
+
 // "bypassPermissions" auto-approves every tool with no prompt — powerful, and the configured default
 // on this box (Thomas's explicit call: every prompt on a local, single-user machine is friction he
 // pays for and never wanted). Override per install with MINAMI_DASHBOARD_PERMISSION_MODE.
@@ -139,7 +146,7 @@ export type AgentEvent =
   | { t: "init"; sessionId: string; model?: string }
   | { t: "delta"; text: string } // streaming assistant text token(s)
   | { t: "thinking"; text: string } // streaming reasoning token(s) — see the `thinking` option below
-  | { t: "snapshot"; busy: boolean; partial: string; partialThinking: string; activity: ActivityState; hold: boolean; queued: { uuid: string; text: string }[] } // sent on (re)subscribe: the in-flight turn's state
+  | { t: "snapshot"; busy: boolean; partial: string; partialThinking: string; activity: ActivityState; hold: boolean; queued: { uuid: string; text: string }[]; ctxUsed?: number } // sent on (re)subscribe: the in-flight turn's state
   // Messages handed to the CLI while a turn was running, still awaiting their own turn. REPLACE
   // semantics like `activity`: the whole list every time, so a dropped event self-heals on the next one.
   | { t: "queued"; queued: { uuid: string; text: string }[] }
@@ -168,6 +175,9 @@ export type AgentEvent =
   // The placement pass moved this conversation to a new folder (see relocate); the pane must adopt
   // the cwd and re-arm `resume`, exactly like a model swap's `respawned`.
   | { t: "relocated"; cwd: string; text: string }
+  // Context-window fill, REPLACE semantics — re-broadcast whole on every assistant message, so a
+  // dropped one self-heals. The window itself is derived client-side from the session's model.
+  | { t: "ctx"; used: number }
   | { t: "error"; message: string };
 
 type Decision = { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string };
@@ -233,6 +243,9 @@ type Session = {
    *  chat because it grepped another repo would relocate half the box. Capped; the decision needs
    *  a pattern, not a census. */
   writePaths: string[];
+  /** Latest known context size in tokens (input + cache reads/writes of the newest API call) — what
+   *  the meter renders. 0 until the first assistant message of the first live turn. */
+  ctxUsed: number;
   subs: Set<Sub>;
   pending: Map<string, Pending>; // outstanding permission prompts
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -374,7 +387,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: model || DEFAULT_MODEL, fanout: fanout ?? DEFAULT_FANOUT, writePaths: [], subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: model || DEFAULT_MODEL, fanout: fanout ?? DEFAULT_FANOUT, writePaths: [], ctxUsed: 0, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -484,7 +497,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // systemPrompt because both were born in the same MCP_SERVERS spread.
       systemPrompt: {
         type: "preset", preset: "claude_code",
-        append: [PREVIEW_PROMPT, ...(s.fanout ? [FANOUT_PROMPT] : []), ...(MCP_SERVERS ? [BROWSER_PROMPT] : [])].join("\n\n"),
+        append: [PREVIEW_PROMPT, CONTEXT_PROMPT, ...(s.fanout ? [FANOUT_PROMPT] : []), ...(MCP_SERVERS ? [BROWSER_PROMPT] : [])].join("\n\n"),
       },
       ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS } : {}),
       ...(resume ? { resume } : {}),
@@ -606,6 +619,14 @@ function handleMessage(s: Session, m: any) {
       break;
     }
     case "assistant": {
+      // Every API call reports the prompt it was billed for — input + cache reads + cache writes IS
+      // the context size right now. Top-level messages only: a subagent's usage describes ITS
+      // context, and letting it overwrite the main loop's made the meter jump around.
+      const u = m.message?.usage;
+      if (u && !m.parent_tool_use_id) {
+        const used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+        if (used > 0 && used !== s.ctxUsed) { s.ctxUsed = used; broadcast(s, { t: "ctx", used }); }
+      }
       // Text is already streamed via deltas; surface tool_use blocks for live "running X" feedback.
       // A message with parent_tool_use_id set came from INSIDE a subagent — its tools belong to that
       // task, not the top line, so they're recorded with parentId and filtered out of phaseLabel().
@@ -1278,7 +1299,7 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
   if (s.sessionId) replay.push({ t: "init", sessionId: s.sessionId, model: s.model });
   // `activity` rides along so a client that refreshed mid-tool-call resumes with the real label and a
   // correctly-offset elapsed clock, instead of falling back to a generic "working…".
-  replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold, queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })) });
+  replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold, queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })), ctxUsed: s.ctxUsed || undefined });
   for (const [id, p] of s.pending) {
     if (p.toolName === "AskUserQuestion") replay.push({ t: "ask", id, questions: (p.input as { questions?: AgentQuestion[] })?.questions || [] });
     // `expiresAt` is an absolute timestamp, not a remaining duration, precisely so a client that

@@ -15,3 +15,11 @@ export const SELECTABLE_MODELS: { id: string; label: string; note: string }[] = 
   { id: "claude-fable-5-1", label: "Fable 5.1", note: "Frontier. Long-horizon agents; when Opus falls short. 2× Opus price." },
   { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", note: "Cheapest. Mechanical passes, scans, summaries." },
 ];
+
+// Context window per model family, for the composer's context meter. Coarse on purpose — the meter
+// answers "how close is this chat to compaction", not billing. 200k for Haiku 4.5; every current
+// larger model is 1M (docs checked 2026-09-02). New families default to 1M: over-stating the window
+// under-states the fill, and the meter turning amber late beats a false alarm on day one.
+export function contextWindowFor(model?: string | null): number {
+  return model?.includes("haiku") ? 200_000 : 1_000_000;
+}

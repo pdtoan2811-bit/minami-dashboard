@@ -63,6 +63,8 @@ export function useAgent(paneKey: string) {
   // Where the placement pass moved this conversation, if it did — the pane's cwd prop is stale the
   // moment this is set, and every later send must use this instead. Null until a relocation.
   const [relocatedTo, setRelocatedTo] = useState<string | null>(null);
+  // Context-window fill in tokens, REPLACE semantics from the server. Null until a live turn reports.
+  const [ctxUsed, setCtxUsed] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detached, setDetached] = useState(false); // an attach found no live server session
   const esRef = useRef<EventSource | null>(null);
@@ -195,6 +197,7 @@ export function useAgent(paneKey: string) {
           });
           break;
         case "snapshot": {
+          if (typeof ev.ctxUsed === "number") setCtxUsed(ev.ctxUsed);
           // The activity state is always safe to adopt — REPLACE semantics, idempotent, never clobbers
           // anything. This matters even on a fresh send(): the POST (sendMessage) and the GET (this
           // stream's subscribe) race, and the POST usually wins, broadcasting the turn's opening
@@ -318,6 +321,8 @@ export function useAgent(paneKey: string) {
         case "notice":
           setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now(), agent: ev.agent, status: ev.status }]);
           break;
+        case "ctx":
+          setCtxUsed(typeof ev.used === "number" ? ev.used : null); break;
         case "relocated":
           // The placement pass moved this conversation to a new folder. Two duties, same contract
           // as a model swap's `respawned`: the next send must carry `resume` (the session was torn
@@ -712,5 +717,5 @@ export function useAgent(paneKey: string) {
 
   // `elapsed` recomputes on every 1s tick above, so the caller gets a live-counting number for free.
   const elapsed = activity.phase === "idle" ? 0 : Math.max(0, Date.now() - phaseStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, sessionModel, relocatedTo, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, setHold, stop };
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, sessionModel, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, setHold, stop };
 }

@@ -9,6 +9,10 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-03
+- **Context meter + /compact button + guardrail** (§3) — the composer shows window fill (amber 45%,
+  red 80%; click = `/compact`), the server broadcasts `ctx` from top-level assistant usage, and
+  every session's prompt now says context pressure is the harness's problem — never a reason to
+  stop, hand off, or compact vault files.
 - **The shared-folder banner learns about lazy repos** (§9) — `GET /api/worktree` now returns the
   repo's `minami.isolate` mode, and the amber "will overwrite each other" warning only fires for
   eager repos. Lazy (the vault): a quiet neutral line — sharing is the designed state, the

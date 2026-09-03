@@ -113,7 +113,7 @@ text block opens mid-turn, and `\n---\n` when a second thinking block does. Cont
 carry no delimiter of their own, and without them the pane renders two distinct passes as one
 paragraph — see §5c.
 
-### The system-prompt append: preview contract, fan-out, browser nudge (2026-09-02)
+### The system-prompt append: preview contract, fan-out, browser nudge (2026-09-02, context guardrail 2026-09-03)
 
 Every session's `query()` carries `systemPrompt: { preset: "claude_code", append }` built from up to
 three pieces. It used to ride inside the `MCP_SERVERS` spread — an accident of birth (the browser
@@ -130,6 +130,18 @@ append at all. Now the append is unconditional and only its pieces are gated:
   `MINAMI_DASHBOARD_FANOUT` (unset/1 = on). The fuller procedure lives in the user-level `fanout`
   skill (`~/.claude/skills/fanout/`), which is on the box, not in this repo.
 - **`BROWSER_PROMPT`, when the browser MCP is registered** — unchanged.
+- **`CONTEXT_PROMPT`, always (2026-09-03).** A session watching its own context shrink invented
+  remedies: one rationed its replies ("it's a fresh session with the spec"), and in a vault cwd the
+  nearest thing named "compact" is the VAULT's consolidation — chat-6's stranded branch carried two
+  vault-compaction commits born exactly that way. The append says: keep working, the harness
+  auto-compacts at `AUTOCOMPACT_PCT`%, and file-level "compaction" (vault routines, memory skills)
+  runs only on explicit request, never as a context remedy. The visible half is the composer's
+  context meter: `s.ctxUsed` (input + cache reads/writes of the newest TOP-LEVEL assistant message —
+  a subagent's usage describes its own context, not the main loop's) rides a REPLACE-semantics
+  `ctx` event plus the reconnect snapshot; the window is derived client-side from the session model
+  (`contextWindowFor`, lib/model-catalog.ts — 200k Haiku, 1M otherwise, unknown→1M so the meter errs
+  late rather than crying early). Amber at 45%, red at 80%; clicking sends `/compact`, the CLI's own
+  manual compaction, whose `compact_boundary` the pane already narrates.
 
 `fanout` rides on every send like `model` and is creation-only for the same reason: an append can't
 be edited on a warm query. Mid-chat toggles go through `POST /api/agent/fanout` → `setFanout()`,
