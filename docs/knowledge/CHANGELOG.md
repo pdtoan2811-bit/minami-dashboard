@@ -15,6 +15,15 @@ this to do a piece of work; read the subsystem's own doc.
   then reversed the same evening — the vault keeps per-chat isolation and its own
   `prune-worktrees.sh` now recycles finished branches instead (stale-claim aware, auto-merge,
   origin cleanup). Stranded content rescued into the vault's `main`; chat-6 reconciled.
+- **🐛 New vault chats woke up inside chat-6's worktree** (§5d, §9) — a topic's cwd was
+  `ss[0].cwd`, i.e. whichever session sorted first, and for secondBrain that was a session recorded
+  in `.minami-worktrees/chat-6`. Every blank pane inherited the dead tree's address — and birth
+  isolation silently disarmed itself for months, because `isolate()` declines when the cwd is
+  already a worktree. Topic cwd now prefers a non-isolated session's cwd and folds the suffix
+  otherwise. Related: a REHOMED transcript (placement pass / recycled-tree rescue) records a launch
+  cwd that no longer encodes to the directory it is filed in; `buildMeta` now detects the mismatch
+  and folds to the base that does encode back (META_DERIVATION_VERSION → 5), so resuming a migrated
+  chat can't hunt in the wrong project dir.
 - **The placement pass: a chat follows its work** (§9) — `minami.isolate lazy` (vault: set) skips
   the birth worktree; at idle turn-ends the server reads the session's write targets and either
   relocates the chat to the repo its work is in (≥2 writes there; transcript moves with it, board

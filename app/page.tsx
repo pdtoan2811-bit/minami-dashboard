@@ -180,7 +180,14 @@ function groupProjects(list: SessionMeta[]): Project[] {
     const reqs = ss.reduce((a, x) => a + x.messages, 0);
     const tokens = ss.reduce((a, x) => a + x.tokensIn + x.tokensOut, 0);
     const latest = [...ss].sort((a, b) => b.lastActivity - a.lastActivity)[0];
-    return { name, sessions: ss, cwd: ss[0]?.cwd || "", reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), review: ss.some((x) => x.review), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
+    // The topic's cwd is where a NEW blank chat starts, so it must be the repo BASE. A worktree is a
+    // per-session address (resume uses the session's own cwd) — but ss[0] can be a session that
+    // lives in one, and inheriting its cwd hands a fresh chat someone else's old checkout. That was
+    // "every new vault chat wakes up inside chat-6" — and it also silently disarmed birth isolation,
+    // which declines when the cwd is already a worktree. Prefer a session outside any tree; if the
+    // whole topic is isolated sessions, fold the suffix off one.
+    const cwd = ss.find((x) => !/\/\.minami-worktrees\//.test(x.cwd))?.cwd || (ss[0]?.cwd || "").replace(/\/\.minami-worktrees\/[^/]+.*$/, "");
+    return { name, sessions: ss, cwd, reqs, tokens, last: Math.max(...ss.map((x) => x.lastActivity)), active: ss.some((x) => x.active), review: ss.some((x) => x.review), goals: [...new Set(ss.map(goalOf))], latest: titleOf(latest), weight: reqs + tokens / 5000 };
   });
 }
 const WINDOWS: { label: string; days: number | null }[] = [

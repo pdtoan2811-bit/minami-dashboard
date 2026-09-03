@@ -152,7 +152,7 @@ type CacheEntry = { mtime: number; size: number; head: string; accum: ParseAccum
 // never re-derived — so a change to how a title is chosen would otherwise only reach sessions that
 // happened to receive another message, leaving the board a permanent mix of the old rule and the new.
 // Re-deriving costs no file I/O at all: buildMeta is pure over state we already hold on disk.
-const META_DERIVATION_VERSION = 4;
+const META_DERIVATION_VERSION = 5;
 
 // Bumped whenever a field's PARSING changes — a stronger invalidation than META_DERIVATION_VERSION.
 // A derivation change can be back-fixed from the cached `accum` (migrateAccum + re-derive, no I/O); a
@@ -337,7 +337,22 @@ export function topicOf(cwd: string): { project: string; isolatedAs: string | nu
 }
 
 function buildMeta(id: string, file: string, acc: ParseAccum, mtime: number): SessionMeta {
-  const topic = acc.cwd ? topicOf(acc.cwd) : { project: "", isolatedAs: null };
+  // A transcript whose recorded launch cwd no longer encodes back to the directory it is FILED in
+  // has been rehomed — the placement pass moved it, or the recycled-tree rescue did. `--resume` is
+  // scoped to the file's directory (the whole reason foldLine freezes the launch cwd), so for a
+  // rehomed chat the recorded cwd is the one address guaranteed to be wrong. If folding the
+  // worktree suffix off it produces a path that DOES encode to this directory, that base is the
+  // session's true home now: resume there works, and the tile stops advertising a dead tree.
+  let cwd = acc.cwd;
+  if (cwd) {
+    const enc = (p: string) => p.replace(/[^a-zA-Z0-9]/g, "-");
+    const dirSlug = path.basename(path.dirname(file));
+    if (enc(cwd) !== dirSlug) {
+      const folded = cwd.replace(/\/\.minami-worktrees\/[^/]+\/?$/, "");
+      if (enc(folded) === dirSlug) cwd = folded;
+    }
+  }
+  const topic = cwd ? topicOf(cwd) : { project: "", isolatedAs: null };
   const project = topic.project || (path.basename(path.dirname(file)).replace(/^-/, "").split("-").pop() || "session");
   const lastActivity = Math.max(acc.lastTs, mtime);
   // FIRST prompt, not the last one. The CLI appends a `last-prompt` row on every message you send, so
@@ -356,7 +371,7 @@ function buildMeta(id: string, file: string, acc: ParseAccum, mtime: number): Se
   // latest prompt, which at least describes something, and accept that it moves.
   const derived = acc.title || acc.titleSeed || cleanTitle(acc.lastPrompt) || project;
   return {
-    id, project, isolatedAs: topic.isolatedAs, cwd: acc.cwd, gitBranch: acc.gitBranch,
+    id, project, isolatedAs: topic.isolatedAs, cwd, gitBranch: acc.gitBranch,
     title: derived.slice(0, 80),
     lastPrompt: (cleanTitle(acc.lastPrompt) || cleanTitle(acc.firstUser)).slice(0, 140),
     model: acc.model, tier: tierOf(acc.model),
