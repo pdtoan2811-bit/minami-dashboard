@@ -308,9 +308,14 @@ function denyAllPending(s: Session, message: string) {
   s.pending.clear();
 }
 
-function resetActivity(s: Session, phase: ActivityPhase) {
+function resetActivity(s: Session, phase: ActivityPhase, opts?: { keepTasks?: boolean }) {
   s.liveTools.clear();
-  s.liveTasks.clear();
+  // A turn can END while agents it launched are still running (run_in_background) — any liveTasks
+  // entry that never got its task_notification is still out there by definition, since a foreground
+  // subagent always notifies before `result`. Wiping them at the turn boundary was why a reply
+  // saying "waiting on C's sweep" sat next to a pane showing NOTHING about C. Teardown paths keep
+  // clearing everything: when the subprocess dies, its background agents die with it.
+  if (!opts?.keepTasks) s.liveTasks.clear();
   s.toolBufs?.clear();
   s.note = null;
   s.phase = phase;
@@ -675,8 +680,11 @@ function handleMessage(s: Session, m: any) {
       }
       s.busy = false;
       // A denied tool never produces a tool_result, so anything still open at the end of the turn is
-      // finished by definition — clear it rather than let it leak into the next turn's label.
-      resetActivity(s, "idle");
+      // finished by definition — clear it rather than let it leak into the next turn's label. Tasks
+      // are the exception (see resetActivity): survivors are background agents still working, and
+      // the phase says so — `tool`, not `idle`, keeps the status line honest about a fleet in
+      // flight. Their eventual task_notification settles the session to true idle.
+      resetActivity(s, s.liveTasks.size ? "tool" : "idle", { keepTasks: true });
       broadcast(s, { t: "activity", activity: activityOf(s) });
       broadcast(s, { t: "busy", busy: false });
       scheduleIdle(s);

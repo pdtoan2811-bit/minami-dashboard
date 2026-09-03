@@ -8,6 +8,11 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-03
+- **🐛 Background agents survive the turn boundary on the board** (§4) — `result` no longer wipes
+  still-running tasks; phase stays `tool` while they fly, and the pane shows the bay in the banner
+  slot when idle-with-agents (+3min grace so landings are seen).
+
 ### 2026-09-02
 - **Per-repo isolation opt-out: `git config minami.isolate off`** (§9) — born from the secondBrain
   strandings (four worktrees piled up; a vault compaction ran invisibly in one — full post-mortem

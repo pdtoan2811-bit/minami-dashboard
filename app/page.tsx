@@ -268,7 +268,7 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
           ))}
         </span>
         <span className="text-[9px] font-semibold uppercase tracking-[0.09em] text-neutral-500">
-          agents · {tasks.length} working{finished.length ? ` · ${finished.length} done` : ""}
+          agents · {tasks.length ? `${tasks.length} working` : "all landed"}{finished.length ? ` · ${finished.length} done` : ""}
         </span>
       </span>
       {tasks.map((k, i) => (
@@ -2561,6 +2561,17 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             most need to be told where it will write — the empty "New chat in …" state is the moment
             before you type the instruction, and the old placement only rendered once a transcript
             existed, i.e. after the first turn had already run somewhere. */}
+        {/* Agents that outlived the turn. While a turn streams, the bay lives on the live row's
+            ActivityLine — but a reply that ends with "waiting on C's sweep" leaves C running with
+            no row to carry it, which read as "no visual clue whether C is alright". Same bay, this
+            slot, whenever the pane is idle with agents still in flight — plus a short grace window
+            after the last one lands, so the ✓/✗ verdict is seen rather than vanishing with the
+            fleet. */}
+        {!agent.busy && (agent.activity.tasks.length > 0 || agent.notices.some((n) => n.kind === "task" && n.at > Date.now() - 3 * 60_000)) && (
+          <div className="mb-1 flex justify-center">
+            <AgentBoard tasks={agent.activity.tasks} finished={agent.notices.filter((n) => n.kind === "task")} />
+          </div>
+        )}
         {/* The placement pass moved this conversation — say so persistently, in the same slot the
             isolation bar uses and for the same reason: where a chat writes is the one fact that
             must never be ambient. NoticeStrip can't carry this (it renders only during a live

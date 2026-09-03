@@ -263,6 +263,17 @@ first sight of them, and a fabricated timestamp would render as a confident lie.
 without their own interval because every full-size ActivityLine caller already re-renders on the 1s
 elapsed tick.
 
+> 🐛 **A background agent vanished at the turn boundary (2026-09-03).** A reply ending "waiting on
+> C's sweep" sat next to a pane showing nothing about C: the `result` handler's `resetActivity`
+> cleared `liveTasks` unconditionally, but a `run_in_background` agent OUTLIVES the turn — any
+> entry without its `task_notification` at `result` time is still running by definition (foreground
+> subagents always notify first). Fix, both halves: `resetActivity` takes `keepTasks` (only the
+> result path uses it; teardown still clears, because a dead subprocess takes its agents with it)
+> and the turn ends in phase `tool`, not `idle`, while survivors exist — which also keeps the 1s
+> client tick alive for their clocks. The pane renders the same AgentBoard in the banner slot when
+> idle-with-agents, with a 3-minute grace window after the last landing so the ✓/✗ verdict is seen
+> rather than vanishing with the fleet.
+
 One-line contexts (tile, cramped status) don't get the board; `taskLabel` instead says
 `4 agents · Explore ×3, Plan` (counts by type) rather than the old `subagent (Explore) +3`, and a
 single agent shows type AND clipped assignment.
