@@ -21,6 +21,7 @@ import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type 
 import { DASHBOARD_MODEL } from "../model-pins";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
+import { contextWindowFor } from "../model-catalog";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
 // effort"). Opus 5 is the current top-tier model (see the claude-api skill's model table); "default
@@ -100,7 +101,7 @@ const DEFAULT_FANOUT = process.env.MINAMI_DASHBOARD_FANOUT !== "0";
 // carried two vault-compaction commits born exactly this way, and another session answered a task
 // with "it's a fresh session with the spec" rather than keep working. Context pressure is the
 // HARNESS's problem; say so.
-const CONTEXT_PROMPT = `Never estimate your own remaining context — you cannot measure it and such guesses run far too low (a session here declared "I'm near the end of my context" at a MEASURED 8% of its 1M-token window). The user sees the real fill as a meter; the harness auto-compacts the conversation at ${AUTOCOMPACT_PCT}%. So if the context feels short mid-task: keep working. It is never a reason to stop, hand off to "a fresh session", ration your replies, or run any file-level compaction. In particular, NEVER respond to context pressure by compacting or reorganising the user's vault/notes (secondBrain consolidation, memory compaction skills, or similar) — those rewrite his knowledge base and run only when he explicitly asks.`;
+const CONTEXT_PROMPT = `Never estimate your own remaining context — you cannot measure it and such guesses run far too low (a session here declared "I'm near the end of my context" at a MEASURED 8% of its 1M-token window). The user sees the real fill as a meter; the harness auto-compacts the conversation at ${AUTOCOMPACT_PCT}%. So if the context feels short mid-task: keep working. It is never a reason to stop, hand off to "a fresh session", ration your replies, or run any file-level compaction. In particular, NEVER respond to context pressure by compacting or reorganising the user's vault/notes (secondBrain consolidation, memory compaction skills, or similar) — those rewrite his knowledge base and run only when he explicitly asks. If the user explicitly asks to compact THIS CONVERSATION, never refuse — you cannot run it yourself (/compact is a user-side command), so tell them: the dashboard compacts automatically past ${AUTOCOMPACT_PCT}%, and they can click the "% ctx" meter or type /compact to do it now.`;
 
 // "bypassPermissions" auto-approves every tool with no prompt — powerful, and the configured default
 // on this box (Thomas's explicit call: every prompt on a local, single-user machine is friction he
@@ -246,6 +247,9 @@ type Session = {
   /** Latest known context size in tokens (input + cache reads/writes of the newest API call) — what
    *  the meter renders. 0 until the first assistant message of the first live turn. */
   ctxUsed: number;
+  /** Context size at the last server-triggered auto-compact, the re-fire guard: try again only once
+   *  the context has GROWN past this — new evidence, not the same evidence louder. */
+  lastAutoCompactCtx: number;
   subs: Set<Sub>;
   pending: Map<string, Pending>; // outstanding permission prompts
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -387,7 +391,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: model || DEFAULT_MODEL, fanout: fanout ?? DEFAULT_FANOUT, writePaths: [], ctxUsed: 0, subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: model || DEFAULT_MODEL, fanout: fanout ?? DEFAULT_FANOUT, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -709,6 +713,14 @@ function handleMessage(s: Session, m: any) {
       broadcast(s, { t: "activity", activity: activityOf(s) });
       broadcast(s, { t: "busy", busy: false });
       scheduleIdle(s);
+      // The SDK's own autocompact does not fire in server-driven sessions — measured 2026-09-04: a
+      // session sat at 73% of its window (728k/1M) with the env override set, settings armed, and
+      // zero boundaries in any transcript on the box. So the server enforces the threshold itself —
+      // the stance canUseTool already takes on permission modes: what the SDK is told is not what
+      // we rely on. At an idle turn end past the line, inject the user-side /compact the CLI
+      // demonstrably honours (verified on-disk 2026-09-03). Before placementPass on purpose: its
+      // send occupies the queue, and the pass's own guards then stand down for this boundary.
+      maybeAutoCompact(s);
       // The one moment a chat can change folders: the turn is over, nothing is queued, nothing is
       // parked. Fire-and-forget — the pass re-checks those guards after its own awaits.
       void placementPass(s).catch(() => { /* placement is an optimisation, never a failure */ });
@@ -1229,6 +1241,17 @@ function relocate(s: Session, newCwd: string, text: string) {
     for (const sub of orphans) set.add(sub);
     waiting.set(s.key, set);
   }
+}
+
+function maybeAutoCompact(s: Session) {
+  if (s.closed || s.busy || s.pending.size || s.queued.length || s.queue.length || !s.ctxUsed) return;
+  const window = contextWindowFor(s.model);
+  const threshold = (Number(AUTOCOMPACT_PCT) / 100) * window;
+  if (s.ctxUsed <= threshold || s.ctxUsed <= s.lastAutoCompactCtx) return;
+  s.lastAutoCompactCtx = s.ctxUsed;
+  broadcast(s, { t: "notice", kind: "compact", text: `context at ${Math.round((s.ctxUsed / window) * 100)}% — compacting automatically` });
+  try { sendMessage({ key: s.key, cwd: s.cwd, message: "/compact", mode: s.mode }); }
+  catch { /* the growth guard lets the next turn end retry */ }
 }
 
 async function placementPass(s: Session): Promise<void> {

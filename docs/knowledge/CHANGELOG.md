@@ -8,6 +8,12 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-04
+- **🐛 Server-side auto-compact: `maybeAutoCompact()`** (§3) — the SDK's autocompact never fires in
+  server-driven sessions (measured: 73% with everything armed, zero boundaries box-wide). The
+  manager now injects `/compact` at idle turn-ends past the threshold, growth-guarded against
+  re-fire loops. CONTEXT_PROMPT also stops the model refusing an explicit user compact ask.
+
 ### 2026-09-03
 - **🐛 The model pill said "default" while riding legacy Fable 5** (§3) — a pane's stored pick
   (`claude-fable-5`) stopped matching the catalog when 5.1 replaced it, and the pill's fallback

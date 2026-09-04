@@ -139,7 +139,21 @@ append at all. Now the append is unconditional and only its pieces are gated:
   never SELF-ESTIMATE remaining context: a session declaring "I'm near the end of my context" was
   measured at 83k of 1M — **8%** — with zero compactions ever fired on this box. Manual `/compact`
   was verified end-to-end the same day (recorded as a real local command; the ~$0.13 result is the
-  summarization call itself). The visible half is the composer's
+  summarization call itself).
+
+  > 🐛 **The SDK's autocompact never fires in server-driven sessions (found 2026-09-04).** An
+  > oe-central-ver2 session sat at **73% (728k/1M)** with `autoCompactEnabled: true`, the env
+  > override at 60%, and zero `compact_boundary` rows in any transcript on the box — the settings
+  > were correct and irrelevant. Fix in the house style (`canUseTool` enforces permission modes the
+  > SDK is told about but not trusted with): **`maybeAutoCompact()` makes the server the enforcer.**
+  > At an idle turn end past `AUTOCOMPACT_PCT`% of the model's window it injects the user-side
+  > `/compact` the CLI demonstrably honours, with a notice first. The re-fire guard is
+  > `lastAutoCompactCtx`: try again only once the context has GROWN past the last attempt — new
+  > evidence, not the same evidence louder. Runs before `placementPass` so its send occupies the
+  > queue and the pass stands down for that boundary. Second half of the incident: asked in prose to
+  > compact, the model REFUSED — `/compact` is a user-side command the model cannot run, and the
+  > guardrail against vault-compaction read as "don't compact, period". `CONTEXT_PROMPT` now says an
+  > explicit user ask is always legitimate: point at the meter or `/compact`, never refuse. The visible half is the composer's
   context meter: `s.ctxUsed` (input + cache reads/writes of the newest TOP-LEVEL assistant message —
   a subagent's usage describes its own context, not the main loop's) rides a REPLACE-semantics
   `ctx` event plus the reconnect snapshot; the window is derived client-side from the session model
