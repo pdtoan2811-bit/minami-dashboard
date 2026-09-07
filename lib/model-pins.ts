@@ -38,6 +38,7 @@ export const CHEAP_MODEL = process.env.MINAMI_CHEAP_MODEL || "claude-haiku-4-5";
 // place code looks for "which models exist" — the catalog is a separate module only because THIS one
 // imports node:fs, and the agent config form that renders the menu runs in the browser.
 export { SELECTABLE_MODELS } from "./model-catalog";
+import { EXPECTED_MODEL, isPremiumModel } from "./model-catalog";
 
 // Where Minami's bot repo lives, for reading its brain config.
 const MINAMI_DIR = process.env.MINAMI_BOT_DIR || path.join(os.homedir(), "Minami");
@@ -85,10 +86,22 @@ function readMinamiBrainModel(): { model: string | null; source: string } {
  * this alert. Only spawners that are *supposed* to be on the pin are checked. Same reasoning as the
  * model-routing skill's table: cheap-by-design is not drift.
  */
-export function checkModelPins(): { pinned: string; spawners: SpawnerPin[]; drifted: boolean } {
+export function checkModelPins(): { pinned: string; expected: string; spawners: SpawnerPin[]; drifted: boolean; premium: boolean } {
   const brain = readMinamiBrainModel();
 
   const spawners: SpawnerPin[] = [
+    // The pin ITSELF, checked against a literal. Every other row below compares a spawner to
+    // PINNED_MODEL, which means all of them go green together the moment the pin moves — and the pin
+    // is an env var, so it can move without a code change, from a stale value inherited by the parent
+    // shell (lib/canvas-modes.ts documents that exact failure for the STT ear: `git diff` was clean
+    // for weeks). Without this row, `MINAMI_PINNED_MODEL=claude-fable-5-1` is undetectable by
+    // construction — the check would compare Fable to Fable and report no drift.
+    {
+      name: "Box pin",
+      model: PINNED_MODEL,
+      source: process.env.MINAMI_PINNED_MODEL ? "MINAMI_PINNED_MODEL env" : "lib/model-pins.ts default",
+      drifted: PINNED_MODEL !== EXPECTED_MODEL,
+    },
     {
       name: "Minami bot",
       model: brain.model,
@@ -107,5 +120,13 @@ export function checkModelPins(): { pinned: string; spawners: SpawnerPin[]; drif
     },
   ];
 
-  return { pinned: PINNED_MODEL, spawners, drifted: spawners.some((s) => s.drifted) };
+  return {
+    pinned: PINNED_MODEL,
+    expected: EXPECTED_MODEL,
+    spawners,
+    drifted: spawners.some((s) => s.drifted),
+    // Drift onto Fable is its own severity, not just another drift: it is the only direction that
+    // costs 2× Opus per token, and it is the one the alert must never fold into a collapsed chip.
+    premium: spawners.some((s) => s.drifted && isPremiumModel(s.model)),
+  };
 }

@@ -101,6 +101,48 @@ prevent. "Chosen but not yet running" is likewise derived, from the pick and the
 disagreeing, rather than announced: a `notice` cannot work here at all, since `NoticeStrip` renders only
 while a pane is busy and the swap is refused while busy.
 
+**A premium pick is deliberately not sticky (2026-09-07).** `setModelPick` wrote the choice to the
+pane's key *and* to the global `bento:chatModel` seed, exactly like `setPermDefault` — so one
+considered "use Fable for this hard thing" silently became the birth model of every chat opened in
+that browser afterwards, with no expiry and nothing to notice it by (the pill is a 10px label in a row
+that folds). That one line was the whole shape of the 2026-09-03 incident. A 2× tier should be a
+decision made per conversation, so a premium pick now leaves the seed pointing at the box pin and stays
+where you put it. The pill's own always-on alarm is the other half: it goes amber with a ⚡ and reads
+off `sessionModel` — **what the server says is running** — so a stale localStorage pick cannot talk it
+out of the truth, and the dropdown row carries "⚡ 2× · this chat only".
+
+### `resolveModel()` — the one place a model id is decided (2026-09-07)
+
+Every spawner funnels through `ensureSession`: the composer, `lib/agents/runner.ts`, the autopilot's
+conflict resolver, and teams (via agents). So `resolveModel()` sits there and is the **single choke
+point** — an id not in `SELECTABLE_MODELS` is treated as debris and coerced back to `DEFAULT_MODEL`,
+and the pane is told so with a `notice{kind:"model"}`.
+
+Before this there was **exactly one** model validation in the whole app, in `/api/agent/model` — the
+picker's route. `/api/agent/send` carries the pane's stored id on **every** send and passed it straight
+to the SDK, unvalidated; its own comment documented the gap as deliberate. That was the hole the
+2026-09-03 incident went through (§6): a stale `claude-fable-5`, orphaned in localStorage when the
+catalog moved to `fable-5-1`, kept riding every send for a whole session at ~2× Opus price while the
+pill read "default". **An id that isn't in the catalog is not a preference, it's debris** — and falling
+back *silently* is how the first bug hid, so the fallback announces itself.
+
+A premium birth gets its own notice. It lands at the start of the first turn while the pane is busy,
+which is the only window `NoticeStrip` renders in and exactly the moment the fact is still actionable
+(stop, switch, resend).
+
+**`Session.observedModel` is kept separate from `Session.model`, and that separation is load-bearing.**
+The SDK's `init` message is the only witness to what the request actually *resolved* to; the manager
+used to broadcast it to the browser and throw it away server-side, so "asked for Opus, got something
+else" was unobservable the moment a pane reattached — and the box-wide alert can't read a browser
+anyway. Writing it into `s.model` is the tempting one-liner and it's wrong: `setModel()` compares
+against `s.model` to decide whether a pick actually changed, so an alias resolution would read as a
+user model change and respawn the session. The mismatch notice compares by **family**
+(`claude-fable-5-1` → `fable`) — the CLI resolving an alias to a dated id for the same model is not
+drift; landing in a different family is.
+
+`liveModels()` exports the runtime half of the question the config check cannot answer — see §6 for
+why the two halves both exist and how `AccountStatus` ranks them.
+
 **`bypassPermissions` is this install's default** (`DEFAULT_PERMISSION_MODE`, overridable with
 `MINAMI_DASHBOARD_PERMISSION_MODE`) — Thomas's call for a local, single-user box. Note the asymmetry
 that keeps it safe: a *missing* mode gets that default, but an *unrecognised* mode string still clamps
@@ -130,6 +172,13 @@ append at all. Now the append is unconditional and only its pieces are gated:
   `MINAMI_DASHBOARD_FANOUT` (unset/1 = on). The fuller procedure lives in the user-level `fanout`
   skill (`~/.claude/skills/fanout/`), which is on the box, not in this repo.
 - **`BROWSER_PROMPT`, when the browser MCP is registered** — unchanged.
+- **`repoBriefing()`, when the cwd is a git checkout (2026-09-07).** Placed *ahead* of the behavioural
+  rules, because it is measurement rather than instruction: which branch this checkout is really on,
+  which remote trunk is actually moving, how far behind it is, and when origin was last fetched. Read
+  from `cachedRepoState()` — sync, cache-only, because `ensureSession` builds the whole `query()` in one
+  synchronous breath and must not wait on git; `/api/agent/send` awaits `primeRepoState()` first to fill
+  that cache. A miss is a briefing one turn late, never a stall. Full reasoning, and the five-hour
+  dead-branch incident it exists for, in **§19**.
 - **`CONTEXT_PROMPT`, always (2026-09-03).** A session watching its own context shrink invented
   remedies: one rationed its replies ("it's a fresh session with the spec"), and in a vault cwd the
   nearest thing named "compact" is the VAULT's consolidation — chat-6's stranded branch carried two
@@ -168,6 +217,10 @@ subscriber-handover into `waiting`, `respawned: true`, and the client re-arms `r
 send picks the conversation back up off disk under the new prompt.
 
 ### Gotchas
+- **A new `notice` kind needs a tint or it renders grey.** `NOTICE_TINT` in `app/page.tsx` maps kind →
+  colour and falls back to `#9ca3af`, so a kind added server-side without a row there is not an error,
+  just a notice that silently loses its severity. `model` and `repo` (both added 2026-09-07) are amber,
+  alongside `limit` / `denied` / `restarting`.
 - **Removing a session must remove both aliases**, identity-checked (`store.get(s.key) === s`),
   or cleanup for a dead session can delete a newer one that reclaimed the pane key.
 - **A parked permission promise that nobody resolves pins the session `busy` forever** — no `result`

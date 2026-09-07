@@ -21,7 +21,8 @@ import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type 
 import { DASHBOARD_MODEL } from "../model-pins";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
-import { contextWindowFor } from "../model-catalog";
+import { contextWindowFor, isSelectableModel, isPremiumModel } from "../model-catalog";
+import { cachedRepoState, repoBriefing, repoNotice } from "../repo-state";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
 // effort"). Opus 5 is the current top-tier model (see the claude-api skill's model table); "default
@@ -167,7 +168,7 @@ export type AgentEvent =
   // "restarting" is the deploy path telling every open pane that the server is about to be swapped for
   // a new build — see drainForRestart() below. It's the one notice the user gets BEFORE the disruption
   // rather than after, which is the whole point: an unexplained dead turn reads as a bug.
-  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
+  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting" | "model" | "repo"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
   | { t: "permission"; id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } // waiting on the user
   | { t: "hold"; hold: boolean } // the Flow view's brake: park every tool call at the gate (REPLACE semantics)
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
@@ -235,6 +236,12 @@ type Session = {
    *  — it is not a knob: nothing reads this to decide what runs, because by the time it is set the
    *  `query()` is already built around it. See setModel for why a change means a respawn. */
   model: string;
+  /** What the SDK reported it actually resolved the request to, from the `init` message. Kept apart
+   *  from `model` on purpose: `model` is what we ASKED for and is what setModel() compares against, so
+   *  overwriting it with the observed value would make an alias resolution look like a user model
+   *  change and respawn the session. This field exists so "requested Opus, running something else" is
+   *  observable at all — before it, `m.model` was broadcast to the browser and thrown away server-side. */
+  observedModel: string | null;
   /** Whether this session was BORN with the fan-out instruction in its system prompt. Creation-time
    *  only, same trap as `model`: an append can't be edited on a warm query, so setFanout() answers a
    *  mid-chat toggle the way setModel() does — teardown, and the next send resumes from disk. */
@@ -384,14 +391,46 @@ async function* inputGen(s: Session): AsyncGenerator<any> {
 // layer pins each agent's own tier, and the composer's model picker passes the pane's choice; everything
 // else omits it and gets the box pin. Because it is creation-only, the picker cannot change a warm
 // session by asking — it has to respawn it. See setModel().
+/**
+ * The one place a requested model becomes the model that runs.
+ *
+ * Every spawner funnels through ensureSession — the composer's picker, lib/agents/runner.ts, the
+ * autopilot's conflict resolver, teams (via agents) — and until now each of them read
+ * `model || DEFAULT_MODEL` with no validation anywhere but `/api/agent/model`, which only the picker
+ * calls. `/api/agent/send` carries the pane's stored id on EVERY send and passed it straight to the
+ * SDK; its own comment called that out as deliberate. It was the hole: on 2026-09-03 a
+ * `claude-fable-5` left in localStorage by a catalog change kept being sent for a whole session at 2×
+ * Opus price, while the pill said "default".
+ *
+ * So: an id that isn't in the catalog is not a preference, it's debris — fall back to the pin rather
+ * than honouring it. And say so out loud, because falling back silently is how the first bug hid.
+ */
+/** "claude-fable-5-1" → "fable". The unit an alert should compare on: a dated id for the same model
+ *  is not drift, a different family is. */
+function family(id: string): string {
+  return id.replace(/^claude-/, "").split("-")[0].toLowerCase();
+}
+
+function resolveModel(requested?: string): { id: string; fellBack: string | null; premium: boolean } {
+  const want = requested || DEFAULT_MODEL;
+  const ok = isSelectableModel(want);
+  const id = ok ? want : DEFAULT_MODEL;
+  return { id, fellBack: ok ? null : want, premium: isPremiumModel(id) };
+}
+
 function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string, model?: string, fanout?: boolean): Session {
   const existing = store.get(key);
   if (existing && !existing.closed) return existing;
 
+  const picked = resolveModel(model);
+  // Read from cache only — `query()` below is built synchronously and must not wait on git. The async
+  // side (primeRepoState, called by the send route and the autopilot tick) is what fills this in.
+  const repo = cachedRepoState(cwd);
+
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: model || DEFAULT_MODEL, fanout: fanout ?? DEFAULT_FANOUT, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -487,7 +526,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // raw chain of thought is never returned on current models.
       thinking: { type: "adaptive", display: "summarized" },
       settingSources: ["user", "project", "local"], // mirror the user's own CLAUDE.md / permissions / MCP
-      model: model || DEFAULT_MODEL,
+      model: picked.id,
       // Only set effort if explicitly pinned via env — omitting it lets the SDK/model default apply
       // (see the DEFAULT_EFFORT comment above; "default effort" was the explicit ask, not "high").
       ...(DEFAULT_EFFORT ? { effort: DEFAULT_EFFORT } : {}),
@@ -501,12 +540,34 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // systemPrompt because both were born in the same MCP_SERVERS spread.
       systemPrompt: {
         type: "preset", preset: "claude_code",
-        append: [PREVIEW_PROMPT, CONTEXT_PROMPT, ...(s.fanout ? [FANOUT_PROMPT] : []), ...(MCP_SERVERS ? [BROWSER_PROMPT] : [])].join("\n\n"),
+        append: [
+          PREVIEW_PROMPT, CONTEXT_PROMPT,
+          // Measured facts about the checkout, ahead of the behavioural rules — the model can't be
+          // told to distrust a working tree that renders, so it is handed the answer instead.
+          ...(repoBriefing(repo) ? [repoBriefing(repo)!] : []),
+          ...(s.fanout ? [FANOUT_PROMPT] : []),
+          ...(MCP_SERVERS ? [BROWSER_PROMPT] : []),
+        ].join("\n\n"),
       },
       ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS } : {}),
       ...(resume ? { resume } : {}),
     } as any,
   });
+
+  // Say what this session was actually born on, but only when it's worth an interruption. A birth
+  // notice lands at the start of the first turn, while the pane is busy — which is the only window
+  // NoticeStrip renders in, and exactly the moment the fact is still actionable (stop, switch, resend).
+  if (picked.fellBack) {
+    broadcast(s, { t: "notice", kind: "model", text: `"${picked.fellBack}" is not a model this app offers — started on ${picked.id} instead` });
+  } else if (picked.premium) {
+    broadcast(s, { t: "notice", kind: "model", text: `this chat is on ${picked.id} — ~2× Opus 5 per token, and it stays on it until you switch` });
+  }
+
+  // The same fact the briefing gave the model, given to the human. Not a duplicate: the model gets
+  // numbers to reason with, this is the one line that answers "am I about to work on the wrong
+  // branch again" without reading anything.
+  const rn = repoNotice(repo);
+  if (rn) broadcast(s, { t: "notice", kind: "repo", text: rn });
 
   // Consume the query for the session's lifetime, translating SDK messages into browser events.
   (async () => {
@@ -830,6 +891,17 @@ function handleSystem(s: Session, m: any) {
         // `live:<sessionId>` as the canonical key for an existing session).
         store.set(SID_KEY + m.session_id, s);
         broadcast(s, { t: "init", sessionId: m.session_id, model: m.model });
+        // The SDK is the only witness to what the request actually resolved to. Keep it server-side —
+        // the browser's copy dies on reattach, and the box-wide alert can't read the browser anyway.
+        // Deliberately NOT written to `s.model`: see the field's comment (setModel compares against it).
+        if (typeof m.model === "string" && m.model) {
+          s.observedModel = m.model;
+          // Family-level compare, not exact: the CLI resolves aliases and may return a dated id for the
+          // same model, which is not drift. Landing in a different FAMILY than we asked for is.
+          if (family(m.model) !== family(s.model)) {
+            broadcast(s, { t: "notice", kind: "model", text: `asked for ${s.model}, the CLI started ${m.model}` });
+          }
+        }
       }
       break;
 
@@ -1344,6 +1416,30 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
 export function isBusy(key: string): boolean {
   const s = store.get(key);
   return !!s && !s.closed && s.busy;
+}
+
+/**
+ * What every live session is RUNNING on, for the box-wide model alert.
+ *
+ * checkModelPins() is config-level by construction — it reports what the next spawned turn will use.
+ * That is the fixable fact, but it is blind to the one that costs money right now: a session already
+ * born on Fable keeps its model until it is respawned, so the config can read perfectly green while a
+ * pane burns 2× Opus for hours. This is the runtime half of the same question.
+ *
+ * Reports the OBSERVED id where the SDK has told us one, falling back to the requested id before the
+ * first init lands — a session about to run Fable should show up in the alert immediately, not one
+ * message later.
+ */
+export function liveModels(): { key: string; cwd: string; model: string; premium: boolean; busy: boolean }[] {
+  const out: { key: string; cwd: string; model: string; premium: boolean; busy: boolean }[] = [];
+  const seen = new Set<Session>();
+  for (const s of store.values()) {
+    if (seen.has(s) || s.closed) continue; // store holds each session under 2 keys — dedup
+    seen.add(s);
+    const model = s.observedModel || s.model;
+    out.push({ key: s.key, cwd: s.cwd, model, premium: isPremiumModel(model), busy: s.busy });
+  }
+  return out;
 }
 
 export function liveActivity(): Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string }> {

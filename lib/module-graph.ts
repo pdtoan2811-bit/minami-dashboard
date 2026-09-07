@@ -120,7 +120,10 @@ export const NODES: ModuleNode[] = [
   { id: "x/metrics", label: "metrics server", sub: "Hetzner · Tailscale Funnel", layer: "runtime", row: 4, pipeline: "metrics" },
   // Written only by bin/deploy.sh and bin/task.mjs — processes that outlive the server, which is the
   // entire reason the alert log is a file instead of an in-memory queue. See KNOWLEDGE.md §10.
-  { id: "l/autopilot", label: "autopilot/runner", sub: "always-on merge · resolve · deploy\n(off by default)", layer: "core", row: 19 },
+  { id: "l/autopilot", label: "autopilot/runner", sub: "always-on merge · resolve · deploy\n(off by default) · freshness (on)", layer: "core", row: 19 },
+  // KNOWLEDGE.md §19. Feeds the LIVE pipeline, but from the side: it writes nothing and decides
+  // nothing — it fetches, measures, and hands the session's system prompt a paragraph of fact.
+  { id: "l/repostate", label: "repo-state", sub: "which branch this checkout is on,\nand what has moved since", layer: "core", row: 23 },
   { id: "c/AutopilotPanel", label: "AutopilotPanel", sub: "the switch, in plain words", layer: "component", row: 20 },
   { id: "r/autopilot", label: "/api/autopilot", sub: "the switch + what the runner sees", layer: "route", row: 12 },
   { id: "x/autopilotcfg", label: "~/.minami/autopilot.json", sub: "its switch — on disk, because a\ntimer in the server reads it", layer: "runtime", row: 6 },
@@ -229,6 +232,9 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/manager", to: "l/claim", kind: "import" },
   { from: "r/autopilot", to: "l/autopilot", kind: "import" },
   { from: "l/autopilot", to: "x/autopilotcfg", kind: "import" },
+  { from: "l/autopilot", to: "l/repostate", kind: "import" },
+  { from: "l/manager", to: "l/repostate", kind: "import" },
+  { from: "r/agent", to: "l/repostate", kind: "import" },
   { from: "l/autopilot", to: "l/manager", kind: "import" },
   { from: "l/autopilot", to: "x/events", kind: "import" },
 

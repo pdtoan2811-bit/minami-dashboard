@@ -20,6 +20,9 @@ export type AutopilotConfig = {
   deploy: boolean;
   /** Try to resolve a merge conflict with an agent. When false, a conflict is aborted and reported. */
   resolve: boolean;
+  /** Keep the remote-tracking refs of folders with live sessions fetched, so what a chat is told
+   *  about its checkout is current. The one duty here that changes nothing — see lib/repo-state.ts. */
+  freshness: boolean;
   /** How long a task must sit still after its last commit before it counts as finished, ms. */
   settleMs: number;
   /** Tick interval, ms. */
@@ -31,6 +34,11 @@ export const DEFAULTS: AutopilotConfig = {
   merge: true,
   deploy: true,
   resolve: true,
+  // On by default, unlike every other duty here, because it is the only one that is not a WRITE: a
+  // `git fetch --prune --no-tags` updates what the box knows and touches no branch, no working tree
+  // and no commit. The risk it guards against is the opposite of autopilot's usual one — not "it did
+  // something I didn't ask for" but "it confidently told me something three weeks out of date".
+  freshness: true,
   // Two minutes: long enough that a run of commits a few seconds apart reads as one piece of work,
   // short enough that "I'm done" doesn't feel like it went unnoticed.
   settleMs: 120_000,

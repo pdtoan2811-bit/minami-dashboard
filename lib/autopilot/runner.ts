@@ -26,6 +26,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readConfig } from "./config";
+import { primeRepoState, refreshRepo, repoRootSync } from "@/lib/repo-state";
 
 const exec = promisify(execFile);
 
@@ -198,10 +199,39 @@ async function buildsClean(root: string): Promise<boolean> {
   } catch { return false; }
 }
 
+/**
+ * Keep the remote-tracking refs of every folder that has a live session fetched.
+ *
+ * Sits ahead of the merge gate rather than inside it because it is a different KIND of duty: merging
+ * and deploying change the repo, this only changes what the box knows about it. Cheap by
+ * construction — `refreshRepo` has its own five-minute per-repo cooldown, so a 15-second tick over a
+ * handful of live folders does approximately nothing most of the time.
+ *
+ * The point is long sessions. A chat is briefed on its checkout at birth (lib/repo-state.ts); five
+ * hours later that briefing is exactly as stale as the refs that produced it, which is the state the
+ * whole module exists to prevent. This is what keeps it true.
+ */
+async function freshenLiveRepos(): Promise<void> {
+  // Dynamically imported, same as the conflict resolver below — the manager pulls in the Agent SDK,
+  // and this module is loaded at server boot by instrumentation.ts.
+  const { liveActivity } = await import("@/lib/agent/manager");
+  const roots = new Set<string>();
+  for (const s of Object.values(liveActivity())) {
+    const root = repoRootSync(s.cwd);
+    if (root) roots.add(root);
+  }
+  // Serially, not in parallel: these are network calls against the same few remotes, and nothing here
+  // is waiting on the result. Slower is fine; a burst of concurrent fetches is not.
+  for (const root of roots) {
+    await refreshRepo(root).catch(() => false);
+    await primeRepoState(root).catch(() => null);
+  }
+}
+
 async function tick(): Promise<void> {
   if (ticking) return;
   const cfg = readConfig();
-  if (!cfg.enabled || !cfg.merge) return;
+  if (!cfg.enabled) return;
   if (process.env.MINAMI_AUTOPILOT_DISABLE === "1") return;
 
   // Stamped only on a tick that actually runs, so "next check in Ns" counts down from real work rather
@@ -209,6 +239,11 @@ async function tick(): Promise<void> {
   lastTickAt = Date.now();
   ticking = true;
   try {
+    // Inside the re-entrancy guard, before the merge gate: freshness is a duty of its own, and it must
+    // keep running on a box where merging is switched off.
+    if (cfg.freshness) await freshenLiveRepos();
+    if (!cfg.merge) return;
+
     const root = await mainRoot();
     if (!root) return;
     // Someone else is mid-merge or mid-deploy. Both are serialised for good reasons; queue behind them.

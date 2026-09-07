@@ -11,7 +11,7 @@
 // thing that reads it is a timer inside next-server — see lib/autopilot/config.ts.
 import { useCallback, useEffect, useState } from "react";
 
-type Cfg = { enabled: boolean; merge: boolean; deploy: boolean; resolve: boolean; settleMs: number; everyMs: number };
+type Cfg = { enabled: boolean; merge: boolean; deploy: boolean; resolve: boolean; freshness: boolean; settleMs: number; everyMs: number };
 type Task = { name: string; ahead: string; dirty: boolean; live: boolean | null; lastCommitTs: number };
 type Status = {
   config: Cfg;
@@ -83,6 +83,7 @@ export default function AutopilotPanel() {
                 ["merge", "Combine finished work", "Off means it only watches and tells you what's ready."],
                 ["resolve", "Sort out overlaps", "When two pieces of work touch the same lines. It only handles the mechanical kind, and rolls back anything it isn't sure about."],
                 ["deploy", "Put it live afterwards", "Runs the same deploy you'd trigger by hand, and waits until nothing is mid-conversation."],
+                ["freshness", "Keep folders up to date with GitHub", "Checks what's actually been pushed, so a chat can't tell you your latest work doesn't exist. It only looks — it never changes your files."],
               ] as const).map(([k, title, desc]) => (
                 <label key={k} className="flex items-start justify-between gap-4">
                   <span className="min-w-0">

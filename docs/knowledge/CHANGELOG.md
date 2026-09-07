@@ -8,6 +8,65 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-07
+- **🐛 The repo briefing: the server measures the checkout and tells the model** (§19, new) — a
+  `~/secondBrain` session spent 5h30m migrating a homepage onto a dead branch, then talked Thomas out
+  of his own correct suspicion twice, offering him *"Nothing — the homepage is correct, I
+  misremembered"* as an option. Two causes, both one command away: it read `origin/main` without ever
+  running `git fetch` (a remote-tracking ref is a **cache**), and it never checked which branch the
+  checkout was on — `~/ecvision` sat on a feature branch 237 commits behind `origin/develop`, while
+  `main` was a decoy that hadn't moved since Aug 13. New `lib/repo-state.ts` measures branch, dirty
+  count, worktree-ness, and every trunk-shaped remote branch **with its tip date**, so `moving` names
+  the line that is actually alive; `repoBriefing()` is appended to every session's system prompt as
+  measurements plus one rule, `repoNotice()` as an amber `repo` notice. Not a "remind the model to
+  fetch" prompt — the same move as `canUseTool` enforcing permission modes and the server enforcing
+  auto-compact: **the server measures, the model is told.** Verified against the incident commit: a
+  detached worktree at `aac59c5` reported `off-trunk`, 237 behind `origin/develop` (tip 49m) vs
+  `origin/main` (tip 25d).
+- **🐛 A failed `git fetch` still fetched** (§19) — git writes `FETCH_HEAD` and moves remote-tracking
+  refs as it goes, so a run killed by the timeout can have updated everything while `refreshRepo`
+  returns `false`. Observed on the first HTTPS fetch of the day; the pre-fetch state was served over a
+  perfectly current `FETCH_HEAD`. Cache is now dropped on **both** paths.
+- **The sync/async bridge, and the prime budget** (§19, §3) — `ensureSession` builds `query()` in one
+  synchronous breath, so `primeRepoState()` (async, from `/api/agent/send` and the autopilot tick)
+  fills a cache that `cachedRepoState()` (sync) reads. The fetch is awaited on purpose — a briefing
+  built on unfetched refs carries a timestamp and reads as verified, which is worse than none — but
+  only to `PRIME_BUDGET_MS` (6s); past that the caller gets the stale state, which is honest because
+  `stale` is set and the briefing says so in capitals.
+- **Autopilot gains a `freshness` duty, default ON** (§13) — the only duty here that defaults on,
+  because it is the only one that is not a write: `git fetch --prune --no-tags` changes what the box
+  *knows*, not what it *has*. Runs inside the re-entrancy guard but before the merge gate, so it keeps
+  working on a box with merging switched off. Serial, 5-min per-repo cooldown. Its point is long
+  sessions: a chat briefed at birth is, five hours later, exactly as stale as the refs that produced it.
+- **🐛 `resolveModel()` — the single model choke point** (§3) — the only model validation anywhere was
+  in `/api/agent/model`; `/api/agent/send` carried the pane's stored id on **every** send and passed it
+  to the SDK unvalidated, with a comment calling the gap deliberate. That is how a stale
+  `claude-fable-5` (orphaned when the catalog moved to `fable-5-1`) rode a whole session at ~2× Opus on
+  2026-09-03 while the pill read "default". Every spawner funnels through `ensureSession`, so an
+  off-catalog id is now coerced back to the pin with a `model` notice, and a premium birth announces
+  itself. Also `Session.observedModel` — kept separate from `s.model`, which `setModel()` compares
+  against — with a family-level mismatch notice when the CLI starts something else.
+- **🐛 The model pin drift check compared the config against itself** (§6) — every spawner row was
+  measured against `PINNED_MODEL`, which is env-overridable, so `MINAMI_PINNED_MODEL=claude-fable-5-1`
+  was undetectable by construction: Fable compared to Fable, reported green. New `EXPECTED_MODEL`
+  literal in `lib/model-catalog.ts` and a **"Box pin"** row checked against it, plus a `premium` flag
+  because drift onto Fable is its own severity.
+- **The alert grew a runtime half: `liveModels()` → `premiumSessions`** (§6, §3) — the pin check is
+  config-level and says what the *next* spawn will use, but a session born on Fable keeps it, so the
+  pin can read green while a pane burns 2× for hours. `AccountStatus` renders the live ones by folder,
+  folds them into `episodeKey` by `cwd+model` (a second pane joining re-expands a collapsed card), and
+  escalates to **`critical`** when one is busy — unlike a config drift, it is already billing.
+- **A premium pick is no longer sticky** (§3) — `setModelPick` wrote to the pane key *and* the
+  global `bento:chatModel` seed, so one deliberate Fable pick silently became the birth model of every
+  new chat in that browser, forever, with no expiry. Premium picks now stay per-conversation; the pill
+  goes amber with a ⚡ and reads off `sessionModel` (what the server says is *running*) so a stale
+  localStorage pick can't talk it out of the truth, and the dropdown row says "⚡ 2× · this chat only".
+- **🐛 The cost panel under-priced the premium tier by half** (§6) — `server/metrics-server.js` listed
+  `claude-fable-5` **before** `claude-fable-5-1` in a substring-matched price table (the inverse of the
+  ordering rule `lib/routing.ts` enforces), and booked unknown models at the Opus rate — in the very
+  panel you'd use to notice a new premium tier. 5.1 now precedes 5, and an unknown `/fable/i` id books
+  at the premium rate.
+
 ### 2026-09-04
 - **🐛 Server-side auto-compact: `maybeAutoCompact()`** (§3) — the SDK's autocompact never fires in
   server-driven sessions (measured: 73% with everything armed, zero boundaries box-wide). The

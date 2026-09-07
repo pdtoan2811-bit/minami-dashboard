@@ -52,13 +52,18 @@ const PRICES = {
   "claude-sonnet-5": { in: 2, out: 10 },
   "claude-opus-4-8": { in: 5, out: 25 },
   "claude-opus-5": { in: 5, out: 25 },
-  "claude-fable-5": { in: 10, out: 50 },
+  // Longer id first — priceFor() matches by substring, so "claude-fable-5" listed above "…-5-1" would
+  // swallow every 5.1 turn. Identical prices today, which is exactly why the ordering bug would ship
+  // unnoticed and only surface the day the tiers diverge. lib/routing.ts already enforces this rule.
   "claude-fable-5-1": { in: 10, out: 50 },
+  "claude-fable-5": { in: 10, out: 50 },
 };
 function priceFor(model) {
   if (!model) return { in: 5, out: 25 };
   const key = Object.keys(PRICES).find((k) => model.includes(k));
-  return key ? PRICES[key] : { in: 5, out: 25 };
+  // An UNKNOWN model books at the Opus rate, which under-reports a new premium tier by half — and the
+  // cost panel is where you'd hope to notice one. Charge unknown Fable variants at the premium rate.
+  return key ? PRICES[key] : /fable/i.test(model) ? { in: 10, out: 50 } : { in: 5, out: 25 };
 }
 function costOf(e) {
   const p = priceFor(e.model);

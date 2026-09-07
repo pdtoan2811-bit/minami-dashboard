@@ -50,6 +50,11 @@ type ModelPins = {
   drifted: boolean;
 };
 
+/** A session already RUNNING on a premium model. Separate from the pin check because it is a
+ *  different kind of fact: the pin says what the next turn will spawn on and is fixable by editing a
+ *  file; this says money is being spent at 2× right now, and is fixable only by switching that pane. */
+type PremiumSession = { cwd: string; model: string; busy: boolean };
+
 type Live = {
   email: string | null;
   displayName: string | null;
@@ -59,6 +64,7 @@ type Live = {
   // Optional: a dashboard build older than the model-pin check won't send this. Treated as
   // "nothing to report" rather than "no drift" — absent evidence isn't evidence.
   models?: ModelPins;
+  premiumSessions?: PremiumSession[];
 };
 
 type Level = "ok" | "warn" | "critical";
@@ -75,11 +81,16 @@ const episodeKey = (l: Live): string => {
     .filter((s) => s.drifted)
     .map((s) => `${s.name}=${s.model}`)
     .join(",");
-  return [account, models ? `model:${models}` : ""].filter(Boolean).join("|");
+  // Keyed by cwd+model, not by count: a second pane joining an existing Fable episode is new
+  // information and should re-expand a card you had collapsed.
+  const premium = premiumSessions(l).map((p) => `${p.cwd}=${p.model}`).sort().join(",");
+  return [account, models ? `model:${models}` : "", premium ? `live:${premium}` : ""].filter(Boolean).join("|");
 };
 
 const driftedSpawners = (l: Live | null): SpawnerPin[] =>
   (l?.models?.spawners ?? []).filter((s) => s.drifted);
+
+const premiumSessions = (l: Live | null): PremiumSession[] => l?.premiumSessions ?? [];
 
 // The episode record we remember between polls: its identity, plus enough detail to word the
 // recovery card in terms of what was actually wrong ("was <the wrong account>" vs "back on the pin").
@@ -175,13 +186,21 @@ export function AccountStatus() {
   const key = live ? episodeKey(live) : "";
   const accountDrift = !!live?.offPreferred;
   const modelDrift = driftedSpawners(live).length > 0;
+  const premium = premiumSessions(live);
+  // A pane that is mid-turn on Fable is spending at 2× right now. A merely-open one isn't yet.
+  const premiumBurning = premium.some((p) => p.busy);
 
   // Account drift outranks model drift for severity: the credential failure modes (a switch that
   // silently no-ops, a banner that lies) are the ones with no one-click fix. A model that fell off
   // the pin is always fixable — you edit a file — so it stays at `warn` however long it persists.
+  //
+  // A live premium session is the exception, and the reason it outranks a config drift: the pin
+  // check's finding costs nothing until the next spawn, while this one is already billing. It is
+  // also the failure that actually happened — a stale Fable id ran a whole session at 2× on
+  // 2026-09-03 with every surface reading "default" — so it gets the pulsing dot, not a quiet chip.
   const level: Level = !live || key === ""
     ? "ok"
-    : accountDrift && (live.claimsMismatch || switchStuck)
+    : (accountDrift && (live.claimsMismatch || switchStuck)) || premiumBurning
       ? "critical"
       : "warn";
 
@@ -327,7 +346,13 @@ export function AccountStatus() {
   // What the chip says. Account drift names the account you're wrongly burning; a model-only
   // episode has no wrong account to name, so it says what IS wrong instead of naming the account
   // you are correctly on, which would read as all-clear.
-  const chipLabel = accountDrift ? shortName(live.email ?? "unknown") : "model pin";
+  // Premium outranks the pin in the label for the same reason it outranks it in severity: "model pin"
+  // reads as a config nit you can look at later, and this one is billing now.
+  const chipLabel = accountDrift
+    ? shortName(live.email ?? "unknown")
+    : premium.length
+      ? `${premium.length} on ${premium[0].model.replace(/^claude-/, "")}`
+      : "model pin";
 
   const motion = (
     <style>{`
@@ -354,11 +379,13 @@ export function AccountStatus() {
             accountDrift ? `running on ${live.email}, not ${live.preferred}` : ""
           }${accountDrift && modelDrift ? "; " : ""}${
             modelDrift ? `${drifted.length} spawner${drifted.length === 1 ? "" : "s"} off the ${live.models?.pinned} pin` : ""
-          }. Show details.`}
+          }${premium.length ? `; ${premium.length} live session${premium.length === 1 ? "" : "s"} on ${premium[0].model}` : ""}. Show details.`}
           title={
             accountDrift
               ? `Running on ${live.email} — click for details`
-              : `Off the ${live.models?.pinned} model pin — click for details`
+              : premium.length
+                ? `${premium.length} live session${premium.length === 1 ? "" : "s"} on ${premium[0].model} — click for details`
+                : `Off the ${live.models?.pinned} model pin — click for details`
           }
           className={`ms-in flex items-center gap-1.5 rounded-full border py-1 pl-2 pr-2.5 text-[11px] font-medium shadow-lg backdrop-blur transition-colors ${s.chip}`}
         >
@@ -437,6 +464,22 @@ export function AccountStatus() {
                   <span className="font-medium tabular-nums">{sp.model}</span>, not{" "}
                   <span className="font-medium tabular-nums">{live.models?.pinned}</span>
                   <span className="opacity-70"> — {sp.source}</span>
+                </p>
+              ))}
+            </div>
+          )}
+
+          {/* Live premium sessions. Names the folder rather than the pane key — the folder is what
+              you recognise, and it's what you'd go click on. No button: switching another pane's
+              model from here would respawn someone else's conversation mid-thought. */}
+          {!isRecovery && premium.length > 0 && (
+            <div className={`mt-1 space-y-0.5 text-[11px] leading-relaxed ${s.body}`}>
+              {premium.map((p) => (
+                <p key={p.cwd + p.model}>
+                  <span className="font-medium tabular-nums">{p.model.replace(/^claude-/, "")}</span>
+                  {p.busy ? " is running now in " : " is open in "}
+                  <span className="font-medium">{p.cwd.replace(/^\/Users\/[^/]+\//, "~/")}</span>
+                  <span className="opacity-70"> — ~2× Opus 5 per token</span>
                 </p>
               ))}
             </div>

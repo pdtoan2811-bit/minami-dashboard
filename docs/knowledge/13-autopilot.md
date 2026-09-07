@@ -12,7 +12,32 @@ deploys. It exists so that using this dashboard doesn't require knowing what a m
 was built for wants to iterate on several projects at once and never type `task merge`.
 
 **Off by default, and that is not a formality** — it rewrites the user's git history unattended. The
-switch is `enabled` in `~/.minami/autopilot.json`; nothing happens until it is explicitly `true`.
+switch is `enabled` in `~/.minami/autopilot.json`; nothing happens until it is explicitly `true`. Every
+*duty* under it is off by default too, with exactly one exception — `freshness`, below, which is the
+only one that doesn't write.
+
+### `freshness` — the one duty that defaults ON (2026-09-07)
+
+`freshness` keeps the remote-tracking refs of every folder with a live session fetched, so what a chat
+is told about its checkout stays true (§19). It is the **only** duty in `~/.minami/autopilot.json` whose
+default is `true`, and the exception is principled rather than convenient: **it is the only one that is
+not a write.** `git fetch --prune --no-tags` changes what the box *knows*; it touches no branch, no
+working tree and no commit. Nothing it does can be the thing you'd want reverted.
+
+The risk it guards against is the *opposite* of autopilot's usual one. Everything else here is fenced
+because of "it did something I didn't ask for". This is fenced against "it confidently told me
+something three weeks out of date" — and leaving that one off by default would mean the guard only
+protects the people who already knew they needed it.
+
+It runs **inside the re-entrancy guard but before the merge gate**, because it is a different kind of
+duty and must keep working on a box where merging is switched off. `freshenLiveRepos()` walks
+`liveActivity()`, maps each cwd to a repo root via `repoRootSync`, and refreshes them **serially** —
+these are network calls against the same few remotes and nothing is waiting on the result, so slower is
+fine and a burst of concurrent fetches is not. `refreshRepo` carries its own 5-minute per-repo cooldown,
+so a 45-second tick over a handful of folders does approximately nothing most of the time.
+
+The manager is `await import()`ed here, same as the conflict resolver, because it pulls in the Agent SDK
+and this module is loaded at server boot by `instrumentation.ts`.
 
 ### Why the switch lives on disk
 Every other preference in Bento is a `useSetting` (localStorage, per browser). This one can't be: the

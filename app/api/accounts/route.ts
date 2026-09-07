@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { checkModelPins } from "@/lib/model-pins";
+import { liveModels } from "@/lib/agent/manager";
 import { readPreferred, writePreferred, isPinned } from "@/lib/preferred-account";
 
 export const dynamic = "force-dynamic";
@@ -85,6 +86,12 @@ export async function GET() {
         claimsMismatch: live.email != null && typeof doc?.active === "string" && doc.active !== live.email,
         // What each spawner will run on its NEXT turn, and whether any has fallen off the pin.
         models: checkModelPins(),
+        // ...and the runtime half: sessions ALREADY born on a premium model, which the config check
+        // cannot see (a warm session keeps its model, so the pin can read green while a pane burns 2×).
+        // Only the premium ones — this is an alert feed, not a session census.
+        premiumSessions: liveModels()
+          .filter((m) => m.premium)
+          .map((m) => ({ cwd: m.cwd, model: m.model, busy: m.busy })),
       },
     });
   } catch {

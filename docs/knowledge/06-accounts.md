@@ -53,7 +53,64 @@ which account *should* be live. Conflating them would mean picking a target in S
 dropped your sessions. `PUT` also rejects any address not in the token-slayer pool, because a typo
 would pin the alert to an account that can never go live, leaving it stuck red with no way to read why.
 
+### The model alert has two halves, and only one of them was ever built
+
+`/api/accounts` carries the model check as well as the account check, because they answer the same
+question — *is this box spending what I think it's spending?* — and share one card. As of 2026-09-07
+it reports both halves of it:
+
+- **Config: `checkModelPins()`** (`lib/model-pins.ts`) — what each spawner will run on its **next**
+  spawn. Rows for the Minami bot and the dashboard, each compared against `PINNED_MODEL`.
+- **Runtime: `liveModels()`** (`lib/agent/manager.ts`) → `live.premiumSessions` — sessions **already
+  running** on a premium model. Filtered to the premium ones only; this is an alert feed, not a
+  session census. It reports `observedModel` where the SDK has told us one and the requested id before
+  the first `init` lands, so a pane about to run Fable shows up immediately rather than one message
+  later.
+
+The split is not tidiness. A `query()` is built around a model and cannot be re-modelled warm (§3), so
+**a session born on Fable keeps it until something respawns it** — the config check can read perfectly
+green while a pane burns 2× Opus for hours. That is not a hypothetical; it happened on 2026-09-03.
+
+> 🐛 **The drift check compared the config against itself.** `checkModelPins()` compared
+> `DASHBOARD_MODEL !== PINNED_MODEL` and `brain !== PINNED_MODEL` — every row measured against the pin,
+> so all of them go green together the moment the pin itself moves. And `PINNED_MODEL` is an env var:
+> `MINAMI_PINNED_MODEL=claude-fable-5-1` was **undetectable by construction**, because the check would
+> compare Fable to Fable and report no drift. An env var inherited from a stale parent shell is exactly
+> how this drifts without a code change — `lib/canvas-modes.ts` records the same failure for the STT
+> ear, where `git diff` was clean for weeks.
+>
+> Fix: `EXPECTED_MODEL` in `lib/model-catalog.ts`, a **literal**, deliberately not derived from anything
+> overridable — the fixed point that makes *"did the pin itself move?"* an answerable question. A
+> **"Box pin"** row now sits above the others and is checked against it, with `source` naming whether
+> the value came from the env var or the file, so the alert says which thing to edit.
+
+`checkModelPins()` also returns `premium: true` when a *drifted* spawner is on a Fable-family id.
+Drift onto Fable is its own severity rather than one more drift: it is the only direction that costs
+2× Opus per token, and it must never fold into a collapsed chip.
+
+**`AccountStatus` escalates a live premium session to `critical`.** Normally model drift stays at
+`warn` however long it persists, because it is always fixable by editing a file — while account drift
+takes `critical` only when self-recovery is untrustworthy. A busy premium pane breaks that ranking on
+purpose: unlike a config finding, which costs nothing until the next spawn, **it is already billing**.
+`premiumBurning` (any `premiumSessions[].busy`) forces `critical`, which means the pulsing dot and, via
+the existing warn→critical rule, re-opening a card you had collapsed.
+
+`episodeKey` folds the live sessions in **keyed by `cwd + model`, not by count** — a second pane joining
+an existing Fable episode is new information and should re-expand a collapsed card. The rows name the
+**folder**, not the pane key: the folder is what you recognise and what you'd go click on. There is
+deliberately no button, because switching another pane's model from a status widget would respawn
+someone else's conversation mid-thought.
+
 ### Caveats
+- `premiumSessions` and `models` are both **optional** in the client type. A dashboard build older than
+  either check simply doesn't send them, and absence is treated as "nothing to report" rather than
+  "no drift" — absent evidence isn't evidence.
+- The runtime half sees only sessions **this server process** is hosting. A `claude` started in a
+  terminal is invisible to it; that is what `server/metrics-server.js`'s cost panel is for — and as of
+  2026-09-07 that panel prices `claude-fable-5-1` before `claude-fable-5` (its `priceFor()` matches by
+  substring, so the shorter id listed first swallowed every 5.1 turn) and books an unknown
+  `/fable/i` id at the premium rate rather than at Opus's, which used to under-report a premium tier by
+  half in the very panel you'd use to notice one.
 - There is no shipped fallback any more (see above). If nothing is pinned and no env var is set, the
   wrong-account check is **off** — deliberately, but it does mean "no alert" can mean "not
   configured" as well as "all good". `PreferredAccountPanel` says which.

@@ -8,7 +8,7 @@ import { useSetting } from "@/lib/use-settings";
 // The catalog, not lib/model-pins — that module reads ~/Minami's config with node:fs and can't be
 // imported into a client component. See its own comment: the split exists so one list of ids serves
 // both sides.
-import { SELECTABLE_MODELS, contextWindowFor } from "@/lib/model-catalog";
+import { SELECTABLE_MODELS, contextWindowFor, isPremiumModel } from "@/lib/model-catalog";
 import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
@@ -362,7 +362,10 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: {
 // `restarting` shares the amber warning language used by the account alert: it's the one notice that
 // arrives BEFORE the disruption (the deploy script warning panes it's about to swap the server out from
 // under them), so it has to read as "act now", not as after-the-fact grey chatter like `aborted`.
-const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af", restarting: "#f0a868", relocated: "#6cc4a1" };
+// `model` and `repo` share the amber of the other "you probably want to know this before you carry
+// on" notices. Both are said once, at session birth, and both are about a fact the pane would
+// otherwise be silent on: what this chat costs, and which branch it is standing on.
+const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af", restarting: "#f0a868", relocated: "#6cc4a1", model: "#f0a868", repo: "#f0a868" };
 function NoticeStrip({ notices }: { notices: Notice[] }) {
   const rest = notices.filter((n) => n.kind !== "task");
   if (!rest.length) return null;
@@ -1704,20 +1707,32 @@ function ModelPicker({ model, sessionModel, onPick, busy }: {
   // swap time would have to be cleared correctly on send, failure, revert and reattach, and any missed
   // path leaves a dot claiming a pending swap that already happened.
   const staged = !!model && !!sessionModel && model !== sessionModel;
+  // The pane's own always-on Fable alarm. The notice at session birth is a moment; this is the state,
+  // and it reads off `sessionModel` — what the server says is RUNNING — so it can't be talked out of
+  // by a stale localStorage pick. Amber for staged-but-not-started, solid once it's actually running.
+  const premium = isPremiumModel(model || sessionModel);
+  const premiumLive = isPremiumModel(sessionModel);
   return (
     <div className="relative shrink-0">
       <button onClick={() => setOpen((v) => !v)} disabled={busy}
         title={busy
           ? "Can't switch model while a turn is running — stop it first"
-          : staged
-            ? `${shown?.label || "This model"} starts on your next message — the conversation is resumed from disk, so nothing is lost`
-            : "Model for this chat. Switching restarts the session and resumes this conversation from disk."}
+          : premium
+            ? `${(model || sessionModel)} costs ~2× Opus 5 per token${premiumLive ? " and is what this chat is running on" : ""}. It is not sticky — new chats still start on the box default.`
+            : staged
+              ? `${shown?.label || "This model"} starts on your next message — the conversation is resumed from disk, so nothing is lost`
+              : "Model for this chat. Switching restarts the session and resumes this conversation from disk."}
         className={`flex shrink-0 items-center gap-1 rounded-lg border p-0.5 transition-colors ${
-          busy ? "border-white/10 text-neutral-600" : "border-white/10 text-neutral-400 hover:text-neutral-200"}`}>
+          busy ? "border-white/10 text-neutral-600"
+            : premium ? "border-amber-400/40 text-amber-300 hover:text-amber-200"
+              : "border-white/10 text-neutral-400 hover:text-neutral-200"}`}>
         <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">
           {/* A dot, not a word: this row folds into one pill on a cramped pane, so the indicator has to
               cost ~4px. It reads as "pending" next to a name that has already changed. */}
           {staged && <span className="mr-1 text-[var(--sakura)]">•</span>}
+          {/* Costs the same ~4px as the staged dot and answers the question the pill was silent about
+              for a whole session: is this chat on the expensive tier right now? */}
+          {premium && <span className="mr-1" aria-label="premium tier">⚡</span>}
           {/* An id the catalog no longer offers must still be NAMED, not filed under "default" —
               a pane pinned to legacy Fable 5 read "default" for a day while every send silently
               rode the 2× price tier. "default" is only honest when we genuinely don't know. */}
@@ -1736,7 +1751,11 @@ function ModelPicker({ model, sessionModel, onPick, busy }: {
                 <button key={m.id} onClick={() => { onPick(m.id); setOpen(false); }}
                   className={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
                     on ? "bg-[var(--sakura)]/15" : "hover:bg-white/5"}`}>
-                  <span className={`block text-[11px] font-medium ${on ? "text-[var(--sakura)]" : "text-neutral-200"}`}>{m.label}</span>
+                  <span className={`block text-[11px] font-medium ${on ? "text-[var(--sakura)]" : "text-neutral-200"}`}>
+                    {m.label}
+                    {/* Priced in the row, not only in the note: the note is the part people skim. */}
+                    {m.premium && <span className="ml-1 text-[9px] font-normal text-amber-400/80">⚡ 2× · this chat only</span>}
+                  </span>
                   <span className="mt-0.5 block text-[10px] leading-snug text-neutral-500">{m.note}</span>
                 </button>
               );
@@ -2241,7 +2260,14 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   const setModelPick = (m: string | null) => {
     const prev = model;
     setModel(m);
-    setModelDefault(m); // seeds the next NEW chat, exactly like setPermDefault — never retroactive
+    // Seeds the next NEW chat, exactly like setPermDefault — never retroactive.
+    //
+    // Except for a premium pick, which is deliberately NOT sticky. This one line was the whole shape
+    // of the 2026-09-03 incident: one considered "use Fable for this hard thing" silently became the
+    // birth model of every chat opened in this browser afterwards, with no expiry and nothing to
+    // notice — the pill is a 10px label in a row that folds. A 2× tier should be a decision you make
+    // per conversation, so the seed is left pointing at the box pin and Fable stays where you put it.
+    if (!isPremiumModel(m)) setModelDefault(m);
     agent.changeModel(m).then((ok) => { if (!ok) setModel(prev); });
   };
   // The fan-out pill, same contract as setModelPick — optimistic, revert on refusal (busy turn).

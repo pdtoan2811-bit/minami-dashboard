@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { sendMessage } from "@/lib/agent/manager";
 import { imageBlocksFor } from "@/lib/agent/images";
 import { rehomeStrandedTranscript } from "@/lib/worktree";
+import { primeRepoState } from "@/lib/repo-state";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,10 +45,17 @@ export async function POST(req: Request) {
     // Deliberately best-effort — a missing or oversized file degrades to the old path-only behaviour
     // rather than failing the send.
     const images = await imageBlocksFor(String(message));
+    // Fetch and measure the checkout BEFORE the session can be born, because ensureSession builds the
+    // whole `query()` synchronously and reads this only from cache. Awaited on purpose: a briefing
+    // assembled from unfetched refs is worse than none — it carries a timestamp and reads as verified,
+    // which is precisely how a session spent five hours on a dead branch (see lib/repo-state.ts).
+    // Cooldown-limited inside, so this is a few hundred ms once every five minutes per repo, and
+    // best-effort: a repo with no remote, no network or no git at all just yields no briefing.
+    await primeRepoState(home).catch(() => null);
     // `model` only bites when this call CREATES the session (see ensureSession) — on a warm one it is
     // ignored, which is correct: the picker already respawned the session via /api/agent/model if the
-    // choice actually changed. Validated there, not here; an unrecognised id arriving on this path just
-    // rides through to the SDK, and the composer is the only caller that sets it.
+    // choice actually changed. An id that isn't in the catalog no longer rides through to the SDK:
+    // ensureSession coerces it back to the box pin and says so in the pane (see resolveModel).
     const { sessionId } = sendMessage({ key, cwd: home, message: String(message), mode, resume, images, model: typeof model === "string" && model ? model : undefined, hold: typeof hold === "boolean" ? hold : undefined, fanout: typeof fanout === "boolean" ? fanout : undefined });
     return Response.json({ ok: true, sessionId });
   } catch (e) {

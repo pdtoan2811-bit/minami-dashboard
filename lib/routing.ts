@@ -35,10 +35,18 @@ export const ROUTING_RULES: { work: string; tier: Tier; why: string }[] = [
   { work: "very long autonomous run, hardest reasoning", tier: "Fable 5.1", why: "only when Opus visibly struggles — 2× Opus" },
 ];
 
-// Resolve a real model id (e.g. "claude-sonnet-5") to its tier/price/tint. Unknown ids fall back to
-// the top default tier, so an unrecognised model is over-costed rather than silently under-costed.
+// Resolve a real model id (e.g. "claude-sonnet-5") to its tier/price/tint. Unknown ids fall back to a
+// tier deliberately chosen to over-cost rather than silently under-cost.
+//
+// That intent used to be written as "fall back to Opus 5", which stopped being true the day a tier
+// above Opus existed: an unrecognised `claude-fable-6` would have been priced at HALF what it cost,
+// in the one panel you would use to notice a new premium tier had appeared. Falling back by family
+// first keeps the stated guarantee actually true.
 export function tierFromModel(model?: string) {
-  return MODELS.find((m) => (model || "").includes(m.id)) || MODELS.find((m) => m.tier === "Opus 5")!;
+  const exact = MODELS.find((m) => (model || "").includes(m.id));
+  if (exact) return exact;
+  if (/fable/i.test(model || "")) return MODELS.find((m) => m.tier === "Fable 5.1")!;
+  return MODELS.find((m) => m.tier === "Opus 5")!;
 }
 
 // Actual cost of a real turn, given its token counts + model (cache reads billed at 0.1x input).

@@ -30,14 +30,14 @@ recycle one.
 | Doc | Sections | ~tokens | What's in it |
 |---|---|---|---|
 | [`01-transcripts.md`](knowledge/01-transcripts.md) | §1 §2 | ~2,200 | Reading `~/.claude/projects/*.jsonl` — the incremental parser, windowed history paging, the three caches, and `bin/transcript.mjs`. |
-| [`03-live-sessions.md`](knowledge/03-live-sessions.md) | §3 §4 §5 | ~2,800 | `manager.ts`: the session registry, the SDK `query()` loop, `canUseTool` as the permission gate, subprocess lifetime, restart safety. Activity labels and the client SSE hook. |
+| [`03-live-sessions.md`](knowledge/03-live-sessions.md) | §3 §4 §5 | ~7,600 | `manager.ts`: the session registry, the SDK `query()` loop, `canUseTool` as the permission gate, `resolveModel()` as the model choke point, the system-prompt append, subprocess lifetime, restart safety. Activity labels and the client SSE hook. Approaching the length the split exists to fix. |
 | [`05b-browser.md`](knowledge/05b-browser.md) | §5b | ~2,900 | The headless browser's window: state derived from tool results, the header/tabs/content layout, the console-badge post-mortem. |
 | [`05c-message-render.md`](knowledge/05c-message-render.md) | §5c | ~800 | `Markdown.tsx` and `ThoughtBlock.tsx` — one parser, two tones, and the reasoning-pass seam. |
 | [`05d-topics.md`](knowledge/05d-topics.md) | §5d | ~1,800 | Creating a topic: the folder picker's Recent/Browse tabs, the focus ranking behind Recent, `cwd` validation, `isTrivial`. |
 | [`05e-shell.md`](knowledge/05e-shell.md) | §5e | ~10,300 | The biggest one, and past the length this split was meant to fix — split it before adding another section. Density tiers, Embody, tab-first panes, closing tabs, the hiding panel header, the bento rail, project icons, the ask card, motion/scroll cost, `--continue` parity, the composer. |
 | [`05f-flow.md`](knowledge/05f-flow.md) | §5f §5f-bis | ~7,300 | The session journey — asks, semantic acts, evidence, open loops, the last-3-calls preview and the stack row — five revisions of what it got wrong, the `canUseTool` brake, and mid-turn message queueing. |
 | [`05g-file-preview.md`](knowledge/05g-file-preview.md) | §5g | ~1,600 | Kind-routed file viewing, the shared side slot, the tab row. |
-| [`06-accounts.md`](knowledge/06-accounts.md) | §6 | ~800 | Ground-truth account identity, and why a reported switch is not evidence. |
+| [`06-accounts.md`](knowledge/06-accounts.md) | §6 | ~2,600 | Ground-truth account identity, why a reported switch is not evidence, and the model alert's two halves — the config pin check (which used to compare the config against itself) and the live premium sessions that are already billing. |
 | [`07-knowledge-base.md`](knowledge/07-knowledge-base.md) | §7 §7b | ~1,000 | The module map's extracted edges, and how the KB itself is built and served. |
 | [`08-deploy.md`](knowledge/08-deploy.md) | §8 | ~1,900 | The deploy protocol: why it detaches, why `next build` is not a compile check, why success is a changed PID *and* `BUILD_ID`. |
 | [`09-concurrency.md`](knowledge/09-concurrency.md) | §9 | ~2,100 | Why two chats in one checkout collide; `bin/task.mjs` worktrees as the fix, and the dashboard auto-isolating a second chat so the fix actually gets used. |
@@ -45,12 +45,13 @@ recycle one.
 | [`11-images.md`](knowledge/11-images.md) | §11 | ~1,100 | Pasted screenshots: the path is the payload, so it survives a reload. |
 | [`12-rendering-cost.md`](knowledge/12-rendering-cost.md) | §12 | ~1,400 | Why the dashboard made the machine hot: idle GPU 31% → 14%, and never animate inside a `backdrop-filter`. |
 | [`16-token-economics.md`](knowledge/16-token-economics.md) | §16 | ~1,100 | Where the box's tokens actually go: a cache write costs 12.5-20x a read, deploys force the re-writes, auto-compaction is inert. **Read this instead of loading the 137k-token `claude-api` skill for a price.** |
-| [`13-autopilot.md`](knowledge/13-autopilot.md) | §13 | ~1,200 | Always-on merge · resolve · deploy, off by default. Was a second `§12`; renumbered. |
+| [`13-autopilot.md`](knowledge/13-autopilot.md) | §13 | ~1,800 | Always-on merge · resolve · deploy, off by default — plus `freshness`, the one duty that defaults on because it is the only one that doesn't write. Was a second `§12`; renumbered. |
 | [`14-agents.md`](knowledge/14-agents.md) | §14 | ~3,000 | Standing agents: identity + home folder ≠ cwd, scaffold vs adopt, the onboarding interview, the unattended task runner (and why it polls), attribution rules, HQ and `bin/agent.mjs`. |
 | [`15-teams.md`](knowledge/15-teams.md) | §15 | ~2,600 | Teams: templates → standing agents, a product's three lifespans (run · record · repo block), the chain runner, and why a handoff is a file rather than a payload. |
 | [`17-meeting-canvas.md`](knowledge/17-meeting-canvas.md) | §17 | ~1,900 | `/canvas`: audio → transcript → ReactFlow board. Why using a chat LLM as the transcriber costs latency, accuracy *and* money, OpenRouter's STT catalogue with prices, and the specified-but-unbuilt replacement. |
 | [`18-meeting-launch.md`](knowledge/18-meeting-launch.md) | §18 | ~1,500 | Getting Minami into a call: the two launchers, the receiver on :8787, the cloudflared quick tunnel, and the shared `bin/tunnel-lib.sh`. Why this Mac's DNS opinion is not the question, and the 1800s negative-cache trap that made the launcher poison its own probe. |
-| [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~9,400 | Dated log of every change. Append here; don't read it to do work. |
+| [`19-repo-state.md`](knowledge/19-repo-state.md) | §19 | ~3,000 | The checkout briefing: which branch a session is really on and which trunk is actually moving, measured with a fetch and handed to the model as fact. The five-hour dead-branch incident, the sync/async cache bridge, and why a failed fetch still fetched. |
+| [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~24,000 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
 
@@ -92,7 +93,9 @@ The live and read pipelines meet only on disk. They never call each other.
 
 | Subsystem | File | State | Notes |
 |---|---|---|---|
-| Live sessions | `lib/agent/manager.ts` | **shipped** | Opus 5, effort unset, 60% autocompact |
+| Live sessions | `lib/agent/manager.ts` | **shipped** | Opus 5, effort unset, 60% autocompact; `resolveModel()` is the one model choke point — see §3 |
+| Repo freshness | `lib/repo-state.ts` | **shipped** | fetches, finds the trunk that's actually *moving*, briefs the session at birth. Verified 2026-09-07 against the incident commit: `off-trunk`, 237 behind `origin/develop` — see §19 |
+| Model alerting | `lib/model-catalog.ts` + `lib/model-pins.ts` + `app/api/accounts` | **shipped** | config half (`checkModelPins`, incl. the pin checked against `EXPECTED_MODEL`) *and* runtime half (`liveModels()` → `premiumSessions`) — see §6 |
 | Activity labels | `lib/agent/labels.ts` | **shipped** | server-derived, survives refresh |
 | Transcript parser | `lib/claude-sessions.ts` | **shipped** | incremental meta *and* turns; windowed history paging — see §1 |
 | Transcript CLI | `bin/transcript.mjs` | **shipped** | full history, no server, no caps — see §1 |
