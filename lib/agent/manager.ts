@@ -21,7 +21,8 @@ import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type 
 import { DASHBOARD_MODEL } from "../model-pins";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
-import { contextWindowFor, isSelectableModel, isPremiumModel } from "../model-catalog";
+import { contextWindowFor, isSelectableModel, isPremiumModel, meetsMinCli, SELECTABLE_MODELS } from "../model-catalog";
+import { sdkClaudeVersion } from "../runtime-version";
 import { cachedRepoState, repoBriefing, repoNotice } from "../repo-state";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
@@ -411,11 +412,25 @@ function family(id: string): string {
   return id.replace(/^claude-/, "").split("-")[0].toLowerCase();
 }
 
-function resolveModel(requested?: string): { id: string; fellBack: string | null; premium: boolean } {
+function resolveModel(requested?: string): { id: string; fellBack: string | null; reason: string; premium: boolean } {
   const want = requested || DEFAULT_MODEL;
-  const ok = isSelectableModel(want);
-  const id = ok ? want : DEFAULT_MODEL;
-  return { id, fellBack: ok ? null : want, premium: isPremiumModel(id) };
+  if (!isSelectableModel(want)) {
+    return { id: DEFAULT_MODEL, fellBack: want, reason: "is not a model this app offers", premium: isPremiumModel(DEFAULT_MODEL) };
+  }
+  // Second gate: the catalog says the id exists, the RUNTIME says whether it can run it. The binary
+  // that serves these chats is the one bundled with the Agent SDK, not the `claude` on PATH — so a
+  // model can be perfectly current and still be rejected with a 400 mid-turn, after the user has
+  // already sent a message. Catch it here, where the cost is a notice instead of a dead turn.
+  const cli = sdkClaudeVersion();
+  const entry = SELECTABLE_MODELS.find((m) => m.id === want);
+  if (!meetsMinCli(cli, entry?.minCli)) {
+    return {
+      id: DEFAULT_MODEL, fellBack: want,
+      reason: `needs Claude Code ${entry!.minCli} and this server's Agent SDK bundles ${cli} — bump @anthropic-ai/claude-agent-sdk to use it`,
+      premium: isPremiumModel(DEFAULT_MODEL),
+    };
+  }
+  return { id: want, fellBack: null, reason: "", premium: isPremiumModel(want) };
 }
 
 function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string, model?: string, fanout?: boolean): Session {
@@ -558,7 +573,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   // notice lands at the start of the first turn, while the pane is busy — which is the only window
   // NoticeStrip renders in, and exactly the moment the fact is still actionable (stop, switch, resend).
   if (picked.fellBack) {
-    broadcast(s, { t: "notice", kind: "model", text: `"${picked.fellBack}" is not a model this app offers — started on ${picked.id} instead` });
+    broadcast(s, { t: "notice", kind: "model", text: `${picked.fellBack} ${picked.reason} — started on ${picked.id} instead` });
   } else if (picked.premium) {
     broadcast(s, { t: "notice", kind: "model", text: `this chat is on ${picked.id} — ~2× Opus 5 per token, and it stays on it until you switch` });
   }

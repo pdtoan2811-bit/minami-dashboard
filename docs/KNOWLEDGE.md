@@ -30,7 +30,7 @@ recycle one.
 | Doc | Sections | ~tokens | What's in it |
 |---|---|---|---|
 | [`01-transcripts.md`](knowledge/01-transcripts.md) | §1 §2 | ~2,200 | Reading `~/.claude/projects/*.jsonl` — the incremental parser, windowed history paging, the three caches, and `bin/transcript.mjs`. |
-| [`03-live-sessions.md`](knowledge/03-live-sessions.md) | §3 §4 §5 | ~7,600 | `manager.ts`: the session registry, the SDK `query()` loop, `canUseTool` as the permission gate, `resolveModel()` as the model choke point, the system-prompt append, subprocess lifetime, restart safety. Activity labels and the client SSE hook. Approaching the length the split exists to fix. |
+| [`03-live-sessions.md`](knowledge/03-live-sessions.md) | §3 §4 §5 | ~8,700 | `manager.ts`: the session registry, the SDK `query()` loop, `canUseTool` as the permission gate, `resolveModel()` as the model choke point (both gates — catalog id *and* whether the SDK's bundled Claude Code can run it), the system-prompt append, subprocess lifetime, restart safety. Activity labels and the client SSE hook. Past the length the split exists to fix — split it before adding another section. |
 | [`05b-browser.md`](knowledge/05b-browser.md) | §5b | ~2,900 | The headless browser's window: state derived from tool results, the header/tabs/content layout, the console-badge post-mortem. |
 | [`05c-message-render.md`](knowledge/05c-message-render.md) | §5c | ~800 | `Markdown.tsx` and `ThoughtBlock.tsx` — one parser, two tones, and the reasoning-pass seam. |
 | [`05d-topics.md`](knowledge/05d-topics.md) | §5d | ~1,800 | Creating a topic: the folder picker's Recent/Browse tabs, the focus ranking behind Recent, `cwd` validation, `isTrivial`. |

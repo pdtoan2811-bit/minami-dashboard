@@ -143,6 +143,69 @@ drift; landing in a different family is.
 `liveModels()` exports the runtime half of the question the config check cannot answer — see §6 for
 why the two halves both exist and how `AccountStatus` ranks them.
 
+#### The second gate: the runtime is `node_modules`, not `PATH` (2026-09-08)
+
+A model can be in the catalog, current, correctly spelled, and still be **rejected with a 400
+mid-turn**, after the user has already spent a message. `resolveModel()` therefore has two gates, and
+they answer different questions:
+
+1. **Is the id one this app offers** — `isSelectableModel()`. An off-catalog id is debris (above).
+2. **Can the runtime run it** — `meetsMinCli(sdkClaudeVersion(), entry.minCli)`.
+
+Either gate falls back to `DEFAULT_MODEL` and returns a `reason` string, so the `notice{kind:"model"}`
+says *which* gate rejected the pick — "needs Claude Code 2.1.251 and this server's Agent SDK bundles
+2.1.220 — bump `@anthropic-ai/claude-agent-sdk` to use it" — rather than announcing a bare
+substitution. That converts a dead turn into a sentence.
+
+**The version that governs this is a property of `node_modules`, not of `PATH`.** The Agent SDK ships
+and spawns its *own* Claude Code binary; `node_modules/@anthropic-ai/claude-agent-sdk` (0.3.220) carries
+`manifest.json` = `{"version":"2.1.220","commit":"4073f59…","buildDate":"2026-07-24T22:28:51Z"}`, and
+that is what every dashboard chat on this box runs on. The `claude` on `PATH` — measured at
+`/opt/homebrew/bin/claude`, **2.1.241** — serves interactive terminal sessions and has no say here. The
+only way to move the number is to bump the npm dependency and redeploy.
+
+- **`lib/runtime-version.ts`** (new) reads that manifest, 60s cache — a dependency bump needs a redeploy
+  anyway, so the TTL is churn control, not freshness. **The null contract is the load-bearing part:**
+  `sdkClaudeVersion()` returns `null` when it can't tell, and every caller must read null as *"no reason
+  to block"*, never as *"blocked"*. An SDK package layout change must not silently strip the picker to
+  nothing.
+- **`meetsMinCli()` compares numerically, per segment.** A string compare gets `"2.1.9" > "2.1.251"` —
+  and being wrong here re-enables the exact model that 400s, which is the failure this whole gate exists
+  to prevent. Missing `min` or unknown `version` → `true`, same contract.
+- **`GET /api/agent/runtime` → `{ cliVersion }`** (new) is its own tiny route rather than a field on
+  `/api/accounts`: the picker is not an account surface, and hanging a model question off the
+  token-slayer bridge would couple a dropdown to a poll that can 502 when the CLI isn't installed.
+- **The picker fetches it lazily, on first dropdown open** (`ModelPicker`, `app/page.tsx`). It can only
+  change with a redeploy, so paying for it on mount in every pane is waste. `undefined` = not fetched;
+  only a *known*-too-old runtime disables a row. Disabled rows are greyed **and labelled** "needs CLI
+  2.1.251", with a tooltip naming the real remedy — a greyed row with no reason reads as a bug in the app.
+
+**`claude-fable-5` is back in the catalog as a selectable `premium` row**, and not out of nostalgia: it
+is the only Fable this runtime can actually run (verified — 641 turns ran on it on this box across
+2026-09-02..04). Removing it would leave the box offering a Fable that cannot work and no Fable that can.
+
+Verified by measurement: all 9 `meetsMinCli` cases pass, including the `2.1.9` vs `2.1.251`
+string-compare trap and both null cases; and against the really-bundled 2.1.220, Opus 5 / Sonnet 5 /
+Fable 5 / Haiku 4.5 resolve `runnable=true` while Fable 5.1 resolves `runnable=false`.
+
+> 🐛 **The error told you to update the wrong binary (2026-09-08).** Picking "Fable 5.1" in a pane killed
+> the turn with `API Error: 400 Claude Code 2.1.220 does not support this model; version 2.1.251 or newer
+> is required. Run 'claude update', or update the Claude desktop app, then try again.` Every noun in that
+> remedy is wrong on this box. `claude --version` was already **2.1.241** — newer than the 2.1.220 the
+> error names — and `claude update` would have changed nothing, because the 2.1.220 doing the rejecting
+> lives in `node_modules`, not on `PATH`. There is no desktop app in this path at all. Following the
+> message would have cost an afternoon and ended with the same 400.
+>
+> Two failures stacked. The **diagnostic** one: an error that names a version implies you can go read that
+> version somewhere, and the obvious place to look is the thing you'd type. The dashboard couldn't correct
+> it because the app had no idea what version it was spawning either. The **timing** one: the check
+> happened inside the model, so the price of a wrong pick was a spent message and a dead turn rather than
+> a disabled row. Both are answered the same way — measure the binary that will actually run
+> (`sdkClaudeVersion()`), and decide *before* the send instead of learning it from the API.
+>
+> This is the index's pattern in a new costume: `claude --version` looks authoritative and is only a claim
+> *about a different process*. The thing that cannot lie is the manifest of the package that gets spawned.
+
 **`bypassPermissions` is this install's default** (`DEFAULT_PERMISSION_MODE`, overridable with
 `MINAMI_DASHBOARD_PERMISSION_MODE`) — Thomas's call for a local, single-user box. Note the asymmetry
 that keeps it safe: a *missing* mode gets that default, but an *unrecognised* mode string still clamps

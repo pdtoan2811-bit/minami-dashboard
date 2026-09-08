@@ -9,12 +9,40 @@
 // Tiers and notes, not bare ids: the question actually being asked at an agent's model picker is
 // "what's the cheapest thing that will still get this right". The model-routing skill is the long
 // answer; this is the version that fits in a dropdown.
-export const SELECTABLE_MODELS: { id: string; label: string; note: string; premium?: boolean }[] = [
+export const SELECTABLE_MODELS: {
+  id: string; label: string; note: string; premium?: boolean;
+  /** Lowest Claude Code version that will accept this id. See `meetsMinCli`. */
+  minCli?: string;
+}[] = [
   { id: "claude-opus-5", label: "Opus 5", note: "Top tier. Judgement, ambiguity, code that has to be right." },
   { id: "claude-sonnet-5", label: "Sonnet 5", note: "Fast and capable. The right default for high-volume work." },
-  { id: "claude-fable-5-1", label: "Fable 5.1", note: "Frontier. Long-horizon agents; when Opus falls short. 2× Opus price.", premium: true },
+  { id: "claude-fable-5-1", label: "Fable 5.1", note: "Frontier. Long-horizon agents; when Opus falls short. 2× Opus price.", premium: true, minCli: "2.1.251" },
+  // The previous Fable, kept selectable rather than retired. Not nostalgia: the runtime this app
+  // actually spawns is the binary BUNDLED WITH the Agent SDK, not the `claude` on your PATH, and that
+  // binary refuses 5.1 with a 400 until the SDK dependency is bumped. Removing this row would leave
+  // the box with no working Fable at all while appearing to offer one.
+  { id: "claude-fable-5", label: "Fable 5", note: "Previous Fable. Same 2× price, and the one this runtime can actually run.", premium: true },
   { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", note: "Cheapest. Mechanical passes, scans, summaries." },
 ];
+
+/**
+ * Does `version` (e.g. "2.1.220") satisfy `min` (e.g. "2.1.251")?
+ *
+ * Numeric per-segment, because a string compare gets "2.1.9" > "2.1.251" wrong — and this decides
+ * whether a model is offered at all, so being wrong here reintroduces the mid-turn 400 it prevents.
+ * An unreadable or missing version returns true: we do not know of a reason to block, and silently
+ * hiding every premium model because a version probe failed would be the worse failure.
+ */
+export function meetsMinCli(version: string | null | undefined, min?: string): boolean {
+  if (!min || !version) return true;
+  const a = version.split(".").map((n) => parseInt(n, 10));
+  const b = min.split(".").map((n) => parseInt(n, 10));
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0, y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
 
 // The model every spawner on this box is expected to be on, as a LITERAL — deliberately not derived
 // from anything overridable. lib/model-pins.ts's PINNED_MODEL is env-overridable by design, so a drift

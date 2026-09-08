@@ -234,6 +234,8 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/autopilot", to: "x/autopilotcfg", kind: "import" },
   { from: "l/autopilot", to: "l/repostate", kind: "import" },
   { from: "l/manager", to: "l/repostate", kind: "import" },
+  { from: "l/manager", to: "l/runtimever", kind: "import" },
+  { from: "r/agent", to: "l/runtimever", kind: "import" },
   { from: "r/agent", to: "l/repostate", kind: "import" },
   { from: "l/autopilot", to: "l/manager", kind: "import" },
   { from: "l/autopilot", to: "x/events", kind: "import" },

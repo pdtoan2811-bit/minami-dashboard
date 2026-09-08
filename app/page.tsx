@@ -8,7 +8,7 @@ import { useSetting } from "@/lib/use-settings";
 // The catalog, not lib/model-pins — that module reads ~/Minami's config with node:fs and can't be
 // imported into a client component. See its own comment: the split exists so one list of ids serves
 // both sides.
-import { SELECTABLE_MODELS, contextWindowFor, isPremiumModel } from "@/lib/model-catalog";
+import { SELECTABLE_MODELS, contextWindowFor, isPremiumModel, meetsMinCli } from "@/lib/model-catalog";
 import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
@@ -1697,6 +1697,15 @@ function ModelPicker({ model, sessionModel, onPick, busy }: {
   model: string | null; sessionModel: string | null; onPick: (m: string | null) => void; busy: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // The Claude Code the SERVER will spawn — the SDK's bundled binary, not the one on your PATH. Some
+  // ids 400 on an older one, and finding that out mid-turn (as happened with Fable 5.1 on 2026-09-08)
+  // costs a message and reads as the app being broken. Fetched lazily on first open: it can only
+  // change with a redeploy, so paying for it on mount in every pane would be waste.
+  const [cliVersion, setCliVersion] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!open || cliVersion !== undefined) return;
+    fetch("/api/agent/runtime").then((r) => r.json()).then((d) => setCliVersion(d?.cliVersion ?? null)).catch(() => setCliVersion(null));
+  }, [open, cliVersion]);
   // Explicit pick wins; otherwise name what the LIVE session reported; otherwise say "default" rather
   // than guessing a label. The box pin is env-overridable and lives in a server-only module, so the
   // honest client-side answer before a session exists is that we don't know yet.
@@ -1747,14 +1756,21 @@ function ModelPicker({ model, sessionModel, onPick, busy }: {
           <div className="absolute bottom-full left-0 z-20 mb-1 w-64 overflow-hidden rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
             {SELECTABLE_MODELS.map((m) => {
               const on = m.id === (model || sessionModel);
+              // `undefined` = not fetched yet. Only a KNOWN-too-old runtime disables a row; an
+              // unanswered probe must never hide a model that would have worked.
+              const runnable = cliVersion === undefined || meetsMinCli(cliVersion, m.minCli);
               return (
-                <button key={m.id} onClick={() => { onPick(m.id); setOpen(false); }}
+                <button key={m.id} disabled={!runnable}
+                  onClick={() => { if (runnable) { onPick(m.id); setOpen(false); } }}
+                  title={runnable ? undefined : `This server's Agent SDK bundles Claude Code ${cliVersion}; ${m.label} needs ${m.minCli}. Bump @anthropic-ai/claude-agent-sdk to use it.`}
                   className={`block w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
-                    on ? "bg-[var(--sakura)]/15" : "hover:bg-white/5"}`}>
+                    !runnable ? "cursor-not-allowed opacity-40" : on ? "bg-[var(--sakura)]/15" : "hover:bg-white/5"}`}>
                   <span className={`block text-[11px] font-medium ${on ? "text-[var(--sakura)]" : "text-neutral-200"}`}>
                     {m.label}
                     {/* Priced in the row, not only in the note: the note is the part people skim. */}
-                    {m.premium && <span className="ml-1 text-[9px] font-normal text-amber-400/80">⚡ 2× · this chat only</span>}
+                    {m.premium && <span className="ml-1 text-[9px] font-normal text-amber-400/80">⚡ 2×{runnable ? " · this chat only" : ""}</span>}
+                    {/* Says WHY it's dead. A greyed row with no reason reads as a bug in the app. */}
+                    {!runnable && <span className="ml-1 text-[9px] font-normal text-neutral-500">needs CLI {m.minCli}</span>}
                   </span>
                   <span className="mt-0.5 block text-[10px] leading-snug text-neutral-500">{m.note}</span>
                 </button>

@@ -8,6 +8,40 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-08
+- **🐛 The 400 that told you to update the wrong binary** (§3) — picking Fable 5.1 killed a turn with
+  *"Claude Code 2.1.220 does not support this model; version 2.1.251 or newer is required. Run 'claude
+  update'…"*. Every noun in that remedy is wrong here: `claude --version` was already **2.1.241** (at
+  `/opt/homebrew/bin/claude`), and the 2.1.220 doing the rejecting is the binary the **Agent SDK ships
+  and spawns** — `@anthropic-ai/claude-agent-sdk@0.3.220`, `manifest.json` `2.1.220`, built 2026-07-24.
+  The governing version is a property of `node_modules`, not `PATH`; the only way to move it is bumping
+  the dependency and redeploying. Following the error's own advice would have cost an afternoon and
+  ended at the same 400. The app had no idea what version it was spawning, so it couldn't correct the
+  message either.
+- **`resolveModel()` gains a second gate, and a `reason`** (§3) — gate one is the catalog, gate two is
+  `meetsMinCli(sdkClaudeVersion(), entry.minCli)`. Both fall back to `DEFAULT_MODEL` and now return a
+  reason string, so the `model` notice names *which* gate rejected the pick ("needs Claude Code 2.1.251
+  and this server's Agent SDK bundles 2.1.220 — bump @anthropic-ai/claude-agent-sdk to use it") instead
+  of announcing a bare substitution. A dead turn becomes a sentence.
+- **`lib/runtime-version.ts` (new) + `GET /api/agent/runtime` (new)** (§3) — `sdkClaudeVersion()` reads
+  the SDK's `manifest.json`, 60s cache (a bump needs a redeploy anyway). **Null means "no reason to
+  block", never "blocked"** — an SDK package layout change must not silently strip the picker to
+  nothing. Its own tiny route rather than a field on `/api/accounts`: the picker is not an account
+  surface, and coupling a dropdown to the token-slayer poll (which 502s when the CLI isn't installed)
+  would be wrong.
+- **`minCli` in the catalog, compared numerically** (§3) — `claude-fable-5-1` carries
+  `minCli: "2.1.251"`; `meetsMinCli()` compares per segment because a string compare reads
+  `"2.1.9" > "2.1.251"`, and being wrong there re-enables the exact model that 400s. Measured: all 9
+  cases pass including that trap and both null cases; against the bundled 2.1.220, Opus 5 / Sonnet 5 /
+  Fable 5 / Haiku 4.5 resolve runnable, Fable 5.1 does not.
+- **`claude-fable-5` is selectable again, `premium: true`** (§3) — not nostalgia: it is the only Fable
+  this runtime can actually run (641 turns on it on this box, 2026-09-02..04). Retiring it would leave
+  the box offering a Fable that cannot work and no Fable that can.
+- **The picker declines before the send** (§3) — `ModelPicker` fetches the runtime version lazily on
+  first dropdown open (it only changes with a redeploy, so paying on mount in every pane is waste),
+  disables rows this runtime can't run, and labels them "needs CLI 2.1.251" with a tooltip naming the
+  real remedy. A greyed row with no reason reads as a bug in the app.
+
 ### 2026-09-07
 - **🐛 The repo briefing: the server measures the checkout and tells the model** (§19, new) — a
   `~/secondBrain` session spent 5h30m migrating a homepage onto a dead branch, then talked Thomas out
