@@ -8,6 +8,43 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-14
+- **Blacksmith mode, and the three questions one indicator was answering** (§20, §3, §4, §5) — asked
+  for a way to drive the [Blacksmith](https://github.com/juzser/blacksmith) agent factory from a chat
+  pane, plus better visibility because *"I often got confused and wondering if the blacksmith still
+  running or not"*. That second half decomposed into three separate questions that had been sharing
+  one bouncing-dots indicator: is the driving **session** working, is this pane still **connected**,
+  and is the **factory** progressing. Each got its own answer.
+- **Two clocks** (§4) — `ActivityState.turnMs`, from `Session.turnStartedAt`. The existing
+  `elapsedMs` is PHASE-elapsed and restarts on every phase *and label* change — several times a second
+  during tool work — so the only number on screen almost never passed ten seconds, and **a wedged
+  five-minute `Bash` rendered identically to a fast one**. Not a missing feature: a number that looked
+  like an answer and wasn't. Tiles get `turnStartedAt` (a stable timestamp) rather than `turnMs`, so
+  the 1.5s grid poll's change-detection still sees a steady object and `TurnClock` ticks locally.
+- **The heartbeat that could not be heard** (§5) — the stream's 20s keepalive was an SSE *comment*
+  frame, invisible to `onmessage` by specification. So a long tool call and a dead stream were the
+  same observation, and both animated forever; `onerror` was empty and `detached` was computed and
+  rendered nowhere. Now a real `{t:"beat"}` every 10s, with `link: "stale"` after 26s of silence,
+  outranking every other status the pane can show. Verified: 3 beats in 36s at 9–10s intervals.
+  The beat deliberately carries **no** session state — riding `busy` along looked like a free
+  self-heal and loses a race to `send()`'s optimistic client-side `setBusy(true)`, blanking the
+  indicator on the very turn just started. Caught before shipping.
+- **The factory cannot tell you it is running** (§20) — Blacksmith emits no `session-ended` event, so
+  the panel reports the AGE of the last event (`moving` / `quiet · 7m ago`) rather than inventing a
+  boolean. Quiet is also not a fault: there is no scheduler and no dispatch driver, so it only moves
+  when an operator moves it. And `liveAgentCount` counts dispatches with no terminal event, so in a
+  hand-driven factory a forgotten `judge report` is a phantom live agent forever — anything older than
+  90 minutes is split out as `stale` instead.
+- Reads `smith ui serve` over HTTP rather than `state/smith.db` (a derived read-model nothing projects
+  on a schedule, in WAL mode) or the hash-chained event log (would mean reimplementing the projector).
+  One refcounted poller per page, 5s live / 30s when down. Read-only by construction: everything the
+  factory admits has to pass its gates, and a dashboard button is not a gate.
+- **🐛 `askBrowser()` dropped the pane's mode flags** (§3) — the browser panel's send path passed
+  `model` but not `fanout`, so a session born cold from that path silently got `DEFAULT_FANOUT`
+  instead of the pane's pill. Latent (only bites when a browser-ask is a pane's first send) and found
+  while adding the third flag. It survived because "rides on every send" lived as a comment on one
+  call site rather than being checked at all of them.
+
 ### 2026-09-08
 - **🐛 The 400 that told you to update the wrong binary** (§3) — picking Fable 5.1 killed a turn with
   *"Claude Code 2.1.220 does not support this model; version 2.1.251 or newer is required. Run 'claude

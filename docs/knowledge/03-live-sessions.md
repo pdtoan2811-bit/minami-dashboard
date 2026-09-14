@@ -234,7 +234,13 @@ append at all. Now the append is unconditional and only its pieces are gated:
   is the marked one in the UI for the same reason. Fallback for panes that never chose:
   `MINAMI_DASHBOARD_FANOUT` (unset/1 = on). The fuller procedure lives in the user-level `fanout`
   skill (`~/.claude/skills/fanout/`), which is on the box, not in this repo.
-- **`BROWSER_PROMPT`, when the browser MCP is registered** — unchanged.
+- **`BLACKSMITH_PROMPT`, when the pane's ⚒ pill is on (2026-09-14).** Turns the pane into the operator
+  console for the Blacksmith agent factory. Off by default (`MINAMI_DASHBOARD_BLACKSMITH=1` flips the
+  fallback) because it is long and names a clone most installs don't have. Why it is a mode and not a
+  skill: Blacksmith's own `/bs` skill states that it "never calls an LLM directly and never embeds a
+  role prompt" — every coder, reviewer and verifier is hand-spawned by an operator — so the session
+  has to know it IS the dispatcher, and a skill that loads when the model thinks it's relevant cannot
+  establish that. Full reasoning in **§20**.
 - **`repoBriefing()`, when the cwd is a git checkout (2026-09-07).** Placed *ahead* of the behavioural
   rules, because it is measurement rather than instruction: which branch this checkout is really on,
   which remote trunk is actually moving, how far behind it is, and when origin was last fetched. Read
@@ -273,11 +279,28 @@ append at all. Now the append is unconditional and only its pieces are gated:
   late rather than crying early). Amber at 45%, red at 80%; clicking sends `/compact`, the CLI's own
   manual compaction, whose `compact_boundary` the pane already narrates.
 
-`fanout` rides on every send like `model` and is creation-only for the same reason: an append can't
-be edited on a warm query. Mid-chat toggles go through `POST /api/agent/fanout` → `setFanout()`,
-which is `setModel()`'s twin — refuse while busy, otherwise teardown with the same
-subscriber-handover into `waiting`, `respawned: true`, and the client re-arms `resume` so the next
-send picks the conversation back up off disk under the new prompt.
+`fanout` and `blacksmith` ride on every send like `model` and are creation-only for the same reason:
+an append can't be edited on a warm query. Mid-chat toggles go through `POST /api/agent/fanout` →
+`setFanout()` and `POST /api/agent/blacksmith` → `setBlacksmith()`, both `setModel()`'s twins —
+refuse while busy, otherwise teardown with the same subscriber-handover into `waiting`,
+`respawned: true`, and the client re-arms `resume` so the next send picks the conversation back up
+off disk under the new prompt. **Three members of one family now; a fourth should be the same shape,
+not a new one.** The trap they all exist to route around is worth restating: a system-prompt append
+is fixed at `query()` creation, so "apply this to the running session" is not a thing that can be
+done, only simulated by replacing the process and resuming from disk.
+
+Two asymmetries between them, both deliberate. Fan-out seeds a global default from the per-pane
+choice (`chatFanout` ← `chatFanout:<key>`), Blacksmith does not: driving the factory is something you
+do in one pane about one epic, and silently making every future chat an operator console would put a
+long, specific prompt in front of unrelated work. And the pill polarity is inverted — fan-out is lit
+when OFF (the marked state is opting out of a default), Blacksmith is lit when ON.
+
+> 🐛 **`askBrowser()` dropped the pane's mode flags (found and fixed 2026-09-14, incidentally).** The
+> browser panel's own send path passed `model` but not `fanout`, so a session born cold from that
+> path silently got `DEFAULT_FANOUT` instead of the pane's pill. Latent rather than reported — it only
+> bites when the browser-ask is the FIRST send of a pane — but it is the exact failure mode the
+> "rides on every send" rule exists to prevent, and it survived because the rule lived in a comment
+> on one call site rather than being checked at all of them. Both flags now ride every `agent.send()`.
 
 ### Gotchas
 - **A new `notice` kind needs a tint or it renders grey.** `NOTICE_TINT` in `app/page.tsx` maps kind →
@@ -392,6 +415,34 @@ disagree, because there is only one source.
 
 Phases: `idle · spawning · thinking · responding · tool · awaiting · retrying · compacting`.
 
+### Two clocks, because one of them was answering the wrong question (2026-09-14)
+
+`ActivityState` now carries **`turnMs`** alongside `elapsedMs`, and the distinction is the whole point.
+
+`elapsedMs` is PHASE-elapsed: `touch()` restarts `phaseSince` whenever the phase changes, and the
+client restarts its own anchor whenever the phase *or the label* changes. During tool-heavy work that
+is several times a second — tool → `settle()` → thinking → tool — so the only number the UI had
+almost never passed ten seconds. **A wedged five-minute `Bash` and a fast one rendered identically**,
+which is precisely the "is this thing still running?" confusion the user reported. It was never a
+missing feature; it was a number that looked like an answer and wasn't.
+
+`turnMs` restarts only at a real turn boundary, from `Session.turnStartedAt`, set on the same tick as
+`busy` in all three places a turn can begin — a fresh send, `command_lifecycle: started` promoting a
+queued message, and the ~2ms result→handover gap. Anything that clears `busy` clears it too, or an
+idle pane inherits a clock running since the last turn. Started at the send rather than at the first
+SDK event on purpose: a cold start is a second or two of that turn and the most anxious part of it.
+
+The client re-anchors `turnStart` only when the implied start MOVES by more than 2s. Every broadcast
+carries a freshly computed `turnMs`, so re-deriving unconditionally would let network jitter walk the
+displayed start back and forth — which on the clock that is supposed to be the steady one reads as a
+glitch. A real boundary moves it by far more than the tolerance.
+
+**Tiles get `turnStartedAt`, not `turnMs`.** `liveActivity()` has always omitted `elapsedMs` because a
+value that changes every poll defeats the bento grid's change-detection and re-renders the whole
+framer-motion grid every 1.5s. A fixed timestamp has the opposite property: the poll sees a steady
+object while the tile counts up from it locally (`TurnClock`, isolated into its own component so its
+1s tick repaints 40 characters instead of the grid).
+
 ### Subagents: the AgentBoard, and per-agent `since` (2026-09-02)
 
 A fan-out used to render as 9px pills on the status line — agent *type* only, so four parallel
@@ -449,6 +500,33 @@ even when empty so columns hold their line.
 `EventSource` reconnects at the transport level **silently**. The socket returns, but everything
 streamed during the gap is missing and nothing above the transport knows. Any `onopen` past the
 first is therefore treated as a reconnect: tear down and reopen as an explicit attach.
+
+### The heartbeat, and why the old one couldn't be seen (2026-09-14)
+
+The stream route always sent a keepalive every 20s — as an SSE **comment frame** (`: ping`). That
+keeps the socket warm and is invisible to `onmessage` by specification, so the client had no evidence
+of liveness at all. The consequence was a pane that could not tell "a long `Bash` is running" from
+"the stream is dead and this is a photograph": both are silence, and silence rendered as bouncing
+dots, shimmering label and all, indefinitely. `es.onerror` was an empty comment, and `detached` was
+computed by the hook and rendered nowhere.
+
+Now it is a real event — `{ t: "beat", at }` every **10s** (`HEARTBEAT_MS`). The client stamps
+`lastSignalRef` on *every* frame (before the switch, so an event it doesn't understand still counts)
+and a 2s watchdog flips `link` to `"stale"` after `LINK_STALE_MS` (26s — two missed beats plus slack).
+`onerror` additionally flips it immediately when `readyState === CLOSED`, the one case the browser
+will never retry. Verified on a live stream: 3 beats in 36s at 9–10s intervals.
+
+Stale outranks every other status the pane can show — the composer's `● live` and the ActivityLine's
+label both give way to it, because a green "live" on a dead stream is the most misleading thing this
+UI can render. The watchdog is skipped entirely when no `EventSource` object exists: a pane that
+deliberately released its stream (`UNPIN_IDLE_MS`) is detached on purpose, not faulty.
+
+> **The beat carries no session state, and that is load-bearing.** The first cut rode `busy` along as
+> a free self-heal for a pane that missed a `result`. It loses a race it cannot win: `send()` sets
+> `busy` optimistically on the client *before* its POST lands, so a beat crossing that ~1–2s cold-start
+> window reads the not-yet-created server session as idle and blanks the indicator on the very turn
+> the user just started. Caught before shipping. If a `busy` self-heal is ever wanted, it needs to
+> know about the in-flight POST; the heartbeat does not.
 
 ### Gotchas
 - **After a resync you hold two versions of the turn.** Prefer local blindly → lose what arrived

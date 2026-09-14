@@ -29,6 +29,18 @@ export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutput
 // in the same broadcast burst, so any real gap is sub-second, and a resync costs a reconnect.
 const AWAIT_HEAL_MS = 4000;
 
+// How long a stream may go completely silent before the pane stops vouching for it.
+//
+// The server beats every 10s (HEARTBEAT_MS in the stream route), so this is two missed beats plus
+// slack. It exists because the failure it catches is invisible by construction: when an EventSource
+// dies in a way that doesn't fire `onerror` — and it does — the pane keeps rendering the last activity
+// state it received, dots bouncing, shimmer shimmering, indefinitely. There was no way to tell that
+// apart from a long tool call, which is exactly the "is it still running?" question. Now silence past
+// this point is reported instead of narrated over.
+// Exported so the pane can quote the real number in its tooltip instead of a hand-copied one that
+// drifts the first time this is tuned.
+export const LINK_STALE_MS = 26_000;
+
 export function useAgent(paneKey: string) {
   const [turns, setTurns] = useState<AgentTurn[]>([]);
   const [live, setLive] = useState(false); // has this pane started driving a session?
@@ -56,6 +68,16 @@ export function useAgent(paneKey: string) {
   // Wall-clock start of the current phase, translated out of the server's elapsedMs so our own ticking
   // timer never depends on the two clocks agreeing.
   const [phaseStart, setPhaseStart] = useState<number>(() => Date.now());
+  // Wall-clock start of the whole TURN, or null when nothing is in flight. Translated out of the
+  // server's `turnMs` the same way phaseStart is, and kept separate from it for the reason spelled out
+  // on ActivityState.turnMs: the phase clock resets several times a second during tool work, so it
+  // could never answer "how long has this been going?" — the one question a worried operator asks.
+  const [turnStart, setTurnStart] = useState<number | null>(null);
+  // "Has the server said anything at all lately?" — see LINK_STALE_MS. Deliberately not derived from
+  // `busy`: a dead stream is worth reporting whether or not we think a turn is running, because what
+  // we think is exactly what's suspect.
+  const [link, setLink] = useState<"live" | "stale">("live");
+  const lastSignalRef = useRef(Date.now());
   const [sessionId, setSessionId] = useState<string | null>(null);
   // The model the live session reported at init — observed, never chosen. Null until a session exists,
   // which is why the picker falls back to the word "default" rather than naming a model it is guessing.
@@ -92,6 +114,15 @@ export function useAgent(paneKey: string) {
       if (prev.phase !== a.phase || prev.label !== a.label) setPhaseStart(Date.now() - (a.elapsedMs || 0));
       return a;
     });
+    // The turn clock, adopted the same way — but only re-anchored when the implied start MOVES. Every
+    // activity broadcast carries a freshly computed `turnMs`, so re-deriving unconditionally would let
+    // network jitter walk the displayed start back and forth by a few hundred ms a second, which on a
+    // clock that is supposed to be the steady one reads as a glitch. A real turn boundary moves it by
+    // far more than the tolerance; anything smaller is noise and is ignored.
+    if (typeof a.turnMs === "number") {
+      const started = Date.now() - a.turnMs;
+      setTurnStart((prev) => (prev == null || Math.abs(prev - started) > 2000 ? started : prev));
+    } else setTurnStart(null);
   }, []);
 
   // One shared 1s tick drives the elapsed counter. It runs only while a phase is actually active, so
@@ -161,7 +192,22 @@ export function useAgent(paneKey: string) {
     es.onmessage = (e) => {
       let ev: any;
       try { ev = JSON.parse(e.data); } catch { return; }
+      // Any frame at all is proof of life — recorded before the parse-specific handling below so that
+      // even an event this client doesn't understand (a newer server, a `hello`) still counts.
+      lastSignalRef.current = Date.now();
+      setLink("live");
       switch (ev.t) {
+        case "beat":
+          // Deliberately empty. The heartbeat's entire job was done two lines above, by the code that
+          // runs for every frame. It is a `case` at all so the switch documents that the event is
+          // expected rather than silently unhandled.
+          //
+          // It carries no state on purpose. An earlier cut rode `busy` along as a self-heal for a pane
+          // that missed a `result`, which loses a race it cannot win: send() sets `busy` optimistically
+          // on the client before the POST lands, so a beat arriving during the ~1-2s cold start would
+          // read the server's not-yet-created session as idle and blank the indicator on the very turn
+          // the user just started. Liveness only.
+          break;
         case "init":
           setSessionId(ev.sessionId); sessionIdRef.current = ev.sessionId;
           // What this session is ACTUALLY on, reported by the SDK rather than assumed from the picker.
@@ -378,9 +424,27 @@ export function useAgent(paneKey: string) {
           break;
       }
     };
-    es.onerror = () => { /* EventSource auto-reconnects */ };
+    // EventSource auto-reconnects on its own (readyState CONNECTING), and the `opens` counter above
+    // turns that into a proper re-attach. The one case that needs saying out loud is CLOSED: the
+    // browser has given up and will never retry, so nothing further will arrive on this stream ever
+    // again. That used to be entirely silent — the empty handler this replaces — which is how a pane
+    // could sit bouncing its dots at a connection that no longer existed. The visibility healer below
+    // still repairs it; this just stops the pane vouching for it in the meantime.
+    es.onerror = () => { if (es.readyState === 2 /* CLOSED */) setLink("stale"); };
     esRef.current = es;
   }, [paneKey, reconcile, closeStream, applyActivity]);
+
+  // The silence watchdog. Polls rather than arming a timer per event, because the thing being measured
+  // is the ABSENCE of events — there is nothing to hang a timeout on. Only runs while a stream object
+  // exists: a pane that deliberately released its stream (see UNPIN_IDLE_MS below) is not "stale", it
+  // is detached on purpose, and reporting that as a fault would cry wolf on every idle pane.
+  useEffect(() => {
+    const h = setInterval(() => {
+      if (!esRef.current) { setLink("live"); return; }
+      setLink(Date.now() - lastSignalRef.current > LINK_STALE_MS ? "stale" : "live");
+    }, 2000);
+    return () => clearInterval(h);
+  }, []);
 
   // Force the server to REPLAY onto a stream that is already open.
   //
@@ -569,7 +633,7 @@ export function useAgent(paneKey: string) {
 
   // Send a user message. `seed` = the existing (file) transcript to preserve when going live;
   // `resume` = the Claude session id to continue on the pane's first send.
-  const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[]; model?: string | null; fanout?: boolean }) => {
+  const send = useCallback(async (text: string, opts: { cwd: string; mode: AgentMode; resume?: string; seed?: AgentTurn[]; model?: string | null; fanout?: boolean; blacksmith?: boolean }) => {
     const clean = text.trim();
     if (!clean || !opts.cwd) return;
     setError(null); setDetached(false); attachingRef.current = false;
@@ -594,7 +658,7 @@ export function useAgent(paneKey: string) {
     // `mode` being re-applied per turn in sendMessage.
     // `fanout` rides like `model` and for the same reason: creation-only server-side, so sending it
     // every turn makes the pill authoritative on whichever send happens to be the cold one.
-    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined, hold: holdRef.current, model: opts.model || undefined, fanout: opts.fanout };
+    const body = { key: paneKey, cwd: opts.cwd, message: clean, mode: opts.mode, resume: usingResume ? opts.resume : undefined, hold: holdRef.current, model: opts.model || undefined, fanout: opts.fanout, blacksmith: opts.blacksmith };
     try {
       const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
@@ -674,6 +738,17 @@ export function useAgent(paneKey: string) {
     } catch (e) { setError(`Couldn't switch fan-out — ${String((e as Error)?.message || e)}`); return false; }
   }, [paneKey]);
 
+  // ...and the Blacksmith pill's. Third of the same family; see changeModel for the respawn contract.
+  const changeBlacksmith = useCallback(async (blacksmith: boolean): Promise<boolean> => {
+    try {
+      const r = await fetch("/api/agent/blacksmith", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, blacksmith }) });
+      const d = await r.json().catch(() => null);
+      if (!d?.ok) { if (d?.reason || d?.error) setError(d.reason || d.error); return false; }
+      if (d.respawned) sentOnce.current = false;
+      return true;
+    } catch (e) { setError(`Couldn't switch Blacksmith mode — ${String((e as Error)?.message || e)}`); return false; }
+  }, [paneKey]);
+
   // Returns whether the server actually applied the mode change, so the caller (the Plan/Code and
   // approval-level toggles in app/page.tsx) can revert its own optimistic UI state on failure instead
   // of silently diverging from what the live session is really running under.
@@ -717,5 +792,8 @@ export function useAgent(paneKey: string) {
 
   // `elapsed` recomputes on every 1s tick above, so the caller gets a live-counting number for free.
   const elapsed = activity.phase === "idle" ? 0 : Math.max(0, Date.now() - phaseStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, notices, sessionId, sessionModel, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, setHold, stop };
+  // The steady one. Same free recount off the same tick, but anchored to the turn rather than the
+  // phase — so this is the number that can legitimately read "6m 20s" and be believed. 0 when idle.
+  const turnElapsed = turnStart == null ? 0 : Math.max(0, Date.now() - turnStart);
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, turnElapsed, link, notices, sessionId, sessionModel, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, changeBlacksmith, setHold, stop };
 }

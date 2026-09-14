@@ -15,6 +15,7 @@
 // "default", so only an explicit, recognised value can ever widen permissions.
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import os from "node:os";
 import pathMod from "node:path";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
@@ -97,6 +98,44 @@ const FANOUT_PROMPT = `When a task has independently workable parts — multiple
 // Default for panes that haven't chosen (and the send route's fallback). On by default per the
 // mode's design; a box that wants opt-in instead sets MINAMI_DASHBOARD_FANOUT=0.
 const DEFAULT_FANOUT = process.env.MINAMI_DASHBOARD_FANOUT !== "0";
+
+// Where the Blacksmith factory's read-only API lives. `smith ui serve` binds 127.0.0.1:4680 by
+// default (local-first, no auth) and re-projects the event log on every request, so polling it is
+// both cheap and always current — there is no rebuild step to remember.
+export const BLACKSMITH_URL = (process.env.MINAMI_BLACKSMITH_URL || "http://127.0.0.1:4680").replace(/\/+$/, "");
+// The clone whose `state/` and `factory/` hold every epic — `smith` anchors ALL state to the clone,
+// never to the target project, so this one path is the whole of the factory's footprint.
+export const BLACKSMITH_HOME = process.env.MINAMI_BLACKSMITH_HOME || pathMod.join(os.homedir(), "dev", "blacksmith");
+
+// Blacksmith mode: turn the pane into the factory's operator console.
+//
+// Two things make this worth a mode rather than a skill. First, `/bs` is a PLAYBOOK — the skill says
+// so itself ("this skill never calls an LLM directly and never embeds a role prompt") — so the
+// session has to know it is the dispatcher, and a skill that loads when the model decides it's
+// relevant cannot establish that. Second, the factory has no dispatch driver at all: `smith daemon`
+// watches and reports but "never dispatches, never merges and never writes to a worktree". Every
+// coder, reviewer and verifier is hand-spawned by an operator who must carry five things into the
+// prompt by hand. Naming that contract up front is the difference between the mode working and the
+// session inventing a shortcut the factory will (correctly) refuse.
+const BLACKSMITH_PROMPT = `You are running as the operator console for **Blacksmith**, the autonomous agent factory at ${BLACKSMITH_HOME} (invoke its skill as \`/bs <subcommand>\`: new, plan, run, status, ui, waivers, lessons, report).
+
+**How the factory actually runs.** \`/bs run\` is a playbook you follow, not a daemon. \`smith daemon\` watches and reports; it never dispatches, never merges and never writes to a worktree. There is no dispatch driver — you hand-spawn every coder, reviewer, tester and verifier from the role templates in \`${BLACKSMITH_HOME}/.claude/agents/<role>.md\`, and every mechanical step in between runs through the real \`smith\` CLI.
+
+**The dispatch contract.** Every agent you spawn must be handed, explicitly, all five of: the task spec (or the one question), the ABSOLUTE worktree path, the path claims it may touch, its token cap, and its turn budget. The last one is listed because the templates carry a \`maxTurns\` key that Claude Code does not read — the number is only true if your prompt says it, so say it. Splice in \`smith lessons for-dispatch <role>\` and \`smith findings for-dispatch\` before spawning.
+
+**Reading factory state.** The CLI prints JSON on stdout and prose on stderr, so \`smith … | jq\` always parses. Exit codes are meaningful and sometimes tri-state (2 ≠ 1). Prefer the read-only commands — \`wave next\`, \`plan validate\`, \`findings list\`, \`judge outstanding\`, \`epic verdict\`, \`stats *\`, \`daemon status\` — over re-deriving state yourself. A read-only HTTP API is also live at ${BLACKSMITH_URL} (\`/api/pulse\`, \`/api/overview\`, \`/api/kanban\`, \`/api/tasks/:id\`); the dashboard panel above this chat is already polling it, so you do not need to poll it too.
+
+**What the factory will refuse, correctly.** A spec-change proposal with no concrete diff. A gate waved through with \`--no-findings\` and no judge dispatch behind it. A judge artifact of the wrong shape. Do not work around a refusal — it is the product.
+
+**Two standing hazards, both learned the expensive way.** (1) A git worktree is a checkout, not an environment: anything gitignored is simply absent, so a check that looks language-pure can still fail on \`vendor/\` or \`node_modules\`. Ask what a check TRANSITIVELY touches, not what language it is written in, and put environment facts in \`factory/policies/worktree.yml\` provisioning rather than in a task spec. (2) A fix that ADDS a condition is often the next round's bug — three consecutive rounds on two components each repaired a real defect and introduced a fresh one, and both converged only when the instruction became "delete the thing you added last round".
+
+**Never hand-estimate a number you are about to assert.** Token counts passed to \`smith gate run\` must be MEASURED off the agent's transcript; an operator's arithmetic once turned four under-budget tasks into a reported 13–44% overrun.
+
+Report factory state flatly and name what you actually ran. If a gate was assigned and never executed, say that — an unexecuted gate is a red gate, not an absent one.`;
+
+// Off by default: the prompt is long and names a clone most installs don't have. A box that lives in
+// the factory can flip the default with MINAMI_DASHBOARD_BLACKSMITH=1.
+const DEFAULT_BLACKSMITH = process.env.MINAMI_DASHBOARD_BLACKSMITH === "1";
 
 // A session that watched its own context shrink used to invent its own remedies, and in a vault cwd
 // the nearest thing named "compact" is the VAULT's consolidation routine — chat-6's stranded branch
@@ -181,6 +220,16 @@ export type AgentEvent =
   // Context-window fill, REPLACE semantics — re-broadcast whole on every assistant message, so a
   // dropped one self-heals. The window itself is derived client-side from the session's model.
   | { t: "ctx"; used: number }
+  // Server heartbeat, every HEARTBEAT_MS. This used to be an SSE COMMENT frame (`: ping`), which keeps
+  // the socket warm but is invisible to `onmessage` — so the client had no way to tell "the turn is
+  // quiet because a long Bash is running" from "the stream died and this pane is now a photograph".
+  // Both rendered as bouncing dots, forever. A real data event makes the difference observable: the
+  // pane treats silence past a couple of beats as a dead link and says so.
+  //
+  // Carries no session state, only a timestamp. Riding `busy` along looks like a free self-heal and is
+  // not: send() sets `busy` optimistically before its POST lands, so a beat crossing that window would
+  // report the not-yet-created session as idle and blank the indicator on the turn just started.
+  | { t: "beat"; at: number }
   | { t: "error"; message: string };
 
 type Decision = { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string };
@@ -247,6 +296,17 @@ type Session = {
    *  only, same trap as `model`: an append can't be edited on a warm query, so setFanout() answers a
    *  mid-chat toggle the way setModel() does — teardown, and the next send resumes from disk. */
   fanout: boolean;
+  /** Whether this session was BORN as a Blacksmith operator console. Same creation-time trap and the
+   *  same remedy as `fanout` — see setBlacksmith(). */
+  blacksmith: boolean;
+  /** Wall-clock start of the turn currently in flight, or null when idle. The source of
+   *  ActivityState.turnMs; see the field's docblock there for why a second clock was needed at all.
+   *
+   *  Set at the same instant as `busy`, in all three places a turn can begin — a fresh send, a queued
+   *  message being promoted by `command_lifecycle: started`, and the result-handover gap that holds
+   *  `busy` true between the two. Anything that sets `busy = false` must clear it, or the next idle
+   *  pane inherits a clock that has been running since the last turn. */
+  turnStartedAt: number | null;
   /** Every file this session has WRITTEN (edit-tool targets), across all turns — the placement
    *  pass's evidence. Writes only, deliberately: a research sweep READS everywhere, and moving a
    *  chat because it grepped another repo would relocate half the box. Capped; the decision needs
@@ -301,6 +361,9 @@ function activityOf(s: Session): ActivityState {
     phase: s.phase,
     label: phaseLabel(s.phase, tools, tasks, s.note),
     elapsedMs: Math.max(0, Date.now() - s.phaseSince),
+    // Only while something is actually in flight. Omitted rather than zeroed so the client can tell
+    // "no turn running" from "a turn that started this millisecond" without consulting `busy` too.
+    ...(s.turnStartedAt ? { turnMs: Math.max(0, Date.now() - s.turnStartedAt) } : {}),
     tools,
     tasks,
     ...(s.note ? { note: s.note } : {}),
@@ -433,7 +496,7 @@ function resolveModel(requested?: string): { id: string; fellBack: string | null
   return { id: want, fellBack: null, reason: "", premium: isPremiumModel(want) };
 }
 
-function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string, model?: string, fanout?: boolean): Session {
+function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: string, model?: string, fanout?: boolean, blacksmith?: boolean): Session {
   const existing = store.get(key);
   if (existing && !existing.closed) return existing;
 
@@ -445,7 +508,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: blacksmith ?? DEFAULT_BLACKSMITH, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -561,6 +624,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
           // told to distrust a working tree that renders, so it is handed the answer instead.
           ...(repoBriefing(repo) ? [repoBriefing(repo)!] : []),
           ...(s.fanout ? [FANOUT_PROMPT] : []),
+          ...(s.blacksmith ? [BLACKSMITH_PROMPT] : []),
           ...(MCP_SERVERS ? [BROWSER_PROMPT] : []),
         ].join("\n\n"),
       },
@@ -592,6 +656,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       broadcast(s, { t: "error", message: String(e?.message || e) });
     } finally {
       s.busy = false;
+      s.turnStartedAt = null;
       s.closed = true;
       if (s.idleTimer) { clearTimeout(s.idleTimer); s.idleTimer = null; }
       // A permission/AskUserQuestion prompt still parked here has no one left to resolve it — the
@@ -774,12 +839,16 @@ function handleMessage(s: Session, m: any) {
       broadcast(s, { t: "result", subtype: m.subtype, costUsd: m.total_cost_usd ?? m.cost_usd });
       if (handover) {
         // Phase, not idle: the pane should read as still working, because it is.
+        // The clock restarts here rather than waiting for `started`: this turn is over, and the ~2ms
+        // gap should not be shown as a continuation of it. `started` sets it again for real.
+        s.turnStartedAt = Date.now();
         resetActivity(s, "thinking");
         broadcast(s, { t: "activity", activity: activityOf(s) });
         holdForQueue(s);
         break;
       }
       s.busy = false;
+      s.turnStartedAt = null;
       // A denied tool never produces a tool_result, so anything still open at the end of the turn is
       // finished by definition — clear it rather than let it leak into the next turn's label. Tasks
       // are the exception (see resetActivity): survivors are background agents still working, and
@@ -835,6 +904,7 @@ function handleCommandLifecycle(s: Session, m: any) {
     const started = s.queued[i];
     s.queued.splice(i, 1);
     s.busy = true;
+    s.turnStartedAt = Date.now(); // a promoted queued message is a new turn, and gets its own clock
     s.sawText = false;
     s.sawThinking = false;
     s.partial = "";
@@ -880,6 +950,7 @@ function holdForQueue(s: Session) {
 // Land the session in a clean idle state after a queue handover failed or emptied out.
 function settleQueueGap(s: Session) {
   s.busy = false;
+  s.turnStartedAt = null;
   resetActivity(s, "idle");
   broadcast(s, { t: "activity", activity: activityOf(s) });
   broadcast(s, { t: "busy", busy: false });
@@ -987,7 +1058,7 @@ function handleSystem(s: Session, m: any) {
 }
 
 // Send a user message; creates the session on first call (with resume/mode) or feeds the live one.
-export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; hold?: boolean; model?: string; fanout?: boolean; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
+export function sendMessage(opts: { key: string; cwd: string; message: string; mode?: string; resume?: string; hold?: boolean; model?: string; fanout?: boolean; blacksmith?: boolean; images?: { type: "image"; source: { type: "base64"; media_type: string; data: string } }[] }): { sessionId: string | null } {
   // A session object existing (and not closed) means its SDK process is already warm — this is just
   // the next turn. Otherwise ensureSession() below is about to spin up a brand-new `query()`, which is
   // the actual ~1-2s cold start `spawning` narrates; a resumed (on-disk) conversation still pays this
@@ -1009,7 +1080,7 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   }
   // An absent mode means "whatever this install defaults to"; an explicit one always wins.
   const wanted = opts.mode === undefined ? DEFAULT_PERMISSION_MODE : safeMode(opts.mode);
-  const s = ensureSession(opts.key, opts.cwd, wanted, opts.resume, opts.model, opts.fanout);
+  const s = ensureSession(opts.key, opts.cwd, wanted, opts.resume, opts.model, opts.fanout, opts.blacksmith);
   // Refresh the heartbeat every turn, not only at creation. A pane can sit warm for hours between
   // messages, and a claim whose age is measured from `claimedAt` would expire under an owner who is
   // demonstrably still there. `ensureSession` above already staked it on the cold path; this is the
@@ -1056,6 +1127,10 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   }
 
   s.busy = true;
+  // The turn clock starts HERE, on the same tick as `busy` — not when the first SDK event arrives.
+  // A cold start is a second or two of that turn and the most anxious part of it; a clock that only
+  // began once the subprocess spoke would under-report exactly the wait the user is staring at.
+  s.turnStartedAt = Date.now();
   s.sawText = false; // fresh turn: the next text block opens the reply, no leading separator
   s.sawThinking = false; // ...and the first thinking pass opens the reasoning, no leading seam
   s.partial = "";
@@ -1251,6 +1326,29 @@ export function setFanout(key: string, fanout: boolean): { ok: boolean; respawne
   if (s.busy) return { ok: false, reason: "a turn is in flight — stop it before switching fan-out" };
   if (s.fanout === fanout) return { ok: true };
   // Same subscriber handover as setModel — see the comment there for why `waiting` is the parking lot.
+  const orphans = new Set(s.subs);
+  closeSession(key);
+  if (orphans.size) {
+    const set = waiting.get(key) || new Set<Sub>();
+    for (const sub of orphans) set.add(sub);
+    waiting.set(key, set);
+  }
+  return { ok: true, respawned: true };
+}
+
+// Blacksmith mode, third of the same family (setModel / setFanout / this). Identical mechanics for
+// the identical reason — the operator-console instruction is a creation-time system-prompt append and
+// a warm `query()`'s cannot be edited, only replaced.
+//
+// Worth stating because the respawn looks gratuitous here: turning this mode ON mid-conversation is
+// the common case, not the exotic one. You discover you are about to drive the factory three turns
+// into a chat about something else, and the whole point is that the next send carries the dispatch
+// contract. Resuming from disk keeps that conversation; only the KV cache is lost.
+export function setBlacksmith(key: string, blacksmith: boolean): { ok: boolean; respawned?: boolean; reason?: string } {
+  const s = store.get(key);
+  if (!s || s.closed) return { ok: true }; // no live session — the flag just applies at the next send
+  if (s.busy) return { ok: false, reason: "a turn is in flight — stop it before switching Blacksmith mode" };
+  if (s.blacksmith === blacksmith) return { ok: true };
   const orphans = new Set(s.subs);
   closeSession(key);
   if (orphans.size) {
@@ -1457,8 +1555,8 @@ export function liveModels(): { key: string; cwd: string; model: string; premium
   return out;
 }
 
-export function liveActivity(): Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string }> {
-  const out: Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string }> = {};
+export function liveActivity(): Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null }> {
+  const out: Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null }> = {};
   const seen = new Set<Session>();
   for (const s of store.values()) {
     if (seen.has(s) || s.closed || !s.sessionId) continue; // store holds each session under 2 keys — dedup
@@ -1466,7 +1564,12 @@ export function liveActivity(): Record<string, { phase: ActivityPhase; label: st
     const a = activityOf(s);
     // NB: no elapsedMs — it changes every poll, which would defeat the grid's change-detection and
     // re-render the whole (framer-motion) tile grid every 1.5s (lag + CPU heat).
-    out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd };
+    //
+    // `turnStartedAt` is the way to give a tile a clock anyway, and it works precisely because it is
+    // the opposite kind of value: a fixed timestamp that does NOT change between polls, so the grid's
+    // change-detection still sees a steady object while the tile counts up from it locally. Sending
+    // turnMs here instead would reintroduce exactly the churn the line above exists to avoid.
+    out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd, turnStartedAt: s.turnStartedAt };
   }
   return out;
 }

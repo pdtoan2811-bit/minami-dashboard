@@ -9,7 +9,7 @@ import { useSetting } from "@/lib/use-settings";
 // imported into a client component. See its own comment: the split exists so one list of ids serves
 // both sides.
 import { SELECTABLE_MODELS, contextWindowFor, isPremiumModel, meetsMinCli } from "@/lib/model-catalog";
-import { useAgent, toolCategory, activityLabel, escalationHint, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask } from "@/lib/use-agent";
+import { useAgent, toolCategory, activityLabel, escalationHint, LINK_STALE_MS, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
 import ThoughtBlock from "@/components/ThoughtBlock";
@@ -18,6 +18,8 @@ import AttachBar from "@/components/AttachBar";
 import BrandIcon, { type Icon } from "@/components/BrandIcon";
 import { ProjectIcon, assignIcons } from "@/components/ProjectIcon";
 import BentoRail, { RAIL_W } from "@/components/BentoRail";
+import { BlacksmithPanel } from "@/components/blacksmith/BlacksmithPanel";
+import { useBlacksmith, projectMatches } from "@/lib/blacksmith/use-blacksmith";
 import AskCard from "@/components/AskCard";
 import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
@@ -226,6 +228,47 @@ const TOOL_TINT: Record<ToolCategory, string> = {
   read: "#6c9cf5", write: "#f0a868", exec: "#e8859b", search: "#6cc4a1", web: "#4dd0e1", browser: "#5ec8f8",
   task: "#b98cff", plan: "#4ade80", ask: "#e8859b", skill: "#f0a868", mcp: "#b98cff", other: "#9ca3af",
 };
+// Blacksmith's accent — hot iron. Deliberately not the amber (#c47f18) that fan-out-off and the brake
+// share: those mean "you have changed a default", and this means "a whole other system is in play".
+const SMITH_TINT = "#e06c4f";
+
+/** A clock that counts up from a fixed server timestamp, isolated into its own component so its 1s
+ *  tick re-renders 40 characters instead of the whole framer-motion tile grid. That isolation is the
+ *  entire reason this exists as a component rather than three lines inline. */
+function TurnClock({ since }: { since: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const h = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(h); }, []);
+  const ms = Math.max(0, Date.now() - since);
+  return (
+    <span className="shrink-0 font-mono text-[9px] tabular-nums text-neutral-500" title={`this turn has been running ${fmtElapsed(ms)}`}>
+      {fmtElapsed(ms)}
+    </span>
+  );
+}
+
+/** Factory progress for one project, on its bento tile.
+ *
+ *  Renders nothing at all unless Blacksmith is up AND has an epic whose target is this folder — a
+ *  badge that appeared on every tile would be noise on nineteen of twenty boards. */
+function BlacksmithTileBadge({ cwd }: { cwd: string }) {
+  const bs = useBlacksmith();
+  if (!bs?.up || !cwd) return null;
+  const mine = bs.sessions.filter((s) => projectMatches(cwd, s.projects));
+  if (!mine.length) return null;
+  const freshest = Math.min(...mine.map((s) => (s.lastEventAt ? Math.max(0, Date.now() - Date.parse(s.lastEventAt)) : Number.POSITIVE_INFINITY)));
+  const moving = Number.isFinite(freshest) && freshest < 5 * 60 * 1000;
+  const done = bs.tasks.find((t) => t.status === "completed")?.count || 0;
+  const total = bs.tasks.reduce((a, t) => a + t.count, 0);
+  const blocking = bs.findings.filter((f) => f.severity.startsWith("S1") || f.severity.startsWith("S2")).reduce((a, f) => a + f.count, 0);
+  return (
+    <div className="relative mt-1 flex items-center gap-1.5 text-[9px]" style={{ color: SMITH_TINT }}
+      title={`Blacksmith is building this project. ${done}/${total} tasks completed${blocking ? `, ${blocking} carrying an open S1/S2 finding` : ""}. ${moving ? "Last factory event under 5 minutes ago." : "The factory has been quiet — it has no scheduler, so it only moves when an operator moves it."}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${moving ? "animate-pulse" : "opacity-40"}`} style={{ background: SMITH_TINT }} />
+      <span className="font-medium">⚒ {done}/{total}</span>
+      {!!blocking && <span className="text-[#ef4444]">{blocking} blocking</span>}
+    </div>
+  );
+}
 const TOOL_ICON: Record<ToolCategory, LucideIcon> = {
   read: FileText, write: Pencil, exec: SquareTerminal, search: Search, web: Globe, browser: Chrome,
   task: Bot, plan: ListChecks, ask: HelpCircle, skill: Puzzle, mcp: Puzzle, other: Wrench,
@@ -302,7 +345,7 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
   );
 }
 
-function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: { activity: ActivityState; elapsed: number; compact?: boolean; busy?: boolean; hideTime?: boolean; notices?: Notice[] }) {
+function ActivityLine({ activity, elapsed, turnElapsed, link, compact, busy, hideTime, notices }: { activity: ActivityState; elapsed: number; turnElapsed?: number; link?: "live" | "stale"; compact?: boolean; busy?: boolean; hideTime?: boolean; notices?: Notice[] }) {
   // `busy` without a phase shouldn't happen (the server always sets one), but if the two ever
   // disagree, err toward animating: a silent blank line is the exact failure we're fixing.
   const phase: ActivityPhase = activity.phase === "idle" && busy ? "thinking" : activity.phase;
@@ -322,20 +365,42 @@ function ActivityLine({ activity, elapsed, compact, busy, hideTime, notices }: {
   const Icon = activeCat ? TOOL_ICON[activeCat] : null;
   const frozen = phase === "awaiting"; // nothing is moving — don't pretend otherwise
   const finished = compact ? [] : (notices || []).filter((n) => n.kind === "task");
+  // The clock the user actually wants. `elapsed` is PHASE-elapsed and restarts on every phase and
+  // label change — several times a second during tool work — so for years the only number on screen
+  // said "3s" no matter how long the turn had really been grinding. Prefer the turn clock where the
+  // caller has one; fall back to phase-elapsed for callers that don't (the bento tile).
+  const showTurn = typeof turnElapsed === "number" && turnElapsed > 0;
+  const clock = showTurn ? turnElapsed! : elapsed;
+  // A stale link outranks every other thing this line could say. Everything else here describes what
+  // the server last told us; this says we have stopped hearing from the server at all, which makes the
+  // rest of the line a photograph rather than a report. Rendered in place of the label — not beside
+  // it — because bouncing dots next to "reading page.tsx" is exactly the lie being corrected.
+  const dead = link === "stale";
   return (
     <span className={`flex min-w-0 flex-col gap-y-1 ${compact ? "text-[10px]" : "text-xs"}`}>
-      <span className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${compact ? "flex-nowrap" : "flex-wrap"} text-neutral-400 ${frozen ? "activity-idle" : ""}`}>
+      <span className={`flex min-w-0 items-center gap-x-2 gap-y-1 ${compact ? "flex-nowrap" : "flex-wrap"} text-neutral-400 ${frozen || dead ? "activity-idle" : ""}`}>
         <span className="flex shrink-0 items-center gap-0.5">
-          {[0, 1, 2].map((i) => <span key={i} className={`think-dot ${compact ? "h-1 w-1" : "h-1.5 w-1.5"} rounded-full`} style={{ background: tint, animationDelay: `${i * 0.15}s` }} />)}
+          {[0, 1, 2].map((i) => <span key={i} className={`think-dot ${compact ? "h-1 w-1" : "h-1.5 w-1.5"} rounded-full`} style={{ background: dead ? "#ef7c7c" : tint, animationDelay: `${i * 0.15}s` }} />)}
         </span>
         {/* A small glyph naming the kind of work, chat-panel only — the tile stays dot+text so a tiny
             tile never feels cluttered. */}
-        {Icon && !compact && <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />}
-        <span className="activity-label min-w-0 truncate italic" style={{ color: tint }}>{label}</span>
+        {Icon && !compact && !dead && <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />}
+        {dead ? (
+          <span className="min-w-0 truncate text-[#ef7c7c]" title={`No heartbeat from the server for over ${Math.round(LINK_STALE_MS / 1000)}s. The last thing it reported was "${activity.label || "working"}" — that may no longer be true. The pane reconnects on its own; switching tabs and back forces it.`}>
+            lost contact with the server — last seen {activity.label || "working"}
+          </span>
+        ) : (
+          <span className="activity-label min-w-0 truncate italic" style={{ color: tint }}>{label}</span>
+        )}
         {/* For every OTHER phase the hint is an addition, not a replacement — it only shows once a task
             has clearly run past typical duration, as a reassurance alongside the (more specific) label. */}
-        {hint && phase !== "spawning" && !compact && <span className="shrink-0 italic text-[10px] text-neutral-600">· {hint}</span>}
-        {!hideTime && <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-600">{fmtElapsed(elapsed)}</span>}
+        {hint && phase !== "spawning" && !compact && !dead && <span className="shrink-0 italic text-[10px] text-neutral-600">· {hint}</span>}
+        {!hideTime && (
+          <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-600"
+            title={showTurn ? `this turn has been running ${fmtElapsed(turnElapsed!)} — the current step started ${fmtElapsed(elapsed)} ago` : undefined}>
+            {fmtElapsed(clock)}
+          </span>
+        )}
         {/* Parallel tool calls: the label names one, so chip the rest instead of hiding them — each
             tinted by its own category so read/write/exec/etc. are distinguishable at a glance. */}
         {!compact && extras.length > 1 && (
@@ -485,7 +550,7 @@ export default function BentoHome() {
   useEffect(() => { let a = true; const t = () => { if (a) loadSessions(); }; t(); const iv = setInterval(t, 5000); return () => { a = false; clearInterval(iv); }; }, [loadSessions]);
   // Live activity per session (what each running dashboard-driven session is doing right now) — polled
   // fast so a tile can show "thinking… / running: … / reading X" live while a box works.
-  const [liveAct, setLiveAct] = useState<Record<string, { phase: string; label: string; busy: boolean; cwd: string }>>({});
+  const [liveAct, setLiveAct] = useState<Record<string, { phase: string; label: string; busy: boolean; cwd: string; turnStartedAt?: number | null }>>({});
   const liveActSig = useRef("");
   useEffect(() => {
     let a = true;
@@ -1133,8 +1198,22 @@ export default function BentoHome() {
                     <p className={`relative mt-1.5 font-semibold tracking-tight ${big ? "text-xl" : "text-sm"}`}>{p.name}</p>
                     {/* Live activity — the SAME hint (phase-tinted dots + tool/file label) as the chat panel. */}
                     {la
-                      ? <div className="relative mt-0.5 min-w-0"><ActivityLine compact hideTime busy activity={{ phase: la.phase as ActivityPhase, label: la.label, elapsedMs: 0, tools: [], tasks: [] }} elapsed={0} /></div>
+                      ? <div className="relative mt-0.5 flex min-w-0 items-center gap-1.5">
+                          <ActivityLine compact hideTime busy activity={{ phase: la.phase as ActivityPhase, label: la.label, elapsedMs: 0, tools: [], tasks: [] }} elapsed={0} />
+                          {/* The turn clock, tile edition. `hideTime` above still stands — what it
+                              suppresses is the PHASE clock, which resets every couple of seconds and
+                              so read as "just started" no matter how long the box had been grinding.
+                              This counts from a fixed server timestamp instead, which is both the
+                              honest number and the one that doesn't churn the poll's change-detection
+                              (see liveActivity in lib/agent/manager.ts). */}
+                          {la.turnStartedAt && <TurnClock since={la.turnStartedAt} />}
+                        </div>
                       : big && <p className="relative mt-0.5 line-clamp-1 text-xs text-neutral-400">↳ {p.latest}</p>}
+                    {/* Factory progress for THIS project, when Blacksmith is driving it. Matched by
+                        folder basename against Blacksmith's own `project` tag rather than by path:
+                        the factory anchors all state to its own clone and records the target only by
+                        name, so the checkout could be anywhere. */}
+                    <BlacksmithTileBadge cwd={p.cwd} />
                     {/* Tech icons on every tile. Small tiles show a compact row; the tile height (auto-rows)
                         was raised so this never clips the stats. */}
                     {(() => { const techs = attachMap[p.name]?.tech || []; const n = big ? 6 : 4; return techs.length > 0 && (
@@ -1537,7 +1616,7 @@ const ImageRefs = memo(function ImageRefs({ text }: { text: string }) {
 // earlier turn's tool rows, badges and images too. `Markdown` was already memoised, which hid how much
 // of the cost sat around it. With the volatile props confined to the live row, everything above it is
 // prop-identical between renders and React skips it outright.
-type LiveBits = { notices: Notice[]; activity: ActivityState; elapsed: number; busy: boolean };
+type LiveBits = { notices: Notice[]; activity: ActivityState; elapsed: number; turnElapsed: number; link: "live" | "stale"; busy: boolean };
 // The created/changed hints under a message. Every write in the turn, de-duplicated — Claude often
 // applies several Edits to one file in a single turn, and five identical chips for one file is worse
 // than none. Reads are excluded (see writtenBy): a chip per file merely looked at would bury the ones
@@ -1622,12 +1701,13 @@ const PreviewChips = memo(function PreviewChips({ previews, onOpenFile }: { prev
  *  is the most dangerous thing in this UI to be wrong about (see `perm` in ChatColumn); two renderings
  *  of it, drifting apart, is the failure mode worth spending a component to make impossible.
  */
-function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, sessionModel, onModel, fanout, onFanout, busy }: {
+function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, sessionModel, onModel, fanout, onFanout, blacksmith, onBlacksmith, busy }: {
   hold: boolean; onHold: (v: boolean) => void;
   planning: boolean; onPlan: (v: boolean) => void;
   perm: Exclude<AgentMode, "plan">; onPerm: (m: Exclude<AgentMode, "plan">) => void;
   model: string | null; sessionModel: string | null; onModel: (m: string | null) => void;
-  fanout: boolean; onFanout: (v: boolean) => void; busy: boolean;
+  fanout: boolean; onFanout: (v: boolean) => void;
+  blacksmith: boolean; onBlacksmith: (v: boolean) => void; busy: boolean;
 }) {
   return (
     <>
@@ -1648,6 +1728,23 @@ function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, ses
           : fanout ? "border-white/10 text-neutral-400 hover:text-neutral-200"
           : "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]"}`}>
         <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">{fanout ? "⑂ fan-out" : "⑂ solo"}</span>
+      </button>
+      {/* Blacksmith: turn this pane into the factory's operator console. Tinted when ON — the inverse
+          of fan-out, because here the notable state is having opted IN. Same busy-disable and the same
+          teardown+resume underneath, since it is the same kind of creation-time prompt append.
+          The lit state is an inline style, not a class: Tailwind cannot see a class name built from a
+          runtime value, so SMITH_TINT has to be applied directly. */}
+      <button onClick={() => onBlacksmith(!blacksmith)} disabled={busy}
+        title={busy
+          ? "Can't switch Blacksmith mode while a turn is running — stop it first"
+          : blacksmith
+            ? "Blacksmith ON — this pane is the factory's operator console: it knows the smith CLI, the dispatch contract and the role templates, and the panel above tracks the factory live. Click to leave."
+            : "Blacksmith OFF — click to drive the agent factory from this pane (adds the /bs operator contract and a live factory panel)."}
+        className={`flex shrink-0 items-center rounded-lg border p-0.5 transition-colors ${
+          busy ? "border-white/10 text-neutral-600"
+          : blacksmith ? "" : "border-white/10 text-neutral-400 hover:text-neutral-200"}`}
+        style={blacksmith && !busy ? { borderColor: SMITH_TINT + "99", background: SMITH_TINT + "26", color: SMITH_TINT } : undefined}>
+        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">⚒ smith</span>
       </button>
       {/* The brake. It lived in the flow panel's header, which is gone — and it is a SESSION control
           (like Plan/Code and the approval level), not a property of a view, so this row is where it
@@ -1873,7 +1970,7 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
               {live && (
                 <div className={`flex flex-col gap-1.5 ${t.text ? "mt-2" : ""}`}>
                   <NoticeStrip notices={live.notices} />
-                  <ActivityLine busy={live.busy} activity={live.activity} elapsed={live.elapsed} notices={live.notices} />
+                  <ActivityLine busy={live.busy} activity={live.activity} elapsed={live.elapsed} turnElapsed={live.turnElapsed} link={live.link} notices={live.notices} />
                 </div>
               )}
               {showTools && t.tools.map((tool, j) => {
@@ -2062,6 +2159,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // question was pure round-trip cost; a pane turns it off for surgical work, not the other way round.
   const [fanoutDefault, setFanoutDefault] = useSetting<boolean>("chatFanout", true);
   const [fanout, setFanout] = useSetting<boolean>("chatFanout:" + effectiveKey, fanoutDefault);
+  // Blacksmith: the same two-key shape a third time. Default OFF, and note the asymmetry with fan-out
+  // below — this one is deliberately NOT seeded from the per-pane choice. Driving the factory is a
+  // thing you do in one pane about one epic; silently making every future chat an operator console
+  // would put a long, specific system prompt in front of work that has nothing to do with it.
+  const [blacksmith, setBlacksmith] = useSetting<boolean>("chatBlacksmith:" + effectiveKey, false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const agent = useAgent(effectiveKey);
   const isNew = !sessionId;
@@ -2220,7 +2322,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     ensureNotifyPermission(); // lazy — a real user gesture, which browsers want for this prompt
     const continuing = !sessionId && continueOn ? continueTarget : null;
     if (continuing) adoptedViaContinueRef.current = true; // so a rejected continue can be handed back
-    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || continuing?.id || undefined, model, fanout, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || continuing?.id || undefined, model, fanout, blacksmith, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
     if (continuing) setResumedFrom(continuing);
     setInput("");
   };
@@ -2292,6 +2394,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     setFanout(v);
     setFanoutDefault(v);
     agent.changeFanout(v).then((ok) => { if (!ok) setFanout(prev); });
+  };
+  // ...and the Blacksmith pill. No `setDefault` twin — see the setting's own comment for why this one
+  // stays per-pane.
+  const setBlacksmithPick = (v: boolean) => {
+    const prev = blacksmith;
+    setBlacksmith(v);
+    agent.changeBlacksmith(v).then((ok) => { if (!ok) setBlacksmith(prev); });
   };
   // Follow the stream — but only while the reader is actually AT the bottom.
   //
@@ -2468,7 +2577,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
 
   const askBrowser = (text: string) => {
     if (!cwd || agent.busy) return;
-    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, model, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
+    agent.send(text, { cwd, mode: effectiveMode, resume: sessionId || undefined, model, fanout, blacksmith, seed: fileTurns.map((t) => ({ role: t.role, text: t.text, tools: t.tools })) });
   };
 
   // Away-tab notifications: tell the user when a background pane finishes, or needs them, while
@@ -2512,7 +2621,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   const ctxWindow = contextWindowFor(model || agent.sessionModel);
   const ctxPct = agent.ctxUsed ? agent.ctxUsed / ctxWindow : 0;
   const ctxEl = agent.ctxUsed && agent.live ? (
-    <button onClick={() => { if (!agent.busy) agent.send("/compact", { cwd, mode: effectiveMode, resume: sessionId || undefined, model, fanout }); }}
+    <button onClick={() => { if (!agent.busy) agent.send("/compact", { cwd, mode: effectiveMode, resume: sessionId || undefined, model, fanout, blacksmith }); }}
       disabled={agent.busy}
       title={`context: ${Math.round(agent.ctxUsed / 1000)}k of ${Math.round(ctxWindow / 1000)}k (${Math.round(ctxPct * 100)}%) — ${agent.busy ? "auto-compacts at 60%" : "click to compact the conversation now (keeps the thread, shrinks the history)"}`}
       className={`shrink-0 font-mono text-[9px] tabular-nums transition-colors ${ctxPct >= 0.8 ? "text-red-400" : ctxPct >= 0.45 ? "text-[#e0a33e]" : "text-neutral-600"} ${agent.busy ? "" : "hover:text-neutral-300"}`}>
@@ -2521,8 +2630,12 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   ) : null;
   const statusEl = agent.stopping ? <span className="flex items-center gap-1 text-red-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />stopping…</span>
     : agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
+    // Ahead of every "live"/activity branch below, because those all describe what the server last
+    // said and this says we have stopped hearing it. A green `● live` on a dead stream is the single
+    // most misleading thing this line can show.
+    : agent.link === "stale" ? <span className="flex items-center gap-1 text-[#ef7c7c]" title={`No heartbeat from the server for over ${Math.round(LINK_STALE_MS / 1000)}s — this pane may be showing a frozen picture. It reconnects on its own; switching tabs and back forces it.`}><span className="h-1.5 w-1.5 rounded-full bg-[#ef7c7c]" />no signal</span>
     : transcriptHasActivity ? <><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</>
-    : agent.busy || agent.activity.phase !== "idle" ? <ActivityLine compact busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} />
+    : agent.busy || agent.activity.phase !== "idle" ? <ActivityLine compact busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} turnElapsed={agent.turnElapsed} link={agent.link} />
     : agent.live ? <><span className="h-1.5 w-1.5 rounded-full bg-green-500" />{planning ? "plan mode" : "live"}</> : <>ready</>;
 
   // The slot is reachable from the header whenever it isn't showing — either because it was hidden by
@@ -2655,6 +2768,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             <AgentBoard tasks={agent.activity.tasks} finished={agent.notices.filter((n) => n.kind === "task")} />
           </div>
         )}
+        {/* The factory strip, whenever this pane is a Blacksmith operator console. Persistent, not
+            turn-scoped: the whole point is that the factory's state is INDEPENDENT of whether this
+            chat is busy, and a strip that only appeared during a turn would answer the question it
+            exists for at exactly the moments you already knew the answer. */}
+        {blacksmith && <div className="mb-1"><BlacksmithPanel /></div>}
         {/* The placement pass moved this conversation — say so persistently, in the same slot the
             isolation bar uses and for the same reason: where a chat writes is the one fact that
             must never be ambient. NoticeStrip can't carry this (it renders only during a live
@@ -2707,7 +2825,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             )}
           </div>
         ) : visible.length === 0 ? (
-          agent.busy ? <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} /> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
+          agent.busy ? <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} turnElapsed={agent.turnElapsed} link={agent.link} notices={agent.notices} /> : (!isNew && !detail ? <p className="text-sm text-neutral-500">Loading transcript…</p> : null)
         ) : (
         <>
         {/* What Claude can actually see is never left implicit. Once this pane resumes a conversation
@@ -2740,7 +2858,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             // every token. Every earlier row gets a prop set that is identical between renders, and
             // React.memo skips it entirely — which is the entire point of the extraction.
             live={t.streaming && i === visible.length - 1
-              ? { notices: agent.notices, activity: agent.activity, elapsed: agent.elapsed, busy: agent.busy }
+              ? { notices: agent.notices, activity: agent.activity, elapsed: agent.elapsed, turnElapsed: agent.turnElapsed, link: agent.link, busy: agent.busy }
               : null}
           />
         ))}
@@ -2750,7 +2868,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         {agent.busy && !(visible[visible.length - 1]?.streaming) && (
           <div className="flex flex-col gap-1.5">
             <NoticeStrip notices={agent.notices} />
-            <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} notices={agent.notices} />
+            <ActivityLine busy={agent.busy} activity={agent.activity} elapsed={agent.elapsed} turnElapsed={agent.turnElapsed} link={agent.link} notices={agent.notices} />
           </div>
         )}
         {/* What you've said that hasn't run yet — in the log, where you said it.
@@ -2855,7 +2973,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           // at the other end of this same row. Two doors, ONE destination still holds — this chip and
           // the switch on the bento tile raise the same canvas.
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} busy={agent.busy} />
+            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{statusEl}</span>
           </div>
@@ -2885,7 +3003,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
                 {/* Opens UPWARD: it hangs off the composer, which is already at the bottom of the pane,
                     so downward would render it outside the pane's `overflow-hidden` box. */}
                 <div className="absolute bottom-full left-0 z-20 mb-1 flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900 p-2 shadow-2xl">
-                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} busy={agent.busy} />
+                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
                 </div>
               </>
             )}
