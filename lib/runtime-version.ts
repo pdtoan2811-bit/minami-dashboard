@@ -6,12 +6,19 @@
 //
 // The advice in that message is wrong here, and following it would have wasted an afternoon: `claude`
 // on this box was ALREADY 2.1.241, and updating it further would have changed nothing. The Agent SDK
-// ships its own Claude Code binary and spawns that one — `@anthropic-ai/claude-agent-sdk@0.3.220`
-// carries 2.1.220, built 2026-07-24. The only way to move it is to bump the npm dependency.
+// ships its own Claude Code binary and spawns that one — at the time, `@anthropic-ai/claude-agent-sdk@0.3.220`
+// carrying 2.1.220, built 2026-07-24. The only way to move it is to bump the npm dependency.
 //
 // So the version that governs which models a pane may use is a property of node_modules, and the app
 // had no idea what it was. It does now, so the picker can decline a model BEFORE a turn is spent on it
 // rather than surfacing a 400 the user has to decode.
+//
+// 2026-09-14: bumped to 0.3.270 / CLI 2.1.270, which is why no number is hardcoded below — the manifest
+// is read at runtime precisely so this file does not become the thing that goes stale. The bump is also
+// why Fable 5.1 (minCli 2.1.251) is now selectable here at all. Two hazards are recorded in
+// docs/knowledge/03-live-sessions.md §3: NODE_ENV=production prunes devDeps on install, and the running
+// server keeps the OLD wrapper in memory while resolving the NEW binary from disk, so deploy promptly
+// after installing and check manifest.sdkCompat.testedWrapperVersions covers the pairing.
 
 import fs from "node:fs";
 import path from "node:path";

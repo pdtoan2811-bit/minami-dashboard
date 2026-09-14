@@ -9,6 +9,37 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-14
+- **The dashboard was running a seven-week-old Claude Code** (§3) — bumped
+  `@anthropic-ai/claude-agent-sdk` 0.3.220 → **0.3.270**, moving the spawned CLI from **2.1.220**
+  (built 2026-07-24) to **2.1.270**. The SDK ships a real ~245 MB `claude` executable in
+  `node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/`; running it directly confirmed both the
+  old and new numbers. Until the bump this box had **three different Claude Codes**: 2.1.220 for
+  dashboard panes, 2.1.241 on `PATH`, 2.1.270 in Desktop.
+- **Found by a transcript that spanned both runtimes, which is a reusable technique.** Every session
+  JSONL row carries `entrypoint` and `version`, so one Blacksmith session recorded
+  `claude-desktop`/2.1.270 for 81 minutes and `sdk-ts`/2.1.220 for the last 8 — same conversation,
+  same model (opus-5), same effort (high), 50 releases apart. Grouping any transcript by `entrypoint`
+  is a free A/B of the dashboard against stock Claude Code, and needs no instrumentation.
+- Worth recording because it contradicts the hypothesis that prompted the investigation: in that
+  transcript the **SDK half performed better**, not worse. It caught a flaky test, rejected its own
+  premature fix, and instrumented to resolve it; the Desktop half held a wrong headline finding
+  ("19 failing tests plus a Filament panel lockout") for ~50 minutes until the user typed "Try again",
+  and produced four false conclusions from zsh quoting bugs. The version gap is a real defect — it is
+  just not what that transcript demonstrates.
+- Two install hazards, both recorded in §3: `NODE_ENV=production` is set on this box, so a bare
+  `npm install` prunes devDeps and silently removes `typescript` (installed with
+  `NODE_ENV=development --include=dev`; all seven declared devDeps verified after). And the running
+  server holds the OLD wrapper JS in memory while resolving the NEW binary from disk, so between
+  install and deploy a *newly created* session pairs 0.3.220 with 2.1.270 — outside
+  `manifest.sdkCompat.testedWrapperVersions` (`0.3.229 … 0.3.269`). Already-running sessions are safe
+  via their open fd to the replaced file.
+- Consequence: `claude-fable-5-1` (`minCli: "2.1.251"`) was unselectable in the dashboard and
+  selectable in Desktop. Both can now run it.
+- **Still open from the same investigation:** the read pipeline never opens `subagents/*.jsonl`. That
+  session wrote **3.4 MB of subagent transcripts against a 3.1 MB main transcript** — four named
+  agents — and `lib/claude-sessions.ts` has zero references to `subagents`/`isSidechain`. Combined
+  with `FANOUT_PROMPT` being on by default, the dashboard pushes work into the one place it cannot
+  display, which reads as "it did less".
 - **Blacksmith mode, and the three questions one indicator was answering** (§20, §3, §4, §5) — asked
   for a way to drive the [Blacksmith](https://github.com/juzser/blacksmith) agent factory from a chat
   pane, plus better visibility because *"I often got confused and wondering if the blacksmith still

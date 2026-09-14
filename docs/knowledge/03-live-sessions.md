@@ -158,11 +158,38 @@ says *which* gate rejected the pick — "needs Claude Code 2.1.251 and this serv
 substitution. That converts a dead turn into a sentence.
 
 **The version that governs this is a property of `node_modules`, not of `PATH`.** The Agent SDK ships
-and spawns its *own* Claude Code binary; `node_modules/@anthropic-ai/claude-agent-sdk` (0.3.220) carries
-`manifest.json` = `{"version":"2.1.220","commit":"4073f59…","buildDate":"2026-07-24T22:28:51Z"}`, and
-that is what every dashboard chat on this box runs on. The `claude` on `PATH` — measured at
-`/opt/homebrew/bin/claude`, **2.1.241** — serves interactive terminal sessions and has no say here. The
-only way to move the number is to bump the npm dependency and redeploy.
+and spawns its *own* Claude Code binary — not a version string in a manifest but a real 200–250 MB
+executable at `node_modules/@anthropic-ai/claude-agent-sdk-<platform>/claude`, whose sibling wrapper
+package carries the matching `manifest.json`. That binary is what every dashboard chat on this box
+runs on. The `claude` on `PATH` — measured at `/opt/homebrew/bin/claude`, **2.1.241** — serves
+interactive terminal sessions and has no say here. The only way to move the number is to bump the npm
+dependency and redeploy.
+
+> **Upgraded 2026-09-14: 0.3.220 / CLI 2.1.220 → 0.3.270 / CLI 2.1.270.** Running the binary directly
+> confirms it (`…-darwin-arm64/claude --version` → `2.1.270 (Claude Code)`). Before the bump the box
+> had **three different Claude Codes** on it — 2.1.220 for dashboard panes, 2.1.241 on `PATH`, 2.1.270
+> in the Desktop app — and the dashboard's was seven weeks and ~50 releases behind.
+>
+> **How it was found is the reusable part: one transcript spanned both runtimes.** Every row in a
+> session JSONL carries `entrypoint` and `version`, so
+> `/Users/thomas/.claude/projects/…/61658e33-….jsonl` records `claude-desktop`/`2.1.270` for its first
+> 81 minutes and `sdk-ts`/`2.1.220` for the last 8 — same conversation, same model, same effort, 50
+> releases apart. **Grouping any transcript by `entrypoint` is the cheapest available A/B of the
+> dashboard against stock Claude Code**, and it needs no instrumentation.
+>
+> Two install hazards, both real on this box:
+> - `NODE_ENV=production` is set in the shell here, so a bare `npm install` prunes every devDependency
+>   and silently removes `typescript` — which breaks every `@/` alias with an error that names neither.
+>   Install with `NODE_ENV=development npm install --include=dev`, then verify the devDeps survived.
+> - **The wrapper JS is loaded in memory by the running server; the binary is resolved from disk at
+>   spawn time.** So between `npm install` and the next deploy, a NEWLY created session pairs the OLD
+>   wrapper with the NEW CLI. `manifest.json`'s `sdkCompat.testedWrapperVersions` is exactly the list
+>   that pairing has to be in — 2.1.270's is `0.3.229 … 0.3.269`, which does **not** include 0.3.220.
+>   Check that list before installing, and deploy promptly afterwards. Already-running sessions are
+>   safe: their process holds an open fd to the replaced binary.
+>
+> Consequence for the catalog: `claude-fable-5-1` carries `minCli: "2.1.251"`, so it was unselectable
+> in the dashboard and selectable in Desktop. Both can now run it.
 
 - **`lib/runtime-version.ts`** (new) reads that manifest, 60s cache — a dependency bump needs a redeploy
   anyway, so the TTL is churn control, not freshness. **The null contract is the load-bearing part:**
