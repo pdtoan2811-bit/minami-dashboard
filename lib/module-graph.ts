@@ -180,6 +180,12 @@ export const NODES: ModuleNode[] = [
   { id: "r/flow", label: "/api/flow/[id]", sub: "narratives only\nGET cached · POST writes", layer: "route", row: 14, pipeline: "live" },
   { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
   { id: "r/fanout", label: "/api/agent/fanout", sub: "fan-out pill → respawn\n(prompt append is creation-only)", layer: "route", row: 15, pipeline: "live" },
+  // ── Blacksmith: the chat pane as the agent factory's operator console (KNOWLEDGE.md §17) ─────
+  { id: "r/bsmode", label: "/api/agent/blacksmith", sub: "⚒ pill → respawn\n(same creation-only trap)", layer: "route", row: 15, pipeline: "live" },
+  { id: "l/bsclient", label: "blacksmith/client.ts", sub: "reads smith ui serve :4680\nevent AGE, never \"running\"", layer: "core", row: 16, pipeline: "live" },
+  { id: "l/bshook", label: "blacksmith/use-blacksmith.ts", sub: "one poller for the page\n(refcounted, backs off when down)", layer: "core", row: 16, pipeline: "live" },
+  { id: "r/bs", label: "/api/blacksmith", sub: "factory state, always 200\n(down is an answer)", layer: "route", row: 16, pipeline: "live" },
+  { id: "c/BlacksmithPanel", label: "BlacksmithPanel", sub: "in-pane factory strip\n+ bento tile badge", layer: "component", row: 16, pipeline: "live" },
   { id: "l/previewblock", label: "preview-block.ts", sub: "```minami-preview → chips\n(the ending contract, reader half)", layer: "core", row: 21, pipeline: "live" },
 
   // ── Density: how much chrome a box may spend (KNOWLEDGE.md §5e) ─────────
@@ -407,5 +413,16 @@ export const EDGES: ModuleEdge[] = [
   { from: "r/hold", to: "l/manager", kind: "import" },
   { from: "l/useagent", to: "r/fanout", kind: "http", label: "toggle" },
   { from: "r/fanout", to: "l/manager", kind: "import" },
+  { from: "l/useagent", to: "r/bsmode", kind: "http", label: "toggle" },
+  { from: "r/bsmode", to: "l/manager", kind: "import" },
+  // The one edge that leaves this machine's own state: an HTTP read of a SEPARATE local service. It
+  // is one-way by construction — nothing here can write to the factory, because everything the
+  // factory admits has to pass its gates, and a dashboard button is not a gate.
+  { from: "l/bsclient", to: "l/manager", kind: "import", label: "URL + home" },
+  { from: "r/bs", to: "l/bsclient", kind: "import" },
+  { from: "l/bshook", to: "r/bs", kind: "http", label: "5s poll · 30s when down" },
+  { from: "c/BlacksmithPanel", to: "l/bshook", kind: "import" },
+  { from: "app/page", to: "c/BlacksmithPanel", kind: "import" },
+  { from: "app/page", to: "l/bshook", kind: "import", label: "tile badge" },
   { from: "app/page", to: "l/previewblock", kind: "import" },
 ];

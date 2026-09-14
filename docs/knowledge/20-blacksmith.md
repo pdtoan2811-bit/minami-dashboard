@@ -1,0 +1,171 @@
+# Blacksmith — the chat pane as the agent factory's operator console
+
+Index: [`../KNOWLEDGE.md`](../KNOWLEDGE.md) · Related: [§3 live sessions](03-live-sessions.md) ·
+[§14 agents](14-agents.md) · [§15 teams](15-teams.md)
+
+---
+
+## 20. Blacksmith (2026-09-14)
+
+[Blacksmith](https://github.com/juzser/blacksmith) is a **separate project** — an autonomous agent
+factory at `~/dev/blacksmith`, CLI `smith`. You co-plan a spec, it decomposes the work, each task runs
+in its own git worktree under a token budget over paths no other worker may touch, and what merges is
+decided by gates: schema, tests, a reviewer that never saw the coder's session, and a verifier whose
+only job is to refute the reviewer.
+
+This section is **only** about the dashboard's side of that: a chat mode, a read-only panel, a tile
+badge. Nothing here orchestrates anything.
+
+### 20.1 What was asked, and the diagnosis underneath it
+
+The ask was two things: a mode to enable Blacksmith in the chat panel, and better UI for seeing an
+agent work — *"I often got confused and wondering if the blacksmith still running or not."*
+
+The second half turned out to be **three different questions wearing one indicator**:
+
+| Question | Who can answer it | State before |
+|---|---|---|
+| Is the chat session driving the factory still working? | the dashboard's own `s.busy` / activity | a phase clock that reset every couple of seconds — see §4 |
+| Is this pane still *connected* to the server? | the SSE stream | nothing — a dead stream and a working pane rendered identically (§5) |
+| Is the **factory** progressing? | Blacksmith's event log | not surfaced at all |
+
+The first two are general defects and were fixed dashboard-wide (§4 two clocks, §5 the heartbeat).
+Only the third is Blacksmith-specific, and it is the rest of this section.
+
+### 20.2 The load-bearing fact: Blacksmith cannot tell you it is running
+
+**There is no `session-ended` event.** Blacksmith's own UI reports `lastEventAt` as *evidence* and
+leaves the judging to the caller. So there is no honest boolean for "is the factory running", and this
+integration does not invent one — the panel reports the **age of the last event** and says
+`moving` / `quiet · 7m ago`. That wording is the feature. "Stopped" would be a claim nobody can make.
+
+It is also not a fault when it is quiet. Blacksmith has no scheduler and **no dispatch driver**:
+`smith daemon` watches and reports but "never dispatches, never merges and never writes to a
+worktree". The factory only moves when an operator moves it, so long quiet periods are the normal
+state and must not read as an alarm.
+
+The corollary bites harder, and it is why `staleAgents` exists. `liveAgentCount` counts
+`dispatch_decision` events that never received a terminal event. In a hand-driven factory — every
+coder and reviewer spawned by hand, every `smith judge report` typed by hand — **a forgotten report
+leaves a phantom "live agent" on the board forever**. A count that only ever goes up is worse than no
+count, so any dispatch older than `STALE_AGENT_MS` (90 min) is separated out and labelled. That
+threshold is sized off the factory's own evidence: the longest measured coder turn in the first
+external epic was ~247k tokens, well under an hour of wall-clock.
+
+### 20.3 Why HTTP, and not the database or the log
+
+`smith ui serve` binds `127.0.0.1:4680` (local-first, no auth) and exposes `/api/pulse`,
+`/api/overview`, `/api/kanban`, `/api/tasks/:id`. **It re-projects changed sessions on every request**,
+fingerprinting each `state/events/*.jsonl` by size+mtime. That makes polling it cheap, always current,
+and incapable of writing anything.
+
+The two alternatives were both worse:
+
+- **`state/smith.db` directly** — it is a *derived* read-model that only exists because something ran
+  the projector. Nothing projects on a schedule (the daemon would, but `state/daemon/` has never
+  existed on this box), so it can be arbitrarily stale. It also runs in WAL mode, so a naive reader
+  silently misses everything still in the write-ahead log.
+- **Tailing the event log** — the most faithful source and the most code: hash-chained JSONL with
+  `event_id` derived as `<session_id>#<lineIndex>`, which would mean reimplementing the projector.
+
+`/api/pulse` is fetched first and alone, because it is the cheap column-projected probe that never
+loads event payloads — a factory that isn't serving costs one failed connect rather than four. The
+other two are best-effort and fetched together: a shape change in one of Blacksmith's endpoints should
+degrade that section, not blank the panel that tells you the factory is alive.
+
+**Read-only by construction, and it stays that way.** Everything Blacksmith admits has to pass its
+gates, and a dashboard button is not a gate. The factory refused three operator shortcuts in its first
+external epic, each correctly; a UI that could route around that would be removing the product.
+
+### 20.4 The mode
+
+Third member of the `setModel` / `setFanout` family, identical mechanics — see §3 for the
+creation-only trap and the teardown-and-resume contract that answers it. The pieces:
+
+`BLACKSMITH_PROMPT` + `DEFAULT_BLACKSMITH` (manager.ts) · `Session.blacksmith` · the
+`systemPrompt.append` conditional · `setBlacksmith()` · `POST /api/agent/blacksmith` ·
+`changeBlacksmith()` (use-agent.ts) · the `⚒ smith` pill in `ModeControls` · `chatBlacksmith:<key>`.
+
+**Why a mode and not a skill.** Blacksmith ships its own `/bs` skill, which states outright that it
+"never calls an LLM directly and never embeds a role prompt" — the judgment steps are separate Claude
+Code sessions the operator dispatches from `.claude/agents/<role>.md`. So the session has to know it
+IS the dispatcher, and a skill that loads when the model decides it's relevant cannot establish that.
+
+What the prompt carries, and why each part earned its place:
+
+- **The dispatch contract** — five things every spawned agent must be handed explicitly: task spec,
+  ABSOLUTE worktree path, path claims, token cap, turn budget. The last is named because the role
+  templates carry a `maxTurns` key *Claude Code does not read*; the number is only true if the prompt
+  says it.
+- **That the factory's refusals are correct** and must not be worked around.
+- **Two standing hazards**, both learned expensively: a git worktree is a checkout, not an environment
+  (ask what a check *transitively* touches, not what language it's written in); and a fix that ADDS a
+  condition is often the next round's bug — three consecutive rounds on two components each repaired a
+  real defect and introduced a fresh one, converging only on "delete the thing you added last round".
+- **Never hand-estimate a number you are about to assert.** An operator's arithmetic once turned four
+  under-budget tasks into a reported 13–44% overrun; `smith gate run`'s token count must be measured
+  off the transcript.
+
+Off by default (`MINAMI_DASHBOARD_BLACKSMITH=1` flips it): the prompt is long and names a clone most
+installs don't have. And unlike fan-out it does **not** seed a global default from the per-pane
+choice — see §3 for why.
+
+### 20.5 What the panel and the badge show
+
+`lib/blacksmith/client.ts` normalizes; `lib/blacksmith/use-blacksmith.ts` is one refcounted poller for
+the whole page (5s live, **30s when the factory is down** — most installs have no Blacksmith, and a
+dashboard firing a doomed request every five seconds forever is a bug even if nothing notices). A
+per-component `useEffect` fetch would have meant one request per bento tile per tick for one identical
+answer, each making `smith ui serve` re-project the log.
+
+Panel headline: `⚒ Blacksmith · moving|quiet · <age> · <epics in flight> · N stale · N blocking`.
+Expanded: task-status histogram, open findings by severity, per-epic token spend against budget, and
+**per-session event age** — which is where "*which* epic has gone quiet" gets answered, something the
+single headline age deliberately does not try to do.
+
+Blacksmith's own closed vocabulary is passed through, not re-labelled: `todo · ready · in-progress ·
+grading · reviewing · merging · blocked · completed · waived · failed · escalated · superseded` for
+tasks, `S1-stop-the-line … S4-nit` for severity. Renaming any of it would make the panel and the CLI
+disagree about the same record.
+
+The **tile badge** (`⚒ 12/30 · 2 blocking`) renders only on a tile whose folder Blacksmith is actually
+building — matched on folder **basename**, not path. Blacksmith anchors every file it writes to its own
+clone and records the target only as a bare `project` string, so the checkout it is building can live
+anywhere on disk; there is no path to compare against.
+
+`/api/blacksmith` always returns **200, even when the factory is down** — `up: false` plus a reason is
+the answer, not an error. Half the point of the panel is to say "Blacksmith isn't running" clearly
+instead of rendering an empty board, which reads exactly like "Blacksmith is running with nothing to
+do".
+
+### 20.6 Verified
+
+2026-09-14, against the live factory on `:4680` with three epics in flight
+(`central-customer-360`, `central-real-screens`, `central-retire-filament`):
+
+- `/api/blacksmith` returned real state — 487 events, tasks `12 completed / 1 in-progress / 4 ready /
+  13 todo`, findings `2×S2 · 2×S3 · 1×S4`, `central-real-screens` at 510k of its 550k budget.
+- The panel rendered headline + expanded detail in a pane with the ⚒ pill lit.
+- The tile badge appeared on `oe-central-ver2` and on no other tile.
+- The SSE heartbeat: 3 beats in 36s at 9–10s intervals.
+
+**Not exercised live:** the turn clock and the stale-link indicator under a real in-flight turn — both
+are typechecked and built, and the heartbeat they depend on is verified, but no dashboard turn was run
+to watch them count. Worth confirming on the first real turn after deploy.
+
+### 20.7 The obvious next thing, and why it is not here
+
+Blacksmith's biggest open build is the **dispatch driver** — step 6 of the per-task chain, the one the
+operator performs by hand. Everything around it already exists and already emits JSON: `wave check` →
+`worktree create` → `lessons/findings for-dispatch` → **[spawn the agent]** → `judge dispatch` →
+`judge report` → `gate run` → `queue run`.
+
+The dashboard is unusually well-placed to close it: `assign()` (§14.3) already spawns a session in a
+given folder under a given model and permission mode, `taskKey()` already namespaces a session so the
+read pipeline attributes it back, and the manager already measures real token usage — which is exactly
+the number an operator currently types by hand into `smith gate run` and once got wrong by 44%.
+
+It is deliberately out of scope here. It is a large piece of work, it belongs as much to Blacksmith as
+to this dashboard, and it would make this integration a writer rather than a reader — which changes
+the security posture of every paragraph above. Recorded so the next person starts from the map rather
+than the discovery.

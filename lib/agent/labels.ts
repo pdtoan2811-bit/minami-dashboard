@@ -83,6 +83,15 @@ export type ActivityState = {
    *  start time (`Date.now() - elapsedMs`) so its own ticking timer stays correct across a reconnect
    *  without depending on the server and browser clocks agreeing. */
   elapsedMs: number;
+  /** How long the whole TURN has been running, in ms — absent when nothing is in flight.
+   *
+   *  Distinct from `elapsedMs` because they answer different questions, and for a long time only the
+   *  wrong one was on screen. `elapsedMs` restarts on every phase change, and a tool-heavy turn changes
+   *  phase several times a second (tool → settle → thinking → tool …), so the only clock the user could
+   *  see rarely passed ten seconds. That made a wedged five-minute Bash and a fast one render
+   *  identically — which is precisely the "is this thing still running?" confusion this field exists to
+   *  answer. It restarts only at a real turn boundary, so it is allowed to read 07:42 and mean it. */
+  turnMs?: number;
   tools: LiveTool[];
   tasks: LiveTask[];
   /** Transient detail that outranks the phase label (retry attempt, compaction size). */
