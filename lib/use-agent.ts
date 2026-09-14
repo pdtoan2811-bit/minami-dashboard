@@ -4,7 +4,7 @@
 // prompts, and — when a turn finishes — reconciles the transcript from the authoritative JSONL file
 // (so Markdown/tools render exactly as elsewhere and any streaming gap is healed).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { IDLE_ACTIVITY, type ActivityState, type ToolOutput } from "./agent/labels";
+import { IDLE_ACTIVITY, type ActivityState, type FinishedTask, type ToolOutput } from "./agent/labels";
 
 export type AgentTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
 export type AgentToolCall = { name: string; input: unknown; id?: string; done?: boolean; ok?: boolean; ms?: number; output?: ToolOutput };
@@ -22,7 +22,7 @@ export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions"
 export type Notice = { kind: string; text: string; at: number; agent?: string; status?: "completed" | "failed" | "stopped" };
 
 export { activityLabel, toolCategory, escalationHint } from "./agent/labels";
-export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem, LiveTask } from "./agent/labels";
+export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem, LiveTask, FinishedTask, TaskKind } from "./agent/labels";
 
 // How long "the server is blocked on you, and you have nothing to answer" must hold before the client
 // treats it as a lost prompt rather than one still in flight. Generous on purpose: the two facts travel
@@ -65,6 +65,11 @@ export function useAgent(paneKey: string) {
   // replace semantics, so a dropped event self-heals and a refresh mid-tool-call resumes correctly.
   const [activity, setActivity] = useState<ActivityState>(IDLE_ACTIVITY);
   const [notices, setNotices] = useState<Notice[]>([]); // retries, compactions, denials — non-fatal
+  // Every subagent / background task that reached a terminal state, newest first. The tasks panel's
+  // "Finished N" list. Its own state rather than a filter over `notices` because those are capped at
+  // five and meant to scroll away; a finished task is something you come back to. Capped high enough
+  // that a fan-out heavy session keeps its whole afternoon.
+  const [finishedTasks, setFinishedTasks] = useState<FinishedTask[]>([]);
   // Wall-clock start of the current phase, translated out of the server's elapsedMs so our own ticking
   // timer never depends on the two clocks agreeing.
   const [phaseStart, setPhaseStart] = useState<number>(() => Date.now());
@@ -366,6 +371,11 @@ export function useAgent(paneKey: string) {
           break;
         case "notice":
           setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now(), agent: ev.agent, status: ev.status }]);
+          break;
+        case "task_end":
+          // Dedup on taskId: a reconnect can replay the tail of the buffer, and the same ending twice
+          // would show a task finishing twice.
+          if (ev.task?.taskId) setFinishedTasks((prev) => [ev.task as FinishedTask, ...prev.filter((t) => t.taskId !== ev.task.taskId)].slice(0, 200));
           break;
         case "ctx":
           setCtxUsed(typeof ev.used === "number" ? ev.used : null); break;
@@ -790,10 +800,22 @@ export function useAgent(paneKey: string) {
     } catch { setStopping(false); }
   }, [live, busy, stopping, paneKey]);
 
+  // Stop ONE task from its card — the SDK answers with a `stopped` task_notification, which lands in
+  // finishedTasks through the normal path, so nothing is updated optimistically here. Returns the
+  // server's refusal so the card can show it rather than silently doing nothing.
+  const stopTask = useCallback(async (taskId: string): Promise<{ ok: boolean; reason?: string }> => {
+    try {
+      const r = await fetch("/api/agent/task/stop", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, taskId }) });
+      const d = await r.json().catch(() => null);
+      return d?.ok ? { ok: true } : { ok: false, reason: d?.reason || d?.error || "couldn't stop that task" };
+    } catch (e) { return { ok: false, reason: String((e as Error)?.message || e) }; }
+  }, [paneKey]);
+  const clearFinished = useCallback(() => setFinishedTasks([]), []);
+
   // `elapsed` recomputes on every 1s tick above, so the caller gets a live-counting number for free.
   const elapsed = activity.phase === "idle" ? 0 : Math.max(0, Date.now() - phaseStart);
   // The steady one. Same free recount off the same tick, but anchored to the turn rather than the
   // phase — so this is the number that can legitimately read "6m 20s" and be believed. 0 when idle.
   const turnElapsed = turnStart == null ? 0 : Math.max(0, Date.now() - turnStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, turnElapsed, link, notices, sessionId, sessionModel, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, changeBlacksmith, setHold, stop };
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, turnElapsed, link, notices, sessionId, sessionModel, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, changeBlacksmith, setHold, stop, finishedTasks, stopTask, clearFinished };
 }

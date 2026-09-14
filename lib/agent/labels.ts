@@ -19,12 +19,54 @@ export type ActivityPhase =
 
 /** A tool call that has started and not yet returned its result. */
 export type LiveTool = { id: string; name: string; label: string; parentId?: string | null };
+/** What kind of thing a task is, from the SDK's `task_type`. The panel renders bash and agent tasks
+ *  differently — a Bash card is "what command, how long"; an agent card is "which model, how many
+ *  tokens, which tool is it on right now" — so the kind has to travel with the task. */
+export type TaskKind = "agent" | "bash" | "workflow" | "mcp" | "other";
+
 /** A running subagent (Task tool) or background task. */
-export type LiveTask = { id: string; description: string; agent?: string; lastTool?: string; toolUses?: number;
+export type LiveTask = {
+  /** `tool_use_id` when the SDK gave one, else `task_id`. This is what a nested tool call's `parentId`
+   *  points at, so it stays the correlation key for the activity line. */
+  id: string;
+  /** The SDK's own `task_id` — what `stopTask()` takes, and (for agents) the suffix of the on-disk
+   *  transcript `subagents/agent-<task_id>.jsonl`. Kept apart from `id` because the two differ. */
+  taskId: string;
+  toolUseId?: string;
+  description: string;
+  agent?: string;
+  kind?: TaskKind;
+  /** Registered in the background (run_in_background, Ctrl+B) rather than blocking its tool call. */
+  backgrounded?: boolean;
+  /** 1 for a top-level spawn, N+1 from inside a depth-N agent. Only on agent tasks. */
+  depth?: number;
+  lastTool?: string;
+  toolUses?: number;
+  /** `usage.total_tokens` from the latest task_progress — the agent's own spend, not the parent's. */
+  tokens?: number;
+  /** The SDK's one-line status for the row: a model-written progress summary for agents, the server's
+   *  own status for an MCP task. Outranks `lastTool` when present. */
+  summary?: string;
+  /** The model the subagent is actually on, read from its transcript's first assistant row. Absent
+   *  until that row exists on disk — a spawn is a second or two ahead of it. */
+  model?: string;
   /** Server clock at task_started — lets the pane show per-agent elapsed instead of one shared timer
    *  that says nothing about which agent has been grinding. Optional: absent on background tasks
    *  adopted from a REPLACE snapshot (their true start predates our first sight of them). */
-  since?: number };
+  since?: number;
+};
+
+/** A task after its task_notification — the Finished list. Same shape plus the outcome, so a card can
+ *  keep rendering exactly as it did while running and just stop ticking. */
+export type FinishedTask = LiveTask & {
+  status: "completed" | "failed" | "stopped";
+  endedAt: number;
+  /** `usage.duration_ms` from the notification — the SDK's own measurement, preferred over
+   *  `endedAt - since` because `since` is absent on adopted background tasks. */
+  ms?: number;
+  /** The notification's `summary` — for an agent, the closing report; for bash, the tail of output. */
+  result?: string;
+};
 
 /** One entry of the agent's TodoWrite plan. Rendered as a live checklist — see TodoChecklist in
  *  app/page.tsx. Sourced straight from a TodoWrite tool call's `input.todos`, which is already

@@ -18,7 +18,8 @@ import fsSync from "node:fs";
 import os from "node:os";
 import pathMod from "node:path";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
-import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type LiveTask, type LiveTool, type ToolOutput } from "./labels";
+import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
+import { findSubagentFile, subagentModel } from "../claude-sessions";
 import { DASHBOARD_MODEL } from "../model-pins";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
@@ -230,6 +231,10 @@ export type AgentEvent =
   // not: send() sets `busy` optimistically before its POST lands, so a beat crossing that window would
   // report the not-yet-created session as idle and blank the indicator on the turn just started.
   | { t: "beat"; at: number }
+  // A subagent or background task reached a terminal state, with the SDK's own usage numbers. The
+  // tasks panel's Finished list is built from these; the transient `notice{kind:"task"}` that rides
+  // alongside is for the status strip and is capped at five, which is why this is its own event.
+  | { t: "task_end"; task: FinishedTask }
   | { t: "error"; message: string };
 
 type Decision = { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string };
@@ -1012,11 +1017,20 @@ function handleSystem(s: Session, m: any) {
     }
 
     case "task_started":
-      if (m.skip_transcript) break; // ambient housekeeping — not the user's business
+      if (m.skip_transcript || m.ambient) break; // ambient housekeeping — not the user's business
+      // The level signal (background_tasks_changed) arrives BEFORE this edge for a backgrounded task —
+      // the SDK documents that ordering as "in practice" — so the task is usually already here under
+      // its `bg:` placeholder id. Retire that entry now, or the panel shows the same command twice.
+      s.liveTasks.delete(`bg:${m.task_id}`);
       s.liveTasks.set(m.task_id, {
         id: m.tool_use_id || m.task_id,
+        taskId: m.task_id,
+        toolUseId: m.tool_use_id,
         description: m.description || m.workflow_name || "task",
         agent: m.subagent_type,
+        kind: taskKindOf(m.task_type, m.subagent_type),
+        backgrounded: !!m.is_backgrounded,
+        depth: typeof m.spawn_depth === "number" ? m.spawn_depth : undefined,
         since: Date.now(),
       });
       touch(s, "tool");
@@ -1029,7 +1043,25 @@ function handleSystem(s: Session, m: any) {
       // chewed through. Turns an opaque 3-minute "running a subagent" into real progress.
       if (m.last_tool_name) t.lastTool = activityLabel(m.last_tool_name);
       if (m.subagent_type) t.agent = m.subagent_type;
+      if (typeof m.summary === "string" && m.summary) t.summary = m.summary;
       t.toolUses = m.usage?.tool_uses;
+      if (typeof m.usage?.total_tokens === "number") t.tokens = m.usage.total_tokens;
+      // The model isn't on any task event. It IS on the subagent's own transcript, one row in — and
+      // progress events are the natural moment to look, because the first one means the agent has
+      // done something, so the row almost certainly exists. Once found it never changes.
+      if (!t.model && t.kind === "agent") resolveTaskModel(s, t);
+      touch(s);
+      break;
+    }
+
+    case "task_updated": {
+      // Wire-safe patches to a task's state — a foreground agent moved to the background (Ctrl+B),
+      // a description rewrite. `status` is deliberately NOT applied here: the terminal states arrive
+      // as task_notification with the usage attached, and acting on both would finish a task twice.
+      const t = s.liveTasks.get(m.task_id);
+      if (!t || !m.patch) break;
+      if (typeof m.patch.description === "string") t.description = m.patch.description;
+      if (typeof m.patch.is_backgrounded === "boolean") t.backgrounded = m.patch.is_backgrounded;
       touch(s);
       break;
     }
@@ -1037,8 +1069,26 @@ function handleSystem(s: Session, m: any) {
     case "task_notification": {
       const t = s.liveTasks.get(m.task_id);
       s.liveTasks.delete(m.task_id);
-      if (!m.skip_transcript && t) {
+      if (!m.skip_transcript && !m.ambient && t) {
+        // Last chance for the model: an agent that used no tools never emitted task_progress, so the
+        // lookup there never ran. Its transcript certainly exists by now.
+        if (t.kind === "agent" && !t.model) resolveTaskModel(s, t, { force: true });
         broadcast(s, { t: "notice", kind: "task", text: `subagent ${m.status}: ${m.summary || t.description}`, agent: t.agent, status: m.status });
+        // The structured record, for the tasks panel's Finished list. Separate from the notice above
+        // on purpose: notices are a five-deep transient strip, and a finished task is a durable thing
+        // you scroll back to — different lifetime, different consumer.
+        broadcast(s, {
+          t: "task_end",
+          task: {
+            ...t,
+            status: m.status,
+            endedAt: Date.now(),
+            ms: m.usage?.duration_ms,
+            ...(typeof m.usage?.total_tokens === "number" ? { tokens: m.usage.total_tokens } : {}),
+            ...(typeof m.usage?.tool_uses === "number" ? { toolUses: m.usage.tool_uses } : {}),
+            ...(m.summary ? { result: String(m.summary).slice(0, 2000) } : {}),
+          },
+        });
       }
       settle(s);
       break;
@@ -1049,12 +1099,48 @@ function handleSystem(s: Session, m: any) {
       // bookend can't wedge a stale "running" indicator.
       for (const [id, t] of s.liveTasks) if (t.id.startsWith("bg:") && !m.tasks?.some((x: any) => `bg:${x.task_id}` === t.id)) s.liveTasks.delete(id);
       for (const x of m.tasks || []) {
+        if (x.ambient) continue;
         const id = `bg:${x.task_id}`;
-        if (!s.liveTasks.has(id)) s.liveTasks.set(id, { id, description: x.description || x.task_type, agent: x.task_type });
+        // Only adopt what the edge stream hasn't already registered under its real id — this payload
+        // is ids-only and would otherwise duplicate every task that also got a task_started.
+        if (s.liveTasks.has(x.task_id) || s.liveTasks.has(id)) continue;
+        const kind = taskKindOf(x.task_type);
+        s.liveTasks.set(id, { id, taskId: x.task_id, description: x.description || x.task_type, ...(kind === "agent" ? { agent: x.task_type } : {}), kind, backgrounded: true });
       }
       touch(s);
       break;
   }
+}
+
+/** The SDK's `task_type` folded to what the panel renders by. `local_agent` is the Task tool;
+ *  `local_bash` is a backgrounded command; the rest are rarer and get their own label rather than
+ *  being mislabelled as one of the two common ones. A missing task_type with a subagent_type is an
+ *  agent — older CLIs sent the latter without the former. */
+function taskKindOf(taskType?: string, subagentType?: string): TaskKind {
+  switch (taskType) {
+    case "local_agent": return "agent";
+    case "local_bash": return "bash";
+    case "local_workflow": return "workflow";
+    case "mcp_task": return "mcp";
+  }
+  return subagentType ? "agent" : "other";
+}
+
+// One disk read per task per attempt, and at most one attempt per 3s: task_progress can arrive several
+// times a second under a chatty agent, and the file it wants might be a few seconds from existing.
+// Result lands on the task in place; the next touch() carries it. Never throws, never blocks.
+const modelLookupAt = new WeakMap<LiveTask, number>();
+function resolveTaskModel(s: Session, t: LiveTask, opts?: { force?: boolean }) {
+  if (!s.sessionId) return;
+  const last = modelLookupAt.get(t) || 0;
+  if (!opts?.force && Date.now() - last < 3000) return;
+  modelLookupAt.set(t, Date.now());
+  try {
+    const file = findSubagentFile(s.sessionId, { taskId: t.taskId, toolUseId: t.toolUseId });
+    if (!file) return;
+    const model = subagentModel(file);
+    if (model) t.model = model;
+  } catch { /* best-effort — the card just shows no model */ }
 }
 
 // Send a user message; creates the session on first call (with resume/mode) or feeds the live one.
@@ -1173,6 +1259,30 @@ export function answer(key: string, id: string, answers: Record<string, string |
   p.resolve({ behavior: "allow", updatedInput: { questions, answers } });
   settle(s);
   return true;
+}
+
+// Stop ONE task — a subagent or a backgrounded command — without touching the turn around it. This is
+// the ■ on a card in the tasks panel, and it is a different thing from the pane's Stop: that one
+// interrupts the whole query, which kills every task at once and abandons the reply being written.
+// The SDK answers with a task_notification `status: "stopped"`, which flows through handleMessage and
+// lands in the Finished list like any other ending — so nothing here touches liveTasks directly.
+//
+// Bounded like interrupt() below and for the same reason: a per-task kill is a manual escape hatch,
+// and an escape hatch that can hang is worse than none.
+export async function stopTask(key: string, taskId: string): Promise<{ ok: boolean; reason?: string }> {
+  const s = store.get(key);
+  if (!s || s.closed) return { ok: false, reason: "no live session" };
+  if (!s.liveTasks.has(taskId) && ![...s.liveTasks.values()].some((t) => t.taskId === taskId)) return { ok: false, reason: "that task is not running" };
+  if (typeof s.q?.stopTask !== "function") return { ok: false, reason: "this runtime cannot stop a single task — stop the turn instead" };
+  try {
+    await Promise.race([
+      s.q.stopTask(taskId),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("no response from the runtime within 8s")), 8000)),
+    ]);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: String((e as Error)?.message || e) };
+  }
 }
 
 // Stop the in-flight turn (the chat panel's Stop button). Interrupt the SDK query first — that's the

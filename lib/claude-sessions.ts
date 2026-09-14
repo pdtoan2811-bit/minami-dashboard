@@ -932,3 +932,88 @@ export function readAllTurns(file: string, onTurn: (t: Turn) => void): number {
   } finally { fs.closeSync(fd); }
   return count;
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Subagent transcripts — the sidecar the read pipeline never opened.
+//
+// A Task-tool subagent does not write into the parent's JSONL. Its rows go to
+// `<projects>/<slug>/<sessionId>/subagents/agent-<agentId>.jsonl`, with an `agent-<agentId>.meta.json`
+// beside it carrying `{agentType, description, toolUseId, spawnDepth}`. Measured on one Blacksmith
+// session 2026-09-14: 3.4 MB of subagent transcripts against a 3.1 MB main transcript — more than half
+// the session's work — and nothing in this file looked at any of it. The parent transcript keeps only
+// the Task tool's capped result, so "what did that agent actually do" was unanswerable after the fact.
+//
+// Two keys reach the file. The SDK's `task_id` IS the agentId (verified: the Agent tool result's
+// `agentId: ab8f…` names `agent-ab8f….jsonl`), so the direct path is tried first. `toolUseId` is the
+// fallback, matched through the meta files, for callers that only hold the tool_use block.
+// ---------------------------------------------------------------------------------------------------
+
+const SAFE_ID = /^[a-zA-Z0-9._-]+$/;
+
+export function subagentDir(sessionId: string): string {
+  const main = resolveSessionFile(sessionId);
+  if (!main) return "";
+  return path.join(path.dirname(main), sessionId, "subagents");
+}
+
+/** The transcript file for one subagent, or "" when it doesn't exist yet — a spawn is a second or two
+ *  ahead of its first row on disk, and callers poll this until it appears. */
+export function findSubagentFile(sessionId: string, by: { taskId?: string; toolUseId?: string }): string {
+  const dir = subagentDir(sessionId);
+  if (!dir || !fs.existsSync(dir)) return "";
+  if (by.taskId && SAFE_ID.test(by.taskId)) {
+    const direct = path.join(dir, `agent-${by.taskId}.jsonl`);
+    if (fs.existsSync(direct)) return direct;
+  }
+  if (by.toolUseId) {
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith(".meta.json")) continue;
+        try {
+          const meta = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+          if (meta?.toolUseId === by.toolUseId) {
+            const jsonl = path.join(dir, f.replace(/\.meta\.json$/, ".jsonl"));
+            if (fs.existsSync(jsonl)) return jsonl;
+          }
+        } catch { /* one bad meta file must not hide the rest */ }
+      }
+    } catch { /* unreadable dir */ }
+  }
+  return "";
+}
+
+/** The model a subagent is actually running on — from its first assistant row. Reads only the head of
+ *  the file (the first row is always the prompt, the second is usually the answer), so this is cheap
+ *  enough to call from the live path once per task. Null until that row exists. */
+export function subagentModel(file: string): string | null {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.allocUnsafe(64 * 1024);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    for (const line of buf.subarray(0, n).toString("utf8").split("\n")) {
+      if (!line.includes('"assistant"')) continue;
+      try {
+        const r = JSON.parse(line);
+        const m = r?.message?.model;
+        if (r?.type === "assistant" && typeof m === "string" && m && m !== "<synthetic>") return m;
+      } catch { /* a partial trailing line — the next call will see it whole */ }
+    }
+  } catch { /* missing or unreadable — caller treats as "not yet" */ }
+  finally { if (fd !== null) fs.closeSync(fd); }
+  return null;
+}
+
+export type SubagentPage = { file: string; model: string | null; turns: Turn[]; truncated: boolean };
+
+/** A subagent's whole transcript as turns, through the same parser the main transcript uses so tool
+ *  blocks and outputs render identically. Bounded — an agent that ran for an hour can be larger than
+ *  its parent, and this sits on a request path. */
+export function readSubagent(sessionId: string, by: { taskId?: string; toolUseId?: string }, maxTurns = 400): SubagentPage | null {
+  const file = findSubagentFile(sessionId, by);
+  if (!file) return null;
+  const turns: Turn[] = [];
+  let truncated = false;
+  readAllTurns(file, (t) => { if (turns.length < maxTurns) turns.push(t); else truncated = true; });
+  return { file, model: subagentModel(file), turns, truncated };
+}

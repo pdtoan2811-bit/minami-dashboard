@@ -35,11 +35,26 @@ this to do a piece of work; read the subsystem's own doc.
   via their open fd to the replaced file.
 - Consequence: `claude-fable-5-1` (`minCli: "2.1.251"`) was unselectable in the dashboard and
   selectable in Desktop. Both can now run it.
-- **Still open from the same investigation:** the read pipeline never opens `subagents/*.jsonl`. That
-  session wrote **3.4 MB of subagent transcripts against a 3.1 MB main transcript** — four named
-  agents — and `lib/claude-sessions.ts` has zero references to `subagents`/`isSidechain`. Combined
-  with `FANOUT_PROMPT` being on by default, the dashboard pushes work into the one place it cannot
-  display, which reads as "it did less".
+- **The tasks panel** (§4, §1) — a third side-slot tab, *Tasks*, modelled on Claude Desktop's
+  Background tasks panel: one card per subagent / backgrounded command with kind, elapsed, **model,
+  token spend, tool-use count** and current step, a collapsible *Finished N* ledger, and a
+  `N running tasks` pill in the status line as the door in. Built on SDK 0.3.270's task events
+  (`task_type`, `usage.{total_tokens,tool_uses,duration_ms}`, `summary`, `spawn_depth`), which the
+  morning's runtime bump made available. Two real capabilities, not re-layout: a **per-task ■**
+  (`query.stopTask()` — ends one agent, leaves the turn running; the pane's Stop kills everything)
+  and **View transcript**, which reads the subagent's own JSONL live or finished.
+- **The read pipeline now opens `subagents/`** (§1) — the sidecar it had never looked at. That
+  Blacksmith session wrote **3.4 MB of subagent transcripts against a 3.1 MB main transcript**, four
+  named agents, invisible after the turn ended except for the Task tool's 4,000-char result. Three
+  readers in `lib/claude-sessions.ts` (`findSubagentFile` / `subagentModel` / `readSubagent`) through
+  the same parser as the main transcript; the SDK's `task_id` is the agentId, so the file resolves
+  directly. Served by `/api/agent/task/transcript`.
+- 🐛 Two defects caught by the probe before shipping: a backgrounded Bash rendered **twice** (the
+  SDK's level signal precedes the edge, so the `bg:` placeholder and the real id coexisted — the
+  placeholder is now retired on `task_started`), and a **fast agent had no model** (the lookup only
+  ran on `task_progress`, which an agent that uses no tools never emits — now forced on the
+  notification too). Verified with a Haiku probe on the new runtime: agent card `completed · 7,053 ms
+  · 9,753 tokens · "ok"`, bash card completed with the CLI's summary, transcript route correct.
 - **Blacksmith mode, and the three questions one indicator was answering** (§20, §3, §4, §5) — asked
   for a way to drive the [Blacksmith](https://github.com/juzser/blacksmith) agent factory from a chat
   pane, plus better visibility because *"I often got confused and wondering if the blacksmith still

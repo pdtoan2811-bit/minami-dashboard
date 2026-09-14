@@ -14,6 +14,7 @@ import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify"
 import Markdown from "@/components/Markdown";
 import ThoughtBlock from "@/components/ThoughtBlock";
 import FolderPicker from "@/components/FolderPicker";
+import TasksPanel from "@/components/TasksPanel";
 import AttachBar from "@/components/AttachBar";
 import BrandIcon, { type Icon } from "@/components/BrandIcon";
 import { ProjectIcon, assignIcons } from "@/components/ProjectIcon";
@@ -1897,15 +1898,18 @@ function MenuRow({ label, hint, onClick }: { label: string; hint: string; onClic
   );
 }
 
-function SlotTabs({ slot, onPick, fileCount }: { slot: "browser" | "file"; onPick: (s: "browser" | "file") => void; fileCount: number }) {
+type Slot = "browser" | "file" | "tasks";
+function SlotTabs({ slot, onPick, fileCount, taskCount, show }: { slot: Slot; onPick: (s: Slot) => void; fileCount: number; taskCount: number; show: Record<Slot, boolean> }) {
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-white/10 bg-black/20 px-1.5 py-1">
-      {([["browser", "Browser", Chrome], ["file", "Files", FileText]] as const).map(([id, label, Icon]) => (
+      {([["browser", "Browser", Chrome], ["file", "Files", FileText], ["tasks", "Tasks", Bot]] as const).filter(([id]) => show[id]).map(([id, label, Icon]) => (
         <button key={id} onClick={() => onPick(id)}
           className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] transition-colors ${
             slot === id ? "bg-white/10 text-neutral-100" : "text-neutral-500 hover:text-neutral-300"}`}>
           <Icon className="h-3 w-3" />{label}
           {id === "file" && fileCount > 0 && <span className="text-[9px] tabular-nums text-neutral-500">{fileCount}</span>}
+          {/* Running count, tinted while non-zero: a tab you'd never think to click is a panel nobody opens. */}
+          {id === "tasks" && taskCount > 0 && <span className="text-[9px] tabular-nums" style={{ color: TOOL_TINT.task }}>{taskCount}</span>}
         </button>
       ))}
     </div>
@@ -2531,7 +2535,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // Which file the panel is showing. Set by a chip in the transcript or the panel's own rail; null
   // means "whatever was touched most recently", which is almost always what you want.
   const [filePath, setFilePath] = useState<string | null>(null);
-  const [slot, setSlot] = useSetting<"browser" | "file">("sidePanel", "browser");
+  const [slot, setSlot] = useSetting<Slot>("sidePanel", "browser");
   const openFile = useCallback((p: string) => {
     setFilePath(p);
     setSlot("file");
@@ -2540,12 +2544,18 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
 
   const canShowBrowser = browser.everUsed;
   const canShowFile = files.everUsed;
+  // The tasks slot earns a place once the session has ever had a subagent or background task — while
+  // one runs, or after, for the Finished list. Never on a pane that has had neither: an empty ledger
+  // is chrome for nothing.
+  const canShowTasks = agent.activity.tasks.length > 0 || agent.finishedTasks.length > 0;
   // Fall back rather than render an empty panel: a session that only touched files should not show a
   // blank browser slot just because "browser" is the persisted default.
-  const activeSlot: "browser" | "file" | null =
+  const activeSlot: Slot | null =
     slot === "file" && canShowFile ? "file"
     : slot === "browser" && canShowBrowser ? "browser"
-    : canShowFile ? "file" : canShowBrowser ? "browser" : null;
+    : slot === "tasks" && canShowTasks ? "tasks"
+    : canShowFile ? "file" : canShowBrowser ? "browser" : canShowTasks ? "tasks" : null;
+  const slotChoices = [canShowBrowser, canShowFile, canShowTasks].filter(Boolean).length;
   // A browser preview or a file diff docked beside a 380px-wide transcript is two unreadable columns
   // instead of one readable one, so below `snug` the slot doesn't open at all — and the header's reopen
   // button (see below) becomes "expand this pane", which is the only place the panel CAN fit. Nothing is
@@ -2628,6 +2638,18 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
       {Math.round(ctxPct * 100)}% ctx
     </button>
   ) : null;
+  // "N running tasks" — the door to the tasks panel, in the one row the eye is already on. Claude
+  // Desktop puts exactly this pill in its status line, and it earns the space: without it the panel is
+  // a tab in a slot that may be hidden, and the fleet stays as invisible as it was before the panel.
+  const runningTasks = agent.activity.tasks.length;
+  const tasksEl = runningTasks > 0 ? (
+    <button onClick={() => openSlot("tasks")} title="Show background tasks"
+      className="flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-medium tabular-nums transition-colors"
+      style={{ borderColor: TOOL_TINT.task + "66", color: TOOL_TINT.task, background: TOOL_TINT.task + "1a" }}>
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: TOOL_TINT.task }} />
+      {runningTasks} running task{runningTasks === 1 ? "" : "s"}
+    </button>
+  ) : null;
   const statusEl = agent.stopping ? <span className="flex items-center gap-1 text-red-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />stopping…</span>
     : agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
     // Ahead of every "live"/activity branch below, because those all describe what the server last
@@ -2642,7 +2664,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // hand, or because this pane is too small to hold it. The two cases need different buttons: one
   // reopens, the other has to make room first.
   const slotHidden = !!activeSlot && (browserPanelHidden || !roomForSlot);
-  const openSlot = (which: "browser" | "file") => {
+  const openSlot = (which: Slot) => {
     setSlot(which);
     setBrowserPanelHidden(false);
     if (!roomForSlot) onFocus(); // no room here — take the panel, which is where the room is
@@ -2692,9 +2714,16 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         )}
         {canShowFile && slotHidden && (
           <button onClick={() => openSlot("file")} title={roomForSlot ? "Show files touched in this chat" : "Expand this chat to show the files it touched"}
-            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
+            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 && !canShowTasks ? "ml-auto" : ""}`}>
             <FileText className="h-3.5 w-3.5" />
             <span className="text-[9px] tabular-nums">{files.files.length}</span>
+          </button>
+        )}
+        {canShowTasks && slotHidden && (
+          <button onClick={() => openSlot("tasks")} title={roomForSlot ? "Show background tasks" : "Expand this chat to show its background tasks"}
+            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
+            <Bot className="h-3.5 w-3.5" />
+            {agent.activity.tasks.length > 0 && <span className="text-[9px] tabular-nums" style={{ color: TOOL_TINT.task }}>{agent.activity.tasks.length}</span>}
           </button>
         )}
         {/* The maximise button that used to sit here is gone: it asked "do you want THIS one bigger"
@@ -2975,7 +3004,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
             <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
-            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{statusEl}</span>
+            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{tasksEl}{statusEl}</span>
           </div>
         ) : atLeast(dc, "tight") ? (
           // Cramped: the flow strip's row and the control row become ONE 22px bar. Nothing is removed —
@@ -2996,7 +3025,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
               {!planning && <span className={perm === "bypassPermissions" ? "text-green-400" : ""}>· {PERM_LABEL[perm]}</span>}
               <span className="text-neutral-600">⌄</span>
             </button>
-            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{statusEl}</span>
+            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{tasksEl}{statusEl}</span>
             {modeOpen && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setModeOpen(false)} />
@@ -3099,7 +3128,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         <div ref={browserPaneRef} className="flex min-h-0 shrink-0 flex-col" style={{ width: `${browserW}%` }}>
           {/* Tabs only when there's a genuine choice — a session that never opened a browser shouldn't
               pay a row of chrome to be told so. */}
-          {canShowBrowser && canShowFile && <SlotTabs slot={activeSlot!} onPick={setSlot} fileCount={files.files.length} />}
+          {slotChoices > 1 && <SlotTabs slot={activeSlot!} onPick={setSlot} fileCount={files.files.length} taskCount={agent.activity.tasks.length} show={{ browser: canShowBrowser, file: canShowFile, tasks: canShowTasks }} />}
           {activeSlot === "browser" ? (
             <BrowserPanel
               state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
@@ -3108,6 +3137,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
               onClose={() => setBrowserPanelHidden(true)}
               onToggleLayout={() => setBrowserStacked(true)}
               onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
+            />
+          ) : activeSlot === "tasks" ? (
+            <TasksPanel
+              running={agent.activity.tasks} finished={agent.finishedTasks} sessionId={sessionId} stacked={false}
+              onStop={agent.stopTask} onClearFinished={agent.clearFinished}
+              onClose={() => setBrowserPanelHidden(true)}
+              onToggleLayout={() => setBrowserStacked(true)}
             />
           ) : (
             <FilePanel
@@ -3122,7 +3158,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
       </div>
       {showSidePanel && browserStacked && (
         <div className="flex min-h-0 shrink-0 flex-col" style={{ flexBasis: "45%" }}>
-          {canShowBrowser && canShowFile && <SlotTabs slot={activeSlot!} onPick={setSlot} fileCount={files.files.length} />}
+          {slotChoices > 1 && <SlotTabs slot={activeSlot!} onPick={setSlot} fileCount={files.files.length} taskCount={agent.activity.tasks.length} show={{ browser: canShowBrowser, file: canShowFile, tasks: canShowTasks }} />}
           {activeSlot === "browser" ? (
             <BrowserPanel
               state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
@@ -3131,6 +3167,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
               onClose={() => setBrowserPanelHidden(true)}
               onToggleLayout={() => setBrowserStacked(false)}
               onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
+            />
+          ) : activeSlot === "tasks" ? (
+            <TasksPanel
+              running={agent.activity.tasks} finished={agent.finishedTasks} sessionId={sessionId} stacked
+              onStop={agent.stopTask} onClearFinished={agent.clearFinished}
+              onClose={() => setBrowserPanelHidden(true)}
+              onToggleLayout={() => setBrowserStacked(false)}
             />
           ) : (
             <FilePanel
