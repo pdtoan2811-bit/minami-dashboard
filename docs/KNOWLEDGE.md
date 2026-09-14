@@ -98,6 +98,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Repo freshness | `lib/repo-state.ts` | **shipped** | fetches, finds the trunk that's actually *moving*, briefs the session at birth. Verified 2026-09-07 against the incident commit: `off-trunk`, 237 behind `origin/develop` — see §19 |
 | Model alerting | `lib/model-catalog.ts` + `lib/model-pins.ts` + `app/api/accounts` | **shipped** | config half (`checkModelPins`, incl. the pin checked against `EXPECTED_MODEL`) *and* runtime half (`liveModels()` → `premiumSessions`) — see §6 |
 | Activity labels | `lib/agent/labels.ts` | **shipped** | server-derived, survives refresh; two clocks since 2026-09-14 — `turnMs` is the one that answers "still running?" — see §4 |
+| Tasks panel | `components/TasksPanel.tsx` + `/api/agent/task/*` | **shipped** | per-task cards with model/tokens/step, per-task stop, subagent transcripts. Verified 2026-09-14 with a Haiku probe on SDK 0.3.270 — see §4 |
 | Stream liveness | `app/api/agent/stream` + `lib/use-agent.ts` | **shipped** | real `beat` event every 10s; `link: stale` after 26s of silence. Verified 2026-09-14: 3 beats in 36s — see §5 |
 | Blacksmith mode | `lib/blacksmith/*` + `components/blacksmith/*` + `/api/blacksmith` | **shipped** | read-only console over `smith ui serve` :4680. Verified 2026-09-14 against 3 live epics — see §20 |
 | Transcript parser | `lib/claude-sessions.ts` | **shipped** | incremental meta *and* turns; windowed history paging — see §1 |

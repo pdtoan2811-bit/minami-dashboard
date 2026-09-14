@@ -487,6 +487,59 @@ first sight of them, and a fabricated timestamp would render as a confident lie.
 without their own interval because every full-size ActivityLine caller already re-renders on the 1s
 elapsed tick.
 
+### The tasks panel — the fourth design, and the first with a ledger (2026-09-14)
+
+`components/TasksPanel.tsx`, a third tab in the pane's shared side slot beside Browser and Files,
+modelled on Claude Desktop's *Background tasks* panel. The board (above) stays as the glance in the
+transcript; this is where you go when one line per agent isn't enough. Cards, not rows: title,
+kind (Agent / Bash / Workflow / MCP), elapsed, and for agents the **model, token spend and tool-use
+count**, plus the current step. A **Finished N** section collapses below, with a clear button. The
+door in is a `N running tasks` pill in the composer's status line — the same affordance Desktop has,
+and it earns its place: a tab in a slot that may be hidden is a panel nobody opens.
+
+What made it possible is SDK 0.3.270's task events (§3 runtime bump, same day). `task_started` now
+carries `task_type`, `is_backgrounded`, `spawn_depth`; `task_progress` carries
+`usage.{total_tokens,tool_uses,duration_ms}` and a model-written `summary`; `task_notification`
+carries the final usage. `LiveTask` grew to match, and a `task_end` event carries the finished
+record. `task_updated` patches are applied for `description` and `is_backgrounded` only — its
+`status` is deliberately ignored, because the terminal states arrive as `task_notification` with the
+usage attached, and honouring both would finish a task twice.
+
+Two things are genuinely new capabilities rather than re-layout:
+
+- **Per-task stop.** The card's ■ calls `stopTask(key, taskId)` → the SDK's `query.stopTask()`,
+  which ends one agent and leaves the turn running. The pane's Stop interrupts the whole query and
+  kills every task with it — a different tool for a different intent. Bounded at 8s like `interrupt()`,
+  and it touches nothing locally: the SDK's own `stopped` notification flows back through the normal
+  path, so there is one way a task ends.
+- **View transcript.** Reads the subagent's own JSONL — see §1 for the sidecar the read pipeline had
+  never opened. Works live (the file is appended as the agent runs; the view re-fetches every 4s) and
+  after, which is the point: once a turn ends, the parent transcript keeps only the Task tool's capped
+  result.
+
+**The model isn't on any task event.** It IS on the subagent's transcript, one row in, so
+`resolveTaskModel()` reads the head of that file — on `task_progress` (throttled to one attempt per
+3s per task, since progress can fire several times a second) and, forced, on `task_notification`.
+The second call exists because of a measured gap: an agent that uses no tools never emits progress,
+so a 7-second "reply ok" agent finished with no model. Both lookups are best-effort and never block.
+
+> 🐛 **A backgrounded command rendered twice (caught in the probe, 2026-09-14).** The SDK says the
+> level signal (`background_tasks_changed`) precedes the edge (`task_started`) "in practice", and it
+> does: the command was adopted under its `bg:<id>` placeholder, then registered again under its real
+> id. `task_started` now retires the placeholder first. Also from the same probe: the placeholder had
+> been stuffing `task_type` into `agent`, so a bash task wore a `local_bash` type badge — `agent` is
+> now only set for agent kinds.
+
+`TaskCard` is deliberately not memoized. Its clock is `Date.now() - since` driven by the panel's 1s
+tick, and the task prop's identity doesn't change between ticks — a memo would freeze every running
+card at the second it mounted.
+
+Verified end-to-end 2026-09-14 on the iterate server with a Haiku probe: one `run_in_background`
+Bash and one Explore agent. Agent card: `completed · 7,053 ms · 9,753 tokens · "ok"`; bash card:
+`completed` with the CLI's summary as its result; transcript route returned the right file, the model,
+and both turns. Not exercised: the ■ under a genuinely long-running task, and the panel under a fleet
+wider than two.
+
 > 🐛 **A background agent vanished at the turn boundary (2026-09-03).** A reply ending "waiting on
 > C's sweep" sat next to a pane showing nothing about C: the `result` handler's `resetActivity`
 > cleared `liveTasks` unconditionally, but a `run_in_background` agent OUTLIVES the turn — any

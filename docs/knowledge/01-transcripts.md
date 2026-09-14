@@ -185,6 +185,33 @@ node bin/transcript.mjs show b33e1c2c --format json | jq -r 'select(.role=="user
 > duplication is deliberate: collapsing them means either the dashboard full-reads on every poll, or
 > the CLI inherits the window and silently stops being able to show you everything. Different jobs.
 
+### The sidecar this parser never opened — `subagents/` (2026-09-14)
+
+A Task-tool subagent does **not** write into the parent's JSONL. Its rows go to
+`<projects>/<slug>/<sessionId>/subagents/agent-<agentId>.jsonl`, with `agent-<agentId>.meta.json`
+beside it (`{agentType, description, toolUseId, spawnDepth}`). Every row carries `isSidechain: true`
+and `agentId`; the parent transcript keeps only the Task tool's result, capped at 4,000 characters.
+
+Measured on one Blacksmith session: **3.4 MB of subagent transcripts against a 3.1 MB main
+transcript** — more than half the session's work — and nothing in this file looked at any of it. So
+"what did that agent actually do?" was unanswerable after the fact, and a dashboard whose fan-out
+instruction is on by default was pushing work into exactly the place it couldn't display.
+
+Three readers now, all at the bottom of `lib/claude-sessions.ts`:
+
+- `findSubagentFile(sessionId, {taskId, toolUseId})` — the SDK's `task_id` **is** the agentId
+  (verified: a tool result's `agentId: ab8f…` named `agent-ab8f….jsonl`), so the direct path is tried
+  first; `toolUseId` falls back to a scan of the meta files.
+- `subagentModel(file)` — the first assistant row's `message.model`, from the first 64 KB only. Cheap
+  enough for the live path, which is where §3's tasks panel calls it.
+- `readSubagent(...)` — the whole file as `Turn[]` through `readAllTurns`, i.e. the **same parser** as
+  the main transcript, so tool blocks render identically. Bounded to 400 turns because it sits on a
+  request path and an agent that ran an hour can outweigh its parent.
+
+Served by `GET /api/agent/task/transcript` — 404 is the honest answer for "not yet", since a spawn is
+a second or two ahead of its first row on disk. Not in the caches, not in `listSessions()`, not on
+the board: a subagent is part of its parent's story, not a session of its own.
+
 ---
 
 

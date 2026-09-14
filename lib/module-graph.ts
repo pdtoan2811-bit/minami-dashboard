@@ -186,6 +186,10 @@ export const NODES: ModuleNode[] = [
   { id: "l/bshook", label: "blacksmith/use-blacksmith.ts", sub: "one poller for the page\n(refcounted, backs off when down)", layer: "core", row: 16, pipeline: "live" },
   { id: "r/bs", label: "/api/blacksmith", sub: "factory state, always 200\n(down is an answer)", layer: "route", row: 16, pipeline: "live" },
   { id: "c/BlacksmithPanel", label: "BlacksmithPanel", sub: "in-pane factory strip\n+ bento tile badge", layer: "component", row: 16, pipeline: "live" },
+  // ── Tasks panel: the fleet as a ledger, and the sidecar the read pipeline never opened (§4, §1) ─
+  { id: "c/TasksPanel", label: "TasksPanel", sub: "cards: model · tokens · step\n■ per task · View transcript", layer: "component", row: 17, pipeline: "live" },
+  { id: "r/taskstop", label: "/api/agent/task/stop", sub: "query.stopTask() — one task,\nturn keeps running", layer: "route", row: 17, pipeline: "live" },
+  { id: "r/tasktranscript", label: "/api/agent/task/transcript", sub: "subagents/agent-<id>.jsonl\n(live or finished)", layer: "route", row: 17, pipeline: "read" },
   { id: "l/previewblock", label: "preview-block.ts", sub: "```minami-preview → chips\n(the ending contract, reader half)", layer: "core", row: 21, pipeline: "live" },
 
   // ── Density: how much chrome a box may spend (KNOWLEDGE.md §5e) ─────────
@@ -424,5 +428,13 @@ export const EDGES: ModuleEdge[] = [
   { from: "c/BlacksmithPanel", to: "l/bshook", kind: "import" },
   { from: "app/page", to: "c/BlacksmithPanel", kind: "import" },
   { from: "app/page", to: "l/bshook", kind: "import", label: "tile badge" },
+  { from: "app/page", to: "c/TasksPanel", kind: "import", label: "third side-slot tab" },
+  { from: "c/TasksPanel", to: "r/tasktranscript", kind: "http", label: "View transcript · 4s while live" },
+  { from: "l/useagent", to: "r/taskstop", kind: "http", label: "card ■" },
+  { from: "r/taskstop", to: "l/manager", kind: "import" },
+  // The one edge from the LIVE side into the READ parser: the live manager reads a subagent's model
+  // off its transcript, because no task event carries it. Read-only, best-effort, throttled.
+  { from: "l/manager", to: "l/sessions", kind: "import", label: "subagentModel()" },
+  { from: "r/tasktranscript", to: "l/sessions", kind: "import", label: "readSubagent()" },
   { from: "app/page", to: "l/previewblock", kind: "import" },
 ];
