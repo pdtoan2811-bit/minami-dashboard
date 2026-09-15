@@ -489,6 +489,32 @@ Anything the card can't answer honestly (an empty Other row) is dropped rather t
 > Found in the same audit: multi-select could send a duplicate when a typed value equalled an already
 > ticked label (`["A","A"]`); `picks` is now de-duped.
 
+**A reading scale, not a chrome scale (2026-09-15).** *Reported by user: "things look small."* The card
+had inherited the pane's status-line sizes — the question at 12px, option descriptions at 10px in
+neutral-500, the header pill at 9px — for the one place in the UI where the user is reading in order
+to decide, and where the description is usually where the actual trade-off is written. Now two scales
+in `SCALE` at the top of `AskCard.tsx`, chosen by `useDensityTier()`:
+
+- **reading** (`snug` and up): question 15px, labels 13.5, descriptions 12 in neutral-400, hints 12,
+  buttons 13, marker 16px, rows `px-3 py-2`.
+- **compact** (`tight`/`micro`): 13.5 / 12.5 / 11 — still a step up from before, but a four-pane grid
+  gives a pane ~490px and the card clips rather than scrolls (see the layout note above), so the
+  bigger type has to yield rows there.
+
+Sizes are px, not Tailwind's step ladder: 12 → 14 → 16 is too coarse for a card that has to fit four
+rows and a button in that height. The header pill moved *above* the question rather than beside it —
+at 15px the question wraps the pill onto its own line anyway once it's more than a few words, and then
+the two fight over the first line; stacked, the pill reads as the topic. Verified at 1440×900 (reading)
+and 1100×560 (still `snug`: one option row visible, question and action row pinned, options scrolling
+— the clipping contract held).
+
+> **Dev-only, worth knowing before the next probe:** a pane opened on an already-running session never
+> attaches under `next dev`. The attach effect is guarded by a `useRef` so it runs once per mount, and
+> a separate `useEffect(() => closeStream)` cleanup runs on React StrictMode's *simulated* unmount —
+> so the stream opens, the fake unmount closes it, and the guard refuses to reopen. Production has no
+> double-invoke and reattaches fine. To exercise a live card on `:3017`, send from the composer (the
+> `send()` path opens its own stream) rather than opening a session from a tile.
+
 ### Motion, scroll and render cost
 
 The interaction layer has three rules, and each replaced something ad hoc.

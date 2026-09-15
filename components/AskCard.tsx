@@ -26,6 +26,26 @@
 //    card is a flex column at all).
 import { useRef, useState } from "react";
 import type { AgentQuestion } from "@/lib/use-agent";
+import { atLeast, useDensityTier } from "@/lib/density";
+
+// Two type scales, and the reason there are two at all.
+//
+// The card used to sit on the same 9–12px scale as the pane's chrome — a status line's sizes, applied
+// to the one place in the UI where the user is READING in order to decide. Thomas's report was simply
+// "things look small", and he was right: the question itself was 12px and the option descriptions,
+// which are usually where the actual trade-off is written, were 10px grey-on-dark.
+//
+// So the card gets a reading scale. But it renders outside the transcript, as a sibling of the
+// composer, in a pane that CLIPS rather than scrolls (see the layout note below) — and in a four-pane
+// grid a pane is ~490px tall. Bigger type there costs option rows the user then can't reach. Hence
+// the tier: the reading scale whenever the pane has room, and a compact one (still a step up from
+// before) when it is genuinely cramped. Sizes are px, not Tailwind's step ladder, because the ladder's
+// gaps (12 → 14 → 16) are too coarse for a card that has to fit four rows and a button in 490px.
+const SCALE = {
+  reading: { eyebrow: "text-[10.5px]", header: "text-[11px]", question: "text-[15px] leading-snug", hint: "text-[12px]", label: "text-[13.5px]", desc: "text-[12px] leading-relaxed", input: "text-[13.5px]", button: "text-[13px]", skip: "text-[12px]", sending: "text-[11px]", preview: "text-[11.5px]", mark: "h-4 w-4 text-[10px]", rowPad: "px-3 py-2" },
+  compact: { eyebrow: "text-[10px]", header: "text-[10px]", question: "text-[13.5px] leading-snug", hint: "text-[11px]", label: "text-[12.5px]", desc: "text-[11px] leading-snug", input: "text-[12.5px]", button: "text-xs", skip: "text-[11px]", sending: "text-[10px]", preview: "text-[10.5px]", mark: "h-3.5 w-3.5 text-[9px]", rowPad: "px-2.5 py-1.5" },
+} as const;
+type Scale = (typeof SCALE)[keyof typeof SCALE];
 
 // Sentinel that lets the free-text row live in the same selection array as the real options, so
 // single/multi-select semantics are written once and can't drift between the two. The leading NUL is
@@ -36,6 +56,8 @@ import type { AgentQuestion } from "@/lib/use-agent";
 const OTHER = "\u0000other";
 
 export default function AskCard({ questions, onAnswer }: { questions: AgentQuestion[]; onAnswer: (answers: Record<string, string | string[]>) => void }) {
+  const d = useDensityTier();
+  const sc: Scale = atLeast(d, "snug") ? SCALE.reading : SCALE.compact;
   const [qi, setQi] = useState(0);
   // Per-question selection: a Set (well, array) of chosen labels (single-select keeps at most one).
   const [sel, setSel] = useState<Record<number, string[]>>({});
@@ -152,7 +174,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     // is being asked and the button that answers it.
     <div className="mx-4 mb-2 flex min-h-0 flex-col rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
       <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2">
-        <p className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-[var(--sakura)]"><span>✻</span> Claude is asking</p>
+        <p className={`flex items-center gap-1.5 ${sc.eyebrow} font-medium uppercase tracking-wider text-[var(--sakura)]`}><span>✻</span> Claude is asking</p>
         {n > 1 && (
           <div className="flex items-center gap-1" title={`Question ${qi + 1} of ${n}`}>
             {questions.map((_, i) => (
@@ -170,16 +192,22 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
       {/* Question + the select-one/all hint: pinned. Scrolling the thing being asked out of view while
           you choose is how you answer the wrong question. */}
       <div className="shrink-0">
-        <div className="flex items-center gap-1.5">
-          {q.header && <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-medium text-neutral-300">{q.header}</span>}
-          <p className="min-w-0 flex-1 text-xs font-medium text-neutral-100">{q.question}</p>
-          {n > 1 && <span className="shrink-0 text-[10px] tabular-nums text-neutral-500">{qi + 1}/{n}</span>}
+        {/* Header pill above the question rather than beside it: a 15px question next to a pill wraps
+            the pill onto its own line anyway once the question is more than a few words, and then the
+            two compete for the first line. Stacked, the pill reads as the topic and the question as
+            the question. */}
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            {q.header && <span className={`mb-1 inline-block rounded bg-white/10 px-1.5 py-0.5 ${sc.header} font-medium text-neutral-300`}>{q.header}</span>}
+            <p className={`${sc.question} font-medium text-neutral-50`}>{q.question}</p>
+          </div>
+          {n > 1 && <span className={`shrink-0 pt-0.5 ${sc.hint} tabular-nums text-neutral-500`}>{qi + 1}/{n}</span>}
         </div>
 
         {/* Said in words, right under the question, because the shape of a control is only obvious
             once you already know the convention. Multi-select gets the louder treatment — it's the
             one that's invisible if you assume every question is a radio group. */}
-        <p className={`mt-1 flex items-center gap-1 text-[10px] ${multi ? "font-medium text-[var(--sakura)]" : "text-neutral-500"}`}>
+        <p className={`mt-1.5 flex flex-wrap items-center gap-1 ${sc.hint} ${multi ? "font-medium text-[var(--sakura)]" : "text-neutral-500"}`}>
           {multi ? <>☑ Select <strong className="font-semibold">all that apply</strong>{nPicked > 0 && <span className="text-neutral-500">· {nPicked} selected</span>}</> : <>◉ Select one</>}
           {/* Said here as well as on the rows: when a question is written to be decided by comparing
               previews, a collapsed row gives no sign that the deciding material is one click away. */}
@@ -192,67 +220,69 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
           the pane resizes, so the option you reach for is never in the same place twice.
           Scrollbar deliberately NOT hidden here (it is elsewhere in this app): when the list is taller
           than the pane, that bar is the only thing telling you there are more options below. */}
-      <div className="mt-1.5 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-0.5">
+      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto pr-0.5">
         {q.options.map((o) => {
           const on = picked.includes(o.label);
           const k = `${qi}:${o.label}`;
-          return <Row key={o.label} multi={multi} on={on} onClick={() => toggle(o.label)} label={o.label} description={o.description}
+          return <Row key={o.label} sc={sc} multi={multi} on={on} onClick={() => toggle(o.label)} label={o.label} description={o.description}
             preview={o.preview} previewOpen={open[k] ?? on} onTogglePreview={() => setOpen((p) => ({ ...p, [k]: !(p[k] ?? on) }))} />;
         })}
 
         {/* "Other" is the last row of the same list, not a stray input below it — so exactly one
             thing is ever highlighted, and what's highlighted is what gets sent. */}
-        <Row multi={multi} on={picked.includes(OTHER)} onClick={() => toggle(OTHER)} label="Other"
+        <Row sc={sc} multi={multi} on={picked.includes(OTHER)} onClick={() => toggle(OTHER)} label="Other"
           description={picked.includes(OTHER) ? undefined : "type your own answer"}>
           <input ref={otherRef} value={other[qi] || ""} onChange={(e) => typeOther(e.target.value)}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && answered) next(); }}
             placeholder="type your own answer…"
-            className="mt-1 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-[var(--sakura)]/60" />
+            className={`mt-1.5 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1.5 ${sc.input} text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-[var(--sakura)]/60`} />
         </Row>
       </div>
 
       {/* Pinned. This row is the exit from `phase=awaiting`; it may never be the thing that overflows. */}
       <div className="mt-2.5 flex shrink-0 flex-wrap items-center gap-2">
-        {qi > 0 && <button onClick={back} className="rounded-lg border border-white/15 px-2.5 py-1 text-xs text-neutral-300 transition-colors hover:bg-white/10">← Back</button>}
+        {qi > 0 && <button onClick={back} className={`rounded-lg border border-white/15 px-3 py-1.5 ${sc.button} text-neutral-300 transition-colors hover:bg-white/10`}>← Back</button>}
         <button onClick={next} disabled={!answered}
-          className="rounded-lg bg-[var(--sakura)] px-3 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40">
+          className={`rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 ${sc.button} font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40`}>
           {isLast ? "Send answer" : "Next →"}
         </button>
-        <button onClick={skipOne} className="text-[11px] text-neutral-500 transition-colors hover:text-neutral-300 hover:underline">
+        <button onClick={skipOne} className={`${sc.skip} text-neutral-500 transition-colors hover:text-neutral-300 hover:underline`}>
           Skip{isLast && n > 1 ? " & send" : ""}
         </button>
         {/* What will actually be sent, in the words that will be sent. The old hint described the
             *rules* of the control; this describes the outcome, which is the thing in doubt. */}
-        <span className="ml-auto min-w-0 truncate text-[10px] text-neutral-500" title={answered ? String(Array.isArray(count) ? count.join(", ") : count) : undefined}>
+        <span className={`ml-auto min-w-0 truncate ${sc.sending} text-neutral-500`} title={answered ? String(Array.isArray(count) ? count.join(", ") : count) : undefined}>
           {answered ? <>sending: <span className="text-neutral-300">{Array.isArray(count) ? count.join(", ") : count}</span></> : "nothing selected yet"}
         </span>
       </div>
-      {n > 1 && <button onClick={skipAll} className="mt-1.5 text-[10px] text-neutral-600 transition-colors hover:text-neutral-400">Skip all {n} questions</button>}
+      {n > 1 && <button onClick={skipAll} className={`mt-1.5 ${sc.skip} text-neutral-600 transition-colors hover:text-neutral-400`}>Skip all {n} questions</button>}
     </div>
   );
 }
 
 // One option, full width. The marker is the affordance: a circle fills for single-select, a box gets a
 // tick for multi — so "can I pick more than one?" is answered before you click anything.
-function Row({ multi, on, onClick, label, description, preview, previewOpen, onTogglePreview, children }: {
-  multi: boolean; on: boolean; onClick: () => void; label: string; description?: string;
+function Row({ sc, multi, on, onClick, label, description, preview, previewOpen, onTogglePreview, children }: {
+  sc: Scale; multi: boolean; on: boolean; onClick: () => void; label: string; description?: string;
   preview?: string; previewOpen?: boolean; onTogglePreview?: () => void; children?: React.ReactNode;
 }) {
   return (
     <div onClick={onClick} role="button" tabIndex={0}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
-      className={`w-full cursor-pointer rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+      className={`w-full cursor-pointer rounded-lg border ${sc.rowPad} text-left transition-colors ${
         on ? "border-[var(--sakura)] bg-[var(--sakura)]/20" : "border-white/15 hover:border-white/30 hover:bg-white/5"}`}>
       <div className="flex items-start gap-2">
-        <span className={`mt-[2px] flex h-3.5 w-3.5 shrink-0 items-center justify-center border text-[9px] leading-none ${
+        <span className={`mt-[3px] flex ${sc.mark} shrink-0 items-center justify-center border leading-none ${
           multi ? "rounded-[4px]" : "rounded-full"} ${
           on ? "border-[var(--sakura)] bg-[var(--sakura)] text-white" : "border-white/30"}`}>
           {on && (multi ? "✓" : <span className="h-1.5 w-1.5 rounded-full bg-white" />)}
         </span>
         <span className="min-w-0 flex-1">
-          <span className={`block text-xs font-medium ${on ? "text-white" : "text-neutral-300"}`}>{label}</span>
-          {description && <span className="mt-0.5 block text-[10px] leading-snug text-neutral-500">{description}</span>}
+          <span className={`block ${sc.label} font-medium ${on ? "text-white" : "text-neutral-200"}`}>{label}</span>
+          {/* neutral-400, not 500: the description is usually where the trade-off is actually written,
+              and 10px neutral-500 on this ground measured as the least legible text in the app. */}
+          {description && <span className={`mt-0.5 block ${sc.desc} text-neutral-400`}>{description}</span>}
           {children}
           {/* Block elements are spelled as `block` spans on purpose: this subtree is inside the row's
               `<span>`, and a real <pre>/<div> there is invalid nesting that React will hydrate into a
@@ -263,14 +293,14 @@ function Row({ multi, on, onClick, label, description, preview, previewOpen, onT
                 // The row itself answers Enter/Space by selecting. Without this the same keypress both
                 // toggled the preview and picked the option — one key, two decisions.
                 onKeyDown={(e) => e.stopPropagation()}
-                className="mt-1 text-[10px] text-neutral-500 transition-colors hover:text-[var(--sakura)]">
+                className={`mt-1 ${sc.hint} text-neutral-500 transition-colors hover:text-[var(--sakura)]`}>
                 {previewOpen ? "⌄ hide preview" : "› preview"}
               </button>
               {previewOpen && (
                 // Clicks land on the text, not the row: a preview is there to be read and copied, and
                 // dragging to select it must not re-toggle the answer underneath.
                 <span onClick={(e) => e.stopPropagation()}
-                  className="mt-1 block max-h-40 cursor-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-white/10 bg-black/40 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-neutral-400">
+                  className={`mt-1 block max-h-48 cursor-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-white/10 bg-black/40 px-2.5 py-2 font-mono ${sc.preview} leading-relaxed text-neutral-300`}>
                   {preview}
                 </span>
               )}

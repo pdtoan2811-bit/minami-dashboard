@@ -8,6 +8,18 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-15
+- **The ask card gets a reading scale** (§5e) — *"things look small."* The question was 12px, the
+  option descriptions 10px neutral-500, the header pill 9px: status-line sizes on the one surface where
+  the user is reading to decide. Now `SCALE.reading` (question 15 / labels 13.5 / descriptions 12 in
+  neutral-400) when the pane is `snug` or roomier, and `SCALE.compact` below that, because the card
+  clips rather than scrolls and a four-pane grid gives it ~490px. Header pill stacked above the
+  question instead of beside it. Verified live at 1440×900 and 1100×560.
+- Found while probing: under `next dev`, a pane opened on a running session **never attaches** —
+  StrictMode's simulated unmount runs the `closeStream` cleanup after the once-per-mount attach guard
+  has already fired. Dev-only; production reattaches. Recorded in §5e so the next probe doesn't spend
+  twenty minutes on it.
+
 ### 2026-09-14
 - **The dashboard was running a seven-week-old Claude Code** (§3) — bumped
   `@anthropic-ai/claude-agent-sdk` 0.3.220 → **0.3.270**, moving the spawned CLI from **2.1.220**
