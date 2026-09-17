@@ -51,7 +51,7 @@ recycle one.
 | [`17-meeting-canvas.md`](knowledge/17-meeting-canvas.md) | §17 | ~1,900 | `/canvas`: audio → transcript → ReactFlow board. Why using a chat LLM as the transcriber costs latency, accuracy *and* money, OpenRouter's STT catalogue with prices, and the specified-but-unbuilt replacement. |
 | [`18-meeting-launch.md`](knowledge/18-meeting-launch.md) | §18 | ~1,500 | Getting Minami into a call: the two launchers, the receiver on :8787, the cloudflared quick tunnel, and the shared `bin/tunnel-lib.sh`. Why this Mac's DNS opinion is not the question, and the 1800s negative-cache trap that made the launcher poison its own probe. |
 | [`19-repo-state.md`](knowledge/19-repo-state.md) | §19 | ~3,000 | The checkout briefing: which branch a session is really on and which trunk is actually moving, measured with a fetch and handed to the model as fact. The five-hour dead-branch incident, the sync/async cache bridge, and why a failed fetch still fetched. |
-| [`20-blacksmith.md`](knowledge/20-blacksmith.md) | §20 | ~2,600 | The chat pane as the Blacksmith agent factory's operator console: the ⚒ mode, the read-only panel over `smith ui serve`, the tile badge. Why the factory cannot tell you it is running, why a "live agent" count only ever goes up, and why this integration reads and never writes. |
+| [`20-blacksmith.md`](knowledge/20-blacksmith.md) | §20 | ~3,600 | The chat pane as the Blacksmith agent factory's operator console: the ⚒ mode, the read-only panel over `smith ui serve`, the tile badge. Why the factory cannot tell you it is running, why a "live agent" count only ever goes up, why this integration reads and never writes — and (§20.5b) how the mode measures that it is actually in effect from a folder that isn't the clone. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~24,000 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -100,7 +100,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Activity labels | `lib/agent/labels.ts` | **shipped** | server-derived, survives refresh; two clocks since 2026-09-14 — `turnMs` is the one that answers "still running?" — see §4 |
 | Tasks panel | `components/TasksPanel.tsx` + `/api/agent/task/*` | **shipped** | per-task cards with model/tokens/step, per-task stop, subagent transcripts. Verified 2026-09-14 with a Haiku probe on SDK 0.3.270 — see §4 |
 | Stream liveness | `app/api/agent/stream` + `lib/use-agent.ts` | **shipped** | real `beat` event every 10s; `link: stale` after 26s of silence. Verified 2026-09-14: 3 beats in 36s — see §5 |
-| Blacksmith mode | `lib/blacksmith/*` + `components/blacksmith/*` + `/api/blacksmith` | **shipped** | read-only console over `smith ui serve` :4680. Verified 2026-09-14 against 3 live epics — see §20 |
+| Blacksmith mode | `lib/blacksmith/*` + `components/blacksmith/*` + `/api/blacksmith` | **shipped** | read-only console over `smith ui serve` :4680. Verified 2026-09-14 against 3 live epics; in-effect measurement (`additionalDirectories`, `smith` shim, `SmithEvidence`) verified 2026-09-17 — see §20 |
 | Transcript parser | `lib/claude-sessions.ts` | **shipped** | incremental meta *and* turns; windowed history paging — see §1 |
 | Transcript CLI | `bin/transcript.mjs` | **shipped** | full history, no server, no caps — see §1 |
 | Client SSE | `lib/use-agent.ts` | **shipped** | reconnect-aware |

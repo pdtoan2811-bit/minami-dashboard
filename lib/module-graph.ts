@@ -180,12 +180,12 @@ export const NODES: ModuleNode[] = [
   { id: "r/flow", label: "/api/flow/[id]", sub: "narratives only\nGET cached · POST writes", layer: "route", row: 14, pipeline: "live" },
   { id: "r/hold", label: "/api/agent/hold", sub: "arms the canUseTool brake", layer: "route", row: 13, pipeline: "live" },
   { id: "r/fanout", label: "/api/agent/fanout", sub: "fan-out pill → respawn\n(prompt append is creation-only)", layer: "route", row: 15, pipeline: "live" },
-  // ── Blacksmith: the chat pane as the agent factory's operator console (KNOWLEDGE.md §17) ─────
+  // ── Blacksmith: the chat pane as the agent factory's operator console (KNOWLEDGE.md §20) ─────
   { id: "r/bsmode", label: "/api/agent/blacksmith", sub: "⚒ pill → respawn\n(same creation-only trap)", layer: "route", row: 15, pipeline: "live" },
   { id: "l/bsclient", label: "blacksmith/client.ts", sub: "reads smith ui serve :4680\nevent AGE, never \"running\"", layer: "core", row: 16, pipeline: "live" },
   { id: "l/bshook", label: "blacksmith/use-blacksmith.ts", sub: "one poller for the page\n(refcounted, backs off when down)", layer: "core", row: 16, pipeline: "live" },
   { id: "r/bs", label: "/api/blacksmith", sub: "factory state, always 200\n(down is an answer)", layer: "route", row: 16, pipeline: "live" },
-  { id: "c/BlacksmithPanel", label: "BlacksmithPanel", sub: "in-pane factory strip\n+ bento tile badge", layer: "component", row: 16, pipeline: "live" },
+  { id: "c/BlacksmithPanel", label: "BlacksmithPanel", sub: "factory strip + \"this pane\" row\n(in effect / staged / blind)", layer: "component", row: 16, pipeline: "live" },
   // ── Tasks panel: the fleet as a ledger, and the sidecar the read pipeline never opened (§4, §1) ─
   { id: "c/TasksPanel", label: "TasksPanel", sub: "cards: model · tokens · step\n■ per task · View transcript", layer: "component", row: 17, pipeline: "live" },
   { id: "r/taskstop", label: "/api/agent/task/stop", sub: "query.stopTask() — one task,\nturn keeps running", layer: "route", row: 17, pipeline: "live" },

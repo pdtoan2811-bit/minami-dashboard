@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, CircleDot, Hammer } from "lucide-react";
 import { useBlacksmith } from "@/lib/blacksmith/use-blacksmith";
+import type { SmithEvidence } from "@/lib/use-agent";
 
 // The factory strip that sits above a Blacksmith-mode chat.
 //
@@ -40,7 +41,65 @@ const SEV_TINT: Record<string, string> = { S1: "#ef4444", S2: "#f0a868", S3: "#9
 // so the two states are never rendered identically, which is the whole complaint this answers.
 const QUIET_MS = 5 * 60 * 1000;
 
-export function BlacksmithPanel({ compact }: { compact?: boolean }) {
+/** What the pane knows about ITS OWN operator session — the second question the strip answers, and
+ *  the one that used to have no answer at all: the factory can be moving while this pane's session
+ *  never got the contract, or got it and never used it. `picked` is the pill (localStorage), `born`
+ *  is what the server said the live session started with (null until one exists), `smith` is the
+ *  server's evidence — see SmithEvidence in lib/agent/manager.ts. */
+export type SmithSession = { picked: boolean; born: boolean | null; smith: SmithEvidence | null; busy: boolean };
+
+const AMBER = "#f0a868";
+
+/** One line about this pane's session, worst news first. Rendered whether or not the factory is up:
+ *  "the factory is down" and "this session never got the contract" are independent facts and the
+ *  second is the one the pill's colour was silently lying about. */
+function SessionRow({ session }: { session: SmithSession }) {
+  const { picked, born, smith, busy } = session;
+  let tint = "#9ca3af";
+  let icon: "warn" | "dot" | "none" = "none";
+  let text: string;
+  let title: string;
+  if (born == null) {
+    text = picked ? "operator contract · applies when this chat starts" : "operator contract · off";
+    title = "No live session yet. The pill's choice rides in with the first message.";
+  } else if (picked !== born) {
+    // The model picker's "staged" state. A dot rather than a warning: nothing is wrong, the next
+    // send resolves it, and a warning here would train the eye to ignore the real one below.
+    tint = "var(--sakura)"; icon = "dot";
+    text = picked ? "operator contract · staged — lands on your next message" : "operator contract · leaving on your next message";
+    title = "The pill and the live session disagree. Switching restarts the session and resumes this conversation from disk, so nothing is lost — it just hasn't happened yet.";
+  } else if (!born) {
+    text = "operator contract · off";
+    title = "This session was started without Blacksmith mode.";
+  } else if (smith && !smith.ready) {
+    tint = AMBER; icon = "warn";
+    text = `not in effect — ${smith.issue}`;
+    title = "The pill is on and the prompt is in, but the server measured that the factory can't be reached from this session. The mode changes nothing until this is fixed; ordinary work is unaffected.";
+  } else if (smith?.blindTurn && !busy) {
+    tint = AMBER; icon = "warn";
+    text = `last turn did work without touching the factory — ${smith.touches ? `${smith.touches} smith call${smith.touches === 1 ? "" : "s"} earlier in this session` : "no smith calls in this session yet"}`;
+    title = "The turn that just finished ran commands, edited files or spawned agents, and none of it went through `smith`, `/bs`, a role agent, or the clone. That is the shape of 'Blacksmith is ticked but the work ignored it' — if the turn was meant to drive the factory, say so in the next message.";
+  } else if (smith && smith.touches === 0) {
+    text = "operator contract · in — no factory calls yet";
+    title = `The session has the contract and the roles (${smith.roles.length}) loaded. Nothing has reached the factory yet, which is fine for a turn that only reads or answers.`;
+  } else if (smith) {
+    tint = "#6cc4a1"; icon = "dot";
+    const age = smith.lastAt ? Math.max(0, Date.now() - smith.lastAt) : null;
+    text = `in effect · ${smith.touches} factory call${smith.touches === 1 ? "" : "s"}${smith.agents ? ` · ${smith.agents} dispatched` : ""} · last ${fmtAge(age)}`;
+    title = `Tool calls from this session that reached the factory: smith commands, /bs, role-agent dispatches, reads and writes inside the clone. ${smith.agents} of them spawned a worker from a role template.`;
+  } else {
+    text = "operator contract · in";
+    title = "The session was born with Blacksmith mode. Evidence arrives with its first turn.";
+  }
+  return (
+    <div className="flex items-center gap-1.5 border-t px-2.5 py-1 text-[10px]" style={{ borderColor: SMITH_TINT + "25", color: tint }} title={title}>
+      {icon === "warn" ? <AlertTriangle className="h-3 w-3 shrink-0" /> : <span className="h-1 w-1 shrink-0 rounded-full" style={{ background: icon === "dot" ? "currentColor" : "transparent" }} />}
+      <span className="min-w-0 truncate">this pane · {text}</span>
+    </div>
+  );
+}
+
+export function BlacksmithPanel({ compact, session }: { compact?: boolean; session?: SmithSession }) {
   const s = useBlacksmith();
   const [open, setOpen] = useState(false);
   // Local clock so the "last event 3m ago" line keeps counting between polls instead of sitting on a
@@ -48,7 +107,12 @@ export function BlacksmithPanel({ compact }: { compact?: boolean }) {
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
 
-  if (!s) return null;
+  // Before the first poll answers, the session row is still worth a line — it doesn't depend on the
+  // factory being reachable, and a strip that shows nothing until `:4680` replies hides the fact the
+  // pill was lying about for exactly the seconds you're looking at it.
+  if (!s) {
+    return session ? <div className="rounded-lg border border-white/10 bg-neutral-900/60 text-[11px]"><SessionRow session={session} /></div> : null;
+  }
 
   // Ages are recomputed against the browser clock rather than trusting the server's snapshot, so they
   // keep counting between polls.
@@ -59,9 +123,12 @@ export function BlacksmithPanel({ compact }: { compact?: boolean }) {
 
   if (!s.up) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-2.5 py-1.5 text-[11px] text-neutral-500">
-        <Hammer className="h-3.5 w-3.5 shrink-0 text-neutral-600" />
-        <span className="min-w-0 truncate">Blacksmith not reachable — {s.reason}</span>
+      <div className="rounded-lg border border-white/10 bg-neutral-900/60 text-[11px] text-neutral-500">
+        <div className="flex items-center gap-2 px-2.5 py-1.5">
+          <Hammer className="h-3.5 w-3.5 shrink-0 text-neutral-600" />
+          <span className="min-w-0 truncate">Blacksmith not reachable — {s.reason}</span>
+        </div>
+        {session && <SessionRow session={session} />}
       </div>
     );
   }
@@ -163,6 +230,10 @@ export function BlacksmithPanel({ compact }: { compact?: boolean }) {
           </div>
         </div>
       )}
+      {/* Always below the factory line, never folded into the expander: the factory moving and this
+          pane's session being blind are separate facts, and the second is the one that answers
+          "is the mode doing anything". */}
+      {session && <SessionRow session={session} />}
     </div>
   );
 }

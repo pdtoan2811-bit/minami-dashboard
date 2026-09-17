@@ -8,6 +8,17 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-17
+- **Blacksmith mode now measures whether it is in effect** (§20.5b) — the mode described a factory the
+  session couldn't reach: `/bs` and the role agents are project-level files in the clone, `smith` isn't
+  linked, and a pane on any other tile got a prompt naming things that didn't exist in its session.
+  Measured fix: `additionalDirectories: [clone]` loads both the skill and all 14 roles from any cwd
+  (the clone's hooks do *not* follow — also measured); a `smith` PATH shim under tmpdir; a
+  `blacksmithBriefing()` with the absolute CLI, the loaded roles and `<project-dir>` = the pane's cwd.
+  `init` carries `blacksmith`/`fanout`; a `smith` SSE event carries `SmithEvidence`; the ⚒ pill shows
+  the staged `•` / broken `⚠`; the strip gets a "this pane" row (not in effect → blind turn → staged →
+  in effect with counts). Verified end-to-end from a non-clone folder on the iterate build.
+
 ### 2026-09-15
 - **The ask card gets a reading scale** (§5e) — *"things look small."* The question was 12px, the
   option descriptions 10px neutral-500, the header pill 9px: status-line sizes on the one surface where

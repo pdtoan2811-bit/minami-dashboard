@@ -9,7 +9,7 @@ import { useSetting } from "@/lib/use-settings";
 // imported into a client component. See its own comment: the split exists so one list of ids serves
 // both sides.
 import { SELECTABLE_MODELS, contextWindowFor, isPremiumModel, meetsMinCli } from "@/lib/model-catalog";
-import { useAgent, toolCategory, activityLabel, escalationHint, LINK_STALE_MS, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask } from "@/lib/use-agent";
+import { useAgent, toolCategory, activityLabel, escalationHint, LINK_STALE_MS, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask, type SmithEvidence } from "@/lib/use-agent";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
 import ThoughtBlock from "@/components/ThoughtBlock";
@@ -431,7 +431,7 @@ function ActivityLine({ activity, elapsed, turnElapsed, link, compact, busy, hid
 // `model` and `repo` share the amber of the other "you probably want to know this before you carry
 // on" notices. Both are said once, at session birth, and both are about a fact the pane would
 // otherwise be silent on: what this chat costs, and which branch it is standing on.
-const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af", restarting: "#f0a868", relocated: "#6cc4a1", model: "#f0a868", repo: "#f0a868" };
+const NOTICE_TINT: Record<string, string> = { retry: "#ef7c7c", compact: "#a78bfa", task: "#6c9cf5", limit: "#f0a868", denied: "#f0a868", aborted: "#9ca3af", restarting: "#f0a868", relocated: "#6cc4a1", model: "#f0a868", repo: "#f0a868", blacksmith: "#f0a868" };
 function NoticeStrip({ notices }: { notices: Notice[] }) {
   const rest = notices.filter((n) => n.kind !== "task");
   if (!rest.length) return null;
@@ -1702,14 +1702,31 @@ const PreviewChips = memo(function PreviewChips({ previews, onOpenFile }: { prev
  *  is the most dangerous thing in this UI to be wrong about (see `perm` in ChatColumn); two renderings
  *  of it, drifting apart, is the failure mode worth spending a component to make impossible.
  */
-function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, sessionModel, onModel, fanout, onFanout, blacksmith, onBlacksmith, busy }: {
+function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, sessionModel, onModel, fanout, onFanout, blacksmith, sessionBlacksmith, smith, onBlacksmith, busy }: {
   hold: boolean; onHold: (v: boolean) => void;
   planning: boolean; onPlan: (v: boolean) => void;
   perm: Exclude<AgentMode, "plan">; onPerm: (m: Exclude<AgentMode, "plan">) => void;
   model: string | null; sessionModel: string | null; onModel: (m: string | null) => void;
   fanout: boolean; onFanout: (v: boolean) => void;
-  blacksmith: boolean; onBlacksmith: (v: boolean) => void; busy: boolean;
+  blacksmith: boolean; sessionBlacksmith: boolean | null; smith: SmithEvidence | null; onBlacksmith: (v: boolean) => void; busy: boolean;
 }) {
+  // The pill's three honest states, derived the way ModelPicker derives `staged` — from the pick and
+  // what the server reports, never from a flag set at click time. `staged`: the pick and the live
+  // session disagree, so the contract lands on the next send. `broken`: the session HAS the mode and
+  // the server measured that it can't work (no clone, no CLI, the skill or the roles didn't load).
+  const smithStaged = sessionBlacksmith != null && blacksmith !== sessionBlacksmith;
+  const smithBroken = sessionBlacksmith === true && !!smith && !smith.ready;
+  const smithTitle = busy
+    ? "Can't switch Blacksmith mode while a turn is running — stop it first"
+    : smithBroken
+      ? `Blacksmith is ON but not in effect — ${smith?.issue}. The strip above the chat has the details.`
+      : smithStaged
+        ? blacksmith
+          ? "Blacksmith turns ON with your next message — the session restarts and resumes this conversation from disk, carrying the operator contract."
+          : "Blacksmith turns OFF with your next message — the session restarts without the operator contract."
+        : blacksmith
+          ? "Blacksmith ON — this pane is the factory's operator console: it knows the smith CLI, the dispatch contract and the role templates, and the strip above tracks the factory live. Click to leave."
+          : "Blacksmith OFF — click to drive the agent factory from this pane (adds the /bs operator contract and a live factory strip).";
   return (
     <>
       <ModelPicker model={model} sessionModel={sessionModel} onPick={onModel} busy={busy} />
@@ -1736,16 +1753,19 @@ function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, ses
           The lit state is an inline style, not a class: Tailwind cannot see a class name built from a
           runtime value, so SMITH_TINT has to be applied directly. */}
       <button onClick={() => onBlacksmith(!blacksmith)} disabled={busy}
-        title={busy
-          ? "Can't switch Blacksmith mode while a turn is running — stop it first"
-          : blacksmith
-            ? "Blacksmith ON — this pane is the factory's operator console: it knows the smith CLI, the dispatch contract and the role templates, and the panel above tracks the factory live. Click to leave."
-            : "Blacksmith OFF — click to drive the agent factory from this pane (adds the /bs operator contract and a live factory panel)."}
+        title={smithTitle}
         className={`flex shrink-0 items-center rounded-lg border p-0.5 transition-colors ${
           busy ? "border-white/10 text-neutral-600"
+          : smithBroken ? "border-amber-400/60 bg-amber-400/10 text-amber-300"
           : blacksmith ? "" : "border-white/10 text-neutral-400 hover:text-neutral-200"}`}
-        style={blacksmith && !busy ? { borderColor: SMITH_TINT + "99", background: SMITH_TINT + "26", color: SMITH_TINT } : undefined}>
-        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">⚒ smith</span>
+        style={blacksmith && !busy && !smithBroken ? { borderColor: SMITH_TINT + "99", background: SMITH_TINT + "26", color: SMITH_TINT } : undefined}>
+        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">
+          {/* The model picker's staged dot, for the same reason: this pill folds into a cramped pane's
+              one-pill row, so "chosen, not yet running" has to cost ~4px. */}
+          {smithStaged && <span className="mr-1 text-[var(--sakura)]">•</span>}
+          {smithBroken && <span className="mr-1" aria-label="not in effect">⚠</span>}
+          ⚒ smith
+        </span>
       </button>
       {/* The brake. It lived in the flow panel's header, which is gone — and it is a SESSION control
           (like Plan/Code and the approval level), not a property of a view, so this row is where it
@@ -2801,7 +2821,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             turn-scoped: the whole point is that the factory's state is INDEPENDENT of whether this
             chat is busy, and a strip that only appeared during a turn would answer the question it
             exists for at exactly the moments you already knew the answer. */}
-        {blacksmith && <div className="mb-1"><BlacksmithPanel /></div>}
+        {/* Shown when EITHER the pick or the live session says so: a pane attached to an operator
+            session another pane started must show the strip, and a pane whose pick was just turned
+            off must keep it until the respawn actually drops the contract. The strip's own second
+            row is where the two disagreeing is explained. */}
+        {(blacksmith || agent.sessionBlacksmith) && <div className="mb-1"><BlacksmithPanel session={{ picked: blacksmith, born: agent.sessionBlacksmith, smith: agent.smith, busy: agent.busy }} /></div>}
         {/* The placement pass moved this conversation — say so persistently, in the same slot the
             isolation bar uses and for the same reason: where a chat writes is the one fact that
             must never be ambient. NoticeStrip can't carry this (it renders only during a live
@@ -3002,7 +3026,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           // at the other end of this same row. Two doors, ONE destination still holds — this chip and
           // the switch on the bento tile raise the same canvas.
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
+            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} sessionBlacksmith={agent.sessionBlacksmith} smith={agent.smith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{tasksEl}{statusEl}</span>
           </div>
@@ -3032,7 +3056,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
                 {/* Opens UPWARD: it hangs off the composer, which is already at the bottom of the pane,
                     so downward would render it outside the pane's `overflow-hidden` box. */}
                 <div className="absolute bottom-full left-0 z-20 mb-1 flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900 p-2 shadow-2xl">
-                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
+                  <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} sessionBlacksmith={agent.sessionBlacksmith} smith={agent.smith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
                 </div>
               </>
             )}

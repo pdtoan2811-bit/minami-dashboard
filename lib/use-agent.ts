@@ -5,6 +5,10 @@
 // (so Markdown/tools render exactly as elsewhere and any streaming gap is healed).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IDLE_ACTIVITY, type ActivityState, type FinishedTask, type ToolOutput } from "./agent/labels";
+// Type-only, so nothing of manager.ts (node:fs, the SDK) reaches the browser bundle — the shape is
+// the server's to define, and a client-side copy is exactly the drift the `smith` event would hide.
+import type { SmithEvidence } from "./agent/manager";
+export type { SmithEvidence };
 
 export type AgentTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
 export type AgentToolCall = { name: string; input: unknown; id?: string; done?: boolean; ok?: boolean; ms?: number; output?: ToolOutput };
@@ -87,6 +91,14 @@ export function useAgent(paneKey: string) {
   // The model the live session reported at init — observed, never chosen. Null until a session exists,
   // which is why the picker falls back to the word "default" rather than naming a model it is guessing.
   const [sessionModel, setSessionModel] = useState<string | null>(null);
+  // Whether the live session was BORN as a Blacksmith operator console — observed at init, same
+  // contract as sessionModel. Null until a session exists. The ⚒ pill reads localStorage; this is
+  // what lets it show "staged" when the two disagree instead of lighting up over a session that
+  // never got the contract.
+  const [sessionBlacksmith, setSessionBlacksmith] = useState<boolean | null>(null);
+  // Blacksmith mode's evidence for this session (REPLACE semantics, server-owned). Null on sessions
+  // born without the mode, and reset whenever the session id changes — evidence belongs to a process.
+  const [smith, setSmith] = useState<SmithEvidence | null>(null);
   // Where the placement pass moved this conversation, if it did — the pane's cwd prop is stale the
   // moment this is set, and every later send must use this instead. Null until a relocation.
   const [relocatedTo, setRelocatedTo] = useState<string | null>(null);
@@ -220,6 +232,14 @@ export function useAgent(paneKey: string) {
           // config off disk and so cannot be imported into a browser component — and mirroring the id
           // client-side to render a "default" label is precisely the drift that file exists to prevent.
           if (ev.model) setSessionModel(ev.model);
+          if (typeof ev.blacksmith === "boolean") setSessionBlacksmith(ev.blacksmith);
+          // Every `init` is a new process (a respawn keeps the id but not the evidence), and the
+          // server re-sends `smith` right behind it for any session that has the mode — so clearing
+          // here is what makes a toggle-OFF respawn drop the old counters instead of carrying them.
+          setSmith(null);
+          break;
+        case "smith":
+          setSmith({ ready: !!ev.ready, issue: ev.issue ?? null, roles: Array.isArray(ev.roles) ? ev.roles : [], touches: Number(ev.touches || 0), agents: Number(ev.agents || 0), lastAt: ev.lastAt ?? null, blindTurn: !!ev.blindTurn, turnTouches: Number(ev.turnTouches || 0), turnWork: Number(ev.turnWork || 0) });
           break;
         case "delta":
           lastDeltaAtRef.current = Date.now();
@@ -338,6 +358,9 @@ export function useAgent(paneKey: string) {
           // The brake lived on the (now gone) server session — keeping it lit here would claim a
           // supervision state nothing is enforcing, and the next send would start unheld regardless.
           setHoldState(false);
+          // Same reasoning for what the session was born with: no process, no fact. Leaving these set
+          // would render an "applied ✓" over a pane whose next send decides afresh.
+          setSessionBlacksmith(null); setSmith(null);
           setDetached(true); setLive(false); closeStream();
           break;
         case "activity":
@@ -817,5 +840,5 @@ export function useAgent(paneKey: string) {
   // The steady one. Same free recount off the same tick, but anchored to the turn rather than the
   // phase — so this is the number that can legitimately read "6m 20s" and be believed. 0 when idle.
   const turnElapsed = turnStart == null ? 0 : Math.max(0, Date.now() - turnStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, turnElapsed, link, notices, sessionId, sessionModel, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, changeBlacksmith, setHold, stop, finishedTasks, stopTask, clearFinished };
+  return { turns, live, busy, stopping, pending, ask, activity, elapsed, turnElapsed, link, notices, sessionId, sessionModel, sessionBlacksmith, smith, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, changeBlacksmith, setHold, stop, finishedTasks, stopTask, clearFinished };
 }

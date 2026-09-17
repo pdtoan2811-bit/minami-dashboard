@@ -138,6 +138,61 @@ the answer, not an error. Half the point of the panel is to say "Blacksmith isn'
 instead of rendering an empty board, which reads exactly like "Blacksmith is running with nothing to
 do".
 
+### 20.5b Whether the mode is in effect (2026-09-17)
+
+> 🐛 **The mode described a factory the session could not reach.** `/bs` and the fourteen role
+> templates are **project-level** files in the clone's `.claude/` — the skill's own header says
+> "from a Claude Code session inside this repo". A pane in any other folder (the normal case: you
+> flip ⚒ on the *project's* tile, not on the factory's) got a prompt naming a skill and agent types
+> that did not exist in its session, and `smith` is not linked on this box, so the skill's relative
+> `node factory/orchestrator/dist/cli.js` fallback failed from every folder that wasn't the clone.
+> The pill lit, the strip polled, the model improvised or shrugged. Nothing measured any of it: the
+> pill read localStorage, `init` didn't carry `blacksmith`, and no one counted whether a turn ever
+> touched the factory. Three fixes, each a measurement rather than a belief.
+
+**1. Bring the factory to the session.** MEASURED with a prompt-less SDK probe (`supportedCommands()`
+/ `initializationResult()` on a streaming-input query that never sends a turn):
+
+| Option | `/bs` visible | roles visible | clone's hooks/settings |
+|---|---|---|---|
+| baseline, cwd `/tmp` | no | no | — |
+| `additionalDirectories: [clone]` | **yes** | **all 14** | **no** (PreToolUse guard did not fire on a Haiku turn) |
+| `plugins: [{path: clone/.claude}]` | no | no | — |
+
+So a Blacksmith session is spawned with `additionalDirectories: [BLACKSMITH_HOME]`, and the SDK's own
+`init` message (`slash_commands`, `agents`) is checked afterwards — preflight says the files exist,
+`init` says they arrived. `smith` reaches PATH through a three-line shim under `os.tmpdir()` (each
+Bash call is a fresh shell, so only the subprocess environment survives across calls). The clone's
+PreToolUse guard hook does **not** follow — the briefing names `factory/policies/guardrails.yml`
+so the model holds to the rules itself; the gates downstream still check the result.
+
+**2. Tell the model what was measured.** `blacksmithBriefing()` is `repoBriefing()`'s pattern for
+the factory: the absolute CLI, the loaded roles, and — the answer the skill says to ask for once —
+that `<project-dir>` is the pane's own cwd (`--project <cwd>`), unless the pane *is* the clone. When
+preflight fails the briefing says so and forbids improvising a substitute (no hand-rolled worktrees,
+no untracked agent spawns).
+
+**3. Show the pane what its session has.** `init` now carries `blacksmith`/`fanout` (what the session
+was *born* with); the ⚒ pill renders the model picker's `•` staged dot when the pick and the session
+disagree, and goes amber `⚠` when the session has the mode and the server measured it can't work.
+A `smith` SSE event (REPLACE semantics, replayed on attach) carries `SmithEvidence`: `ready`/`issue`
+from preflight + init, `touches` (a `smith` command, `/bs`, a role dispatch, a read or write inside
+the clone), `agents` (the dispatches), `lastAt`, and `blindTurn` — the last completed turn ran
+Bash/Edit/Write/Agent at the top level and none of it reached the factory. The strip's second row
+("this pane · …") renders whichever is worst: not in effect → blind turn → staged → in effect with
+counts. It renders whether or not `:4680` answers, because "the factory is down" and "this session
+never got the contract" are independent facts, and the strip mounts on `picked || born` so a pane
+attached to an operator session another pane started still shows it.
+
+Verified 2026-09-17 on the iterate build from `/tmp/bs-probe-project` (not the clone): `init` carried
+`blacksmith:true`, `init.agents` confirmed all 14 roles, `smith --help` returned real usage through
+the shim, the model confirmed `/bs` and `coder` available, `touches` counted the call, a Write-only
+turn flipped `blindTurn:true`, and the strip rendered the staged row and then the in-effect row after
+the pill was clicked into agreement.
+
+(Verified through `send()`, not attach — under `next dev` a pane never attaches on mount, the
+StrictMode trap already recorded in §5e. It cost this probe twenty minutes anyway.)
+
 ### 20.6 Verified
 
 2026-09-14, against the live factory on `:4680` with three epics in flight

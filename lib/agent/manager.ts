@@ -138,6 +138,125 @@ Report factory state flatly and name what you actually ran. If a gate was assign
 // the factory can flip the default with MINAMI_DASHBOARD_BLACKSMITH=1.
 const DEFAULT_BLACKSMITH = process.env.MINAMI_DASHBOARD_BLACKSMITH === "1";
 
+// The CLI is a package `bin` that is never linked on this box — `which smith` fails from every folder,
+// and the skill's own fallback (`node factory/orchestrator/dist/cli.js`) is RELATIVE to the clone, so
+// it fails from every folder that isn't the clone. This is the one path both resolve to.
+export const BLACKSMITH_CLI = pathMod.join(BLACKSMITH_HOME, "factory", "orchestrator", "dist", "cli.js");
+
+// What Blacksmith mode measured before the session was born. Every field is a fact from disk, not a
+// belief: the mode used to be a prompt that DESCRIBED a factory ("invoke `/bs`", "spawn from the role
+// templates", "run `smith`") and nothing checked that any of it was reachable from the pane's folder.
+// It wasn't. `/bs` and the role agents are PROJECT-level files in the clone's `.claude/`, so a pane in
+// any other cwd — which is the normal case; you flip the pill on the project tile, not on the factory's
+// — got a prompt naming a skill and fourteen agent types that did not exist in its session, and a
+// binary that isn't on PATH. The pill lit, the strip polled, the model shrugged. This is how the mode
+// tells the difference between "on" and "in effect".
+type BlacksmithPreflight = {
+  home: boolean;      // the clone is where BLACKSMITH_HOME says
+  cli: boolean;       // dist/cli.js exists — `pnpm build` has run since the clone was made
+  skill: boolean;     // .claude/skills/bs/SKILL.md — the operator playbook the prompt tells the model to invoke
+  roles: string[];    // .claude/agents/<role>.md — the templates every coder/reviewer/verifier is spawned from
+  missing: string[];  // human-readable, one entry per absent thing; empty means usable
+};
+function blacksmithPreflight(): BlacksmithPreflight {
+  const home = fsSync.existsSync(BLACKSMITH_HOME);
+  const cli = home && fsSync.existsSync(BLACKSMITH_CLI);
+  const skill = home && fsSync.existsSync(pathMod.join(BLACKSMITH_HOME, ".claude", "skills", "bs", "SKILL.md"));
+  let roles: string[] = [];
+  try {
+    roles = fsSync.readdirSync(pathMod.join(BLACKSMITH_HOME, ".claude", "agents")).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort();
+  } catch { /* no agents dir — reported below as missing */ }
+  const missing: string[] = [];
+  if (!home) missing.push(`no Blacksmith clone at ${BLACKSMITH_HOME} (set MINAMI_BLACKSMITH_HOME)`);
+  else {
+    if (!cli) missing.push(`no CLI at ${BLACKSMITH_CLI} — run \`pnpm build\` in the clone`);
+    if (!skill) missing.push("no /bs skill in the clone's .claude/skills");
+    if (!roles.length) missing.push("no role templates in the clone's .claude/agents");
+  }
+  return { home, cli, skill, roles, missing };
+}
+
+// A `smith` on PATH for the subprocess, so the skill's own command lines work verbatim from any
+// folder. Each Bash tool call is a fresh shell — a function or alias in one call is gone by the next
+// — so the only thing that survives across calls is the environment the subprocess was born with.
+// Written under tmpdir, not the repo and not the clone: a fresh checkout has no ~/.minami, and
+// writing into Blacksmith's tree would put an untracked file in the one repo whose gates care.
+let smithShim: string | null = null;
+function smithShimDir(): string | null {
+  if (smithShim) return smithShim;
+  try {
+    const dir = pathMod.join(os.tmpdir(), "minami-blacksmith-bin");
+    fsSync.mkdirSync(dir, { recursive: true });
+    fsSync.writeFileSync(pathMod.join(dir, "smith"), `#!/bin/sh\nexec node "${BLACKSMITH_CLI}" "$@"\n`, { mode: 0o755 });
+    smithShim = dir;
+  } catch { smithShim = null; }
+  return smithShim;
+}
+
+// The measured half of the operator prompt, in the same spirit as repoBriefing(): the model can't be
+// told to distrust a prompt that reads fine, so it is handed the facts and what they imply. Written
+// AFTER the contract so the contract stays general and this stays specific to this spawn.
+function blacksmithBriefing(pre: BlacksmithPreflight, cwd: string): string {
+  if (pre.missing.length) {
+    return `**Blacksmith is NOT usable from this session — measured at spawn:** ${pre.missing.join("; ")}. Say so in one line the first time it matters and do not improvise a substitute for the factory (no hand-rolled worktrees, no agents spawned outside the dispatch contract, no "I'll do the coder's job myself"). Ordinary work in this folder is unaffected.`;
+  }
+  const inClone = cwd === BLACKSMITH_HOME || cwd.startsWith(BLACKSMITH_HOME + pathMod.sep);
+  return [
+    `**Measured at spawn, so do not re-derive it:** the clone is at ${BLACKSMITH_HOME} and its CLI is on PATH for this session as \`smith\` (a shim for \`node ${BLACKSMITH_CLI}\`) — use \`smith …\` verbatim, never the relative \`node factory/…\` form. The \`/bs\` skill and these role agents are loaded from the clone into THIS session, so \`Agent(subagent_type: "<role>")\` works from here without changing folder: ${pre.roles.join(", ")}.`,
+    inClone
+      ? `You are sitting inside the clone itself, so the \`<project-dir>\` the playbooks ask for is genuinely unknown — ask for it once, at the top, as the skill says.`
+      : `The \`<project-dir>\` the playbooks ask for is this session's own folder, \`${cwd}\` — carry it as \`--project ${cwd}\` (and as the positional on the \`worktree\` family); do not ask for it and do not assume the clone. One thing did NOT follow you out of the clone (measured): its PreToolUse guard hook. The rules it enforces are data in \`${BLACKSMITH_HOME}/factory/policies/guardrails.yml\` — read them once and hold to them yourself; the gates downstream still check the result either way.`,
+  ].join(" ");
+}
+
+// The per-session evidence that the mode is doing anything. `touches` counts tool calls that reached
+// the factory — a `smith` command, the `/bs` skill, a role agent dispatch, a read or write inside the
+// clone. `ready` is what the SDK's own `init` confirmed: the skill and the roles actually arrived in
+// the session's command list, which is a stronger fact than "the files exist". Broadcast whole after
+// every change (REPLACE semantics, like `activity`) so a dropped event self-heals.
+export type SmithEvidence = {
+  ready: boolean;
+  issue: string | null;      // why not ready, in words the strip can show
+  roles: string[];
+  touches: number;
+  agents: number;            // role dispatches — the subset of touches that spawned a worker
+  lastAt: number | null;
+  /** The last COMPLETED turn did real tool work and none of it reached the factory. The honest
+   *  "ticked but had no effect" signal — an operator turn that only answers a question is not blind,
+   *  a turn that edited files and ran commands without one `smith` call is. */
+  blindTurn: boolean;
+  turnTouches: number;
+  turnWork: number;
+};
+const WORK_TOOLS = new Set(["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent"]);
+function noteSmithTouch(s: Session, name: string, input: unknown, topLevel: boolean): void {
+  const ev = s.smith;
+  if (!ev) return;
+  const o = (input || {}) as Record<string, unknown>;
+  let touched = false;
+  let dispatched = false;
+  if (name === "Bash" && typeof o.command === "string") {
+    touched = /(^|[\s;&|(`])smith\s/.test(o.command) || o.command.includes(BLACKSMITH_CLI);
+  } else if (name === "Skill") {
+    touched = typeof o.skill === "string" && /^bs(:|$)/.test(o.skill);
+  } else if (name === "Agent") {
+    dispatched = typeof o.subagent_type === "string" && ev.roles.includes(o.subagent_type);
+    touched = dispatched;
+  } else {
+    const p = o.file_path || o.path || o.notebook_path;
+    touched = typeof p === "string" && (p === BLACKSMITH_HOME || p.startsWith(BLACKSMITH_HOME + pathMod.sep));
+  }
+  // Work is counted at the top level only: a coder's forty reads inside its own worktree are the
+  // factory working, not the operator ignoring it.
+  if (topLevel && WORK_TOOLS.has(name)) ev.turnWork++;
+  if (!touched) return;
+  ev.touches++;
+  ev.turnTouches++;
+  ev.lastAt = Date.now();
+  if (dispatched) ev.agents++;
+  broadcast(s, { t: "smith", ...ev });
+}
+
 // A session that watched its own context shrink used to invent its own remedies, and in a vault cwd
 // the nearest thing named "compact" is the VAULT's consolidation routine — chat-6's stranded branch
 // carried two vault-compaction commits born exactly this way, and another session answered a task
@@ -186,7 +305,14 @@ const spawnMode = (m: AllowedMode): AllowedMode => (m === "plan" ? "plan" : "def
 // Events pushed to the browser over SSE.
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] };
 export type AgentEvent =
-  | { t: "init"; sessionId: string; model?: string }
+  // `blacksmith` / `fanout` are what the session was BORN with. The pane's pills read localStorage,
+  // and a pane that attached to a session another pane started (or that toggled while the swap was
+  // refused) has no other way to learn that its pill and its session disagree — see the "staged"
+  // rendering of the ⚒ pill, which is the model picker's pattern applied to a boolean.
+  | { t: "init"; sessionId: string; model?: string; blacksmith?: boolean; fanout?: boolean }
+  // Blacksmith mode's evidence for THIS session, REPLACE semantics; absent on sessions born without
+  // the mode. See SmithEvidence for what each number means.
+  | ({ t: "smith" } & SmithEvidence)
   | { t: "delta"; text: string } // streaming assistant text token(s)
   | { t: "thinking"; text: string } // streaming reasoning token(s) — see the `thinking` option below
   | { t: "snapshot"; busy: boolean; partial: string; partialThinking: string; activity: ActivityState; hold: boolean; queued: { uuid: string; text: string }[]; ctxUsed?: number } // sent on (re)subscribe: the in-flight turn's state
@@ -209,7 +335,7 @@ export type AgentEvent =
   // "restarting" is the deploy path telling every open pane that the server is about to be swapped for
   // a new build — see drainForRestart() below. It's the one notice the user gets BEFORE the disruption
   // rather than after, which is the whole point: an unexplained dead turn reads as a bug.
-  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting" | "model" | "repo"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
+  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting" | "model" | "repo" | "blacksmith"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
   | { t: "permission"; id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } // waiting on the user
   | { t: "hold"; hold: boolean } // the Flow view's brake: park every tool call at the gate (REPLACE semantics)
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
@@ -304,6 +430,8 @@ type Session = {
   /** Whether this session was BORN as a Blacksmith operator console. Same creation-time trap and the
    *  same remedy as `fanout` — see setBlacksmith(). */
   blacksmith: boolean;
+  /** Blacksmith mode's evidence that it is in effect — null on a session born without the mode. */
+  smith: SmithEvidence | null;
   /** Wall-clock start of the turn currently in flight, or null when idle. The source of
    *  ActivityState.turnMs; see the field's docblock there for why a second clock was needed at all.
    *
@@ -510,10 +638,15 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   // side (primeRepoState, called by the send route and the autopilot tick) is what fills this in.
   const repo = cachedRepoState(cwd);
 
+  const smithOn = blacksmith ?? DEFAULT_BLACKSMITH;
+  // Measured once, at birth, and carried on the session: the same facts feed the prompt (so the model
+  // knows what it has), `ready` (so the strip knows), and the spawn options below (so it's true).
+  const pre = smithOn ? blacksmithPreflight() : null;
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: blacksmith ?? DEFAULT_BLACKSMITH, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
+    smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, turnTouches: 0, turnWork: 0 } : null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -616,7 +749,20 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // env is otherwise inherited from process.env by default (per the SDK's own doc comment) —
       // spread it explicitly so this override adds to, rather than replaces, everything the
       // subprocess already needs (PATH, HOME, ANTHROPIC_API_KEY, token-slayer's active credential).
-      env: { ...process.env, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: AUTOCOMPACT_PCT },
+      env: {
+        ...process.env, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: AUTOCOMPACT_PCT,
+        // `smith` on PATH for a Blacksmith session — see smithShimDir(). Prepended, so a real link
+        // added later still loses to the shim only for the lifetime of this session, never globally.
+        ...(pre && !pre.missing.length && smithShimDir() ? { PATH: `${smithShimDir()}${pathMod.delimiter}${process.env.PATH || ""}` } : {}),
+      },
+      // The whole reason Blacksmith mode works from a folder that isn't the clone. MEASURED (a
+      // prompt-less probe against this SDK build): `additionalDirectories: [clone]` loads the clone's
+      // project-level `.claude/skills/bs` AND all fourteen `.claude/agents/<role>.md` into the session
+      // — `supportedCommands()` gains `bs`, `init.agents` gains coder/reviewer/verifier/…. Passing the
+      // roles through the `agents` option instead would have worked too but would have meant parsing
+      // frontmatter here and drifting from the templates; `plugins: [{path: clone/.claude}]` does NOT
+      // work (no plugin manifest). Only when the clone exists: the CLI rejects an absent directory.
+      ...(pre && pre.home ? { additionalDirectories: [BLACKSMITH_HOME] } : {}),
       // The append is unconditional now (the preview contract applies to every session); only the
       // browser nudge stays tied to the browser tool actually being registered, and only the fan-out
       // instruction to the pill. mcpServers rides separately — it was only ever bundled with
@@ -629,7 +775,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
           // told to distrust a working tree that renders, so it is handed the answer instead.
           ...(repoBriefing(repo) ? [repoBriefing(repo)!] : []),
           ...(s.fanout ? [FANOUT_PROMPT] : []),
-          ...(s.blacksmith ? [BLACKSMITH_PROMPT] : []),
+          ...(pre ? [BLACKSMITH_PROMPT, blacksmithBriefing(pre, cwd)] : []),
           ...(MCP_SERVERS ? [BROWSER_PROMPT] : []),
         ].join("\n\n"),
       },
@@ -798,6 +944,7 @@ function handleMessage(s: Session, m: any) {
             if (task) task.lastTool = label;
           }
           broadcast(s, { t: "tool", name: b.name, input: b.input, id: b.id });
+          noteSmithTouch(s, b.name, b.input, !parentId);
           changed = true;
         }
         if (changed) touch(s, "tool");
@@ -841,6 +988,16 @@ function handleMessage(s: Session, m: any) {
       // that gap is what stops Stop→Send→Stop flickering on every queued message, and it's the honest
       // state (something IS about to run). `command_lifecycle: started` takes it from here.
       const handover = s.queued.length > 0;
+      // Judge the turn that just ended, before its counters are cleared for the next one. A blind
+      // turn is one that did work and none of it touched the factory — the pill was on, the prompt
+      // was in, and it changed nothing about how the turn ran. Broadcast either way so the strip
+      // clears a previous turn's warning when this one did reach the factory.
+      if (s.smith) {
+        s.smith.blindTurn = s.smith.turnWork > 0 && s.smith.turnTouches === 0;
+        broadcast(s, { t: "smith", ...s.smith });
+        s.smith.turnTouches = 0;
+        s.smith.turnWork = 0;
+      }
       broadcast(s, { t: "result", subtype: m.subtype, costUsd: m.total_cost_usd ?? m.cost_usd });
       if (handover) {
         // Phase, not idle: the pane should read as still working, because it is.
@@ -981,7 +1138,28 @@ function handleSystem(s: Session, m: any) {
         // the one that started it — can subscribe/send/reattach and stream it live (the client uses
         // `live:<sessionId>` as the canonical key for an existing session).
         store.set(SID_KEY + m.session_id, s);
-        broadcast(s, { t: "init", sessionId: m.session_id, model: m.model });
+        broadcast(s, { t: "init", sessionId: m.session_id, model: m.model, blacksmith: s.blacksmith, fanout: s.fanout });
+        // The stronger check. Preflight said the files exist; this is the CLI saying the skill and the
+        // roles are IN the session. The two disagree exactly when `additionalDirectories` stopped doing
+        // what the probe measured (an SDK bump is the obvious way), and that failure is otherwise
+        // silent: the prompt still names `/bs` and `coder`, and the model still can't reach them.
+        if (s.smith && s.smith.ready) {
+          const cmds: string[] = Array.isArray(m.slash_commands) ? m.slash_commands.map(String) : [];
+          const agents: string[] = Array.isArray(m.agents) ? m.agents.map(String) : [];
+          const noSkill = cmds.length > 0 && !cmds.includes("bs");
+          const lostRoles = agents.length > 0 ? s.smith.roles.filter((r) => !agents.includes(r)) : [];
+          if (noSkill || lostRoles.length) {
+            s.smith.ready = false;
+            s.smith.issue = [noSkill ? "the /bs skill did not load into this session" : "", lostRoles.length ? `role agents missing from this session: ${lostRoles.join(", ")}` : ""].filter(Boolean).join("; ");
+            broadcast(s, { t: "notice", kind: "blacksmith", text: `Blacksmith is on but not in effect — ${s.smith.issue}` });
+          }
+          broadcast(s, { t: "smith", ...s.smith });
+        } else if (s.smith) {
+          // Preflight already failed; the strip shows it persistently, this is the one-time flag at
+          // the start of the first turn, the only moment NoticeStrip renders.
+          broadcast(s, { t: "notice", kind: "blacksmith", text: `Blacksmith is on but not in effect — ${s.smith.issue}` });
+          broadcast(s, { t: "smith", ...s.smith });
+        }
         // The SDK is the only witness to what the request actually resolved to. Keep it server-side —
         // the browser's copy dies on reattach, and the box-wide alert can't read the browser anyway.
         // Deliberately NOT written to `s.model`: see the field's comment (setModel compares against it).
@@ -1614,7 +1792,10 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
   const replay: AgentEvent[] = [];
   // `model` rides the replay too, or a pane that reattached (refresh, server restart) would show
   // "default" for a session it can see is running — the SDK's own init only fires once, at spawn.
-  if (s.sessionId) replay.push({ t: "init", sessionId: s.sessionId, model: s.model });
+  if (s.sessionId) replay.push({ t: "init", sessionId: s.sessionId, model: s.model, blacksmith: s.blacksmith, fanout: s.fanout });
+  // The factory evidence rides the replay for the same reason `model` does: it lives only here, and a
+  // pane that refreshed would otherwise show a Blacksmith session as untested until its next turn.
+  if (s.smith) replay.push({ t: "smith", ...s.smith });
   // `activity` rides along so a client that refreshed mid-tool-call resumes with the real label and a
   // correctly-offset elapsed clock, instead of falling back to a generic "working…".
   replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold, queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })), ctxUsed: s.ctxUsed || undefined });
