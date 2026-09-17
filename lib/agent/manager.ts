@@ -124,6 +124,8 @@ const BLACKSMITH_PROMPT = `You are running as the operator console for **Blacksm
 
 **The dispatch contract.** Every agent you spawn must be handed, explicitly, all five of: the task spec (or the one question), the ABSOLUTE worktree path, the path claims it may touch, its token cap, and its turn budget. The last one is listed because the templates carry a \`maxTurns\` key that Claude Code does not read — the number is only true if your prompt says it, so say it. Splice in \`smith lessons for-dispatch <role>\` and \`smith findings for-dispatch\` before spawning.
 
+**Parallelism in this session is the factory's, not yours.** Do not fan out ad-hoc \`general-purpose\` or \`Explore\` agents to split work you judge divisible — an agent the factory did not dispatch is work its gates cannot see. When several tasks are ready at once (\`smith wave next\`), dispatch each as its own role agent under the contract above, in parallel if their path claims are disjoint; that is the only fan-out that counts. The one exception is reading: a research sweep that touches no files and produces no artifact is fine solo or fanned, because it is not a task.
+
 **Reading factory state.** The CLI prints JSON on stdout and prose on stderr, so \`smith … | jq\` always parses. Exit codes are meaningful and sometimes tri-state (2 ≠ 1). Prefer the read-only commands — \`wave next\`, \`plan validate\`, \`findings list\`, \`judge outstanding\`, \`epic verdict\`, \`stats *\`, \`daemon status\` — over re-deriving state yourself. A read-only HTTP API is also live at ${BLACKSMITH_URL} (\`/api/pulse\`, \`/api/overview\`, \`/api/kanban\`, \`/api/tasks/:id\`); the dashboard panel above this chat is already polling it, so you do not need to poll it too.
 
 **What the factory will refuse, correctly.** A spec-change proposal with no concrete diff. A gate waved through with \`--no-findings\` and no judge dispatch behind it. A judge artifact of the wrong shape. Do not work around a refusal — it is the product.
@@ -774,7 +776,13 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
           // Measured facts about the checkout, ahead of the behavioural rules — the model can't be
           // told to distrust a working tree that renders, so it is handed the answer instead.
           ...(repoBriefing(repo) ? [repoBriefing(repo)!] : []),
-          ...(s.fanout ? [FANOUT_PROMPT] : []),
+          // Fan-out is subordinate to Blacksmith, not additive. Both are instructions about how to
+          // spawn agents, and the generic one is broader and came first in the prompt: "independently
+          // workable parts → Agent tool, in parallel, don't ask" answers a coder's job with ad-hoc
+          // general-purpose agents, which is precisely the untracked dispatch the factory's gates
+          // cannot see — a blind turn by construction, with the ⑂ pill lit as the reason. In an
+          // operator session parallelism means a wave of role dispatches; BLACKSMITH_PROMPT says so.
+          ...(s.fanout && !pre ? [FANOUT_PROMPT] : []),
           ...(pre ? [BLACKSMITH_PROMPT, blacksmithBriefing(pre, cwd)] : []),
           ...(MCP_SERVERS ? [BROWSER_PROMPT] : []),
         ].join("\n\n"),
@@ -1613,6 +1621,10 @@ export function setFanout(key: string, fanout: boolean): { ok: boolean; respawne
   if (!s || s.closed) return { ok: true }; // no live session — the flag just applies at the next send
   if (s.busy) return { ok: false, reason: "a turn is in flight — stop it before switching fan-out" };
   if (s.fanout === fanout) return { ok: true };
+  // Under Blacksmith the fan-out instruction is never appended (see the systemPrompt build), so a
+  // respawn here would tear down a warm session to be reborn with an identical prompt. Record the
+  // pick and move on; it takes effect on the respawn that turns Blacksmith off.
+  if (s.blacksmith) { s.fanout = fanout; return { ok: true }; }
   // Same subscriber handover as setModel — see the comment there for why `waiting` is the parking lot.
   const orphans = new Set(s.subs);
   closeSession(key);

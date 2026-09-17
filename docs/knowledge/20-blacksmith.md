@@ -193,6 +193,23 @@ the pill was clicked into agreement.
 (Verified through `send()`, not attach — under `next dev` a pane never attaches on mount, the
 StrictMode trap already recorded in §5e. It cost this probe twenty minutes anyway.)
 
+### 20.5c Fan-out is subordinate, not additive (2026-09-17)
+
+> 🐛 **Fan-out was overriding the factory.** Both modes are instructions about how to spawn agents,
+> and both were appended when both pills were on — fan-out first, and fan-out is ON by default. So
+> the typical operator session read *"independently workable parts → Agent tool, in parallel, don't
+> ask"* before it read the dispatch contract. The generic instruction is broader and earlier, so a
+> coder's job got answered with ad-hoc `general-purpose` agents — the one dispatch the gates cannot
+> see, and a `blindTurn` by construction with the ⑂ pill lit as the reason.
+
+Three changes. The server never appends `FANOUT_PROMPT` to a Blacksmith session (`s.fanout && !pre`);
+`setFanout()` on such a session records the pick without a respawn (the prompt would be identical);
+and `BLACKSMITH_PROMPT` gains a paragraph saying what parallelism means there — a wave of role
+dispatches under the contract, in parallel when path claims are disjoint, never an ad-hoc fan-out,
+with one exception for pure reading (no files, no artifact → not a task). The ⑂ pill renders
+`⑂ via smith`, dashed and muted, still clickable, with the reason in the title; the pick survives
+and returns on the respawn that turns ⚒ off.
+
 ### 20.6 Verified
 
 2026-09-14, against the live factory on `:4680` with three epics in flight

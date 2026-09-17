@@ -1735,17 +1735,25 @@ function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, ses
           the inverse of `hold`, because here the notable condition is having opted OUT. Disabled
           mid-turn for the same reason as the model picker: applying it to a warm session is a
           teardown+resume, which must not happen under a streaming reply. */}
+      {/* Under Blacksmith the pill is overridden, not hidden: the pick survives (it comes back the
+          moment ⚒ is turned off), but the server never appends the generic instruction to an
+          operator session — parallelism there is a wave of role dispatches, and an ad-hoc fan-out is
+          the one thing the factory's gates cannot see. Rendered muted with the reason, still
+          clickable, so the state is legible rather than mysterious. */}
       <button onClick={() => onFanout(!fanout)} disabled={busy}
         title={busy
           ? "Can't switch fan-out while a turn is running — stop it first"
+          : blacksmith
+            ? `Fan-out is overridden while Blacksmith is on — the factory owns dispatch, so this session never gets the generic "fan out subagents" instruction. Parallel work here is a wave of role agents through smith. Your pick (${fanout ? "fan-out" : "solo"}) returns when ⚒ is turned off.`
           : fanout
             ? "Fan-out ON — Claude proposes parallel agents for divisible work and proceeds without asking. Click for solo."
             : "Solo — Claude works single-threaded. Click to let it fan out subagents by default."}
         className={`flex shrink-0 items-center rounded-lg border p-0.5 transition-colors ${
           busy ? "border-white/10 text-neutral-600"
+          : blacksmith ? "border-dashed border-white/10 text-neutral-600 hover:text-neutral-400"
           : fanout ? "border-white/10 text-neutral-400 hover:text-neutral-200"
           : "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]"}`}>
-        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">{fanout ? "⑂ fan-out" : "⑂ solo"}</span>
+        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">{blacksmith ? "⑂ via smith" : fanout ? "⑂ fan-out" : "⑂ solo"}</span>
       </button>
       {/* Blacksmith: turn this pane into the factory's operator console. Tinted when ON — the inverse
           of fan-out, because here the notable state is having opted IN. Same busy-disable and the same

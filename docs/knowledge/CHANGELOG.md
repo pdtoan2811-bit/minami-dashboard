@@ -18,6 +18,11 @@ this to do a piece of work; read the subsystem's own doc.
   `init` carries `blacksmith`/`fanout`; a `smith` SSE event carries `SmithEvidence`; the ⚒ pill shows
   the staged `•` / broken `⚠`; the strip gets a "this pane" row (not in effect → blind turn → staged →
   in effect with counts). Verified end-to-end from a non-clone folder on the iterate build.
+- **Fan-out no longer overrides Blacksmith** (§20.5c) — both prompts were appended when both pills
+  were on, fan-out first and on by default, so an operator session was told to fan out ad-hoc agents
+  before it read the dispatch contract. The server now drops `FANOUT_PROMPT` under ⚒, `setFanout()`
+  records the pick without a respawn there, the Blacksmith prompt says parallelism = a wave of role
+  dispatches, and the ⑂ pill reads `⑂ via smith` with the reason.
 
 ### 2026-09-15
 - **The ask card gets a reading scale** (§5e) — *"things look small."* The question was 12px, the
