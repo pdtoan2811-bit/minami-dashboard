@@ -25,7 +25,11 @@
 // phantom "live agent" on the board FOREVER. A number that only ever goes up is worse than no number,
 // so `staleAgents` separates the ones whose dispatch is older than any plausible turn.
 
-import { BLACKSMITH_HOME, BLACKSMITH_URL } from "@/lib/agent/manager";
+import fsSync from "node:fs";
+import os from "node:os";
+import pathMod from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
+import { BLACKSMITH_CLI, BLACKSMITH_HOME, BLACKSMITH_URL } from "@/lib/agent/manager";
 
 /** A dispatched agent with no terminal event yet. `ageMs` is what decides whether that means
  *  "working" or "nobody ever closed this out". */
@@ -193,4 +197,71 @@ export async function blacksmithState(): Promise<BlacksmithState> {
     .catch((e) => down(String((e as Error)?.message || e)))
     .then((value) => { cache = { at: Date.now(), value }; inflight = null; return value; });
   return inflight;
+}
+
+// ── Starting the factory's own UI ────────────────────────────────────────────────────────────────────
+// The one thing here that is not a read. It is still not a write to the FACTORY: `smith ui serve` is
+// a read-only projector over the event log (see the header), and starting it changes nothing the
+// gates care about. What it changes is whether the strip above every operator pane can answer its
+// one question — and the strip used to say "start it with `smith ui serve`" to a person sitting in a
+// browser with no terminal in reach. Spawned detached from the clone (its defaults — `state/smith.db`,
+// `factory/specs/roadmap.md` — are relative to it), stdio to a log under tmpdir, unref'd so it outlives
+// the request and the dashboard's own restarts. Refused when already up: two servers on one port is
+// a crash on the second, and a crash log reads exactly like "won't start".
+const UI_LOG = pathMod.join(os.tmpdir(), "minami-blacksmith-ui.log");
+const UI_BOOT_MS = 8000;
+
+export async function serveBlacksmithUi(): Promise<{ ok: boolean; up: boolean; url: string; reason?: string; log?: string }> {
+  const url = BLACKSMITH_URL;
+  const cur = await blacksmithState();
+  if (cur.up) return { ok: true, up: true, url };
+  if (!fsSync.existsSync(BLACKSMITH_CLI)) return { ok: false, up: false, url, reason: `no CLI at ${BLACKSMITH_CLI} — run \`pnpm build\` in the clone` };
+  // The port is the URL's, so a box that moved the factory with MINAMI_BLACKSMITH_URL starts it where
+  // the poller will look. Anything else in the URL (a remote host) is not something this can start.
+  let port = 4680;
+  try {
+    const u = new URL(url);
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(u.hostname)) return { ok: false, up: false, url, reason: `${url} is not local — start it there` };
+    if (u.port) port = Number(u.port);
+  } catch { /* keep the default */ }
+  let child: ChildProcess;
+  try {
+    const out = fsSync.openSync(UI_LOG, "a");
+    child = spawn(process.execPath, [BLACKSMITH_CLI, "ui", "serve", "--port", String(port)], {
+      cwd: BLACKSMITH_HOME, detached: true, stdio: ["ignore", out, out], env: { ...process.env },
+    });
+    child.unref();
+    fsSync.closeSync(out);
+  } catch (e) {
+    return { ok: false, up: false, url, reason: `could not spawn: ${String((e as Error)?.message || e)}` };
+  }
+  // Wait for the pulse rather than for the process: a server that has started listening is the fact
+  // the strip needs, and a process that exited is the fact the operator needs. `ui.not-built` (the
+  // UI's own dist missing) exits in well under a second and lands in the log; surface its tail.
+  const started = Date.now();
+  let exited: number | null = null;
+  child.on("exit", (code) => { exited = code ?? -1; });
+  while (Date.now() - started < UI_BOOT_MS) {
+    await new Promise((r) => setTimeout(r, 400));
+    if (exited !== null) {
+      const tail = readTail(UI_LOG, 600);
+      const notBuilt = /ui\.not-built/.test(tail);
+      return { ok: false, up: false, url, log: UI_LOG, reason: notBuilt ? "the factory UI isn't built — run `pnpm build:ui` in the clone, then retry" : `\`smith ui serve\` exited ${exited}${tail ? ` — ${tail.split("\n").filter(Boolean).slice(-1)[0]}` : ""}` };
+    }
+    cache = null; // the poller's cached "down" must not answer this probe
+    const s = await blacksmithState();
+    if (s.up) return { ok: true, up: true, url, log: UI_LOG };
+  }
+  return { ok: false, up: false, url, log: UI_LOG, reason: `started (pid ${child.pid}) but nothing answered at ${url} within ${UI_BOOT_MS / 1000}s — check the log` };
+}
+
+function readTail(file: string, bytes: number): string {
+  try {
+    const size = fsSync.statSync(file).size;
+    const fd = fsSync.openSync(file, "r");
+    const buf = Buffer.alloc(Math.min(bytes, size));
+    fsSync.readSync(fd, buf, 0, buf.length, Math.max(0, size - buf.length));
+    fsSync.closeSync(fd);
+    return buf.toString("utf8");
+  } catch { return ""; }
 }

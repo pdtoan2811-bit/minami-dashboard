@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronRight, CircleDot, Hammer } from "lucide-react";
-import { useBlacksmith } from "@/lib/blacksmith/use-blacksmith";
+import { AlertTriangle, ChevronDown, ChevronRight, CircleDot, ExternalLink, Hammer, Play } from "lucide-react";
+import { startBlacksmith, useBlacksmith } from "@/lib/blacksmith/use-blacksmith";
 import type { SmithEvidence } from "@/lib/use-agent";
 
 // The factory strip that sits above a Blacksmith-mode chat.
@@ -14,7 +14,10 @@ import type { SmithEvidence } from "@/lib/use-agent";
 // end up staring at a pane wondering which of the two you are looking at.
 //
 // Everything here is read-only. Nothing in this component can write to the factory; the chat does
-// that, through the real `smith` CLI, where the gates can see it.
+// that, through the real `smith` CLI, where the gates can see it. The one button that DOES something
+// — `start`, when the factory UI isn't answering — starts `smith ui serve`, which is itself a
+// read-only projector over the event log; it changes whether this strip can see, not what the
+// factory holds. See serveBlacksmithUi() in lib/blacksmith/client.ts.
 
 export const SMITH_TINT = "#e06c4f";
 
@@ -102,6 +105,18 @@ function SessionRow({ session }: { session: SmithSession }) {
 export function BlacksmithPanel({ compact, session }: { compact?: boolean; session?: SmithSession }) {
   const s = useBlacksmith();
   const [open, setOpen] = useState(false);
+  // The start button's own state. `starting` covers the ~1-8s the server waits for the pulse;
+  // `startErr` is the route's reason, shown in the strip itself and cleared by the next attempt or
+  // by the factory turning up on its own (an operator may have started it from a terminal meanwhile).
+  const [starting, setStarting] = useState(false);
+  const [startErr, setStartErr] = useState<string | null>(null);
+  const start = async () => {
+    if (starting) return;
+    setStarting(true); setStartErr(null);
+    const r = await startBlacksmith();
+    setStarting(false);
+    if (!r.up) setStartErr(r.reason || "didn't start");
+  };
   // Local clock so the "last event 3m ago" line keeps counting between polls instead of sitting on a
   // stale number for five seconds at a time — a frozen age reads exactly like a frozen factory.
   const [, tick] = useState(0);
@@ -126,7 +141,17 @@ export function BlacksmithPanel({ compact, session }: { compact?: boolean; sessi
       <div className="rounded-lg border border-white/10 bg-neutral-900/60 text-[11px] text-neutral-500">
         <div className="flex items-center gap-2 px-2.5 py-1.5">
           <Hammer className="h-3.5 w-3.5 shrink-0 text-neutral-600" />
-          <span className="min-w-0 truncate">Blacksmith not reachable — {s.reason}</span>
+          {/* The reason used to end in "start it with `smith ui serve`" — an instruction to a person
+              in a browser with no terminal in reach. The button is that instruction, done. */}
+          <span className="min-w-0 truncate" title={startErr || s.reason}>
+            {startErr ? <span className="text-[#f0a868]">didn't start — {startErr}</span> : <>Blacksmith not reachable — {s.reason}</>}
+          </span>
+          <button onClick={start} disabled={starting}
+            title={starting ? "Waiting for the factory UI to answer…" : `Run \`smith ui serve\` from the clone (${s.home}) and wait for ${s.url.replace(/^https?:\/\//, "")} to answer`}
+            className="ml-auto flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-60"
+            style={{ borderColor: SMITH_TINT + "66", color: SMITH_TINT, background: SMITH_TINT + "14" }}>
+            <Play className={`h-3 w-3 ${starting ? "animate-pulse" : ""}`} />{starting ? "starting…" : "start"}
+          </button>
         </div>
         {session && <SessionRow session={session} />}
       </div>
@@ -161,6 +186,14 @@ export function BlacksmithPanel({ compact, session }: { compact?: boolean; sessi
           )}
           {!!(s.agents.length - s.staleAgents.length) && <span className="text-neutral-400">{s.agents.length - s.staleAgents.length} dispatched</span>}
           {!!blocking && <span style={{ color: SEV_TINT.S1 }} title="tasks carrying an open S1/S2 finding — these block their gate">{blocking} blocking</span>}
+          {/* The factory's own dashboard, one click from the headline rather than buried in the
+              expander's footer. An <a> inside the headline <button>: stopPropagation so opening it
+              doesn't also toggle the expander. */}
+          <a href={s.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+            title={`Open the Blacksmith dashboard (${s.url}) in a new tab`}
+            className="flex items-center gap-0.5 rounded-md border border-white/10 px-1.5 py-px text-[10px] text-neutral-400 transition-colors hover:border-white/20 hover:text-neutral-200">
+            <ExternalLink className="h-2.5 w-2.5" />open
+          </a>
           {open ? <ChevronDown className="h-3 w-3 text-neutral-600" /> : <ChevronRight className="h-3 w-3 text-neutral-600" />}
         </span>
       </button>

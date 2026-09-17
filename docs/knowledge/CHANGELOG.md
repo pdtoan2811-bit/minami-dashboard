@@ -23,6 +23,10 @@ this to do a piece of work; read the subsystem's own doc.
   before it read the dispatch contract. The server now drops `FANOUT_PROMPT` under ⚒, `setFanout()`
   records the pick without a respawn there, the Blacksmith prompt says parallelism = a wave of role
   dispatches, and the ⑂ pill reads `⑂ via smith` with the reason.
+- **The strip can start the factory UI** (§20.5d) — the down state's "start it with `smith ui serve`"
+  is now a `start` button: `POST /api/blacksmith/serve` spawns it detached from the clone and waits
+  for the pulse, not the pid; `refreshBlacksmith()` beats the 30s down-backoff; `open ↗` moved from the
+  expander's footer to the headline. Still not a writer — `ui serve` is the read-only projector.
 
 ### 2026-09-15
 - **The ask card gets a reading scale** (§5e) — *"things look small."* The question was 12px, the

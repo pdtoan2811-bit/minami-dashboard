@@ -210,6 +210,33 @@ with one exception for pure reading (no files, no artifact → not a task). The 
 `⑂ via smith`, dashed and muted, still clickable, with the reason in the title; the pick survives
 and returns on the respawn that turns ⚒ off.
 
+### 20.5d Starting the factory UI from the strip (2026-09-17)
+
+The down state used to read *"not reachable — start it with `smith ui serve`"*: an instruction to a
+person sitting in a browser with no terminal in reach, in the one moment the strip mattered. Now it
+is a button. `POST /api/blacksmith/serve` → `serveBlacksmithUi()` spawns `node <CLI> ui serve --port
+<n>` **detached and unref'd from the clone** (its defaults — `state/smith.db`, `factory/specs/
+roadmap.md` — are relative paths), stdio to `<tmpdir>/minami-blacksmith-ui.log`, then waits up to 8s
+for **the pulse, not the pid** — a listening server is the fact the strip needs, an exited process
+is the fact the operator needs (`ui.not-built` exits in under a second and is named). Refused when
+already up: a second server on one port crashes, and a crash log reads like "won't start". The port
+comes from `MINAMI_BLACKSMITH_URL`; a non-loopback host is refused, because it isn't something this
+box can start. Takes no input — binary, clone and port are the server's own config, so there is
+nothing to point it at.
+
+Still not a writer. `smith ui serve` is the read-only projector the whole panel already depends on;
+starting it changes whether the strip can *see*, not what the factory holds. The header comment in
+`BlacksmithPanel.tsx` says so, because "everything here is read-only" is a claim the next person
+will check against a button labelled `start`.
+
+The hook gained `refreshBlacksmith()` (poll now, ignoring the 30s down-backoff — without it the strip
+kept saying "not reachable" for up to half a minute over a server that was already answering) and
+`startBlacksmith()`. When up, the headline carries an `open ↗` link — it was only in the expander's
+footer before, which is not where you look for a door.
+
+Verified 2026-09-17: down → `start` → `up: true` in 1.8s (route) / ~2s (strip), pid detached and
+surviving the iterate server's exit; the `oe-central-ver2` tile badge came back with it.
+
 ### 20.6 Verified
 
 2026-09-14, against the live factory on `:4680` with three epics in flight

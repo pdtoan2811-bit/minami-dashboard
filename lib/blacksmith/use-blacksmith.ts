@@ -35,6 +35,27 @@ async function poll() {
   if (refs > 0) timer = setTimeout(poll, state?.up ? LIVE_MS : DOWN_MS);
 }
 
+/** Poll now, ignoring the back-off. For the moment right after something changed the answer — a
+ *  start request just returned — when a 30s "down" back-off would leave the strip saying "not
+ *  reachable" over a server that is already answering. */
+export function refreshBlacksmith(): void {
+  if (refs === 0) return;
+  if (timer) { clearTimeout(timer); timer = null; }
+  void poll();
+}
+
+/** Ask the server to start `smith ui serve`, then re-poll. Resolves to the route's answer; never
+ *  throws, so the strip can show "didn't start — reason" in place rather than an error toast. */
+export async function startBlacksmith(): Promise<{ ok: boolean; up: boolean; url: string; reason?: string; log?: string }> {
+  try {
+    const d = await fetch("/api/blacksmith/serve", { method: "POST" }).then((r) => r.json());
+    refreshBlacksmith();
+    return d;
+  } catch (e) {
+    return { ok: false, up: false, url: state?.url || "", reason: String((e as Error)?.message || e) };
+  }
+}
+
 /** Current factory state, or null before the first response. Shares one poller across all callers. */
 export function useBlacksmith(): BlacksmithState | null {
   const [s, setS] = useState<BlacksmithState | null>(state);

@@ -185,6 +185,7 @@ export const NODES: ModuleNode[] = [
   { id: "l/bsclient", label: "blacksmith/client.ts", sub: "reads smith ui serve :4680\nevent AGE, never \"running\"", layer: "core", row: 16, pipeline: "live" },
   { id: "l/bshook", label: "blacksmith/use-blacksmith.ts", sub: "one poller for the page\n(refcounted, backs off when down)", layer: "core", row: 16, pipeline: "live" },
   { id: "r/bs", label: "/api/blacksmith", sub: "factory state, always 200\n(down is an answer)", layer: "route", row: 16, pipeline: "live" },
+  { id: "r/bsserve", label: "/api/blacksmith/serve", sub: "start smith ui serve, detached\n(wait for the pulse, not the pid)", layer: "route", row: 16, pipeline: "live" },
   { id: "c/BlacksmithPanel", label: "BlacksmithPanel", sub: "factory strip + \"this pane\" row\n(in effect / staged / blind)", layer: "component", row: 16, pipeline: "live" },
   // ── Tasks panel: the fleet as a ledger, and the sidecar the read pipeline never opened (§4, §1) ─
   { id: "c/TasksPanel", label: "TasksPanel", sub: "cards: model · tokens · step\n■ per task · View transcript", layer: "component", row: 17, pipeline: "live" },
@@ -426,6 +427,8 @@ export const EDGES: ModuleEdge[] = [
   { from: "r/bs", to: "l/bsclient", kind: "import" },
   { from: "l/bshook", to: "r/bs", kind: "http", label: "5s poll · 30s when down" },
   { from: "c/BlacksmithPanel", to: "l/bshook", kind: "import" },
+  { from: "l/bshook", to: "r/bsserve", kind: "http", label: "start button" },
+  { from: "r/bsserve", to: "l/bsclient", kind: "import" },
   { from: "app/page", to: "c/BlacksmithPanel", kind: "import" },
   { from: "app/page", to: "l/bshook", kind: "import", label: "tile badge" },
   { from: "app/page", to: "c/TasksPanel", kind: "import", label: "third side-slot tab" },
