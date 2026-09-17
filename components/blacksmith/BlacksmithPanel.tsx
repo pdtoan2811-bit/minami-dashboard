@@ -78,6 +78,14 @@ function SessionRow({ session }: { session: SmithSession }) {
     tint = AMBER; icon = "warn";
     text = `not in effect — ${smith.issue}`;
     title = "The pill is on and the prompt is in, but the server measured that the factory can't be reached from this session. The mode changes nothing until this is fixed; ordinary work is unaffected.";
+  } else if (smith && smith.offRole > 0 && smith.offRole >= smith.agents) {
+    // Louder than a blind turn and shown even mid-turn: this is factory-shaped work (the session is
+    // calling smith around it) that the gates cannot attribute, and every such agent used to run on
+    // the dashboard's Opus pin. Only when off-template dispatches are at least half the total —
+    // one `Explore` for a read is not a pattern.
+    tint = AMBER; icon = "warn";
+    text = `${smith.offRole} agent${smith.offRole === 1 ? "" : "s"} dispatched off-template (general-purpose, not a role)${smith.agents ? ` · ${smith.agents} by role` : ""}`;
+    title = "Agent calls whose subagent_type was not one of the loaded role templates. A general-purpose agent has no declared model, so it inherits this session's — the Opus pin — and the factory's gates can't attribute its work. Dispatch as Agent(subagent_type: \"coder\" | \"reviewer\" | …) so the template's tier and identity ride with it.";
   } else if (smith?.blindTurn && !busy) {
     tint = AMBER; icon = "warn";
     text = `last turn did work without touching the factory — ${smith.touches ? `${smith.touches} smith call${smith.touches === 1 ? "" : "s"} earlier in this session` : "no smith calls in this session yet"}`;
@@ -88,7 +96,7 @@ function SessionRow({ session }: { session: SmithSession }) {
   } else if (smith) {
     tint = "#6cc4a1"; icon = "dot";
     const age = smith.lastAt ? Math.max(0, Date.now() - smith.lastAt) : null;
-    text = `in effect · ${smith.touches} factory call${smith.touches === 1 ? "" : "s"}${smith.agents ? ` · ${smith.agents} dispatched` : ""} · last ${fmtAge(age)}`;
+    text = `in effect · ${smith.touches} factory call${smith.touches === 1 ? "" : "s"}${smith.agents ? ` · ${smith.agents} dispatched` : ""}${smith.offRole ? ` · ${smith.offRole} off-template` : ""} · last ${fmtAge(age)}`;
     title = `Tool calls from this session that reached the factory: smith commands, /bs, role-agent dispatches, reads and writes inside the clone. ${smith.agents} of them spawned a worker from a role template.`;
   } else {
     text = "operator contract · in";

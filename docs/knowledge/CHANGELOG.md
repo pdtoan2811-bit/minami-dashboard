@@ -27,6 +27,11 @@ this to do a piece of work; read the subsystem's own doc.
   is now a `start` button: `POST /api/blacksmith/serve` spawns it detached from the clone and waits
   for the pulse, not the pid; `refreshBlacksmith()` beats the 30s down-backoff; `open ↗` moved from the
   expander's footer to the headline. Still not a writer — `ui serve` is the read-only projector.
+- **Undeclared subagents no longer inherit the Opus pin** (§20.5e) — the hunch was right: 9 coder/
+  reviewer runs on 2026-09-14 went out as `general-purpose` with no model and ran on Opus 5 (the
+  parent's), then were stamped "mid" at the gate. `BLACKSMITH_WORKER_MODEL` → `CLAUDE_CODE_SUBAGENT_
+  MODEL` (measured: a default, declared roles keep their tier); the contract says to spawn by role
+  type; `SmithEvidence.offRole` and a strip warning name off-template dispatches.
 
 ### 2026-09-15
 - **The ask card gets a reading scale** (§5e) — *"things look small."* The question was 12px, the

@@ -239,7 +239,7 @@ export function useAgent(paneKey: string) {
           setSmith(null);
           break;
         case "smith":
-          setSmith({ ready: !!ev.ready, issue: ev.issue ?? null, roles: Array.isArray(ev.roles) ? ev.roles : [], touches: Number(ev.touches || 0), agents: Number(ev.agents || 0), lastAt: ev.lastAt ?? null, blindTurn: !!ev.blindTurn, turnTouches: Number(ev.turnTouches || 0), turnWork: Number(ev.turnWork || 0) });
+          setSmith({ ready: !!ev.ready, issue: ev.issue ?? null, roles: Array.isArray(ev.roles) ? ev.roles : [], touches: Number(ev.touches || 0), agents: Number(ev.agents || 0), lastAt: ev.lastAt ?? null, blindTurn: !!ev.blindTurn, offRole: Number(ev.offRole || 0), turnTouches: Number(ev.turnTouches || 0), turnWork: Number(ev.turnWork || 0) });
           break;
         case "delta":
           lastDeltaAtRef.current = Date.now();

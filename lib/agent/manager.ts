@@ -20,7 +20,7 @@ import pathMod from "node:path";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
 import { findSubagentFile, subagentModel } from "../claude-sessions";
-import { DASHBOARD_MODEL } from "../model-pins";
+import { BLACKSMITH_WORKER_MODEL, DASHBOARD_MODEL } from "../model-pins";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
 import { contextWindowFor, isSelectableModel, isPremiumModel, meetsMinCli, SELECTABLE_MODELS } from "../model-catalog";
@@ -123,6 +123,8 @@ const BLACKSMITH_PROMPT = `You are running as the operator console for **Blacksm
 **How the factory actually runs.** \`/bs run\` is a playbook you follow, not a daemon. \`smith daemon\` watches and reports; it never dispatches, never merges and never writes to a worktree. There is no dispatch driver — you hand-spawn every coder, reviewer, tester and verifier from the role templates in \`${BLACKSMITH_HOME}/.claude/agents/<role>.md\`, and every mechanical step in between runs through the real \`smith\` CLI.
 
 **The dispatch contract.** Every agent you spawn must be handed, explicitly, all five of: the task spec (or the one question), the ABSOLUTE worktree path, the path claims it may touch, its token cap, and its turn budget. The last one is listed because the templates carry a \`maxTurns\` key that Claude Code does not read — the number is only true if your prompt says it, so say it. Splice in \`smith lessons for-dispatch <role>\` and \`smith findings for-dispatch\` before spawning.
+
+**How to spawn, mechanically.** The role templates are loaded into this session as agent types, so dispatch is \`Agent(subagent_type: "<role>", …)\` — \`coder\`, \`reviewer\`, \`tester\`, \`verifier\`, \`planner\`, \`scribe\` and the rest — and the template's declared model rides with the type. Do NOT use \`general-purpose\` for factory work: it has no declared model, so it inherits THIS session's, and this dashboard runs on the Opus pin — a coder dispatched that way runs at the frontier tier while your \`--model-tier mid\` stamps a lie on the gate record. The only reason to pass a \`model\` argument is a logged escalation after two failed rounds, exactly as \`dispatch.md\` says.
 
 **Parallelism in this session is the factory's, not yours.** Do not fan out ad-hoc \`general-purpose\` or \`Explore\` agents to split work you judge divisible — an agent the factory did not dispatch is work its gates cannot see. When several tasks are ready at once (\`smith wave next\`), dispatch each as its own role agent under the contract above, in parallel if their path claims are disjoint; that is the only fan-out that counts. The one exception is reading: a research sweep that touches no files and produces no artifact is fine solo or fanned, because it is not a task.
 
@@ -227,6 +229,10 @@ export type SmithEvidence = {
    *  "ticked but had no effect" signal — an operator turn that only answers a question is not blind,
    *  a turn that edited files and ran commands without one `smith` call is. */
   blindTurn: boolean;
+  /** Agent dispatches that were NOT a role template — `general-purpose`, `Explore`, … — in a session
+   *  that has the roles loaded. Each one is work the factory's gates cannot attribute, and until
+   *  CLAUDE_CODE_SUBAGENT_MODEL was set, each one ran on the dashboard's Opus pin. */
+  offRole: number;
   turnTouches: number;
   turnWork: number;
 };
@@ -244,6 +250,10 @@ function noteSmithTouch(s: Session, name: string, input: unknown, topLevel: bool
   } else if (name === "Agent") {
     dispatched = typeof o.subagent_type === "string" && ev.roles.includes(o.subagent_type);
     touched = dispatched;
+    // Counted and broadcast even though it is not a touch: an off-template dispatch is the specific
+    // thing the strip has to be able to name, because it looks exactly like factory work from the
+    // outside (the session IS calling smith around it) and is invisible to the gates.
+    if (!dispatched && ev.roles.length) { ev.offRole++; broadcast(s, { t: "smith", ...ev }); }
   } else {
     const p = o.file_path || o.path || o.notebook_path;
     touched = typeof p === "string" && (p === BLACKSMITH_HOME || p.startsWith(BLACKSMITH_HOME + pathMod.sep));
@@ -648,7 +658,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
     sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
-    smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, turnTouches: 0, turnWork: 0 } : null,
+    smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
     toolBufs: new Map(),
   };
@@ -756,6 +766,11 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
         // `smith` on PATH for a Blacksmith session — see smithShimDir(). Prepended, so a real link
         // added later still loses to the shim only for the lifetime of this session, never globally.
         ...(pre && !pre.missing.length && smithShimDir() ? { PATH: `${smithShimDir()}${pathMod.delimiter}${process.env.PATH || ""}` } : {}),
+        // Where an UNDECLARED subagent lands in an operator session. Without this it inherits the
+        // session's model — the Opus pin — and a `general-purpose` coder runs at the frontier tier
+        // while the gate records "mid" (nine of them did, 2026-09-14). A default, not an override:
+        // measured, the role templates' own `model:` still wins. See BLACKSMITH_WORKER_MODEL.
+        ...(pre ? { CLAUDE_CODE_SUBAGENT_MODEL: BLACKSMITH_WORKER_MODEL } : {}),
       },
       // The whole reason Blacksmith mode works from a folder that isn't the clone. MEASURED (a
       // prompt-less probe against this SDK build): `additionalDirectories: [clone]` loads the clone's

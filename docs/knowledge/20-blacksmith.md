@@ -237,6 +237,38 @@ footer before, which is not where you look for a door.
 Verified 2026-09-17: down → `start` → `up: true` in 1.8s (route) / ~2s (strip), pid detached and
 surviving the iterate server's exit; the `oe-central-ver2` tile badge came back with it.
 
+### 20.5e The Opus leak: undeclared agents inherit the dashboard's pin (2026-09-17)
+
+> 🐛 **"I have a hunch Blacksmith is fanning out Opus 5 agents because of the dashboard's own
+> setting."** Right hunch, measured: in the 2026-09-14 epic (`61658e33`, 267 `smith` calls) all 13
+> dispatches were `general-purpose`; 9 carried no `model` argument and ran on **`claude-opus-5`** —
+> for jobs like "Port Marketing overview to React" and "Review the Filament removal", then stamped
+> `--model-tier mid` at the gate. Today's epic (`81166efb`, roles loaded) still went 22× `general-
+> purpose` with `model: "sonnet"` passed by hand, plus one `planner` and one `spec-reviewer` by type.
+
+Not a config knob: nothing in the dashboard, `~/.claude/settings.json` or the clone sets a subagent
+model. The mechanism is inheritance. A role template declares its model (`coder`/`reviewer`/`tester`
+→ sonnet, `planner`/`verifier` → opus, `scribe` → haiku) and the playbook says rounds 1–2 run at the
+declared tier — but the playbook never says *how* to spawn, so the operator reaches for
+`general-purpose`, which declares nothing and therefore runs on the parent session's model. On this
+dashboard that is the Opus pin. The model chose the tier by hand, and every time it forgot, the
+dashboard's default answered.
+
+Three fixes. **(1)** `BLACKSMITH_WORKER_MODEL` (`lib/model-pins.ts`, env `MINAMI_BLACKSMITH_WORKER_
+MODEL`, default `claude-sonnet-5`) is handed to Blacksmith sessions as `CLAUDE_CODE_SUBAGENT_MODEL`.
+MEASURED to be a *default, not an override*: with it set to sonnet, `general-purpose` ran on sonnet
+and `scribe` still ran on its declared haiku — so `planner: opus` keeps its tier. (`_FORCE` is the
+separate bool that would clobber.) **(2)** The dispatch contract now says the mechanics: `Agent(
+subagent_type: "<role>")`, never `general-purpose` for factory work, and why. **(3)** `SmithEvidence.
+offRole` counts dispatches whose type is not a loaded role; the strip warns when they are at least
+half of all dispatches, and the in-effect line carries the count.
+
+Verified through the dashboard's own spawn path: Opus 5 parent, `general-purpose` with no model →
+`claude-sonnet-5`; `offRole: 1` on the stream.
+
+**For Blacksmith itself** (routed to its folder): `dispatch.md` should say the spawn mechanics, and
+`gate run --model-tier` is a claim the operator types — nine "mid" records in that epic were Opus.
+
 ### 20.6 Verified
 
 2026-09-14, against the live factory on `:4680` with three epics in flight

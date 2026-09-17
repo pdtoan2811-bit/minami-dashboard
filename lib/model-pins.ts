@@ -34,6 +34,18 @@ export const DASHBOARD_MODEL = process.env.MINAMI_DASHBOARD_MODEL || PINNED_MODE
 // check below on purpose: being off the pin is this caller's correct state, not drift.
 export const CHEAP_MODEL = process.env.MINAMI_CHEAP_MODEL || "claude-haiku-4-5";
 
+// What a Blacksmith operator session's UNDECLARED subagents run on. The factory's role templates
+// each declare a model (coder/reviewer/tester → sonnet, planner/verifier → opus, scribe → haiku) and
+// its playbook says rounds 1-2 run at the role's declared tier. But an operator that reaches for
+// `general-purpose` — which it does, measured: 22 of 24 dispatches in one epic — gets an agent with
+// no declared model, and that inherits the PARENT session's model: the dashboard's Opus 5. Nine
+// coder/reviewer runs went out at the frontier tier that way and were then stamped `--model-tier
+// mid` at the gate. This is handed to the subprocess as CLAUDE_CODE_SUBAGENT_MODEL, which is a
+// DEFAULT, not an override (measured: with it set to sonnet, `scribe` still ran on its declared
+// haiku) — so declared roles keep their tier and only the undeclared fall here instead of to the pin.
+// Off the pin on purpose, like CHEAP_MODEL, and excluded from the drift check for the same reason.
+export const BLACKSMITH_WORKER_MODEL = process.env.MINAMI_BLACKSMITH_WORKER_MODEL || "claude-sonnet-5";
+
 // The picker menu. Defined in lib/model-catalog.ts and re-exported here so this file stays the one
 // place code looks for "which models exist" — the catalog is a separate module only because THIS one
 // imports node:fs, and the agent config form that renders the menu runs in the browser.
