@@ -18,9 +18,10 @@ this to do a piece of work; read the subsystem's own doc.
   a comment icon beside every localhost preview chip and in the pane header. The dashboard's own
   dev layout includes the script. Verified end to end on a dev instance. Two post-mortems recorded
   in §21: the handshake races both ways (parse-time `hello` vs hydration; fixed by probing on mount
-  and on load), and hotkeys die once the iframe has focus (fixed by a key relay). New dependency:
-  `html-to-image` — the main checkout needs an install (`NODE_ENV=development npm ci --include=dev`)
-  before this ships; without it the script still works and only the crops come back null.
+  and on load), and hotkeys die once the iframe has focus (fixed by a key relay). `html-to-image`
+  is vendored verbatim under `public/vendor/` rather than taken from `node_modules`: nothing in this
+  box's merge/deploy pipeline installs, so a runtime read of `node_modules` would have shipped a
+  server whose every crop was null. No new dependency.
 - **Live sessions — `ask_team` card** (§3) — a question for the OTHER founder now shows in the pane
   while it waits on Slack: `manager.ts` tracks the top-level `ask_team` MCP call on `s.askTeam` and
   broadcasts `ask_team` (REPLACE, rides the snapshot); `AskTeamCard` renders the packet in the Slack

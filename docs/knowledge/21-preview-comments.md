@@ -180,8 +180,12 @@ if that need materialises, the fallback is the script drawing its own toolbar in
 ### What shipped (Q20: everything above, one build)
 - `public/inspect-core.js` — the in-app script (hello · hover · pick · region · anchor · markers ·
   crop · errors · key relay), plain ES2019, no build step. Served as **`/inspect.js`** by
-  `app/inspect.js/route.ts`, which prepends `html-to-image`'s UMD build from `node_modules` at
-  request time — a checkout without the package still gets a working script with `crop: null`.
+  `app/inspect.js/route.ts`, which prepends the vendored `public/vendor/html-to-image.js` (MIT,
+  v1.11.13, copied verbatim) at request time. Vendored rather than an npm dependency read from
+  `node_modules` because nothing in this box's pipeline installs — `task.mjs merge` and `deploy.sh`
+  build and swap, worktrees share only git objects (§9) — so the first version would have shipped
+  a server whose every crop was null. If the file is ever missing the script still loads; only the
+  crop degrades to `null`.
 - `lib/preview-comments.ts` — the typed protocol (the script's twin; change both), the `Pin`
   model, `composeMessage` / `composeErrorsOnly`, `installSnippet`, `isPreviewUrl`.
 - `app/preview/[session]/page.tsx` — the pop-out: toolbar, iframe, note editor with intent chips,

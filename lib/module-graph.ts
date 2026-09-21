@@ -199,7 +199,7 @@ export const NODES: ModuleNode[] = [
   // ── Preview comments: point at the running app instead of describing it (KNOWLEDGE.md §21) ──
   { id: "app/preview", label: "/preview/[session]", sub: "pop-out: the app in an iframe\npins → one user turn", layer: "surface", row: 22, pipeline: "live" },
   { id: "l/previewcomments", label: "preview-comments.ts", sub: "postMessage protocol (typed twin)\n+ composeMessage()", layer: "core", row: 22, pipeline: "live" },
-  { id: "r/inspectjs", label: "/inspect.js", sub: "html-to-image UMD + inspect-core.js\n(the one line a dev app includes)", layer: "route", row: 22, pipeline: "live" },
+  { id: "r/inspectjs", label: "/inspect.js", sub: "public/vendor/html-to-image.js + inspect-core.js\n(the one line a dev app includes)", layer: "route", row: 22, pipeline: "live" },
   { id: "p/inspectcore", label: "public/inspect-core.js", sub: "runs INSIDE the previewed app\nhover · pick · crop · errors · anchor", layer: "core", row: 22, pipeline: "live" },
 
   // ── Density: how much chrome a box may spend (KNOWLEDGE.md §5e) ─────────
