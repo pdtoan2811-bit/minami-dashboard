@@ -20,6 +20,7 @@ import pathMod from "node:path";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
 import { findSubagentFile, subagentModel } from "../claude-sessions";
+import { answerAsk as hubAnswer, askHubConfig, findPendingAsk, isAskTeamTool, type AskTeamPacket } from "../ask-hub";
 import { BLACKSMITH_WORKER_MODEL, DASHBOARD_MODEL } from "../model-pins";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
@@ -351,6 +352,13 @@ export type AgentEvent =
   | { t: "permission"; id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } // waiting on the user
   | { t: "hold"; hold: boolean } // the Flow view's brake: park every tool call at the gate (REPLACE semantics)
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
+  // Claude's `ask_team` MCP tool — a question for the OTHER founder, in flight on the Ask Hub and
+  // showing as a Slack card. REPLACE semantics: `packet: null` means the call returned (answered on
+  // Slack, answered here, rerouted, or timed out). Unlike `ask`, nothing is parked at the gate — the
+  // tool itself is what's waiting, so the pane answers through the hub, not through canUseTool.
+  // `hub` says whether THIS server can answer it (env configured) or can only show it. §3 in
+  // docs/knowledge/03-live-sessions.md.
+  | { t: "ask_team"; id: string; packet: AskTeamPacket | null; hub: boolean }
   | { t: "result"; subtype: string; costUsd?: number } // turn finished
   | { t: "busy"; busy: boolean }
   // The placement pass moved this conversation to a new folder (see relocate); the pane must adopt
@@ -474,6 +482,9 @@ type Session = {
   liveTools: Map<string, LiveTool & { startedAt: number }>; // tool_use_id → in-flight tool call
   liveTasks: Map<string, LiveTask>; // task_id → running subagent / background task
   toolBufs: Map<number, { id: string; name: string; buf: string }>; // block index → streaming tool input
+  /** The in-flight `ask_team` call, if any — kept so a pane that (re)attaches mid-wait gets the card
+   *  back from the snapshot instead of finding a session that is "running a tool" for half an hour. */
+  askTeam: { id: string; packet: AskTeamPacket } | null;
 };
 
 // Persist the registry on globalThis so Next.js dev hot-reloads don't orphan live sessions. Sessions
@@ -659,7 +670,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     partialThinking: "",
     sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
     smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
-    phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(),
+    phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), askTeam: null,
     toolBufs: new Map(),
   };
   store.set(key, s);
@@ -968,6 +979,12 @@ function handleMessage(s: Session, m: any) {
           }
           broadcast(s, { t: "tool", name: b.name, input: b.input, id: b.id });
           noteSmithTouch(s, b.name, b.input, !parentId);
+          // Top-level only: a subagent's ask_team is the subagent's to wait on, and its packet never
+          // reaches this pane's transcript, so a card for it would have no thread to answer into.
+          if (!parentId && b.id && isAskTeamTool(b.name) && b.input?.question) {
+            s.askTeam = { id: b.id, packet: b.input as AskTeamPacket };
+            broadcast(s, { t: "ask_team", id: b.id, packet: s.askTeam.packet, hub: !!askHubConfig() });
+          }
           changed = true;
         }
         if (changed) touch(s, "tool");
@@ -995,6 +1012,10 @@ function handleMessage(s: Session, m: any) {
         // input JSON blob. summarizeToolResult caps size, so this stays cheap even for a chatty tool.
         const output = summarizeToolResult(b.content);
         broadcast(s, { t: "tool_end", id: t.id, name: t.name, ok: !b.is_error, ms: Date.now() - t.startedAt, output });
+        if (s.askTeam?.id === t.id) {
+          s.askTeam = null;
+          broadcast(s, { t: "ask_team", id: t.id, packet: null, hub: !!askHubConfig() });
+        }
         closed = true;
       }
       if (closed) settle(s);
@@ -1462,6 +1483,20 @@ export function answer(key: string, id: string, answers: Record<string, string |
   return true;
 }
 
+// Answer the in-flight `ask_team` call from the pane. Nothing to resolve locally: the MCP tool is
+// long-polling the hub and returns on its own once the hub records this answer, and the tool_result
+// that follows is what clears the card. The hub is also the arbiter — if ducba clicked first, this
+// comes back 409 and the pane learns it lost the race from the tool_result a moment later.
+export async function answerAskTeam(key: string, id: string, labels: string[], text?: string): Promise<{ ok: boolean; reason?: string }> {
+  const s = store.get(key);
+  if (!s || s.askTeam?.id !== id) return { ok: false, reason: "that question is no longer waiting" };
+  if (!askHubConfig()) return { ok: false, reason: "ask hub is not configured on this server" };
+  const ask = await findPendingAsk(s.askTeam.packet.question);
+  if (!ask) return { ok: false, reason: "the hub has no pending ask for this question — it may have just been answered on Slack" };
+  await hubAnswer(ask.id, labels, text);
+  return { ok: true };
+}
+
 // Stop ONE task — a subagent or a backgrounded command — without touching the turn around it. This is
 // the ■ on a card in the tasks panel, and it is a different thing from the pane's Stop: that one
 // interrupts the whole query, which kills every task at once and abandons the reply being written.
@@ -1826,6 +1861,7 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
   // `activity` rides along so a client that refreshed mid-tool-call resumes with the real label and a
   // correctly-offset elapsed clock, instead of falling back to a generic "working…".
   replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold, queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })), ctxUsed: s.ctxUsed || undefined });
+  if (s.askTeam) replay.push({ t: "ask_team", id: s.askTeam.id, packet: s.askTeam.packet, hub: !!askHubConfig() });
   for (const [id, p] of s.pending) {
     if (p.toolName === "AskUserQuestion") replay.push({ t: "ask", id, questions: (p.input as { questions?: AgentQuestion[] })?.questions || [] });
     // `expiresAt` is an absolute timestamp, not a remaining duration, precisely so a client that

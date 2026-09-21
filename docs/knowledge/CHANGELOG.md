@@ -8,6 +8,15 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-21
+- **Live sessions — `ask_team` card** (§3) — a question for the OTHER founder now shows in the pane
+  while it waits on Slack: `manager.ts` tracks the top-level `ask_team` MCP call on `s.askTeam` and
+  broadcasts `ask_team` (REPLACE, rides the snapshot); `AskTeamCard` renders the packet in the Slack
+  card's fixed order; `/api/agent/ask-team` → `lib/ask-hub.ts` answers through the hub so first answer
+  wins there. New env `MINAMI_ASK_HUB_URL/TOKEN/ROLE/NAME`, all optional. The hub itself (Cloudflare
+  Worker) and the MCP tool live in `~/Minami` — design + wire contract in `~/Minami/docs/ASK-HUB.md`.
+  Written and type-checked; **not yet exercised end-to-end** (no hub deployed at time of writing).
+
 ### 2026-09-17
 - **Blacksmith mode now measures whether it is in effect** (§20.5b) — the mode described a factory the
   session couldn't reach: `/bs` and the role agents are project-level files in the clone, `smith` isn't

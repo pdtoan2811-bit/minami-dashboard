@@ -8,7 +8,8 @@ import { IDLE_ACTIVITY, type ActivityState, type FinishedTask, type ToolOutput }
 // Type-only, so nothing of manager.ts (node:fs, the SDK) reaches the browser bundle — the shape is
 // the server's to define, and a client-side copy is exactly the drift the `smith` event would hide.
 import type { SmithEvidence } from "./agent/manager";
-export type { SmithEvidence };
+import type { AskTeamPacket } from "./ask-hub";
+export type { SmithEvidence, AskTeamPacket };
 
 export type AgentTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCall[]; streaming?: boolean; thinking?: string };
 export type AgentToolCall = { name: string; input: unknown; id?: string; done?: boolean; ok?: boolean; ms?: number; output?: ToolOutput };
@@ -21,6 +22,9 @@ export type PermissionPrompt = { id: string; toolName: string; input: unknown; h
 // verbatim), so it was always ARRIVING here; it was only ever missing from this type and from AskCard.
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] };
 export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
+// The in-flight `ask_team` call (a question for the OTHER founder, showing as a Slack card via the
+// Ask Hub). `hub` = this server can answer it too; without it the card is read-only.
+export type AskTeamPrompt = { id: string; packet: AskTeamPacket; hub: boolean } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 // `agent`/`status` only ride along on kind "task" — see manager.ts's AgentEvent for why.
 export type Notice = { kind: string; text: string; at: number; agent?: string; status?: "completed" | "failed" | "stopped" };
@@ -56,6 +60,7 @@ export function useAgent(paneKey: string) {
   const [stopping, setStopping] = useState(false); // Stop was clicked; waiting for the turn to actually end
   const [pending, setPending] = useState<PermissionPrompt>(null);
   const [ask, setAsk] = useState<AskPrompt>(null); // Claude's AskUserQuestion prompt
+  const [askTeam, setAskTeam] = useState<AskTeamPrompt>(null); // Claude's ask_team call, while it waits on Slack
   // The Flow view's brake. Server-owned (see setHold in lib/agent/manager.ts) and delivered with
   // REPLACE semantics like `activity`, so this never derives a supervision state the gate disagrees
   // with — the gate is what actually decides whether a tool runs.
@@ -418,6 +423,9 @@ export function useAgent(paneKey: string) {
           setHoldState(!!ev.hold); break;
         case "ask":
           setAsk({ id: ev.id, questions: ev.questions || [] }); break;
+        case "ask_team":
+          // REPLACE semantics from the server: a null packet is the call returning, whoever answered.
+          setAskTeam(ev.packet ? { id: ev.id, packet: ev.packet, hub: !!ev.hub } : null); break;
         case "busy":
           setBusy(ev.busy); if (!ev.busy) setStopping(false); break;
         case "queued":
@@ -443,7 +451,7 @@ export function useAgent(paneKey: string) {
           ]);
           break;
         case "result":
-          setBusy(false); setStopping(false); setPending(null); setAsk(null); applyActivity(IDLE_ACTIVITY);
+          setBusy(false); setStopping(false); setPending(null); setAsk(null); setAskTeam(null); applyActivity(IDLE_ACTIVITY);
           setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)));
           reconcile();
           break;
@@ -453,7 +461,7 @@ export function useAgent(paneKey: string) {
           // (its POST would 404 against a session the server already deleted), so clear it instead of
           // leaving a dialog stuck on screen forever with no working button.
           setError(String(ev.message || "error")); setBusy(false); setStopping(false); applyActivity(IDLE_ACTIVITY);
-          setPending(null); setAsk(null); setHoldState(false);
+          setPending(null); setAsk(null); setAskTeam(null); setHoldState(false);
           break;
       }
     };
@@ -740,6 +748,18 @@ export function useAgent(paneKey: string) {
     } catch (e) { setError(`Couldn't send that answer — try again (${String((e as Error)?.message || e)})`); }
   }, [ask, paneKey]);
 
+  // Answer the in-flight ask_team call from here. The card is NOT cleared on success — the server clears
+  // it when the tool returns, which is the only moment we know the hub accepted this answer over
+  // Slack's. Returns the hub's refusal (already answered, not configured) for the card to show.
+  const answerAskTeam = useCallback(async (labels: string[], text?: string): Promise<string | null> => {
+    const a = askTeam; if (!a) return "that question is no longer waiting";
+    try {
+      const r = await fetch("/api/agent/ask-team", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: a.id, labels, text }) });
+      const d = await r.json().catch(() => null);
+      return d?.ok ? null : String(d?.reason || "the hub didn't accept this answer");
+    } catch (e) { return String((e as Error)?.message || e); }
+  }, [askTeam, paneKey]);
+
   // Point this pane at a different model. Returns whether it applied, so the composer's picker can
   // revert rather than display a model the session isn't on — the same contract as changeMode().
   //
@@ -840,5 +860,5 @@ export function useAgent(paneKey: string) {
   // The steady one. Same free recount off the same tick, but anchored to the turn rather than the
   // phase — so this is the number that can legitimately read "6m 20s" and be believed. 0 when idle.
   const turnElapsed = turnStart == null ? 0 : Math.max(0, Date.now() - turnStart);
-  return { turns, live, busy, stopping, pending, ask, activity, elapsed, turnElapsed, link, notices, sessionId, sessionModel, sessionBlacksmith, smith, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, changeBlacksmith, setHold, stop, finishedTasks, stopTask, clearFinished };
+  return { turns, live, busy, stopping, pending, ask, askTeam, answerAskTeam, activity, elapsed, turnElapsed, link, notices, sessionId, sessionModel, sessionBlacksmith, smith, relocatedTo, ctxUsed, error, detached, hold, queued, send, queueMessage, attach, respond, answerAsk, changeMode, changeModel, changeFanout, changeBlacksmith, setHold, stop, finishedTasks, stopTask, clearFinished };
 }

@@ -22,6 +22,7 @@ import BentoRail, { RAIL_W } from "@/components/BentoRail";
 import { BlacksmithPanel } from "@/components/blacksmith/BlacksmithPanel";
 import { useBlacksmith, projectMatches } from "@/lib/blacksmith/use-blacksmith";
 import AskCard from "@/components/AskCard";
+import AskTeamCard from "@/components/AskTeamCard";
 import Composer from "@/components/Composer";
 import BrowserPanel from "@/components/BrowserPanel";
 import FilePanel from "@/components/FilePanel";
@@ -2962,6 +2963,12 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         // question-index state against a `questions` array that may now be shorter — without this,
         // `questions[qi]` can go out of bounds and crash the render (no error boundary catches it).
         <AskCard key={agent.ask.id} questions={agent.ask.questions} onAnswer={agent.answerAsk} />
+      )}
+
+      {/* Claude's ask_team — a question for the OTHER founder, in flight on Slack via the Ask Hub. The
+          pane can answer it too; the hub decides who was first. Keyed like AskCard, for the same reason. */}
+      {agent.askTeam && (
+        <AskTeamCard key={agent.askTeam.id} ask={agent.askTeam} onAnswer={agent.answerAskTeam} />
       )}
 
       {/* Tool-permission prompt (default mode) — Claude is paused until the user decides.

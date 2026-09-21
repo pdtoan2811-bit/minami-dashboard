@@ -75,6 +75,37 @@ parks a promise in `s.pending` and blocks.
 question, and auto-answering it would throw the question away. The mode is still handed to the SDK at
 spawn time *and* on change, so the CLI's own state agrees; it just isn't trusted to be the enforcer.
 
+**`ask_team` is the other kind of question, and it is deliberately *not* parked at the gate.** Added
+2026-09-21. `AskUserQuestion` is Claude asking the person at the keyboard; `ask_team` (an MCP tool,
+`~/Minami/mcp/ask-team`, design in `~/Minami/docs/ASK-HUB.md`) is Claude asking the *other* founder —
+a question for the CTO from a growth session, or the reverse. The tool posts a packet to a Cloudflare
+Worker (the Ask Hub), which renders it as a Slack card in `#ecvision` and long-polls for the answer;
+the tool call itself is what waits, for up to 30 minutes, then tells Claude to fall back to a local
+`AskUserQuestion`.
+
+The dashboard's part is small on purpose: it *renders* the in-flight call and lets the pane answer it
+too. `manager.ts` spots the tool in the top-level `tool_use` stream (`isAskTeamTool`, suffix-matched
+because the `mcp__<server>__` prefix is whatever `claude mcp add` was given), stores it on
+`s.askTeam`, and broadcasts `{t:"ask_team", packet}` — REPLACE semantics, `packet:null` when the
+`tool_result` lands. It rides the snapshot, so a pane that reattaches mid-wait gets the card back
+instead of "running a tool" for half an hour. `AskTeamCard` draws the packet in the **same fixed
+order as the Slack card** (why you → what's going on → the question → it hinges on → options with
+consequences → footer) so the two renderings are one thing. Answering posts to `/api/agent/ask-team`
+→ `lib/ask-hub.ts`, which finds the hub's pending ask by the question text (the hub id went to the
+MCP tool, a different process) and posts the answer as `via:"dashboard"`. **Nothing is resolved
+locally**: the hub is the arbiter of who answered first, the MCP tool returns on its own, and the
+`tool_result` is what clears the card — which is why the card stays in its "answered here — waiting"
+state after a successful send rather than vanishing. A 409 from the hub means Slack won the race;
+the tool_result a moment later says who.
+
+Why it isn't the same path as `AskUserQuestion`: an intercepted-and-mirrored `AskUserQuestion` would
+have needed a routing tag Claude has to remember to set, a second answer path inside `canUseTool`,
+and would have worked only on this dashboard — ducba runs plain Claude Code in VS Code. One tool with
+an explicit `to:` works on every platform, and the wording rules that make a question answerable by
+someone who has never seen the task live in the tool's schema, so they travel with it. Off unless
+`MINAMI_ASK_HUB_URL` + `MINAMI_ASK_HUB_TOKEN` are set; without them the card renders read-only and
+says so.
+
 **The model is creation-only, so the composer's picker respawns rather than asks.** `query()` is built
 around a model and there is no control message to move a warm session onto another one — the same shape
 of trap as `setPermissionMode()` above. `setModel()` therefore closes the SDK subprocess and the pane's

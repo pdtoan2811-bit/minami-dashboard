@@ -220,6 +220,10 @@ export function activityLabel(name: string, input?: unknown): string {
     case "ToolSearch":
       return "looking up tools";
     default: {
+      // The Ask Hub's tool (~/Minami/docs/ASK-HUB.md): the session is waiting on a PERSON over Slack,
+      // which is a different thing from "running an MCP tool" and can last half an hour.
+      if (name.startsWith("mcp__") && name.endsWith("__ask_team")) return o.to === "eng" ? "asking the CTO on Slack" : o.to === "growth" ? "asking Growth/PM on Slack" : "asking the team on Slack";
+      if (name.startsWith("mcp__") && name.endsWith("__ask_team_continue")) return "closing the loop on Slack";
       const browser = browserToolLabel(name, o);
       return browser || mcpLabel(name) || `using ${name}`;
     }
