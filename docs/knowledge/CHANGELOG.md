@@ -9,6 +9,18 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-21
+- **Preview comments** (§21, new) — point at the running app instead of describing it. A pop-out
+  (`/preview/<sid>?url=…`) wraps the localhost app in an iframe, bound to one pane; a one-line dev
+  script (`/inspect.js` = `html-to-image` UMD + `public/inspect-core.js`) reports element ·
+  React component chain · in-page crop · console/network/Next-overlay errors over `postMessage`;
+  numbered pins with notes + intent chips, rectangles, whole-page notes and two-click moves go out
+  as ONE user turn through the existing paste + send routes, with a self-verify nudge. Entry points:
+  a comment icon beside every localhost preview chip and in the pane header. The dashboard's own
+  dev layout includes the script. Verified end to end on a dev instance. Two post-mortems recorded
+  in §21: the handshake races both ways (parse-time `hello` vs hydration; fixed by probing on mount
+  and on load), and hotkeys die once the iframe has focus (fixed by a key relay). New dependency:
+  `html-to-image` — the main checkout needs an install (`NODE_ENV=development npm ci --include=dev`)
+  before this ships; without it the script still works and only the crops come back null.
 - **Live sessions — `ask_team` card** (§3) — a question for the OTHER founder now shows in the pane
   while it waits on Slack: `manager.ts` tracks the top-level `ask_team` MCP call on `s.askTeam` and
   broadcasts `ask_team` (REPLACE, rides the snapshot); `AskTeamCard` renders the packet in the Slack

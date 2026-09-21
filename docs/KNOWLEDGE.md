@@ -52,6 +52,7 @@ recycle one.
 | [`18-meeting-launch.md`](knowledge/18-meeting-launch.md) | §18 | ~1,500 | Getting Minami into a call: the two launchers, the receiver on :8787, the cloudflared quick tunnel, and the shared `bin/tunnel-lib.sh`. Why this Mac's DNS opinion is not the question, and the 1800s negative-cache trap that made the launcher poison its own probe. |
 | [`19-repo-state.md`](knowledge/19-repo-state.md) | §19 | ~3,000 | The checkout briefing: which branch a session is really on and which trunk is actually moving, measured with a fetch and handed to the model as fact. The five-hour dead-branch incident, the sync/async cache bridge, and why a failed fetch still fetched. |
 | [`20-blacksmith.md`](knowledge/20-blacksmith.md) | §20 | ~4,800 | The chat pane as the Blacksmith agent factory's operator console: the ⚒ mode, the read-only panel over `smith ui serve`, the tile badge. Why the factory cannot tell you it is running, why a "live agent" count only ever goes up, why this integration reads and never writes — and (§20.5b) how the mode measures that it is actually in effect from a folder that isn't the clone, why fan-out is subordinate to it, how the strip starts `smith ui serve`, and why undeclared subagents used to run on the Opus pin. |
+| [`21-preview-comments.md`](knowledge/21-preview-comments.md) | §21 | ~3,200 | Pointing at the running app instead of describing it: a pop-out that wraps the localhost app, a one-line dev script that reports element · component chain · crop · errors over postMessage, numbered pins sent as one structured turn, the twenty decisions behind that shape — and the two-way handshake race that the first build lost. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~24,000 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -122,6 +123,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Task isolation | `bin/task.mjs` | **shipped** | one task = one worktree = one branch = one agent — see §9 |
 | Out-of-pane alerts | `bin/minami-event.mjs` + `lib/events.ts` | **shipped** | disk-backed, survives the deploy that produces them — see §10 |
 | Images in a message | `lib/agent/images.ts` + `app/api/fs/paste` | **shipped** | paste a screenshot; path is the payload, so it survives a reload — see §11 |
+| Preview comments | `app/preview/[session]` + `public/inspect-core.js` (served as `/inspect.js`) + `lib/preview-comments.ts` | **shipped** | pop-out wrapping the localhost app; pins → one structured turn with crops — see §21 |
 | Rendering cost | `app/globals.css`, `ProjectIcon.tsx` | **shipped** | idle GPU 31% → 14%; never animate inside a backdrop-blur — see §12 |
 | Standing agents | `lib/agents/*` + `app/agents/*` | **shipped** | opt-in roster; identity + home folder, not cwd. Verified end-to-end 2026-07-30 — see §14 |
 | Agent task runner | `lib/agents/runner.ts` | **shipped** | unattended runs, write-back, handoffs; polls rather than subscribes — see §14.3 |
