@@ -37,8 +37,8 @@ import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, typ
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
 import { motion } from "motion/react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bot, ChevronLeft, ChevronRight, Chrome, Clock, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Bot, ChevronLeft, ChevronRight, Chrome, Clock, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, MessageSquarePlus, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -1658,7 +1658,7 @@ const FileChips = memo(function FileChips({ tools, onOpen }: { tools: AgentToolC
  *  url opens a real tab (a localhost preview deserves a full window, and the in-app browser panel
  *  belongs to the SESSION'S browsing, not ours); file reuses the same panel slot as FileChips; cmd
  *  copies, because running model-suggested shell text on click is an auto-approve nobody armed. */
-const PreviewChips = memo(function PreviewChips({ previews, onOpenFile }: { previews: Preview[]; onOpenFile: (p: string) => void }) {
+const PreviewChips = memo(function PreviewChips({ previews, onOpenFile, onComment }: { previews: Preview[]; onOpenFile: (p: string) => void; onComment?: (url: string) => void }) {
   const [copied, setCopied] = useState<string | null>(null);
   if (!previews.length) return null;
   return (
@@ -1678,7 +1678,8 @@ const PreviewChips = memo(function PreviewChips({ previews, onOpenFile }: { prev
             : () => { navigator.clipboard?.writeText(p.target).then(() => { setCopied(p.target); setTimeout(() => setCopied(null), 1500); }); };
         const host = local ? p.target.replace(/^https?:\/\//, "").replace(/\/$/, "") : null;
         return (
-          <button key={i} onClick={act}
+          <Fragment key={i}>
+          <button onClick={act}
             title={p.kind === "url" ? p.target : p.kind === "file" ? p.target : `copy: ${p.target}`}
             className={`flex max-w-full items-center gap-1.5 rounded-lg border transition-colors hover:bg-white/[0.06] ${local ? "px-2.5 py-1 text-[11px]" : "px-2 py-1 text-[11px]"}`}
             style={local
@@ -1689,6 +1690,16 @@ const PreviewChips = memo(function PreviewChips({ previews, onOpenFile }: { prev
             {/* The address itself, so "the dashboard" never needs a hover to know WHERE. */}
             {host && <span className="shrink-0 font-mono text-[9.5px]" style={{ color: tint }}>{host}</span>}
           </button>
+          {/* The other way in (§21): the same page in the pop-out where you can point at it. A separate
+              control rather than a mode on the chip — the chip's click has meant "open a tab" since it
+              existed, and a localhost preview deserves both a full tab and a place to comment. */}
+          {local && onComment && (
+            <button onClick={() => onComment(p.target)} title={`Comment on ${host} — point at elements and send them here`}
+              className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-lg border border-white/10 text-neutral-400 transition-colors hover:bg-white/[0.06] hover:text-[var(--sakura)]">
+              <MessageSquarePlus className="h-3.5 w-3.5" />
+            </button>
+          )}
+          </Fragment>
         );
       })}
     </div>
@@ -1945,7 +1956,7 @@ function SlotTabs({ slot, onPick, fileCount, taskCount, show }: { slot: Slot; on
   );
 }
 
-const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, onOpenFile, live, sameSpeaker }: {
+const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, onOpenFile, onComment, live, sameSpeaker }: {
   turn: RenderTurn;
   showTools: boolean;
   /** Previous row was the same role — suppress the repeated speaker label. Derived at the call site
@@ -1956,6 +1967,8 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
   /** Stable identity required — TurnRow is memoised, and a fresh closure here would defeat it for
    *  every row on every render. Supplied as a useCallback by ChatColumn. */
   onOpenFile: (path: string) => void;
+  /** Same contract as onOpenFile. Opens the §21 pop-out on a localhost preview chip. */
+  onComment: (url: string) => void;
   /** Non-null only for the one row that is currently streaming. */
   live: LiveBits | null;
 }) {
@@ -1992,7 +2005,7 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
               {/* Where to SEE the work, per the reply's own preview block. Above FileChips because it
                   is the reply's deliberate answer to "where do I look", while FileChips is derived
                   exhaust — the intentional signal outranks the inferred one. */}
-              <PreviewChips previews={previewSplit.previews} onOpenFile={onOpenFile} />
+              <PreviewChips previews={previewSplit.previews} onOpenFile={onOpenFile} onComment={onComment} />
               {/* What this turn actually did to the filesystem, as chips you can open.
                   Deliberately OUTSIDE the `showTools` gate below: "which files changed" is the
                   outcome of a turn, not tool noise, and it's the one thing worth seeing even when
@@ -2571,6 +2584,26 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     setBrowserPanelHidden(false); // the slot is shared, so un-hiding it is what makes the file visible
   }, [setSlot, setBrowserPanelHidden]);
 
+  // The §21 pop-out: the app in a window of its own, bound to THIS conversation so what gets pinned
+  // there lands here. Named window per session, so a second click focuses it rather than spawning
+  // another. Opened without a url when called from the header — the pop-out has an address bar.
+  const openPreview = useCallback((url?: string) => {
+    const q = new URLSearchParams({ cwd });
+    if (url) q.set("url", url);
+    window.open(`/preview/${sessionId || "new"}?${q}`, `preview-${sessionId || "new"}`, "width=1280,height=900");
+  }, [sessionId, cwd]);
+  // Whether a localhost preview has appeared in this conversation — the header button only earns
+  // its place once there is a page to comment on. Tail-only: chips live at the end of a reply, and
+  // the last few replies are the ones with a live server behind them.
+  const hasLocalPreview = useMemo(() => {
+    const tail = agent.turns.slice(-30);
+    for (let i = tail.length - 1; i >= 0; i--) {
+      const t = tail[i];
+      if (t.role === "assistant" && t.text && splitPreviewBlock(t.text).previews.some(isLocalUrl)) return true;
+    }
+    return false;
+  }, [agent.turns]);
+
   const canShowBrowser = browser.everUsed;
   const canShowFile = files.everUsed;
   // The tasks slot earns a place once the session has ever had a subagent or background task — while
@@ -2748,6 +2781,12 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             <span className="text-[9px] tabular-nums">{files.files.length}</span>
           </button>
         )}
+        {hasLocalPreview && (
+          <button onClick={() => openPreview()} title="Comment on the localhost preview — pins there are sent to this chat"
+            className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 hover:text-[var(--sakura)]">
+            <MessageSquarePlus className="h-3.5 w-3.5" />
+          </button>
+        )}
         {canShowTasks && slotHidden && (
           <button onClick={() => openSlot("tasks")} title={roomForSlot ? "Show background tasks" : "Expand this chat to show its background tasks"}
             className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
@@ -2914,7 +2953,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         )}
         {visible.map((t, i) => (
           <TurnRow
-            key={i} turn={t} showTools={showTools} shots={browser.shots} onOpenShot={setLightbox} onOpenFile={openFile}
+            key={i} turn={t} showTools={showTools} shots={browser.shots} onOpenShot={setLightbox} onOpenFile={openFile} onComment={openPreview}
             sameSpeaker={i > 0 && visible[i - 1].role === t.role}
             // Only the LAST row needs the live indicator, so only it receives props that change on
             // every token. Every earlier row gets a prop set that is identical between renders, and

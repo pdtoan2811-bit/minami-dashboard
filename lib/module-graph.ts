@@ -196,6 +196,11 @@ export const NODES: ModuleNode[] = [
   { id: "r/taskstop", label: "/api/agent/task/stop", sub: "query.stopTask() — one task,\nturn keeps running", layer: "route", row: 17, pipeline: "live" },
   { id: "r/tasktranscript", label: "/api/agent/task/transcript", sub: "subagents/agent-<id>.jsonl\n(live or finished)", layer: "route", row: 17, pipeline: "read" },
   { id: "l/previewblock", label: "preview-block.ts", sub: "```minami-preview → chips\n(the ending contract, reader half)", layer: "core", row: 21, pipeline: "live" },
+  // ── Preview comments: point at the running app instead of describing it (KNOWLEDGE.md §21) ──
+  { id: "app/preview", label: "/preview/[session]", sub: "pop-out: the app in an iframe\npins → one user turn", layer: "surface", row: 22, pipeline: "live" },
+  { id: "l/previewcomments", label: "preview-comments.ts", sub: "postMessage protocol (typed twin)\n+ composeMessage()", layer: "core", row: 22, pipeline: "live" },
+  { id: "r/inspectjs", label: "/inspect.js", sub: "public/vendor/html-to-image.js + inspect-core.js\n(the one line a dev app includes)", layer: "route", row: 22, pipeline: "live" },
+  { id: "p/inspectcore", label: "public/inspect-core.js", sub: "runs INSIDE the previewed app\nhover · pick · crop · errors · anchor", layer: "core", row: 22, pipeline: "live" },
 
   // ── Density: how much chrome a box may spend (KNOWLEDGE.md §5e) ─────────
   { id: "l/density", label: "density.ts", sub: "measured tiers + context\n(roomy · snug · tight · micro)", layer: "core", row: 20 },
@@ -448,4 +453,15 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/manager", to: "l/sessions", kind: "import", label: "subagentModel()" },
   { from: "r/tasktranscript", to: "l/sessions", kind: "import", label: "readSubagent()" },
   { from: "app/page", to: "l/previewblock", kind: "import" },
+  // The pop-out is a second window on the SAME session (Session.subs is a Set) that also sends —
+  // through the same route and hook the pane uses, so there is no second way into a session.
+  { from: "app/preview", to: "l/previewcomments", kind: "import" },
+  { from: "app/preview", to: "l/useagent", kind: "import", label: "attach + send" },
+  { from: "app/preview", to: "l/settings", kind: "import", label: "the pane's mode/model" },
+  { from: "app/preview", to: "r/paste", kind: "http", label: "crop → path" },
+  { from: "app/preview", to: "r/agent", kind: "http", label: "/live (rebind list)" },
+  // Cross-origin, so no import: the app loads the script, and the two talk over window.postMessage.
+  { from: "r/inspectjs", to: "p/inspectcore", kind: "http", label: "concatenates at request" },
+  { from: "p/inspectcore", to: "app/preview", kind: "http", label: "postMessage (hello · picked · errors)" },
+  { from: "app/page", to: "app/preview", kind: "http", label: "window.open from a url chip" },
 ];

@@ -28,6 +28,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             persistent dot once collapsed) or for a few seconds after recovering. */}
         <AccountStatus />
         {children}
+        {/* The dashboard is its own first preview target (§21): in development the inspect script
+            is included so a dev instance of this app can be commented on from a pop-out. A relative
+            src is enough — the script learns the dashboard's origin from the handshake, not the URL.
+            Never in production: `next build` evaluates this to false and ships nothing. */}
+        {process.env.NODE_ENV === "development" && <script src="/inspect.js" />}
       </body>
     </html>
   );

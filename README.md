@@ -40,6 +40,7 @@ single board:
 | **Repo & tech attach bar** | Each topic shows its git repo (link) and the tech it uses (Shopify, ClickHouse, BigQuery, Google Cloud, …) as brand icons, detected from `.git`, `package.json`, and config files. |
 | **Live drive** (Phase 2) | Actually run Claude Code from the panel — send messages, watch tokens stream in, and approve/deny tool calls inline. `Plan`/`Code` toggle (default Code) + approval level (`ask` / `auto-edits`), with a live "what it's doing" hint that tells cold-start (`starting session…`) apart from mid-turn thinking, escalates ("still working…") past a minute, and flashes the tab title if you've wandered off. A live checklist tracks the agent's TodoWrite plan as it works, not just the current tool. Uses your existing Claude login (no API key). |
 | **Browser tool** | Every live-driven chat gets a headless, isolated browser (Playwright MCP) so Claude can navigate/click/type/screenshot — built for QA-testing your own apps. Because it's headless, the docked panel *is* the browser window: URL bar, device presets, screenshot filmstrip, console/network/actions drawer, full-screen lightbox, and a pop-out window. Gated by your normal permission mode, with per-host "allow all" for QA runs. See [Browser tool](#browser-tool) below. |
+| **Preview comments** | Point at your running app instead of describing it. A comment icon beside any `localhost` preview chip opens the page in a pop-out window bound to that chat; press `P` and click an element, `R` to drag a region, `N` for a page note, `M` for "move this → here". Each pin gets a note and an optional intent (Fix / Style / Move / …); **Send** turns them into one message with the React component chain, CSS selector, a crop of the spot, and any console/network errors since the last send. One-time setup per app: the pop-out asks Claude to add a single dev-only `<script src="http://localhost:3000/inspect.js">` line. See [Preview comments](#preview-comments) below. |
 | **Semantic labels** | Sessions are grouped **Project › Goal › Task** and flagged for review by a cheap local Haiku pass (uses your Claude subscription via the `claude` CLI — no API key). Cached to disk; curate by hand or via the `bento-taxonomy` skill. |
 | **Metrics** (`/dashboard`) | Usage heatmap (cohort calendar), live model-routing feed, per-machine usage, routing table + savings. Optional — needs the metrics server below. |
 | **Pluggable panels** | Task log / Trace-back / Analytics / People read from a JSON file you provide (`MINAMI_PANELS_FILE`). Empty and harmless by default. |
@@ -222,6 +223,35 @@ Click the viewport (or any screenshot in the transcript) for a **full-screen lig
 resize, `▥` to move the panel below the chat instead of beside it, and `⧉` to pop it into its own
 window (handy on a second monitor — it's read-only there). Turn the whole tool off with
 `MINAMI_DISABLE_BROWSER_TOOL=1`.
+
+### Preview comments
+
+The browser tool is Claude looking at your app. Preview comments are *you* looking at it — and
+pointing. Any reply that ends with a localhost preview chip gets a small comment icon next to it;
+click it and the page opens in a pop-out bound to that chat (the same icon sits in the pane header).
+
+The first time you open an app this way, the pop-out notices the page isn't reporting and offers
+**Enable comments** — one click asks the chat to add a dev-only line to the app's root layout:
+
+```tsx
+{process.env.NODE_ENV === "development" && <script src="http://localhost:3000/inspect.js" />}
+```
+
+Reload, and the toolbar comes alive:
+
+| | |
+|---|---|
+| **Pin** (`P`) | Click an element. You get its React component chain (`ProductGrid > ProductCard > PriceTag`), a stable CSS selector, its text, and a crop of the spot, plus a note box with intent chips (Fix · Style · Move · Remove · Ask · Copy). |
+| **Rect** (`R`) | Drag a region for things that aren't one element — spacing, a whole section. Everything inside is listed. |
+| **Note** (`N`) | A whole-page comment with no anchor. |
+| **Move** (`M`) | Click the thing, then click where it should go. |
+| **⚠ badge** | Console errors, failed requests and the Next.js error overlay, collected since your last send. Click to send them on their own — no more screenshotting red boxes. |
+| **Send** (`⌘↩`) | All open pins become one message in the bound chat, crops attached, ending with a nudge for Claude to re-screenshot each pinned selector after the fix. Pins go grey while Claude works and fade when the turn ends. |
+
+Pins survive the app reloading (HMR, navigation, Claude's fix landing) — they re-anchor by selector,
+and one whose element is gone is sent as such rather than dropped. The status bar shows what Claude
+is doing and its last reply, and lets you re-bind the window to another live chat. Only `localhost`
+URLs can be previewed; apps that render inside another site (Shopify embedded apps) can't be framed.
 
 ## Roadmap
 
