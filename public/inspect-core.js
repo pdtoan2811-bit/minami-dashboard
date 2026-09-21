@@ -342,6 +342,7 @@
         if (drag) placeRubber(normBox(drag, mouse));
         return;
       }
+      if (overlay) overlay.style.cursor = markerAt(mouse.x, mouse.y) ? 'pointer' : 'crosshair';
       var node = targetAt(mouse.x, mouse.y);
       placeHighlight(node);
       if (node !== hovered) {
@@ -374,6 +375,10 @@
   var onClick = safe(function (e) {
     e.preventDefault();
     e.stopPropagation();
+    // Clicking an existing marker reopens its note rather than dropping a new pin on top of it —
+    // the overlay sits above the markers, so this has to be checked here, not on the badge.
+    var mk = markerAt(e.clientX, e.clientY);
+    if (mk) { post({ t: 'marker', n: mk }); return; }
     if (tool !== 'pin') return;
     var node = targetAt(e.clientX, e.clientY);
     if (!node) return;
@@ -476,8 +481,12 @@
     for (var j = 0; j < markers.length; j++) {
       var m2 = markers[j];
       var open = m2.state === 'open';
-      m2.badge = el('div', 'position:fixed;width:22px;height:22px;border-radius:11px;background:' + (open ? COLOR : '#666') + ';color:#fff;font:bold 12px/22px system-ui,sans-serif;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:none;display:none;');
+      // The badge is the one injected node that takes pointer events: clicking it reopens that pin's
+      // note in the wrapper. In Browse mode it is the only way back to a comment from the page.
+      m2.badge = el('div', 'position:fixed;width:22px;height:22px;border-radius:11px;background:' + (open ? COLOR : '#666') + ';color:#fff;font:bold 12px/22px system-ui,sans-serif;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:auto;cursor:pointer;display:none;');
       m2.badge.textContent = String(m2.n);
+      m2.badge.setAttribute('data-minami-marker', String(m2.n));
+      m2.badge.addEventListener('click', markerClick(m2.n));
       markerLayer.appendChild(m2.badge);
       if (open) {
         m2.frame = el('div', 'position:fixed;pointer-events:none;outline:1px dashed ' + COLOR + ';display:none;');
@@ -486,6 +495,18 @@
     }
     document.documentElement.appendChild(markerLayer);
     placeMarkers();
+  }
+  function markerClick(n) {
+    return safe(function (e) { e.preventDefault(); e.stopPropagation(); post({ t: 'marker', n: n }); });
+  }
+  // A marker under the armed overlay: the overlay is above it, so hit-test through the stack.
+  function markerAt(x, y) {
+    var stack = document.elementsFromPoint(x, y);
+    for (var i = 0; i < stack.length; i++) {
+      var n = stack[i].getAttribute && stack[i].getAttribute('data-minami-marker');
+      if (n) return parseInt(n, 10);
+    }
+    return 0;
   }
   function placeMarkers() {
     for (var i = 0; i < markers.length; i++) {

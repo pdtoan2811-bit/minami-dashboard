@@ -9,6 +9,15 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-21
+- **Preview comments — comment mode** (§21) — first real use (ecvision on :3150) read as not
+  intuitive: arming Pin per comment, no way to click a marker, Esc unclear. The pop-out now opens in
+  Comment mode (click = pin, stays on; an untouched note is dropped when you click the next thing),
+  in-app markers are clickable to reopen a note (hit-tested through the armed overlay), Esc is
+  layered (note → move → Browse), a Browse | Comment switch replaces the Pin button, and the note
+  editor has an explicit Done. Also: a stale `.next/types/validator.ts` from the live build (which
+  still named the removed `ask-team` route) broke `build:check` for everyone — tsconfig's `**/*.ts`
+  glob includes every dist dir's generated types; deleted `.next/types` (build-time only, the next
+  deploy regenerates it).
 - **Preview comments** (§21, new) — point at the running app instead of describing it. A pop-out
   (`/preview/<sid>?url=…`) wraps the localhost app in an iframe, bound to one pane; a one-line dev
   script (`/inspect.js` = `html-to-image` UMD + `public/inspect-core.js`) reports element ·

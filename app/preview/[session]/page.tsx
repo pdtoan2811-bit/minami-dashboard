@@ -13,7 +13,7 @@
 // whole point: the pane never has to be touched for a round of feedback.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, MousePointerClick, BoxSelect, StickyNote, MoveRight, AlertTriangle, Send, X, Trash2, ChevronDown, Loader2, Link2Off } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, MousePointerClick, MousePointer2, BoxSelect, StickyNote, MoveRight, AlertTriangle, Send, Check, Trash2, ChevronDown, Loader2, Link2Off } from "lucide-react";
 import { useAgent, type AgentMode } from "@/lib/use-agent";
 import { useSetting } from "@/lib/use-settings";
 import {
@@ -46,7 +46,9 @@ export default function PreviewPopOut() {
   // that dropped the script — or a production build — shows Enable comments again.
   const [hooked, setHooked] = useState(false);
   const [loadedOnce, setLoadedOnce] = useState(false);
-  const [tool, setTool] = useState<Tool>(null);
+  // Comment mode by default (Q-followup, 2026-09-21): the window exists to comment, so clicking an
+  // element should just work. Browse (`null`) is the mode you opt into — Esc — to use the app.
+  const [tool, setTool] = useState<Tool>("pin");
   const [pins, setPins] = useState<Pin[]>([]);
   const [errors, setErrors] = useState<AppError[]>([]);
   const [hover, setHover] = useState<ElementInfo | null>(null);
@@ -61,6 +63,10 @@ export default function PreviewPopOut() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const pinsRef = useRef(pins);
   pinsRef.current = pins;
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const moveFromRef = useRef(moveFrom);
+  moveFromRef.current = moveFrom;
   // When the script last said hello. The handshake has two races, in opposite directions: the
   // script's hello fires at parse time, BEFORE the iframe's `load` — and on a fresh navigation the
   // iframe (in the SSR HTML) is already loading before React has hydrated this listener at all, so
@@ -138,22 +144,31 @@ export default function PreviewPopOut() {
         case "picked": {
           if (tool === "move") {
             if (!moveFrom) { setMoveFrom(d.el); break; }
-            const n = nextN(pinsRef.current);
+            const base = closeEditor();
+            const n = nextN(base);
             const pin: Pin = { id: uid(), n, kind: "move", note: "", intent: "Move", el: moveFrom, to: d.el, box: moveFrom.box, cropData: d.crop, state: "open", url: appUrl };
-            setPins((prev) => [...prev, pin]); setMoveFrom(null); setEditing(pin.id); setTool(null);
+            setPins([...base, pin]); setMoveFrom(null); setEditing(pin.id); setTool("pin");
             break;
           }
-          // One pick, one pin, then the tool drops: the note editor takes focus next, and a crosshair
-          // left armed turns the very next click on the page — to scroll, to focus — into a stray pin.
-          const n = nextN(pinsRef.current);
+          // Comment mode stays on after a pick — one click per comment is the whole point. The
+          // stray-pin problem that used to disarm it is handled by closeEditor(): a click while a
+          // note is open closes it, and an untouched note is dropped rather than left as a blank pin.
+          const base = closeEditor();
+          const n = nextN(base);
           const pin: Pin = { id: uid(), n, kind: "pin", note: "", intent: null, el: d.el, box: d.el.box, cropData: d.crop, state: "open", url: appUrl };
-          setPins((prev) => [...prev, pin]); setEditing(pin.id); setTool(null);
+          setPins([...base, pin]); setEditing(pin.id);
           break;
         }
         case "region": {
-          const n = nextN(pinsRef.current);
+          const base = closeEditor();
+          const n = nextN(base);
           const pin: Pin = { id: uid(), n, kind: "rect", note: "", intent: null, region: { box: d.box, els: d.els }, box: d.box, cropData: d.crop, state: "open", url: appUrl };
-          setPins((prev) => [...prev, pin]); setEditing(pin.id); setTool(null);
+          setPins([...base, pin]); setEditing(pin.id); setTool("pin");
+          break;
+        }
+        case "marker": {
+          const hit = pinsRef.current.find((p) => p.n === d.n && p.state === "open");
+          if (hit) { closeEditor(); setEditing(hit.id); }
           break;
         }
         case "anchored":
@@ -177,33 +192,56 @@ export default function PreviewPopOut() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post, anchor, pushMarkers, tool, moveFrom, appUrl]);
 
+  // Close whatever note is open. An untouched one (no text, no chip) is deleted — it was a click,
+  // not a comment. Returns the resulting list so a caller can build on it in the same tick, because
+  // this runs from inside message handlers where `pins` state is a render behind.
+  const closeEditor = useCallback((): Pin[] => {
+    const id = editingRef.current;
+    let list = pinsRef.current;
+    if (id) {
+      const cur = list.find((p) => p.id === id);
+      if (cur && !cur.note.trim() && !cur.intent && cur.kind !== "move") list = list.filter((p) => p.id !== id);
+      setPins(list); setEditing(null);
+    }
+    return list;
+  }, []);
+
   // Arm/disarm follows the tool. `move` and `pin` are the same thing to the script: pick an element.
+  // Not gated on `hooked`: a disarm that waits for a handshake can leave the crosshair stuck over the
+  // app; posting into a frame that isn't listening costs nothing.
   useEffect(() => {
-    if (!hooked) return;
     post({ tag: TAG, t: "arm", tool: tool === "pin" || tool === "move" ? "pin" : tool === "rect" ? "rect" : null });
     if (tool !== "move") setMoveFrom(null);
     if (tool !== "pin" && tool !== "rect" && tool !== "move") setHover(null);
-  }, [tool, hooked, post]);
+  }, [tool, post]);
 
   // A whole-page note needs no element: creating it opens its note straight away.
   useEffect(() => {
     if (tool !== "page") return;
     const n = nextN(pinsRef.current);
     const pin: Pin = { id: uid(), n, kind: "page", note: "", intent: null, box: null, state: "open", url: appUrl };
-    setPins((prev) => [...prev, pin]); setEditing(pin.id); setTool(null);
+    setPins((prev) => [...prev, pin]); setEditing(pin.id); setTool("pin");
   }, [tool, appUrl]);
 
   // Hotkeys. One handler for both sources: keys pressed here, and keys the script forwards when the
   // iframe has focus (which it does after any click in the app — without the relay, P would silently
   // stop working the moment you used the page).
+  // Esc is layered: first it closes the open note (dropping it if untouched), then it leaves
+  // comment mode for Browse. One key that always means "back out of what I'm doing".
   const hotkey = useCallback((key: string) => {
-    if (key === "Escape") { setTool(null); setEditing(null); setSwitcher(false); return; }
+    if (key === "Escape") {
+      setSwitcher(false);
+      if (editingRef.current) { closeEditor(); return; }
+      if (moveFromRef.current) { setMoveFrom(null); return; }
+      setTool(null);
+      return;
+    }
     if (key === "Send") { void sendAllRef.current(); return; }
     if (key === "p") setTool((v) => (v === "pin" ? null : "pin"));
     else if (key === "r") setTool((v) => (v === "rect" ? null : "rect"));
     else if (key === "m") setTool((v) => (v === "move" ? null : "move"));
     else if (key === "n") setTool("page");
-  }, []);
+  }, [closeEditor]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -358,9 +396,15 @@ export default function PreviewPopOut() {
         </form>
         {src && <IconBtn title="Open in your browser" onClick={() => window.open(appUrl || src, "_blank", "noopener")}><ExternalLink size={14} /></IconBtn>}
         <span className="mx-1 h-5 w-px bg-white/10" />
-        <ToolBtn active={tool === "pin"} disabled={!hooked} title="Pin an element (P)" onClick={() => setTool(tool === "pin" ? null : "pin")}><MousePointerClick size={14} /> Pin</ToolBtn>
-        <ToolBtn active={tool === "rect"} disabled={!hooked} title="Drag a region (R)" onClick={() => setTool(tool === "rect" ? null : "rect")}><BoxSelect size={14} /> Rect</ToolBtn>
-        <ToolBtn active={tool === "move"} disabled={!hooked} title="Move this → here (M)" onClick={() => setTool(tool === "move" ? null : "move")}><MoveRight size={14} /> Move</ToolBtn>
+        {/* The mode switch. Comment is the default and the reason the window exists; Browse is the
+            escape hatch for using the app (links, forms, scrolling with the mouse). */}
+        <div className="flex h-7 items-center rounded-md border border-white/10 bg-black/30 p-0.5" title="Comment: click anything to pin it · Browse: use the app normally (Esc)">
+          <button type="button" onClick={() => setTool(null)} className={`flex h-6 items-center gap-1 rounded px-2 ${tool === null ? "bg-white/10 text-neutral-100" : "text-neutral-500 hover:text-neutral-300"}`}><MousePointer2 size={13} /> Browse</button>
+          <button type="button" onClick={() => setTool("pin")} disabled={!hooked} className={`flex h-6 items-center gap-1 rounded px-2 disabled:opacity-40 ${tool === "pin" ? "bg-[var(--sakura)]/25 text-[var(--sakura)]" : "text-neutral-500 hover:text-neutral-300"}`}><MousePointerClick size={13} /> Comment</button>
+        </div>
+        <span className="mx-1 h-5 w-px bg-white/10" />
+        <ToolBtn active={tool === "rect"} disabled={!hooked} title="Drag a region (R)" onClick={() => setTool(tool === "rect" ? "pin" : "rect")}><BoxSelect size={14} /> Region</ToolBtn>
+        <ToolBtn active={tool === "move"} disabled={!hooked} title="Move this → here (M)" onClick={() => setTool(tool === "move" ? "pin" : "move")}><MoveRight size={14} /> Move</ToolBtn>
         <ToolBtn active={false} title="Whole-page note (N)" onClick={() => setTool("page")}><StickyNote size={14} /> Note</ToolBtn>
         <span className="mx-1 h-5 w-px bg-white/10" />
         <button
@@ -448,7 +492,11 @@ export default function PreviewPopOut() {
             : busyLabel ? <>Claude {busyLabel}{agent.turnElapsed > 0 ? <span className="text-neutral-600"> · {Math.round(agent.turnElapsed / 1000)}s</span> : null}</>
             : agent.detached ? <span className="flex items-center gap-1"><Link2Off size={11} /> not live — the next send resumes it</span>
             : lastReply ? <>Done — {lastReply}</>
-            : hooked ? "Ready — P to pin, R for a region, N for a page note" : ""}
+            : !hooked ? ""
+            : tool === "pin" ? "Comment mode — click anything to pin it · click a number to reopen its note · Esc to browse"
+            : tool === "rect" ? "Drag a region · Esc to cancel"
+            : tool === "move" ? (moveFrom ? "Now click where it should go · Esc to cancel" : "Click the thing to move · Esc to cancel")
+            : "Browse mode — the app works normally · P to comment · click a number to reopen its note"}
         </span>
         {agent.queued.length > 0 && <span className="text-neutral-500">{agent.queued.length} queued</span>}
         <button type="button" onClick={() => { if (window.opener && !window.opener.closed) window.opener.focus(); else window.open("/", "_blank"); }} className="text-neutral-500 hover:text-neutral-200">open pane →</button>
@@ -509,7 +557,7 @@ function NoteEditor({ pin, onChange, onDelete, onClose }: { pin: Pin; onChange: 
         <span className="text-[var(--sakura)]">{circled(pin.n)}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-neutral-500">{pinLabel(pin)}</span>
         <button type="button" onClick={onDelete} title="Delete this comment" className="text-neutral-500 hover:text-red-300"><Trash2 size={13} /></button>
-        <button type="button" onClick={onClose} title="Done (Esc)" className="text-neutral-500 hover:text-neutral-200"><X size={13} /></button>
+        <button type="button" onClick={onClose} title="Keep and close (Enter / Esc)" className="flex items-center gap-1 rounded-md bg-[var(--sakura)]/20 px-2 py-0.5 text-[11px] text-[var(--sakura)] hover:bg-[var(--sakura)]/30"><Check size={12} /> Done</button>
       </div>
       <div className="mb-1.5 flex flex-wrap gap-1">
         {INTENTS.map((i: Intent) => (
@@ -526,7 +574,7 @@ function NoteEditor({ pin, onChange, onDelete, onClose }: { pin: Pin; onChange: 
         rows={2} className="w-full resize-none rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[12px] text-neutral-100 outline-none focus:border-[var(--sakura)]/60"
       />
       {pin.cropData && <img src={pin.cropData} alt="" className="mt-1.5 max-h-28 w-full rounded border border-white/10 object-contain" />}
-      <div className="mt-1 text-[10.5px] text-neutral-600">Enter to keep · Esc to close · pins stay until you Send</div>
+      <div className="mt-1 text-[10.5px] text-neutral-600">Enter or Esc keeps it · an empty note is dropped · click the next thing to keep going</div>
     </div>
   );
 }

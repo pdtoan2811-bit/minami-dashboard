@@ -108,6 +108,17 @@ intersects the drag (capped, deduped by component) plus a crop of the region. A 
 is a pin with no anchor. **Move** is two clicks: source element, destination element — one pin with
 `from`/`to`. Freehand drawing was declined.
 
+**Comment mode, not a Pin button** (first-use feedback, 2026-09-21). v1 made you arm "Pin" for
+every comment and disarmed after each pick, and reopening a note meant finding it in the tray. Both
+read as "not intuitive" on first contact with a real app. Now the pop-out **opens in Comment mode**:
+click anything and its note opens on it; click the next thing and you're on the next comment (an
+untouched note is dropped, not left as a blank pin — that is what made "stay armed" safe). The
+markers inside the app are **clickable** and reopen their note, in either mode; under the armed
+overlay the script hit-tests through to the badge so a click on ① never drops a ② on top of it.
+**Esc is layered** — close the note (keeping it), then cancel a half-done move, then leave Comment
+for **Browse**, where the app works normally. The disarm message is no longer gated on the
+handshake state: a disarm that waits for `hooked` can leave the crosshair stuck over the app.
+
 **Pins persist across reloads** (Q7): the wrapper keeps `pins[]` in its own React state; after
 every `hello` (i.e. every app load) and every scroll it sends `anchor` with the selectors and the
 script replies `anchored` with a fresh box per selector, or `null` for one that no longer resolves.

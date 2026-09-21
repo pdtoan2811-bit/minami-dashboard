@@ -241,11 +241,12 @@ Reload, and the toolbar comes alive:
 
 | | |
 |---|---|
-| **Pin** (`P`) | Click an element. You get its React component chain (`ProductGrid > ProductCard > PriceTag`), a stable CSS selector, its text, and a crop of the spot, plus a note box with intent chips (Fix · Style · Move · Remove · Ask · Copy). |
+| **Comment mode** (default; `P`) | Click an element. You get its React component chain (`ProductGrid > ProductCard > PriceTag`), a stable CSS selector, its text, and a crop of the spot, plus a note box with intent chips (Fix · Style · Move · Remove · Ask · Copy). |
 | **Rect** (`R`) | Drag a region for things that aren't one element — spacing, a whole section. Everything inside is listed. |
 | **Note** (`N`) | A whole-page comment with no anchor. |
 | **Move** (`M`) | Click the thing, then click where it should go. |
 | **⚠ badge** | Console errors, failed requests and the Next.js error overlay, collected since your last send. Click to send them on their own — no more screenshotting red boxes. |
+| **Browse** (`Esc`) | Use the app normally. Esc first closes the open note (keeping it; an empty one is dropped), then switches to Browse. Click any numbered marker to reopen its note. |
 | **Send** (`⌘↩`) | All open pins become one message in the bound chat, crops attached, ending with a nudge for Claude to re-screenshot each pinned selector after the fix. Pins go grey while Claude works and fade when the turn ends. |
 
 Pins survive the app reloading (HMR, navigation, Claude's fix landing) — they re-anchor by selector,

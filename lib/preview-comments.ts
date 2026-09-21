@@ -56,7 +56,10 @@ export type ScriptMsg =
   | { tag: typeof TAG; t: "viewport"; scroll: { x: number; y: number }; size: { w: number; h: number } }
   // A wrapper hotkey pressed while the APP had focus (which it does after any click in it). The
   // script never acts on these itself beyond Escape; the wrapper owns the tool state.
-  | { tag: typeof TAG; t: "key"; key: "p" | "r" | "m" | "n" | "Escape" | "Send" };
+  | { tag: typeof TAG; t: "key"; key: "p" | "r" | "m" | "n" | "Escape" | "Send" }
+  // An in-app marker was clicked: reopen that pin's note. Works in Browse mode (the badge takes
+  // pointer events) and under the armed overlay (the script hit-tests through it).
+  | { tag: typeof TAG; t: "marker"; n: number };
 
 // ── wrapper → script ────────────────────────────────────────────────────────────────────────────
 export type WrapperMsg =
