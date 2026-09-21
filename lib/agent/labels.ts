@@ -173,6 +173,10 @@ export function toolCategory(name: string): ToolCategory {
 const base = (p: string) => String(p).split("/").filter(Boolean).pop() || String(p);
 const clip = (v: unknown, n: number) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, n);
 
+/** team-ask (github.com/Anhduchb01/team-ask) registers `ask_team`; the `mcp__<server>__` prefix is
+ *  whatever `claude mcp add` was given, so match the tool suffix, not the server name. */
+export const isAskTeamTool = (name: string): boolean => name.startsWith("mcp__") && name.endsWith("__ask_team");
+
 /** `mcp__linear__create_issue` → `linear: create issue` */
 function mcpLabel(name: string): string | null {
   const m = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(name);
@@ -220,10 +224,9 @@ export function activityLabel(name: string, input?: unknown): string {
     case "ToolSearch":
       return "looking up tools";
     default: {
-      // The Ask Hub's tool (~/Minami/docs/ASK-HUB.md): the session is waiting on a PERSON over Slack,
-      // which is a different thing from "running an MCP tool" and can last half an hour.
-      if (name.startsWith("mcp__") && name.endsWith("__ask_team")) return o.to === "eng" ? "asking the CTO on Slack" : o.to === "growth" ? "asking Growth/PM on Slack" : "asking the team on Slack";
-      if (name.startsWith("mcp__") && name.endsWith("__ask_team_continue")) return "closing the loop on Slack";
+      // team-ask's tool: the session is waiting on a PERSON over Slack DM, which is a different
+      // thing from "running an MCP tool" and can last hours (ASK_TIMEOUT_MINUTES=360 on this box).
+      if (isAskTeamTool(name)) return o.topic ? `asking the team on Slack: ${clip(o.topic, 30)}` : "asking the team on Slack";
       const browser = browserToolLabel(name, o);
       return browser || mcpLabel(name) || `using ${name}`;
     }

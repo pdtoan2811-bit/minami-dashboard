@@ -57,7 +57,7 @@ export const NODES: ModuleNode[] = [
   // ── components ──────────────────────────────────────────────────────────
   { id: "c/Composer", label: "Composer", sub: "message input + mode", layer: "component", row: 0, pipeline: "live" },
   { id: "c/AskCard", label: "AskCard", sub: "AskUserQuestion wizard", layer: "component", row: 1, pipeline: "live" },
-  { id: "c/AskTeamCard", label: "AskTeamCard", sub: "ask_team card (mirrors Slack)", layer: "component", row: 1, pipeline: "live" },
+  { id: "c/AskTeamCard", label: "AskTeamCard", sub: "ask_team mirror (read-only)", layer: "component", row: 1, pipeline: "live" },
   { id: "c/BrowserPanel", label: "BrowserPanel", sub: "browser window for a\nheadless browser", layer: "component", row: 2, pipeline: "live" },
   { id: "c/BrowserLightbox", label: "BrowserLightbox", sub: "full-size viewer\n(portalled to body)", layer: "component", row: 15, pipeline: "live" },
   { id: "c/Markdown", label: "Markdown", sub: "memoised renderer\n(chat + thought tones)", layer: "component", row: 3 },
@@ -81,7 +81,7 @@ export const NODES: ModuleNode[] = [
   { id: "c/NotifBell", label: "NotificationBell", sub: "deploy · build · merge alerts", layer: "component", row: 15 },
 
   // ── api routes ──────────────────────────────────────────────────────────
-  { id: "r/agent", label: "/api/agent/*", sub: "send · stream · stop\npermission · answer · ask-team · mode · model · live", layer: "route", row: 0, pipeline: "live" },
+  { id: "r/agent", label: "/api/agent/*", sub: "send · stream · stop\npermission · answer · mode · model · live", layer: "route", row: 0, pipeline: "live" },
   { id: "r/sessions", label: "/api/bento/sessions", sub: "grid list", layer: "route", row: 1, pipeline: "read" },
   { id: "r/session", label: "/api/bento/session/[id]", sub: "transcript page · ?before=", layer: "route", row: 2, pipeline: "read" },
   { id: "r/enrich", label: "/api/bento/enrich", sub: "Haiku labels", layer: "route", row: 3 },
@@ -97,9 +97,6 @@ export const NODES: ModuleNode[] = [
   // ── core ────────────────────────────────────────────────────────────────
   { id: "l/manager", label: "agent/manager.ts", sub: "session registry · SDK query()", layer: "core", row: 0, pipeline: "live" },
   { id: "l/labels", label: "agent/labels.ts", sub: "activity phases + labels", layer: "core", row: 1, pipeline: "live" },
-  // The Ask Hub client. The pane answers the OTHER founder's Slack card through it; the hub (a
-  // Cloudflare Worker in ~/Minami/worker) is off-graph — this is the only module that talks to it.
-  { id: "l/askhub", label: "ask-hub.ts", sub: "answer an ask_team call\nvia the Slack hub", layer: "core", row: 1, pipeline: "live" },
   { id: "l/useagent", label: "use-agent.ts", sub: "client SSE + reconnect", layer: "core", row: 2, pipeline: "live" },
   { id: "l/sessions", label: "claude-sessions.ts", sub: "windowed parser + caches", layer: "core", row: 3, pipeline: "read" },
   { id: "l/enrich", label: "bento-enrich.ts", sub: "semantic label cache", layer: "core", row: 4, pipeline: "read" },
@@ -222,8 +219,6 @@ export const EDGES: ModuleEdge[] = [
   { from: "app/page", to: "c/AskCard", kind: "import" },
   { from: "app/page", to: "c/AskTeamCard", kind: "import" },
   { from: "c/AskTeamCard", to: "l/useagent", kind: "import" },
-  { from: "l/manager", to: "l/askhub", kind: "import" },
-  { from: "l/useagent", to: "l/askhub", kind: "import" },
   { from: "app/page", to: "c/BrowserPanel", kind: "import" },
   { from: "app/page", to: "c/BrowserLightbox", kind: "import" },
   { from: "app/page", to: "l/browserview", kind: "import" },

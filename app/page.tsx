@@ -3004,11 +3004,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         <AskCard key={agent.ask.id} questions={agent.ask.questions} onAnswer={agent.answerAsk} />
       )}
 
-      {/* Claude's ask_team — a question for the OTHER founder, in flight on Slack via the Ask Hub. The
-          pane can answer it too; the hub decides who was first. Keyed like AskCard, for the same reason. */}
-      {agent.askTeam && (
-        <AskTeamCard key={agent.askTeam.id} ask={agent.askTeam} onAnswer={agent.answerAskTeam} />
-      )}
+      {/* Claude's ask_team — a question for a teammate, in flight as a Slack DM (team-ask). Read-only
+          mirror: it is answered in Slack. Keyed like AskCard, for the same reason. */}
+      {agent.askTeam && <AskTeamCard key={agent.askTeam.id} ask={agent.askTeam} />}
 
       {/* Tool-permission prompt (default mode) — Claude is paused until the user decides.
           Browser calls get the Claude Code treatment: a plain-English verb phrase plus the host, e.g.

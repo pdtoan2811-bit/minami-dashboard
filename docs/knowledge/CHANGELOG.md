@@ -22,13 +22,13 @@ this to do a piece of work; read the subsystem's own doc.
   is vendored verbatim under `public/vendor/` rather than taken from `node_modules`: nothing in this
   box's merge/deploy pipeline installs, so a runtime read of `node_modules` would have shipped a
   server whose every crop was null. No new dependency.
-- **Live sessions — `ask_team` card** (§3) — a question for the OTHER founder now shows in the pane
-  while it waits on Slack: `manager.ts` tracks the top-level `ask_team` MCP call on `s.askTeam` and
-  broadcasts `ask_team` (REPLACE, rides the snapshot); `AskTeamCard` renders the packet in the Slack
-  card's fixed order; `/api/agent/ask-team` → `lib/ask-hub.ts` answers through the hub so first answer
-  wins there. New env `MINAMI_ASK_HUB_URL/TOKEN/ROLE/NAME`, all optional. The hub itself (Cloudflare
-  Worker) and the MCP tool live in `~/Minami` — design + wire contract in `~/Minami/docs/ASK-HUB.md`.
-  Written and type-checked; **not yet exercised end-to-end** (no hub deployed at time of writing).
+- **Live sessions — `ask_team` mirror** (§3) — a question Claude sends to a teammate through the
+  team-ask MCP server (ducba's, `~/dev/team-ask`, user-scope) now shows in the pane while it waits on
+  Slack: `manager.ts` tracks the top-level call on `s.askTeam`, broadcasts `ask_team` (REPLACE, rides
+  the snapshot), `AskTeamCard` renders topic/where/questions read-only, the activity label names the
+  topic. An earlier same-day cut (`c4da49b`) had the pane *answering* through a self-built Cloudflare
+  Worker hub + `lib/ask-hub.ts` + `/api/agent/ask-team`; all of that was removed once team-ask was
+  adopted — the Worker and its MCP tool remain in `~/Minami` (`docs/ASK-HUB.md`) marked superseded.
 
 ### 2026-09-17
 - **Blacksmith mode now measures whether it is in effect** (§20.5b) — the mode described a factory the

@@ -18,9 +18,8 @@ import fsSync from "node:fs";
 import os from "node:os";
 import pathMod from "node:path";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
-import { activityLabel, inputFromPartial, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
+import { activityLabel, inputFromPartial, isAskTeamTool, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
 import { findSubagentFile, subagentModel } from "../claude-sessions";
-import { answerAsk as hubAnswer, askHubConfig, findPendingAsk, isAskTeamTool, type AskTeamPacket } from "../ask-hub";
 import { BLACKSMITH_WORKER_MODEL, DASHBOARD_MODEL } from "../model-pins";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
@@ -317,6 +316,9 @@ const spawnMode = (m: AllowedMode): AllowedMode => (m === "plan" ? "plan" : "def
 
 // Events pushed to the browser over SSE.
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] };
+// The `ask_team` MCP tool's input (team-ask: github.com/Anhduchb01/team-ask) — one topic, 1–4
+// AskUserQuestion-shaped questions, sent to a teammate's Slack DM. Mirrored here read-only.
+export type AskTeamPacket = { topic: string; context: string; assignee?: string; timeout_minutes?: number; questions: AgentQuestion[] };
 export type AgentEvent =
   // `blacksmith` / `fanout` are what the session was BORN with. The pane's pills read localStorage,
   // and a pane that attached to a session another pane started (or that toggled while the swap was
@@ -352,13 +354,12 @@ export type AgentEvent =
   | { t: "permission"; id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } // waiting on the user
   | { t: "hold"; hold: boolean } // the Flow view's brake: park every tool call at the gate (REPLACE semantics)
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
-  // Claude's `ask_team` MCP tool — a question for the OTHER founder, in flight on the Ask Hub and
-  // showing as a Slack card. REPLACE semantics: `packet: null` means the call returned (answered on
-  // Slack, answered here, rerouted, or timed out). Unlike `ask`, nothing is parked at the gate — the
-  // tool itself is what's waiting, so the pane answers through the hub, not through canUseTool.
-  // `hub` says whether THIS server can answer it (env configured) or can only show it. §3 in
-  // docs/knowledge/03-live-sessions.md.
-  | { t: "ask_team"; id: string; packet: AskTeamPacket | null; hub: boolean }
+  // Claude's `ask_team` MCP tool — a question for a TEAMMATE, in flight as a Slack DM card (team-ask).
+  // REPLACE semantics: `packet: null` means the call returned (answered, or expired). Unlike `ask`,
+  // nothing is parked at the gate and nothing here can answer it — the tool's own Socket Mode
+  // connection is what's waiting, and the answer is given in Slack. The pane only mirrors what was
+  // asked, to whom, so a session "running a tool" for an hour reads as what it is. §3.
+  | { t: "ask_team"; id: string; packet: AskTeamPacket | null }
   | { t: "result"; subtype: string; costUsd?: number } // turn finished
   | { t: "busy"; busy: boolean }
   // The placement pass moved this conversation to a new folder (see relocate); the pane must adopt
@@ -979,11 +980,11 @@ function handleMessage(s: Session, m: any) {
           }
           broadcast(s, { t: "tool", name: b.name, input: b.input, id: b.id });
           noteSmithTouch(s, b.name, b.input, !parentId);
-          // Top-level only: a subagent's ask_team is the subagent's to wait on, and its packet never
-          // reaches this pane's transcript, so a card for it would have no thread to answer into.
-          if (!parentId && b.id && isAskTeamTool(b.name) && b.input?.question) {
+          // Top-level only: a subagent's ask_team is the subagent's to wait on. `questions` guards
+          // against a partial/foreign input shape rendering a blank card.
+          if (!parentId && b.id && isAskTeamTool(b.name) && Array.isArray(b.input?.questions)) {
             s.askTeam = { id: b.id, packet: b.input as AskTeamPacket };
-            broadcast(s, { t: "ask_team", id: b.id, packet: s.askTeam.packet, hub: !!askHubConfig() });
+            broadcast(s, { t: "ask_team", id: b.id, packet: s.askTeam.packet });
           }
           changed = true;
         }
@@ -1014,7 +1015,7 @@ function handleMessage(s: Session, m: any) {
         broadcast(s, { t: "tool_end", id: t.id, name: t.name, ok: !b.is_error, ms: Date.now() - t.startedAt, output });
         if (s.askTeam?.id === t.id) {
           s.askTeam = null;
-          broadcast(s, { t: "ask_team", id: t.id, packet: null, hub: !!askHubConfig() });
+          broadcast(s, { t: "ask_team", id: t.id, packet: null });
         }
         closed = true;
       }
@@ -1483,20 +1484,6 @@ export function answer(key: string, id: string, answers: Record<string, string |
   return true;
 }
 
-// Answer the in-flight `ask_team` call from the pane. Nothing to resolve locally: the MCP tool is
-// long-polling the hub and returns on its own once the hub records this answer, and the tool_result
-// that follows is what clears the card. The hub is also the arbiter — if ducba clicked first, this
-// comes back 409 and the pane learns it lost the race from the tool_result a moment later.
-export async function answerAskTeam(key: string, id: string, labels: string[], text?: string): Promise<{ ok: boolean; reason?: string }> {
-  const s = store.get(key);
-  if (!s || s.askTeam?.id !== id) return { ok: false, reason: "that question is no longer waiting" };
-  if (!askHubConfig()) return { ok: false, reason: "ask hub is not configured on this server" };
-  const ask = await findPendingAsk(s.askTeam.packet.question);
-  if (!ask) return { ok: false, reason: "the hub has no pending ask for this question — it may have just been answered on Slack" };
-  await hubAnswer(ask.id, labels, text);
-  return { ok: true };
-}
-
 // Stop ONE task — a subagent or a backgrounded command — without touching the turn around it. This is
 // the ■ on a card in the tasks panel, and it is a different thing from the pane's Stop: that one
 // interrupts the whole query, which kills every task at once and abandons the reply being written.
@@ -1861,7 +1848,7 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
   // `activity` rides along so a client that refreshed mid-tool-call resumes with the real label and a
   // correctly-offset elapsed clock, instead of falling back to a generic "working…".
   replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold, queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })), ctxUsed: s.ctxUsed || undefined });
-  if (s.askTeam) replay.push({ t: "ask_team", id: s.askTeam.id, packet: s.askTeam.packet, hub: !!askHubConfig() });
+  if (s.askTeam) replay.push({ t: "ask_team", id: s.askTeam.id, packet: s.askTeam.packet });
   for (const [id, p] of s.pending) {
     if (p.toolName === "AskUserQuestion") replay.push({ t: "ask", id, questions: (p.input as { questions?: AgentQuestion[] })?.questions || [] });
     // `expiresAt` is an absolute timestamp, not a remaining duration, precisely so a client that
