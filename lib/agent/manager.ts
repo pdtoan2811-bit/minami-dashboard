@@ -21,6 +21,7 @@ import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agen
 import { activityLabel, inputFromPartial, isAskTeamTool, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
 import { findSubagentFile, subagentModel } from "../claude-sessions";
 import { BLACKSMITH_WORKER_MODEL, DASHBOARD_MODEL } from "../model-pins";
+import { teamBriefing } from "../team-roster";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
 import { contextWindowFor, isSelectableModel, isPremiumModel, meetsMinCli, SELECTABLE_MODELS } from "../model-catalog";
@@ -812,6 +813,10 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
           ...(s.fanout && !pre ? [FANOUT_PROMPT] : []),
           ...(pre ? [BLACKSMITH_PROMPT, blacksmithBriefing(pre, cwd)] : []),
           ...(MCP_SERVERS ? [BROWSER_PROMPT] : []),
+          // Who can be asked over Slack, and the rule that nothing reaches their DM unconfirmed.
+          // Read fresh per session so adding someone to team-ask's team.json is enough — null
+          // (no team-ask installed) leaves the prompt exactly as it was.
+          ...(teamBriefing() ? [teamBriefing()!] : []),
         ].join("\n\n"),
       },
       ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS } : {}),

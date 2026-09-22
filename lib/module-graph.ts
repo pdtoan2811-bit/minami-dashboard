@@ -225,6 +225,8 @@ export const EDGES: ModuleEdge[] = [
   { from: "c/AskCard", to: "l/teamforward", kind: "import" },
   { from: "c/AskCard", to: "r/team", kind: "http" },
   { from: "r/team", to: "l/teamroster", kind: "import" },
+  // The roster is also a PROMPT input: every session is told who it can ask and how.
+  { from: "l/manager", to: "l/teamroster", kind: "import" },
   { from: "l/teamroster", to: "l/teamforward", kind: "import" },
   { from: "app/page", to: "c/AskTeamCard", kind: "import" },
   { from: "c/AskTeamCard", to: "l/useagent", kind: "import" },

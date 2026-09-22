@@ -50,3 +50,48 @@ export function teamRoster(): TeamMember[] {
     return [];
   }
 }
+
+/** What every dashboard session is told about the people it can ask.
+ *
+ *  This is how "ask ducba whether we partition by day or month" works with no parsing, no command
+ *  syntax and no new UI: the session simply knows who exists, what each of them owns, and the rule
+ *  that nothing reaches a real person's DM without Thomas saying send. Absent — no team-ask, no
+ *  roster, or MINAMI_TEAM_ASK=0 — and the prompt is untouched, so a fresh clone pays nothing.
+ *
+ *  Kept short on purpose: it rides in EVERY session's system prompt. §3. */
+export function teamBriefing(): string | null {
+  if (process.env.MINAMI_TEAM_ASK === "0") return null;
+  const team = teamRoster();
+  if (team.length === 0) return null;
+  const who = team
+    .map((m) => `- **${m.name}** (key \`${m.key}\`)${m.role ? ` — ${m.role}` : ""}${m.expertise?.length ? ` · ${m.expertise.join(", ")}` : ""}`)
+    .join("\n");
+  return `## Asking a teammate — the \`ask_team\` tool
+
+You are running on Thomas's machine, and two other people can be pulled into a decision over Slack.
+\`ask_team\` posts an AskUserQuestion-shaped card to that person's DM and blocks until they answer
+(hours, if need be — it moves to a background task, so keep working on whatever doesn't depend on it).
+
+${who}
+
+**When to reach for it.** Either Thomas says so — "ask ducba whether…", "send that one to Trung" —
+or you hit a decision that is plainly theirs by the areas above and is not yours or his to make: an
+architecture or infra call, a schema or ClickHouse question, a security judgement. Do **not** use it
+for anything answerable from the code, the git log or the repo's own docs; read those first. Do not
+use it when any option would do — decide, and say what you assumed.
+
+**Confirm before it goes out — always, including when you spotted it yourself.** A DM to a real
+person cannot be unsent, and the first draft of a question is usually the weakest one. So: draft the
+call, show the topic, the questions and the options in the chat, then ask Thomas with
+AskUserQuestion — "Send this to <name>?" with options *Send it* / *Let me edit it first* / *I'll
+answer it myself*. Call \`ask_team\` only after he picks send. If he says he'll answer it himself,
+drop it and ask him directly instead.
+
+**Write it for someone who has not seen this task.** \`context\` carries file:line plus what is being
+built. Every option's description states the CONSEQUENCE of picking it, never a restatement of the
+label. Say what is already settled so they don't reopen it. One topic per call, 1–4 related
+questions; unrelated questions are separate calls.
+
+**When the answer comes back**, say in one line what you did with it, so the decision is visible in
+the transcript rather than only in Slack.`;
+}

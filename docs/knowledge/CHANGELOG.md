@@ -46,6 +46,12 @@ this to do a piece of work; read the subsystem's own doc.
   part answered and part handed over. No Slack code in the dashboard: team-ask is already in the
   session, and a second Socket Mode connection per pane would eat a 10-connection app cap.
   `lib/team-forward.ts` holds the shared instruction text (client-safe; the roster half uses node:fs).
+- **Live sessions — ask a teammate by just saying so** (§3) — `teamBriefing()` (lib/team-roster.ts)
+  puts the team-ask roster and its usage rules in every session's system prompt, so "ask ducba
+  whether…" needs no syntax and no UI. Claude may also spot a teammate's question unprompted, but
+  must draft it and get an explicit send through AskUserQuestion first — a DM can't be unsent.
+  New knobs `MINAMI_TEAM_ASK` (0 disables), `MINAMI_TEAM_ASK_DIR`, `MINAMI_ASK_ME`. Null and
+  therefore absent from the prompt on any machine without team-ask.
 
 ### 2026-09-21
 - **Preview comments — comment mode** (§21) — first real use (ecvision on :3150) read as not

@@ -120,6 +120,26 @@ default `~/dev/team-ask`), minus whoever is at this machine (`CC_ASK_ME`, read f
 `.env`). A copy of the list here would drift, and drift means a question sent to the wrong person. No
 team-ask on the machine → `[]` → the row doesn't render and the card is exactly what it was.
 
+**Saying it is enough — the team briefing.** Added 2026-09-22. The "Not mine →" row is a click; the
+other half is talking. Every session's system prompt now carries `teamBriefing()` — the roster with
+each person's areas, plus the rules for using `ask_team` — so *"ask ducba whether we partition by day
+or month"* works with **no command syntax, no parsing and no new UI**. The session already holds the
+tool; what it lacked was knowing who exists and when it is allowed to reach them.
+
+Two rules in that briefing matter more than the rest, and both came from Thomas directly:
+
+- **Claude may notice a question is a teammate's without being told** — an infra call, a ClickHouse
+  schema question — and is expected to.
+- **Nothing reaches a real person's DM unconfirmed**, including when Claude spotted it itself. It
+  drafts the topic, questions and options, shows them in the chat, and asks with `AskUserQuestion`
+  (*Send it* / *Let me edit it first* / *I'll answer it myself*). A Slack DM cannot be unsent, and
+  the first draft of a question is usually the weakest one — the confirm step is where it gets fixed.
+
+The briefing is read per session from the same `team.json`, so adding someone to team-ask is the
+only step needed for a pane to start routing to them. `null` when team-ask isn't installed or
+`MINAMI_TEAM_ASK=0`, and then the prompt is byte-for-byte what it was — this rides in *every*
+session's prompt, so it is kept to roster lines plus four short rules.
+
 > 🐛 **`expired_trigger_id` — the modal that only opens on the machine that asked (found 2026-09-22).**
 > team-ask's own forward button opened a Slack *modal*, and a modal needs a `trigger_id` that dies
 > 3 seconds after the click. Slack hands each `block_actions` to ONE of the app's Socket Mode
