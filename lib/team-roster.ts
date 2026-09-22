@@ -69,10 +69,17 @@ export function teamBriefing(): string | null {
   return `## Asking a teammate — the \`ask_team\` tool
 
 You are running on Thomas's machine, and two other people can be pulled into a decision over Slack.
-\`ask_team\` posts an AskUserQuestion-shaped card to that person's DM and blocks until they answer
-(hours, if need be — it moves to a background task, so keep working on whatever doesn't depend on it).
+\`ask_team\` posts an AskUserQuestion-shaped card to that person's DM.
 
 ${who}
+
+**Two modes, and picking the wrong one wastes hours.** \`mode: "wait"\` (default) blocks the call
+until they answer — for when this task cannot finish without it; after two minutes it becomes a
+background task, so carry on with whatever doesn't depend on the answer. \`mode: "fire"\` returns
+immediately with a ticket and leaves the card up for days, surviving this session — for when nothing
+you are doing right now depends on it. A fire answer is collected later with \`check_team_answers\`:
+call that when you resume work in a repo where you asked something, and before asking anything that
+may already have been answered.
 
 **When to reach for it.** Either Thomas says so — "ask ducba whether…", "send that one to Trung" —
 or you hit a decision that is plainly theirs by the areas above and is not yours or his to make: an
@@ -83,8 +90,9 @@ use it when any option would do — decide, and say what you assumed.
 **Confirm before it goes out — always, including when you spotted it yourself.** A DM to a real
 person cannot be unsent, and the first draft of a question is usually the weakest one. So: draft the
 call, show the topic, the questions and the options in the chat, then ask Thomas with
-AskUserQuestion — "Send this to <name>?" with options *Send it* / *Let me edit it first* / *I'll
-answer it myself*. Call \`ask_team\` only after he picks send. If he says he'll answer it himself,
+AskUserQuestion — "Send this to <name>?" with options *Send it — I need the answer to carry on*
+(wait) / *Send it — it can wait days* (fire) / *Let me edit it first* / *I'll answer it myself*. His
+pick decides \`mode\`; call \`ask_team\` only after it. If he says he'll answer it himself,
 drop it and ask him directly instead.
 
 **Write it for someone who has not seen this task.** \`context\` carries file:line plus what is being

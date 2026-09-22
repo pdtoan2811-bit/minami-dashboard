@@ -96,8 +96,13 @@ Two things worth knowing. Dashboard sessions get the tool because `settingSource
 — it's the same `~/.claude.json` registration a terminal `claude` uses, so nothing in this repo
 configures it. And team-ask's `RECONCILE`/relay design means an answer can land on *another* of
 this box's sessions' Socket Mode connections and take up to 20s to be relayed; that latency is
-team-ask's, not ours. **Socket Mode caps an app at 10 connections**, and every live pane is one —
-the dashboard's usual four to six panes are most of that budget on their own.
+team-ask's, not ours. **Socket Mode caps an app at 10 connections** — which used to mean the
+dashboard's four to six panes ate most of the team's budget just by being open, because the first
+version connected at startup and held it forever. ducba fixed that on 2026-09-22: the socket is
+opened only while a question is actually waiting, reference-counted per session, so an idle pane
+costs nothing and the real limit is 10 *simultaneously open questions* across the whole team. The
+symptom of exhausting it, if it ever recurs, is `A pong wasn't received from the server before the
+timeout of 5000ms` on the next `ask_team`.
 
 **Forwarding, and why the dashboard grew no Slack code to do it.** Added 2026-09-22. A question
 Claude asks *you* (`AskUserQuestion`) may be one only the CTO can settle, and before this the pane
@@ -134,6 +139,13 @@ Two rules in that briefing matter more than the rest, and both came from Thomas 
   drafts the topic, questions and options, shows them in the chat, and asks with `AskUserQuestion`
   (*Send it* / *Let me edit it first* / *I'll answer it myself*). A Slack DM cannot be unsent, and
   the first draft of a question is usually the weakest one — the confirm step is where it gets fixed.
+
+team-ask gained a second mode on 2026-09-22 (ducba's `feat/fire-mode`), and the briefing teaches it
+because the choice is expensive to get wrong: `wait` blocks the tool call until someone answers,
+`fire` returns immediately with a ticket and leaves the card up for days, outliving the session —
+its answer is collected later through the new `check_team_answers` tool. Thomas's confirm step is
+where the mode is picked ("I need the answer to carry on" vs "it can wait days"), so the judgement
+stays with the person who knows whether the work is blocked.
 
 The briefing is read per session from the same `team.json`, so adding someone to team-ask is the
 only step needed for a pane to start routing to them. `null` when team-ask isn't installed or

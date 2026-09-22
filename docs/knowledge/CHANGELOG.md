@@ -52,6 +52,10 @@ this to do a piece of work; read the subsystem's own doc.
   must draft it and get an explicit send through AskUserQuestion first — a DM can't be unsent.
   New knobs `MINAMI_TEAM_ASK` (0 disables), `MINAMI_TEAM_ASK_DIR`, `MINAMI_ASK_ME`. Null and
   therefore absent from the prompt on any machine without team-ask.
+- **Live sessions — team briefing teaches `wait` vs `fire`** (§3) — team-ask shipped fire mode
+  (non-blocking questions that outlive the session, collected later via `check_team_answers`), which
+  made the briefing's "this tool blocks until they answer" wrong. It now describes both modes and
+  hands the choice to Thomas at the confirm step. Pulled team-ask `4337e15`.
 
 ### 2026-09-21
 - **Preview comments — comment mode** (§21) — first real use (ecvision on :3150) read as not
