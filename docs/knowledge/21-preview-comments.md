@@ -241,6 +241,17 @@ thumbnail arrives later as `cropped`, matched by `reqId`.
 > Next overlay anyway. Aborted requests are no longer reported as failures, `typing()` sees into
 > shadow roots, and the relayed `⌘↩` no longer calls `preventDefault` on the host app's key.
 
+> 🐛 **And then Send didn't work — twice, for reasons introduced by the fixes above.** (1) The
+> button was `disabled` whenever no chat was bound, so the one failure a new window actually hits —
+> opened from a pane before that pane has a session — was a greyed control that swallowed the click
+> and explained nothing, while the status bar showed the FOLDER name and looked bound. Send is
+> never disabled for a missing binding now; it says what is wrong and opens the chat picker, the
+> chip goes amber and reads "<folder> — no chat yet", and a window that knows its folder adopts the
+> single running chat there on its own. (2) The same pass made Send call `closeEditor()`, which
+> drops an untouched note — so pinning something and pressing Send *without typing* deleted the pin
+> and answered "nothing to send". "Drop the untouched note" is a rule about moving on to the next
+> element; pressing Send is the opposite of moving on. A pin with no words is still "look at this".
+
 **The lesson worth keeping:** every one of these is a cost paid by *the app being previewed*, not
 by the dashboard — a blocked wheel, a stolen shortcut, a frozen main thread, a rewritten console.
 A tool that watches someone else's app has to be judged by what it costs that app when it is

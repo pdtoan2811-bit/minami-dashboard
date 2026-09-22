@@ -9,6 +9,13 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-22
+- **Preview comments — Send works when nothing is bound** (§21) — Send was `disabled` without a
+  session, so the commonest case (window opened before its pane went live) was a dead button with
+  no explanation, and the status bar showed the folder name as if bound. Now it is always
+  clickable, names the problem, opens the chat picker, shows an amber "<folder> — no chat yet", and
+  auto-binds when exactly one live chat is running in that folder. Also: Send no longer drops the
+  note you have open when it is empty — pinning and sending without typing used to delete the pin
+  and answer "nothing to send".
 - **Preview comments — the real-app pass** (§21) — pointed at ecvision on :3150 the feature was
   "buggy as hell"; a drive-through plus two adversarial audits found why. The armed overlay
   swallowed every pointer event (inner scroll containers dead, `:hover` dead → hover menus

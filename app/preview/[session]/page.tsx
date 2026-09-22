@@ -369,12 +369,20 @@ export default function PreviewPopOut() {
 
   const sendAll = async () => {
     if (sending) return;
-    // closeEditor(), not setEditing(null): the open note is usually the one you just typed into, and
-    // the "an untouched note is dropped" rule has to hold on the path that matters most — otherwise
-    // clicking an element and hitting Send posts a pin reading "① — (no note)".
-    const batch = closeEditor().filter((p) => p.state === "open");
+    // The open note is KEPT, not dropped. "An untouched note is dropped" is a rule about moving on
+    // to the next element — pressing Send is the opposite of moving on, and applying it here meant
+    // that pinning something and hitting Send without typing deleted the pin and answered "nothing
+    // to send". A pin with no words is still "look at this".
+    setEditing(null);
+    const batch = pinsRef.current.filter((p) => p.state === "open");
     if (!batch.length) { setSendError("Nothing to send — click something in the page first."); return; }
-    if (!sessionId || !cwd) { setSendError("No chat bound — pick one at the bottom left."); setSwitcher(true); return; }
+    if (!sessionId || !cwd) {
+      setSendError(liveSessions && Object.keys(liveSessions).length
+        ? "No chat bound — pick one from the list."
+        : "No chat bound. Open this window from a chat's preview chip, or pick a running chat below.");
+      setSwitcher(true);
+      return;
+    }
     setSending(true); setEditing(null);
     try {
       // Upload crops first so the message can name the paths (§11: the path is the payload).
@@ -449,6 +457,30 @@ export default function PreviewPopOut() {
     }
     return "";
   }, [agent.turns]);
+
+  // A window opened from a pane carries the folder but not always a session id — the pane may not
+  // have gone live yet. Rather than leaving it unbound (and Send unexplained), adopt the running
+  // chat in that folder as soon as one exists. Exactly one: two chats in a folder is a choice, and
+  // guessing there is how comments land in the wrong conversation.
+  useEffect(() => {
+    if (sessionId || !cwd) return;
+    let alive = true;
+    const tick = () => fetch("/api/agent/live").then((r) => r.json()).then((d) => {
+      if (!alive || !d?.activity) return;
+      setLiveSessions(d.activity);
+      const mine = Object.entries(d.activity as Record<string, LiveSession>).filter(([, v]) => v.cwd === cwd);
+      if (mine.length === 1) {
+        const u = new URL(window.location.href);
+        u.pathname = `/preview/${mine[0][0]}`;
+        window.history.replaceState(null, "", u.toString());
+        attachedFor.current = null;
+        setSessionId(mine[0][0]);
+      }
+    }).catch(() => {});
+    tick();
+    const iv = setInterval(tick, 4000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [sessionId, cwd]);
 
   useEffect(() => {
     if (!switcher) return;
@@ -531,8 +563,12 @@ export default function PreviewPopOut() {
           <input type="checkbox" checked={verify} onChange={(e) => setVerify(e.target.checked)} className="accent-[var(--sakura)]" /> verify
         </label>
         <button
-          type="button" onClick={sendAll} disabled={!open.length || sending || !sessionId}
-          title="Send all open comments as one message (⌘↩)"
+          // NOT disabled on a missing binding. It used to be, which made the one failure a new
+          // user actually hits — a window opened before its chat had a session — a greyed button
+          // that swallowed the click and explained nothing. It stays clickable and says what is
+          // wrong; only "nothing pinned yet" and "already sending" disable it.
+          type="button" onClick={sendAll} disabled={!open.length || sending}
+          title={!open.length ? "Nothing pinned yet — click something in the page" : !sessionId ? "No chat bound — click to pick one" : "Send all open comments as one message (⌘↩)"}
           className="ml-1 flex h-7 items-center gap-1.5 rounded-md bg-[var(--sakura)] px-3 font-medium text-black disabled:opacity-40"
         >{sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />} Send {open.length ? open.length : ""}</button>
       </div>
@@ -595,10 +631,14 @@ export default function PreviewPopOut() {
 
       {/* ── status bar ── */}
       <div className="relative flex h-8 shrink-0 items-center gap-2 border-t border-white/10 bg-neutral-900/80 px-2 text-[11.5px]">
-        <button type="button" onClick={() => setSwitcher((v) => !v)} className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 hover:bg-white/5" title="Bound chat — click to change">
-          <span className={`h-2 w-2 rounded-full ${!sessionId ? "bg-neutral-600" : agent.detached ? "bg-amber-400" : agent.busy ? "bg-[var(--sakura)] animate-pulse" : "bg-emerald-400"}`} />
-          <span className="font-medium text-neutral-200">{boundName}</span>
-          <ChevronDown size={12} className="text-neutral-500" />
+        <button type="button" onClick={() => setSwitcher((v) => !v)}
+          className={`flex items-center gap-1.5 rounded-md px-1.5 py-0.5 hover:bg-white/5 ${!sessionId ? "text-amber-300" : ""}`}
+          title={sessionId ? "Bound chat — click to change" : "Nothing to send to yet — click to pick a running chat"}>
+          <span className={`h-2 w-2 rounded-full ${!sessionId ? "bg-amber-400" : agent.detached ? "bg-amber-400" : agent.busy ? "bg-[var(--sakura)] animate-pulse" : "bg-emerald-400"}`} />
+          {/* An unbound window used to show the FOLDER name here, which looks exactly like a bound
+              one — so "why is Send doing nothing" had no answer anywhere on screen. */}
+          <span className={`font-medium ${sessionId ? "text-neutral-200" : "text-amber-300"}`}>{sessionId ? boundName : cwd ? `${basename(cwd)} — no chat yet` : "pick a chat"}</span>
+          <ChevronDown size={12} className={sessionId ? "text-neutral-500" : "text-amber-400/70"} />
         </button>
         <span className="min-w-0 flex-1 truncate text-neutral-400">
           {sendError ? <span className="text-red-300">{sendError}</span>
