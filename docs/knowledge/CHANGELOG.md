@@ -9,6 +9,12 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-22
+- **Preview comments — binding a chat no longer costs you the comments** (§21) — the rebind reload
+  asked `window.confirm` to discard unsent pins, which gated the only escape from "nothing is
+  bound" on throwing away the work that sent you there; pins/errors/mode now ride across in
+  `sessionStorage` and nothing is asked. The picker also lists RECENT chats (read pipeline, one row
+  per folder with title + age) alongside running ones — the chat for the app you are previewing is
+  usually not live, so it was simply absent. Binding to a cold chat resumes it on the first send.
 - **Preview comments — Send works when nothing is bound** (§21) — Send was `disabled` without a
   session, so the commonest case (window opened before its pane went live) was a dead button with
   no explanation, and the status bar showed the folder name as if bound. Now it is always

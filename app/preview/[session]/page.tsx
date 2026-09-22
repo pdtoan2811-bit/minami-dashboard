@@ -23,9 +23,18 @@ import {
 
 type Tool = "pin" | "rect" | "move" | "page" | null;
 type LiveSession = { phase: string; label: string; busy: boolean; cwd: string };
+/** A chat from the read pipeline — exists on disk, not necessarily running. */
+type RecentChat = { id: string; cwd: string; project: string; title: string; lastActivity: number };
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const basename = (p: string) => p.split("/").filter(Boolean).pop() || p;
+function ago(ts: number): string {
+  const m = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (m < 1) return "now";
+  if (m < 60) return m + "m";
+  const h = Math.round(m / 60);
+  return h < 24 ? h + "h" : Math.round(h / 24) + "d";
+}
 
 export default function PreviewPopOut() {
   const params = useParams<{ session: string }>();
@@ -61,6 +70,9 @@ export default function PreviewPopOut() {
   const [verify, setVerify] = useState(true);
   const [switcher, setSwitcher] = useState(false);
   const [liveSessions, setLiveSessions] = useState<Record<string, LiveSession>>({});
+  const liveSessionsRef = useRef(liveSessions);
+  liveSessionsRef.current = liveSessions;
+  const [recent, setRecent] = useState<RecentChat[]>([]);
   const [iframeKey, setIframeKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // The iframe's box in wrapper coordinates — what the note editor clamps against. Measured, not
@@ -74,6 +86,10 @@ export default function PreviewPopOut() {
   const moveFromRef = useRef(moveFrom);
   moveFromRef.current = moveFrom;
   const toolRef = useRef<Tool>("pin");
+  const verifyRef = useRef(true);
+  verifyRef.current = verify;
+  const errorsRef = useRef<AppError[]>([]);
+  errorsRef.current = errors;
   // When the script last said hello. The handshake has two races, in opposite directions: the
   // script's hello fires at parse time, BEFORE the iframe's `load` — and on a fresh navigation the
   // iframe (in the SSR HTML) is already loading before React has hydrated this listener at all, so
@@ -185,6 +201,34 @@ export default function PreviewPopOut() {
     h.push(url);
     histAt.current = h.length - 1;
     setHistState({ back: histAt.current > 0, fwd: false });
+  }, []);
+
+  // ── surviving the rebind reload ────────────────────────────────────────────────────────────────
+  // sessionStorage, not localStorage: this is a handoff between two loads of ONE window, and a stale
+  // copy must not resurrect itself in a different preview tomorrow. Short-lived by timestamp too.
+  const HANDOFF = "minami:preview:handoff";
+  const stashForReload = useCallback(() => {
+    const payload = { at: Date.now(), tool: toolRef.current, verify: verifyRef.current, pins: pinsRef.current, errors: errorsRef.current };
+    try {
+      sessionStorage.setItem(HANDOFF, JSON.stringify(payload));
+    } catch {
+      // Crops are data URLs and a batch of them can pass the ~5MB quota. The words are the payload;
+      // the pictures are a convenience, and they can be re-taken by clicking the pin again.
+      try { sessionStorage.setItem(HANDOFF, JSON.stringify({ ...payload, pins: payload.pins.map((p) => ({ ...p, cropData: null })) })); } catch { /* give up quietly */ }
+    }
+  }, []);
+  useEffect(() => {
+    let raw: string | null = null;
+    try { raw = sessionStorage.getItem(HANDOFF); sessionStorage.removeItem(HANDOFF); } catch { return; }
+    if (!raw) return;
+    try {
+      const d = JSON.parse(raw) as { at: number; tool: Tool; verify: boolean; pins: Pin[]; errors: AppError[] };
+      if (!d || Date.now() - d.at > 20_000) return;   // a reload we did not just ask for
+      if (Array.isArray(d.pins) && d.pins.length) setPins(d.pins);
+      if (Array.isArray(d.errors)) setErrors(d.errors);
+      if (typeof d.verify === "boolean") setVerify(d.verify);
+      if (d.tool !== undefined) setTool(d.tool);
+    } catch { /* malformed handoff — start clean */ }
   }, []);
 
   const probedRef = useRef(false);
@@ -487,6 +531,21 @@ export default function PreviewPopOut() {
     let alive = true;
     const load = () => fetch("/api/agent/live").then((r) => r.json()).then((d) => { if (alive && d?.activity) setLiveSessions(d.activity); }).catch(() => {});
     load();
+    // Chats that exist but are not running — the read pipeline's list (§1). Fetched once per
+    // opening; it is a directory, not a live feed.
+    fetch("/api/bento/sessions").then((r) => r.json()).then((d) => {
+      if (!alive || !Array.isArray(d?.sessions)) return;
+      const live = new Set(Object.keys(liveSessionsRef.current));
+      const seen = new Set<string>();
+      const rows: RecentChat[] = [];
+      for (const s of d.sessions as RecentChat[]) {
+        if (!s.cwd || live.has(s.id) || seen.has(s.cwd)) continue;   // one row per folder, newest first
+        seen.add(s.cwd);
+        rows.push({ id: s.id, cwd: s.cwd, project: s.project, title: (s.title || "").split("\n")[0].slice(0, 60), lastActivity: s.lastActivity });
+        if (rows.length >= 12) break;
+      }
+      setRecent(rows);
+    }).catch(() => {});
     const iv = setInterval(load, 3000);
     return () => { alive = false; clearInterval(iv); };
   }, [switcher]);
@@ -494,11 +553,15 @@ export default function PreviewPopOut() {
   // Re-binding RELOADS the window rather than swapping state. useAgent keys its EventSource by pane
   // key and only closes it on unmount — so changing `sessionId` in place left the old session's
   // stream open and the pop-out kept reporting (and routing sends by) the OLD chat's busy state.
-  // A reload is the one move that cannot leave a half-swapped binding behind. Pins are the cost, so
-  // it asks first when any are open.
+  // A reload is the one move that cannot leave a half-swapped binding behind.
+  //
+  // > 🐛 The reload cost the pins, so v1 asked `window.confirm("…clears your unsent comments")`
+  // first — which put a trap at the exact centre of the feature: you only ever open the chat
+  // picker BECAUSE you just made comments and discovered nothing was bound, so the only way to
+  // bind was to agree to throw that work away. Anyone sane cancels, and then nothing binds at all.
+  // The pins ride across the reload in sessionStorage instead, and nothing is asked.
   const rebind = (id: string, c: string) => {
-    if (pinsRef.current.some((p) => p.state === "open") &&
-        !window.confirm("Switching chats reloads this window and clears your unsent comments. Continue?")) return;
+    stashForReload();
     const u = new URL(window.location.href);
     u.pathname = `/preview/${id}`;
     u.searchParams.set("cwd", c);
@@ -658,17 +721,35 @@ export default function PreviewPopOut() {
         <button type="button" onClick={() => { if (window.opener && !window.opener.closed) window.opener.focus(); else window.open("/", "_blank"); }} className="text-neutral-500 hover:text-neutral-200">open pane →</button>
 
         {switcher && (
-          <div className="absolute bottom-9 left-2 z-10 w-80 rounded-lg border border-white/10 bg-neutral-900 p-1 shadow-xl">
-            <div className="px-2 py-1 text-[10.5px] uppercase tracking-wide text-neutral-500">Live chats</div>
-            {Object.entries(liveSessions).length === 0 && <div className="px-2 py-1 text-neutral-500">none running</div>}
-            {Object.entries(liveSessions).map(([id, s]) => (
-              <button key={id} type="button" onClick={() => rebind(id, s.cwd)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-white/5 ${id === sessionId ? "text-[var(--sakura)]" : "text-neutral-200"}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${s.busy ? "bg-[var(--sakura)]" : "bg-emerald-400"}`} />
-                <span className="flex-1 truncate">{basename(s.cwd)}</span>
-                <span className="truncate text-[10.5px] text-neutral-500">{s.busy ? s.label : "idle"}</span>
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="fixed inset-0 z-[9]" onClick={() => setSwitcher(false)} />
+            <div className="absolute bottom-9 left-2 z-10 max-h-[70vh] w-96 overflow-y-auto rounded-lg border border-white/10 bg-neutral-900 p-1 shadow-xl">
+              <div className="px-2 py-1 text-[10.5px] uppercase tracking-wide text-neutral-500">Running now</div>
+              {Object.entries(liveSessions).length === 0 && <div className="px-2 py-1 text-neutral-500">none running</div>}
+              {Object.entries(liveSessions).map(([id, s]) => (
+                <button key={id} type="button" onClick={() => rebind(id, s.cwd)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-white/5 ${id === sessionId ? "text-[var(--sakura)]" : "text-neutral-200"}`}>
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.busy ? "bg-[var(--sakura)]" : "bg-emerald-400"}`} />
+                  <span className="flex-1 truncate">{basename(s.cwd)}</span>
+                  <span className="shrink-0 truncate text-[10.5px] text-neutral-500">{s.busy ? s.label : "idle"}</span>
+                </button>
+              ))}
+              {/* > 🐛 Only running chats were listed, so the chat you actually wanted — the one for
+                  the app you are previewing — was usually absent, and the picker looked broken.
+                  A chat does not have to be live to receive comments: `send` carries `resume`, so
+                  picking a recent one continues that conversation exactly as reopening it would. */}
+              {recent.length > 0 && <div className="mt-1 border-t border-white/10 px-2 pb-1 pt-1.5 text-[10.5px] uppercase tracking-wide text-neutral-500">Recent</div>}
+              {recent.map((r) => (
+                <button key={r.id} type="button" onClick={() => rebind(r.id, r.cwd)} className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-neutral-300 hover:bg-white/5">
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-neutral-600" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{r.project || basename(r.cwd)}</span>
+                    <span className="block truncate text-[10.5px] text-neutral-500">{r.title}</span>
+                  </span>
+                  <span className="shrink-0 text-[10.5px] text-neutral-600">{ago(r.lastActivity)}</span>
+                </button>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </main>

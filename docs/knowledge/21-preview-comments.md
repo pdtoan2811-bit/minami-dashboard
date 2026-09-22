@@ -252,6 +252,18 @@ thumbnail arrives later as `cropped`, matched by `reqId`.
 > and answered "nothing to send". "Drop the untouched note" is a rule about moving on to the next
 > element; pressing Send is the opposite of moving on. A pin with no words is still "look at this".
 
+> 🐛 **Then binding a chat was impossible without losing the work that made you want one.** The
+> rebind reload asked `window.confirm("…clears your unsent comments")` first — and the only reason
+> anyone opens the chat picker is that they just made comments and found nothing bound. So the one
+> path out of "Send does nothing" was gated on agreeing to throw that work away; cancel, and
+> nothing binds. Pins, errors, mode and the verify flag now ride across the reload in
+> `sessionStorage` (crops dropped first if the quota complains — the words are the payload) and
+> nothing is asked. In the same pass the picker stopped listing only RUNNING chats: the chat you
+> want is usually the one for the app on screen, which is frequently not live, so it simply was not
+> there. It now lists running chats and then recent ones from the read pipeline (§1), one row per
+> folder with its title and age. Binding to a cold chat is safe because `send` already carries
+> `resume` — the status bar says "not live — the next send resumes it", and it does.
+
 **The lesson worth keeping:** every one of these is a cost paid by *the app being previewed*, not
 by the dashboard — a blocked wheel, a stolen shortcut, a frozen main thread, a rewritten console.
 A tool that watches someone else's app has to be judged by what it costs that app when it is
