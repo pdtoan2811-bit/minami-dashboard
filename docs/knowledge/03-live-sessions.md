@@ -99,6 +99,39 @@ this box's sessions' Socket Mode connections and take up to 20s to be relayed; t
 team-ask's, not ours. **Socket Mode caps an app at 10 connections**, and every live pane is one —
 the dashboard's usual four to six panes are most of that budget on their own.
 
+**Forwarding, and why the dashboard grew no Slack code to do it.** Added 2026-09-22. A question
+Claude asks *you* (`AskUserQuestion`) may be one only the CTO can settle, and before this the pane
+offered three bad exits: guess, skip it (Claude guesses), or leave the card unanswered — which pins
+`phase=awaiting`, busy forever, starving every deploy on the box (§8). So each question on `AskCard`
+now carries a **"Not mine →" row** of teammates, and picking one resolves *that question* with an
+instruction to go ask that person with `ask_team`. Per question, not per card: answer two yourself
+and hand the third to trungld in the same Send.
+
+The dashboard has no Slack token and deliberately doesn't get one. team-ask is already an MCP server
+the session holds, so the cheapest correct move is to answer Claude's own question with *"Not my
+call — ask X, use the ask_team tool with assignee …, wait for their answer"*. One Slack integration
+on this box instead of two; it works identically in a pane, a terminal or a headless agent; and the
+`ask_team` mirror card above is what then appears, so the hand-over is visible. The cost is that it
+depends on Claude following an instruction rather than on a call we make ourselves — accepted,
+because the alternative is a second Socket Mode connection per pane against a 10-connection app cap.
+
+The roster is **read from team-ask's own `team.json`** (`lib/team-roster.ts`, `MINAMI_TEAM_ASK_DIR`,
+default `~/dev/team-ask`), minus whoever is at this machine (`CC_ASK_ME`, read from that same repo's
+`.env`). A copy of the list here would drift, and drift means a question sent to the wrong person. No
+team-ask on the machine → `[]` → the row doesn't render and the card is exactly what it was.
+
+> 🐛 **`expired_trigger_id` — the modal that only opens on the machine that asked (found 2026-09-22).**
+> team-ask's own forward button opened a Slack *modal*, and a modal needs a `trigger_id` that dies
+> 3 seconds after the click. Slack hands each `block_actions` to ONE of the app's Socket Mode
+> connections at random, and every Claude session is a connection — so the click routinely lands on a
+> process that must then do work before opening anything. Measured on the first real click: the
+> foreign connection received it and `views.open` returned `expired_trigger_id`. The button silently
+> did nothing. The same trap sits under the "Other / type your own" modal, which is why that one
+> now names the thread as its fallback in words. Fixed for forwarding by not needing a trigger at
+> all: the fallback is a `users_select` inside an **ephemeral message**, which has no time window.
+> The lesson generalises: *in a multi-connection Socket Mode app, anything that depends on
+> `trigger_id` is best-effort, and needs a path that isn't.*
+
 Why this isn't the same path as `AskUserQuestion`: a first cut (same day, reverted within hours)
 built a Cloudflare Worker "hub" the pane could answer through, so the pane and Slack raced. It was
 dropped the moment ducba's team-ask existed — one tool the whole team already runs beats a second

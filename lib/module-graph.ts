@@ -92,12 +92,17 @@ export const NODES: ModuleNode[] = [
   { id: "r/events", label: "/api/events", sub: "tails the alert log", layer: "route", row: 9 },
   { id: "r/paste", label: "/api/fs/paste", sub: "writes a pasted image\n(fixed root, no path input)", layer: "route", row: 10 },
   { id: "r/fsimage", label: "/api/fs/image", sub: "serves an image for\nthumbnails (magic-byte gated)", layer: "route", row: 11 },
+  { id: "r/team", label: "/api/team/roster", sub: "who a question can be\nhanded to (team-ask)", layer: "route", row: 12, pipeline: "live" },
   { id: "r/browserfile", label: "/api/agent/browser/file", sub: "serves <cwd>/.playwright-mcp/*\n(full-res shots, console logs)", layer: "route", row: 7, pipeline: "live" },
 
   // ── core ────────────────────────────────────────────────────────────────
   { id: "l/manager", label: "agent/manager.ts", sub: "session registry · SDK query()", layer: "core", row: 0, pipeline: "live" },
   { id: "l/labels", label: "agent/labels.ts", sub: "activity phases + labels", layer: "core", row: 1, pipeline: "live" },
   { id: "l/useagent", label: "use-agent.ts", sub: "client SSE + reconnect", layer: "core", row: 2, pipeline: "live" },
+  // Forwarding a question. Split in two on purpose: the roster read uses node:fs, the instruction
+  // text is rendered by AskCard in the browser, and one module would drag fs into the client bundle.
+  { id: "l/teamroster", label: "team-roster.ts", sub: "reads team-ask's team.json", layer: "core", row: 4, pipeline: "live" },
+  { id: "l/teamforward", label: "team-forward.ts", sub: "the \"go ask them\" answer text", layer: "core", row: 5, pipeline: "live" },
   { id: "l/sessions", label: "claude-sessions.ts", sub: "windowed parser + caches", layer: "core", row: 3, pipeline: "read" },
   { id: "l/enrich", label: "bento-enrich.ts", sub: "semantic label cache", layer: "core", row: 4, pipeline: "read" },
   { id: "l/routing", label: "routing.ts", sub: "models + prices", layer: "core", row: 5 },
@@ -217,6 +222,10 @@ export const EDGES: ModuleEdge[] = [
   { from: "c/FilePanel", to: "c/PanelTabs", kind: "import" },
   { from: "c/BrowserPanel", to: "c/PanelTabs", kind: "import" },
   { from: "app/page", to: "c/AskCard", kind: "import" },
+  { from: "c/AskCard", to: "l/teamforward", kind: "import" },
+  { from: "c/AskCard", to: "r/team", kind: "http" },
+  { from: "r/team", to: "l/teamroster", kind: "import" },
+  { from: "l/teamroster", to: "l/teamforward", kind: "import" },
   { from: "app/page", to: "c/AskTeamCard", kind: "import" },
   { from: "c/AskTeamCard", to: "l/useagent", kind: "import" },
   { from: "app/page", to: "c/BrowserPanel", kind: "import" },

@@ -17,6 +17,12 @@
 // 4. **The Other row follows its text.** Text in the field means the row is part of the answer, and no
 //    click can withdraw it — only clearing the field can. Selection and free text are one state, so
 //    there is no gesture that leaves a typed answer on screen that Send won't send.
+// 6. **A question you cannot answer is still answerable — by handing it to someone who can.** Each
+//    question gets a "Not mine →" row of teammates (team-ask's roster; absent if it isn't installed).
+//    Picking one answers THAT question with an instruction for Claude to ask that person over Slack
+//    via the `ask_team` tool, so a card can be part answered here and part handed over. Before this,
+//    a question only the CTO could settle left three bad options: guess, skip it (Claude guesses), or
+//    leave the session parked at `phase=awaiting` — which is busy forever and starves every deploy.
 // 5. **A preview is shown where its option is.** The tool schema lets the model attach `preview` to an
 //    option — the mockup/snippet/plan that the description can only gesture at. This card dropped it
 //    silently, so a question written to be decided by comparing two previews arrived as two one-line
@@ -24,9 +30,10 @@
 //    the one scrolling region, because that is the only place a block of arbitrary length cannot push
 //    "Send answer" off the bottom of a short pane (see the layout note below — that bug is why this
 //    card is a flex column at all).
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentQuestion } from "@/lib/use-agent";
 import { atLeast, useDensityTier } from "@/lib/density";
+import { forwardInstruction, type TeamMember } from "@/lib/team-forward";
 
 // Two type scales, and the reason there are two at all.
 //
@@ -42,8 +49,8 @@ import { atLeast, useDensityTier } from "@/lib/density";
 // before) when it is genuinely cramped. Sizes are px, not Tailwind's step ladder, because the ladder's
 // gaps (12 → 14 → 16) are too coarse for a card that has to fit four rows and a button in 490px.
 const SCALE = {
-  reading: { eyebrow: "text-[10.5px]", header: "text-[11px]", question: "text-[15px] leading-snug", hint: "text-[12px]", label: "text-[13.5px]", desc: "text-[12px] leading-relaxed", input: "text-[13.5px]", button: "text-[13px]", skip: "text-[12px]", sending: "text-[11px]", preview: "text-[11.5px]", mark: "h-4 w-4 text-[10px]", rowPad: "px-3 py-2" },
-  compact: { eyebrow: "text-[10px]", header: "text-[10px]", question: "text-[13.5px] leading-snug", hint: "text-[11px]", label: "text-[12.5px]", desc: "text-[11px] leading-snug", input: "text-[12.5px]", button: "text-xs", skip: "text-[11px]", sending: "text-[10px]", preview: "text-[10.5px]", mark: "h-3.5 w-3.5 text-[9px]", rowPad: "px-2.5 py-1.5" },
+  reading: { eyebrow: "text-[10.5px]", header: "text-[11px]", question: "text-[15px] leading-snug", hint: "text-[12px]", label: "text-[13.5px]", desc: "text-[12px] leading-relaxed", input: "text-[13.5px]", button: "text-[13px]", skip: "text-[12px]", sending: "text-[11px]", preview: "text-[11.5px]", chip: "text-[11.5px]", mark: "h-4 w-4 text-[10px]", rowPad: "px-3 py-2" },
+  compact: { eyebrow: "text-[10px]", header: "text-[10px]", question: "text-[13.5px] leading-snug", hint: "text-[11px]", label: "text-[12.5px]", desc: "text-[11px] leading-snug", input: "text-[12.5px]", button: "text-xs", skip: "text-[11px]", sending: "text-[10px]", preview: "text-[10.5px]", chip: "text-[10.5px]", mark: "h-3.5 w-3.5 text-[9px]", rowPad: "px-2.5 py-1.5" },
 } as const;
 type Scale = (typeof SCALE)[keyof typeof SCALE];
 
@@ -68,7 +75,21 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   // means with a mouse. So choosing an option shows you what you chose, and an explicit toggle still
   // wins in both directions (peek at one you haven't picked; collapse one you have).
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // Per question: the teammate it is being handed to, if any. Mutually exclusive with picking an
+  // option — you are either answering it or saying it isn't yours.
+  const [fwd, setFwd] = useState<Record<number, TeamMember>>({});
+  const [team, setTeam] = useState<TeamMember[]>([]);
   const otherRef = useRef<HTMLInputElement>(null);
+
+  // team-ask's roster. A machine without it gets [] and no forward row — same card as before.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/team/roster")
+      .then((r) => r.json())
+      .then((d) => { if (alive && Array.isArray(d?.members)) setTeam(d.members); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const n = questions.length;
   const q = questions[qi];
@@ -82,6 +103,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
 
   const toggle = (label: string) => {
     setSkipped((p) => (p[qi] ? { ...p, [qi]: false } : p));
+    setFwd((p) => (p[qi] ? { ...p, [qi]: undefined as unknown as TeamMember } : p));
     // Rule 4: while the Other field holds text, clicking its row SELECTS, never deselects. Typing
     // already selected the row, so the plain toggle read that click as "turn it off" and left the
     // typed answer visible in a field the disabled Send button refused to send — with no clue that
@@ -106,6 +128,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   const typeOther = (v: string) => {
     setOther((p) => ({ ...p, [qi]: v }));
     setSkipped((p) => (p[qi] ? { ...p, [qi]: false } : p));
+    if (v.trim()) setFwd((p) => (p[qi] ? { ...p, [qi]: undefined as unknown as TeamMember } : p));
     setSel((prev) => {
       const cur = prev[qi] || [];
       if (!v.trim()) return cur.includes(OTHER) ? { ...prev, [qi]: cur.filter((l) => l !== OTHER) } : prev;
@@ -116,8 +139,14 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
 
   // Reads live sel/other/skipped state — only safe to call when nothing in this render is about to
   // change those for `i` (see skipOne(), which special-cases its own index instead of calling this).
+  // How many questions are being handed over — the instruction says so, so Claude batches the ones
+  // going to the same person into a single ask_team call instead of one card per question.
+  const fwdCount = Object.values(fwd).filter(Boolean).length;
+
   const answerFor = (i: number): string | string[] | null => {
     if (skipped[i]) return null;
+    const to = fwd[i];
+    if (to) return forwardInstruction(to, fwdCount);
     const txt = (other[i] || "").trim();
     // The sentinel resolves to whatever was typed; an empty Other row is not an answer, so it drops
     // out rather than sending "" and making Claude guess what a blank choice meant.
@@ -149,6 +178,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     setSkipped((p) => ({ ...p, [qi]: true }));
     setSel((p) => ({ ...p, [qi]: [] }));
     setOther((p) => ({ ...p, [qi]: "" }));
+    setFwd((p) => ({ ...p, [qi]: undefined as unknown as TeamMember }));
     if (isLast) onAnswer(buildAnswers(qi));
     else setQi((i) => i + 1);
   };
@@ -240,6 +270,27 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
         </Row>
       </div>
 
+      {/* Hand this one question to someone else. Inside the scrolling region deliberately: it is part
+          of choosing an answer, not an action on the card, and it must never push Send off the pane. */}
+      {team.length > 0 && (
+        <div className={`mt-2 flex shrink-0 flex-wrap items-center gap-1.5 ${sc.chip}`}>
+          <span className="text-neutral-500">Not mine →</span>
+          {team.map((m) => {
+            const on = fwd[qi]?.key === m.key;
+            return (
+              <button key={m.key} title={m.role || m.expertise?.join(", ")}
+                onClick={() => setFwd((p) => ({ ...p, [qi]: on ? (undefined as unknown as TeamMember) : m }))}
+                className={`rounded-full border px-2 py-0.5 transition-colors ${
+                  on ? "border-[var(--sakura)] bg-[var(--sakura)]/20 text-white"
+                     : "border-white/15 text-neutral-400 hover:border-white/30 hover:text-neutral-200"}`}>
+                {on ? "✓ " : ""}{m.name}
+              </button>
+            );
+          })}
+          {fwd[qi] && <span className="text-neutral-500">· Claude will ask them on Slack</span>}
+        </div>
+      )}
+
       {/* Pinned. This row is the exit from `phase=awaiting`; it may never be the thing that overflows. */}
       <div className="mt-2.5 flex shrink-0 flex-wrap items-center gap-2">
         {qi > 0 && <button onClick={back} className={`rounded-lg border border-white/15 px-3 py-1.5 ${sc.button} text-neutral-300 transition-colors hover:bg-white/10`}>← Back</button>}
@@ -252,8 +303,12 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
         </button>
         {/* What will actually be sent, in the words that will be sent. The old hint described the
             *rules* of the control; this describes the outcome, which is the thing in doubt. */}
-        <span className={`ml-auto min-w-0 truncate ${sc.sending} text-neutral-500`} title={answered ? String(Array.isArray(count) ? count.join(", ") : count) : undefined}>
-          {answered ? <>sending: <span className="text-neutral-300">{Array.isArray(count) ? count.join(", ") : count}</span></> : "nothing selected yet"}
+        <span className={`ml-auto min-w-0 truncate ${sc.sending} text-neutral-500`} title={fwd[qi] ? `${fwd[qi].name}${fwd[qi].role ? ` — ${fwd[qi].role}` : ""}` : answered ? String(Array.isArray(count) ? count.join(", ") : count) : undefined}>
+          {fwd[qi]
+            ? <>handing to <span className="text-neutral-300">{fwd[qi].name}</span></>
+            : answered
+              ? <>sending: <span className="text-neutral-300">{Array.isArray(count) ? count.join(", ") : count}</span></>
+              : "nothing selected yet"}
         </span>
       </div>
       {n > 1 && <button onClick={skipAll} className={`mt-1.5 ${sc.skip} text-neutral-600 transition-colors hover:text-neutral-400`}>Skip all {n} questions</button>}

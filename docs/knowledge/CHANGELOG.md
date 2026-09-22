@@ -38,6 +38,15 @@ this to do a piece of work; read the subsystem's own doc.
   re-attributed the app's own errors to inspect-core.js and counted React warnings as errors).
   The account-status card no longer renders over the preview.
 
+### 2026-09-22
+- **Live sessions — hand a question to a teammate** (§3) — each question on `AskCard` gets a
+  "Not mine →" row built from team-ask's roster (`lib/team-roster.ts` → `/api/team/roster`, read from
+  `~/dev/team-ask/team.json`, minus this machine's own `CC_ASK_ME`). Picking someone resolves that one
+  question with an instruction for Claude to ask them via the `ask_team` MCP tool, so a card can be
+  part answered and part handed over. No Slack code in the dashboard: team-ask is already in the
+  session, and a second Socket Mode connection per pane would eat a 10-connection app cap.
+  `lib/team-forward.ts` holds the shared instruction text (client-safe; the roster half uses node:fs).
+
 ### 2026-09-21
 - **Preview comments — comment mode** (§21) — first real use (ecvision on :3150) read as not
   intuitive: arming Pin per comment, no way to click a marker, Esc unclear. The pop-out now opens in
