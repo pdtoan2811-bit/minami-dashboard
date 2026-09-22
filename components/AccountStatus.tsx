@@ -161,7 +161,11 @@ export function AccountStatus() {
   // "you're on the wrong Claude account" card appearing over a live pitch is the exact opposite of
   // what this component is for. Suppressed at the route level rather than by the page, because the
   // whole point of this widget is that it mounts globally and nothing has to remember it exists.
-  const onCanvas = usePathname()?.startsWith("/canvas") ?? false;
+  // Same reasoning for /preview (§21): that window is a picture of somebody's app with a comment
+  // layer over it, and an amber card parked over the bottom-right corner covers the very thing the
+  // window exists to point at. The dashboard's own tabs still show it.
+  const path = usePathname() ?? "";
+  const onCanvas = path.startsWith("/canvas") || path.startsWith("/preview");
 
   const [live, setLive] = useState<Live | null>(null);
   const [switching, setSwitching] = useState(false);

@@ -8,6 +8,23 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-22
+- **Preview comments — the real-app pass** (§21) — pointed at ecvision on :3150 the feature was
+  "buggy as hell"; a drive-through plus two adversarial audits found why. The armed overlay
+  swallowed every pointer event (inner scroll containers dead, `:hover` dead → hover menus
+  un-commentable); picking now uses capture-phase document listeners and a `pointer-events:none`
+  highlight, and reads `composedPath()[0]` so shadow DOM is pickable. Crops rendered the whole body
+  — 19.4s measured on ecvision, against a 4s timeout that can't fire — and were of the wrong region
+  entirely on app-shell layouts; they are element-scoped now (pin 756ms, crop 1.0s) and the pin no
+  longer waits for its picture (`cropped` arrives later, matched by `reqId`). Also fixed: note
+  editor clipped below the fold, ⌘↩ dead inside the note, dead Back/Forward/Reload on a
+  cross-origin frame (the wrapper keeps its own page history), rebind leaking the old EventSource,
+  marker-layer rebuild churn, drifting rect markers, hidden-element markers parked at the origin,
+  non-unique selectors past depth 8 (now honest via `ambiguous: N`), pins stuck grey, multi-page
+  batches under one URL, empty notes in a batch, and the `console.error` patch (removed — it
+  re-attributed the app's own errors to inspect-core.js and counted React warnings as errors).
+  The account-status card no longer renders over the preview.
+
 ### 2026-09-21
 - **Preview comments — comment mode** (§21) — first real use (ecvision on :3150) read as not
   intuitive: arming Pin per comment, no way to click a marker, Esc unclear. The pop-out now opens in

@@ -188,6 +188,64 @@ embedded apps are out of scope — they render inside `admin.shopify.com`, which
 if that need materialises, the fallback is the script drawing its own toolbar in the app tab
 (the Q5 option that was declined for v1).
 
+### First contact with a real app — what it broke, and why (2026-09-22)
+
+Pointed at ecvision (`localhost:3150`, a Next.js app with an app-shell layout), the feature was
+reported as "buggy as hell". A drive-through plus two adversarial code audits found the causes; the
+individual post-mortems sit next to the code they belong to, and this is the shape of them.
+
+**The overlay was the root of most of it.** Picking was implemented as a full-viewport `fixed`
+layer that swallowed every pointer event. Measured against a real inner scroll container: armed, a
+wheel gave `inner 0 / window 150` — the panel you were trying to comment on didn't move and the
+page behind it did. `:hover` never fired either, so dropdowns, tooltips and row actions could not
+be made to appear: an entire class of UI was un-commentable, in the mode the window opens in. The
+layer is gone. Picking now listens on the document in the **capture phase** and the highlight is
+`pointer-events:none`, so hover and scroll behave exactly as they do without the script and only
+the click itself is intercepted. `composedPath()[0]` is used for the target, which also makes
+content inside web components pickable for the first time.
+
+**Crops were rendering the whole page.** `html-to-image` was pointed at `document.body`, then cut.
+On ecvision's 1280×4363 home page that measured **19.4s** (another run: 28.9s on a 6,053-node
+page), against a 4s timeout that *could not fire* — the render starves its own `setTimeout`, so the
+guard ran at 14.7s. Every crop was null, every click froze the app for ~15s, and nothing serialised
+picks, so three clicks queued 37s of jank. Worse, on an app-shell layout (`html,body{overflow:hidden}`
+with a scrolling `<div>` — most Next dashboards) the body-cut produced a picture of *a different
+part of the page*: measured zero matching pixels. Crops are now scoped to the **subject** — the
+picked element, or the nearest ancestor that still fits on screen when the element is a sliver —
+which is both fast and correct under any scroller. Measured after: pin in **756ms**, crop in
+**1.0s**.
+
+**And the pin waited for its picture.** `picked` was only posted once the render settled, so a
+click did nothing visible for as long as the crop took. The pin is posted immediately now and the
+thumbnail arrives later as `cropped`, matched by `reqId`.
+
+> 🐛 Others fixed in the same pass, each with its post-mortem at the code: the note editor clamped
+> only its top edge, so any pin in the lower third opened a card whose textarea and buttons were
+> below the stage's hidden overflow — unreachable, and Esc deleted the pin because the note was
+> still empty (it now measures itself and flips above the element); `⌘↩` was dead from inside the
+> note (the window handler bails on a focused input) and Enter merely closed it; Back/Forward
+> called `history.go()` on a cross-origin frame, which throws, so they were dead buttons while
+> Reload silently reverted to the original URL (the wrapper keeps its own history of the pages the
+> script reports); rebinding the window left the old session's `EventSource` open, so the pop-out
+> reported — and routed sends by — the *previous* chat's state (it reloads now); markers rebuilt
+> their entire layer on every push (~8×/s while scrolling), destroying badges under the cursor, and
+> a rect marker re-based its document coordinates every frame so it drifted away from what it
+> marked; a marker on a hidden element parked at (-11,-11) forever because `display:none` reports a
+> 0×0 box at the origin; `selectorFor` gave up at depth 8 and returned a **non-unique** selector
+> (measured: two different spans, same selector) — it now walks as far as needed and reports
+> `ambiguous: N` rather than lying; sent pins stayed grey forever if the next turn started within
+> 1.5s; a batch spanning two pages was reported under one URL; the note open at send time was
+> included even when empty; and `console.error` was patched, which re-attributed every one of the
+> app's own errors to `inspect-core.js` in DevTools and counted React's dev warnings as errors —
+> the patch is gone entirely, since real faults arrive via `error`/`unhandledrejection`/network/the
+> Next overlay anyway. Aborted requests are no longer reported as failures, `typing()` sees into
+> shadow roots, and the relayed `⌘↩` no longer calls `preventDefault` on the host app's key.
+
+**The lesson worth keeping:** every one of these is a cost paid by *the app being previewed*, not
+by the dashboard — a blocked wheel, a stolen shortcut, a frozen main thread, a rewritten console.
+A tool that watches someone else's app has to be judged by what it costs that app when it is
+merely *present*, and none of that shows up in the dashboard's own tests.
+
 ### What shipped (Q20: everything above, one build)
 - `public/inspect-core.js` — the in-app script (hello · hover · pick · region · anchor · markers ·
   crop · errors · key relay), plain ES2019, no build step. Served as **`/inspect.js`** by

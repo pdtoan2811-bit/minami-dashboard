@@ -27,6 +27,10 @@ export type ElementInfo = {
   tag: string;
   text: string;
   box: Box;
+  /** Set only when the selector does NOT identify exactly one element — how many it matches. A
+   *  deep, class-less tree can defeat the shortest-unique-path walk, and a selector that quietly
+   *  points at the wrong node is worse than one that says it is unsure. */
+  ambiguous?: number;
 };
 
 /** One recorded error inside the app — console, window, rejection, fetch/XHR, or the Next.js overlay. */
@@ -44,8 +48,13 @@ export type ScriptMsg =
   | { tag: typeof TAG; t: "hello"; url: string; title: string; viewport: { w: number; h: number } }
   // Live hover feedback while a mark tool is armed.
   | { tag: typeof TAG; t: "hover"; el: ElementInfo | null }
-  // A click landed while `pin` was armed; `crop` is a PNG data URL or null if rendering failed.
+  // A click landed while `pin` was armed. `crop` is always null here and arrives later as
+  // `cropped`: rendering takes hundreds of ms (seconds on a heavy page), and a pin that waits for
+  // its picture is a click that appears to do nothing.
   | { tag: typeof TAG; t: "picked"; reqId: string; el: ElementInfo; crop: string | null }
+  // The thumbnail for an earlier `picked`/`region`, matched by `reqId`. Never sent when the render
+  // failed or timed out — the pin simply keeps no picture.
+  | { tag: typeof TAG; t: "cropped"; reqId: string; crop: string }
   // A rectangle drag finished: everything that intersects it, plus a crop of the region.
   | { tag: typeof TAG; t: "region"; reqId: string; box: Box; els: ElementInfo[]; crop: string | null }
   // Answer to `anchor`: fresh boxes for the selectors that still exist, null for the ones that don't.
@@ -95,8 +104,10 @@ export type Pin = {
   region?: { box: Box; els: ElementInfo[] };
   /** Where the crop landed on disk after upload (§11 pastes dir) — the path is what goes in the turn. */
   cropPath?: string | null;
-  /** The data URL until upload, for the wrapper's own thumbnail. */
+  /** The data URL until upload, for the wrapper's own thumbnail. Arrives after the pin (`cropped`). */
   cropData?: string | null;
+  /** Correlates a late `cropped` message with the pin it belongs to. */
+  reqId?: string;
   /** Last known box in app coordinates; null once re-anchoring found the element gone. */
   box: Box | null;
   state: "open" | "sent";
@@ -113,6 +124,7 @@ const quote = (s: string) => `"${s.replace(/\s+/g, " ").trim()}"`;
 /** One element, on one line, the way Claude will grep for it. */
 function elLine(el: ElementInfo): string {
   const parts = [chain(el), `\`${el.selector}\``];
+  if (el.ambiguous) parts.push(`(selector matches ${el.ambiguous} elements — go by the component and the text)`);
   return parts.join(" · ");
 }
 
@@ -127,9 +139,17 @@ export function composeMessage(pins: Pin[], ctx: PageContext, errors: AppError[]
   const open = pins.filter((p) => p.state === "open");
   const lines: string[] = [];
   const count = open.length === 1 ? "1 comment" : `${open.length} comments`;
-  lines.push(`[Preview comments] ${ctx.url} · ${ctx.viewport.w}×${ctx.viewport.h} · ${count}`);
+  // > 🐛 The header used to name ONE url — wherever the app happened to be when Send was pressed —
+  // for a batch that may have been collected across several pages. Claude was then told to verify
+  // three selectors on a page two of them do not exist on. Each pin carries its own `url`, so a
+  // batch that spans pages says so and groups by page.
+  const pages = uniq(open.map((p) => p.url || ctx.url));
+  lines.push(`[Preview comments] ${pages.length > 1 ? `${pages.length} pages` : pages[0] || ctx.url} · ${ctx.viewport.w}×${ctx.viewport.h} · ${count}`);
   lines.push("");
-  for (const p of open) {
+  for (const page of pages) {
+  const pagePins = open.filter((p) => (p.url || ctx.url) === page);
+  if (pages.length > 1) { lines.push(`── ${page}`); }
+  for (const p of pagePins) {
     const n = circled(p.n);
     const head = [n, p.intent ? `${p.intent} —` : "—", p.note.trim() ? quote(p.note) : "(no note)"].join(" ");
     lines.push(head);
@@ -153,6 +173,7 @@ export function composeMessage(pins: Pin[], ctx: PageContext, errors: AppError[]
     if (p.cropPath) lines.push(`   ${p.cropPath}`);
     lines.push("");
   }
+  }
   if (errors.length) {
     lines.push(`Errors since last send (${errors.length}):`);
     for (const e of errors.slice(-12)) {
@@ -162,7 +183,9 @@ export function composeMessage(pins: Pin[], ctx: PageContext, errors: AppError[]
     lines.push("");
   }
   if (opts.verify && open.some((p) => p.kind !== "page")) {
-    lines.push("After making the changes, open the same URL in the browser tool and screenshot each pinned selector; show before/after for each pin in your reply.");
+    lines.push(pages.length > 1
+      ? "After making the changes, open each page listed above in the browser tool and screenshot the selectors pinned on it; show before/after for each pin in your reply."
+      : "After making the changes, open the same URL in the browser tool and screenshot each pinned selector; show before/after for each pin in your reply.");
   }
   return lines.join("\n").trimEnd();
 }

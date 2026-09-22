@@ -42,6 +42,8 @@ export default function PreviewPopOut() {
   const [srcDraft, setSrcDraft] = useState(src);
   const [appUrl, setAppUrl] = useState(src);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
   // `hooked` = the script inside the app said hello for the CURRENT load (see onFrameLoad), so a page
   // that dropped the script — or a production build — shows Enable comments again.
   const [hooked, setHooked] = useState(false);
@@ -61,12 +63,17 @@ export default function PreviewPopOut() {
   const [liveSessions, setLiveSessions] = useState<Record<string, LiveSession>>({});
   const [iframeKey, setIframeKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  // The iframe's box in wrapper coordinates — what the note editor clamps against. Measured, not
+  // derived from window.innerHeight minus assumed chrome heights.
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stage, setStage] = useState({ w: 1200, h: 700 });
   const pinsRef = useRef(pins);
   pinsRef.current = pins;
   const editingRef = useRef(editing);
   editingRef.current = editing;
   const moveFromRef = useRef(moveFrom);
   moveFromRef.current = moveFrom;
+  const toolRef = useRef<Tool>("pin");
   // When the script last said hello. The handshake has two races, in opposite directions: the
   // script's hello fires at parse time, BEFORE the iframe's `load` — and on a fresh navigation the
   // iframe (in the SSR HTML) is already loading before React has hydrated this listener at all, so
@@ -100,7 +107,15 @@ export default function PreviewPopOut() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  const appOrigin = useMemo(() => { try { return new URL(src).origin; } catch { return ""; } }, [src]);
+  // The origin we post to must track where the app actually IS, not where it started. An in-app
+  // navigation to another port/host (an auth redirect, a link to another local service) left
+  // `postMessage` targeting a stale origin — and a mismatched targetOrigin fails SILENTLY, so the
+  // toolbar stayed enabled over a page that could no longer hear a word. `hello` carries the real
+  // URL, so it is the authority; `src` only seeds it.
+  const appOrigin = useMemo(() => {
+    for (const u of [appUrl, src]) { try { if (u) return new URL(u).origin; } catch { /* keep looking */ } }
+    return "";
+  }, [appUrl, src]);
 
   // ── channel ────────────────────────────────────────────────────────────────────────────────────
   const post = useCallback((m: WrapperMsg) => {
@@ -112,15 +127,65 @@ export default function PreviewPopOut() {
   postRef.current = post;
 
   // Markers live inside the app so they scroll with it; the wrapper is their source of truth.
+  //
+  // > 🐛 The push used to key on the whole `pins` array, which changes identity on every keystroke
+  // in a note, every late crop, and every `anchored` reply — i.e. ~60×/s while scrolling. Each push
+  // tears down and rebuilds every badge inside the app, so badges flickered under the cursor and a
+  // click on one could land on a node that had just been replaced. Only the four fields the script
+  // actually draws are compared now, and the box is rounded: sub-pixel scroll deltas are not news.
+  const markerPayload = useMemo(
+    () => pins.filter((p) => p.kind !== "page").map((p) => ({ n: p.n, selector: p.el?.selector || null, box: p.box ? { x: Math.round(p.box.x), y: Math.round(p.box.y), w: Math.round(p.box.w), h: Math.round(p.box.h) } : null, state: p.state })),
+    [pins],
+  );
+  const markerKey = JSON.stringify(markerPayload);
   const pushMarkers = useCallback((list: Pin[]) => {
     post({ tag: TAG, t: "markers", markers: list.filter((p) => p.kind !== "page").map((p) => ({ n: p.n, selector: p.el?.selector || null, box: p.box, state: p.state })) });
   }, [post]);
-  useEffect(() => { if (hooked) pushMarkers(pins); }, [pins, hooked, pushMarkers]);
+  useEffect(() => {
+    if (!hooked) return;
+    post({ tag: TAG, t: "markers", markers: markerPayload });
+    // markerPayload is rebuilt every render; markerKey is its VALUE, which is the actual trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markerKey, hooked, post]);
 
   const anchor = useCallback(() => {
     const sels = pinsRef.current.filter((p) => p.kind === "pin" || p.kind === "move").map((p) => p.el!.selector);
     if (sels.length) post({ tag: TAG, t: "anchor", selectors: sels });
   }, [post]);
+
+  useEffect(() => {
+    const node = stageRef.current;
+    if (!node) return;
+    const measure = () => setStage({ w: node.clientWidth, h: node.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
+
+  // > 🐛 v1 called `win.history.go()` and `win.location.reload()` on the framed window, on the
+  // belief that a cross-origin frame's history is still ours to drive. It is not — `history` is not
+  // on the cross-origin Window allow-list and `Location` exposes only `href`/`replace`. Both threw,
+  // so Back and Forward were dead buttons, and Reload fell into the catch and remounted the iframe
+  // at its ORIGINAL url, silently throwing away wherever you had navigated to (and orphaning every
+  // pin anchored on that page).
+  //
+  // The script reports each URL it lands on (`hello`), so the wrapper keeps its OWN history of the
+  // app's pages and navigates by setting `src`. That is a real back/forward over the pages the
+  // preview has actually seen, and a reload that reloads what is on screen.
+  const history = useRef<string[]>([]);
+  const histAt = useRef(-1);
+  const navigating = useRef(false);
+  const [histState, setHistState] = useState({ back: false, fwd: false });
+  const recordVisit = useCallback((url: string) => {
+    if (navigating.current) { navigating.current = false; setHistState({ back: histAt.current > 0, fwd: histAt.current < history.current.length - 1 }); return; }
+    const h = history.current;
+    if (h[histAt.current] === url) return;
+    h.splice(histAt.current + 1);   // a new page truncates the forward branch, like a browser
+    h.push(url);
+    histAt.current = h.length - 1;
+    setHistState({ back: histAt.current > 0, fwd: false });
+  }, []);
 
   const probedRef = useRef(false);
   useEffect(() => {
@@ -133,7 +198,9 @@ export default function PreviewPopOut() {
       switch (d.t) {
         case "hello":
           helloAt.current = Date.now();
-          setHooked(true); setAppUrl(d.url); setViewport(d.viewport);
+          setHooked(true); setAppUrl(d.url); setSrcDraft(d.url); setViewport(d.viewport);
+          viewportRef.current = d.viewport;
+          recordVisit(d.url);
           post({ tag: TAG, t: "connect" });
           // Re-arm whatever was armed and re-anchor: this is the reload path (Q7).
           if (tool === "pin" || tool === "move") post({ tag: TAG, t: "arm", tool: "pin" });
@@ -143,10 +210,14 @@ export default function PreviewPopOut() {
         case "hover": setHover(d.el); break;
         case "picked": {
           if (tool === "move") {
-            if (!moveFrom) { setMoveFrom(d.el); break; }
+            // The ref, not the closure: two picks inside one React commit both read `moveFrom` as
+            // null and the second one silently replaced the source instead of completing the move.
+            const from = moveFromRef.current;
+            if (!from) { moveFromRef.current = d.el; setMoveFrom(d.el); break; }
             const base = closeEditor();
             const n = nextN(base);
-            const pin: Pin = { id: uid(), n, kind: "move", note: "", intent: "Move", el: moveFrom, to: d.el, box: moveFrom.box, cropData: d.crop, state: "open", url: appUrl };
+            const pin: Pin = { id: uid(), n, kind: "move", note: "", intent: "Move", el: from, to: d.el, box: from.box, cropData: d.crop, reqId: d.reqId, state: "open", url: appUrl };
+            moveFromRef.current = null;
             setPins([...base, pin]); setMoveFrom(null); setEditing(pin.id); setTool("pin");
             break;
           }
@@ -155,17 +226,22 @@ export default function PreviewPopOut() {
           // note is open closes it, and an untouched note is dropped rather than left as a blank pin.
           const base = closeEditor();
           const n = nextN(base);
-          const pin: Pin = { id: uid(), n, kind: "pin", note: "", intent: null, el: d.el, box: d.el.box, cropData: d.crop, state: "open", url: appUrl };
+          const pin: Pin = { id: uid(), n, kind: "pin", note: "", intent: null, el: d.el, box: d.el.box, cropData: d.crop, reqId: d.reqId, state: "open", url: appUrl };
           setPins([...base, pin]); setEditing(pin.id);
           break;
         }
         case "region": {
           const base = closeEditor();
           const n = nextN(base);
-          const pin: Pin = { id: uid(), n, kind: "rect", note: "", intent: null, region: { box: d.box, els: d.els }, box: d.box, cropData: d.crop, state: "open", url: appUrl };
+          const pin: Pin = { id: uid(), n, kind: "rect", note: "", intent: null, region: { box: d.box, els: d.els }, box: d.box, cropData: d.crop, reqId: d.reqId, state: "open", url: appUrl };
           setPins([...base, pin]); setEditing(pin.id); setTool("pin");
           break;
         }
+        case "cropped":
+          // The picture, arriving after its pin. Matched on reqId so a slow render can never attach
+          // itself to whatever pin happens to be open when it lands.
+          setPins((prev) => prev.map((p) => (p.reqId === d.reqId && !p.cropData ? { ...p, cropData: d.crop } : p)));
+          break;
         case "marker": {
           const hit = pinsRef.current.find((p) => p.n === d.n && p.state === "open");
           if (hit) { closeEditor(); setEditing(hit.id); }
@@ -177,10 +253,12 @@ export default function PreviewPopOut() {
         case "errors": setErrors(d.errors); break;
         case "key": hotkey(d.key); break;
         case "viewport":
-          setViewport(d.size);
-          // Boxes are viewport coordinates, so a scroll moves every pin; ask for fresh ones. The
-          // script throttles `viewport` to animation frames, so this is one message per frame at
-          // worst, and the reply is a handful of getBoundingClientRect calls.
+          // Size is only read when a batch is composed, so a state write per scroll frame was a
+          // whole-component re-render for a value nobody was looking at. Kept in a ref; the state
+          // copy is updated only when the size actually changes (a resize, not a scroll).
+          viewportRef.current = d.size;
+          setViewport((v) => (v.w === d.size.w && v.h === d.size.h ? v : d.size));
+          // Boxes are viewport coordinates, so a scroll moves every pin; ask for fresh ones.
           anchor();
           break;
       }
@@ -190,7 +268,7 @@ export default function PreviewPopOut() {
     if (!probedRef.current && iframeRef.current) { probedRef.current = true; probe(); }
     return () => window.removeEventListener("message", onMsg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post, anchor, pushMarkers, tool, moveFrom, appUrl]);
+  }, [post, anchor, pushMarkers, tool, moveFrom, appUrl, recordVisit]);
 
   // Close whatever note is open. An untouched one (no text, no chip) is deleted — it was a click,
   // not a comment. Returns the resulting list so a caller can build on it in the same tick, because
@@ -206,10 +284,18 @@ export default function PreviewPopOut() {
     return list;
   }, []);
 
+  // Re-send the current arm state. Needed wherever the SCRIPT may have disarmed itself (Escape
+  // inside the app) while the wrapper keeps the tool — the arm effect only fires on a tool CHANGE.
+  const reArm = useCallback(() => {
+    const t = toolRef.current;
+    postRef.current({ tag: TAG, t: "arm", tool: t === "pin" || t === "move" ? "pin" : t === "rect" ? "rect" : null });
+  }, []);
+
   // Arm/disarm follows the tool. `move` and `pin` are the same thing to the script: pick an element.
   // Not gated on `hooked`: a disarm that waits for a handshake can leave the crosshair stuck over the
   // app; posting into a frame that isn't listening costs nothing.
   useEffect(() => {
+    toolRef.current = tool;
     post({ tag: TAG, t: "arm", tool: tool === "pin" || tool === "move" ? "pin" : tool === "rect" ? "rect" : null });
     if (tool !== "move") setMoveFrom(null);
     if (tool !== "pin" && tool !== "rect" && tool !== "move") setHover(null);
@@ -231,8 +317,12 @@ export default function PreviewPopOut() {
   const hotkey = useCallback((key: string) => {
     if (key === "Escape") {
       setSwitcher(false);
-      if (editingRef.current) { closeEditor(); return; }
-      if (moveFromRef.current) { setMoveFrom(null); return; }
+      if (editingRef.current) { closeEditor(); reArm(); return; }
+      if (moveFromRef.current) {
+        // The script disarms ITSELF on Escape, so any branch that keeps a tool selected has to put
+        // the overlay back — otherwise the toolbar says Move and the page answers to nothing.
+        moveFromRef.current = null; setMoveFrom(null); reArm(); return;
+      }
       setTool(null);
       return;
     }
@@ -270,7 +360,7 @@ export default function PreviewPopOut() {
   };
 
   const deliver = async (text: string) => {
-    if (!sessionId || !cwd) { setSendError("This window isn't bound to a chat — pick one from the status bar."); return false; }
+    if (!sessionId || !cwd) { setSendError("No chat bound — pick one at the bottom left."); setSwitcher(true); return false; }
     setSendError(null);
     if (agent.busy) await agent.queueMessage(text, { cwd, mode: perm });
     else await agent.send(text, { cwd, mode: perm, resume: sessionId, model });
@@ -278,18 +368,29 @@ export default function PreviewPopOut() {
   };
 
   const sendAll = async () => {
-    const batch = pinsRef.current.filter((p) => p.state === "open");
-    if (!batch.length || sending) return;
-    setSending(true); setEditing(null); setTool(null);
+    if (sending) return;
+    // closeEditor(), not setEditing(null): the open note is usually the one you just typed into, and
+    // the "an untouched note is dropped" rule has to hold on the path that matters most — otherwise
+    // clicking an element and hitting Send posts a pin reading "① — (no note)".
+    const batch = closeEditor().filter((p) => p.state === "open");
+    if (!batch.length) { setSendError("Nothing to send — click something in the page first."); return; }
+    if (!sessionId || !cwd) { setSendError("No chat bound — pick one at the bottom left."); setSwitcher(true); return; }
+    setSending(true); setEditing(null);
     try {
       // Upload crops first so the message can name the paths (§11: the path is the payload).
       const withPaths = await Promise.all(batch.map(async (p) => ({ ...p, cropPath: p.cropData ? await uploadCrop(p.cropData) : null })));
-      const text = composeMessage(withPaths, { url: appUrl || src, viewport }, errors, { verify });
+      const lost = withPaths.filter((p) => p.cropData && !p.cropPath).length;
+      const text = composeMessage(withPaths, { url: appUrl || src, viewport: viewportRef.current }, errors, { verify });
+      // Mode is left alone on FAILURE (it used to drop to Browse before the send was even attempted,
+      // so a rejected batch left you clicking a page that no longer answered).
       if (!(await deliver(text))) return;
       awaitingReply.current = true;
       const ids = new Set(batch.map((p) => p.id));
       setPins((prev) => prev.map((p) => (ids.has(p.id) ? { ...p, state: "sent", cropPath: withPaths.find((w) => w.id === p.id)?.cropPath ?? null, cropData: null } : p)));
       setErrors([]); post({ tag: TAG, t: "clearErrors" });
+      setSendError(lost ? `Sent — but ${lost} screenshot${lost === 1 ? "" : "s"} couldn't be saved; the selectors still went.` : null);
+    } catch (e) {
+      setSendError(`Couldn't send: ${String((e as Error)?.message || e)}`);
     } finally { setSending(false); }
   };
   // The hotkey listener is installed once; this ref is how it reaches the current closure.
@@ -309,8 +410,14 @@ export default function PreviewPopOut() {
   // clean result. Only a turn WE started clears them — a turn the pane started is not an answer.
   useEffect(() => {
     if (agent.busy || !awaitingReply.current) return;
-    awaitingReply.current = false;
-    const t = setTimeout(() => setPins((prev) => prev.filter((p) => p.state !== "sent")), 1500);
+    // The flag is cleared by the timer, not here. Clearing it up front meant that if a new turn
+    // started inside the 1.5s window, the cleanup cancelled the timer and the NEXT idle saw the
+    // flag already false — so that batch's pins stayed grey in the tray and grey in the app for
+    // the rest of the session.
+    const t = setTimeout(() => {
+      awaitingReply.current = false;
+      setPins((prev) => prev.filter((p) => p.state !== "sent"));
+    }, 1500);
     return () => clearTimeout(t);
   }, [agent.busy]);
 
@@ -352,12 +459,19 @@ export default function PreviewPopOut() {
     return () => { alive = false; clearInterval(iv); };
   }, [switcher]);
 
+  // Re-binding RELOADS the window rather than swapping state. useAgent keys its EventSource by pane
+  // key and only closes it on unmount — so changing `sessionId` in place left the old session's
+  // stream open and the pop-out kept reporting (and routing sends by) the OLD chat's busy state.
+  // A reload is the one move that cannot leave a half-swapped binding behind. Pins are the cost, so
+  // it asks first when any are open.
   const rebind = (id: string, c: string) => {
-    attachedFor.current = null;
-    setSessionId(id); setCwd(c); setSwitcher(false);
+    if (pinsRef.current.some((p) => p.state === "open") &&
+        !window.confirm("Switching chats reloads this window and clears your unsent comments. Continue?")) return;
     const u = new URL(window.location.href);
-    u.pathname = `/preview/${id}`; u.searchParams.set("cwd", c);
-    window.history.replaceState(null, "", u.toString());
+    u.pathname = `/preview/${id}`;
+    u.searchParams.set("cwd", c);
+    if (appUrl) u.searchParams.set("url", appUrl);
+    window.location.replace(u.toString());
   };
 
   useEffect(() => { document.title = `${open.length ? `(${open.length}) ` : ""}${appUrl || "Preview"} — Minami`; }, [open.length, appUrl]);
@@ -367,13 +481,14 @@ export default function PreviewPopOut() {
     if (!isPreviewUrl(clean)) { setSendError("Only localhost URLs can be previewed here."); return; }
     setSendError(null); setSrc(clean); setSrcDraft(clean); setAppUrl(clean); setHooked(false); setIframeKey((k) => k + 1);
   };
-  // Back/forward/reload reach the frame through its history — a cross-origin frame's history is
-  // still ours to navigate, just not to read.
   const nav = (dir: -1 | 0 | 1) => {
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    try { if (dir === 0) win.location.reload(); else win.history.go(dir); }
-    catch { if (dir === 0) setIframeKey((k) => k + 1); }
+    if (dir === 0) { setSrc(appUrl || src); setIframeKey((k) => k + 1); return; }
+    const next = histAt.current + dir;
+    if (next < 0 || next >= history.current.length) return;
+    histAt.current = next;
+    navigating.current = true;
+    const url = history.current[next];
+    setSrc(url); setSrcDraft(url); setIframeKey((k) => k + 1);
   };
 
   const editingPin = editing ? pins.find((p) => p.id === editing) || null : null;
@@ -384,9 +499,9 @@ export default function PreviewPopOut() {
     <main className="flex h-screen flex-col overflow-hidden bg-neutral-950 text-neutral-100">
       {/* ── toolbar ── */}
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-white/10 bg-neutral-900/80 px-2 text-[12px]">
-        <IconBtn title="Back" onClick={() => nav(-1)}><ArrowLeft size={14} /></IconBtn>
-        <IconBtn title="Forward" onClick={() => nav(1)}><ArrowRight size={14} /></IconBtn>
-        <IconBtn title="Reload" onClick={() => nav(0)}><RotateCw size={14} /></IconBtn>
+        <IconBtn title={histState.back ? "Back" : "Nothing to go back to yet"} disabled={!histState.back} onClick={() => nav(-1)}><ArrowLeft size={14} /></IconBtn>
+        <IconBtn title={histState.fwd ? "Forward" : "Nothing forward"} disabled={!histState.fwd} onClick={() => nav(1)}><ArrowRight size={14} /></IconBtn>
+        <IconBtn title="Reload this page" onClick={() => nav(0)}><RotateCw size={14} /></IconBtn>
         <form className="mx-1 flex min-w-0 flex-1 items-center" onSubmit={(e) => { e.preventDefault(); go(srcDraft); }}>
           <input
             value={srcDraft} onChange={(e) => setSrcDraft(e.target.value)} onFocus={(e) => e.target.select()}
@@ -423,7 +538,7 @@ export default function PreviewPopOut() {
       </div>
 
       {/* ── stage ── */}
-      <div className="relative min-h-0 flex-1 bg-neutral-900">
+      <div ref={stageRef} className="relative min-h-0 flex-1 bg-neutral-900">
         {src ? (
           <iframe
             key={iframeKey} ref={iframeRef} src={src} title="preview"
@@ -439,25 +554,24 @@ export default function PreviewPopOut() {
           <NotHooked onEnable={enableComments} canSend={!!sessionId && !!cwd} snippet={typeof window !== "undefined" ? installSnippet(window.location.origin, "next") : ""} />
         )}
 
-        {/* hover readout while a tool is armed */}
-        {hover && (tool === "pin" || tool === "move") && (
-          <div className="pointer-events-none absolute left-2 top-2 max-w-[60%] truncate rounded-md border border-white/10 bg-black/80 px-2 py-1 font-mono text-[11px] text-neutral-300">
-            {tool === "move" && moveFrom ? "→ destination: " : ""}{hover.components.length ? hover.components.join(" > ") : `<${hover.tag}>`} <span className="text-neutral-500">{hover.selector}</span>
-          </div>
-        )}
+        {/* The hover readout used to float over the page's top-left, which on most sites is the
+            logo and nav — the chrome you are most likely to be pointing at. It lives in the status
+            bar now; the highlight outline inside the app already says WHERE, so this only has to
+            say WHAT. */}
         {tool === "move" && moveFrom && (
           <div className="pointer-events-none absolute right-2 top-2 rounded-md border border-[var(--sakura)]/40 bg-black/80 px-2 py-1 text-[11px] text-neutral-300">
-            moving <span className="font-mono">{moveFrom.components.at(-1) || `<${moveFrom.tag}>`}</span> — click where it should go
+            moving <span className="font-mono">{shortChain(moveFrom, 1)}</span> — click where it should go
           </div>
         )}
 
         {/* note popover, anchored to the pin's box when it has one */}
         {editingPin && (
           <NoteEditor
-            pin={editingPin}
+            pin={editingPin} stage={stage}
             onChange={(patch) => setPins((prev) => prev.map((p) => (p.id === editingPin.id ? { ...p, ...patch } : p)))}
-            onDelete={() => { setPins((prev) => prev.filter((p) => p.id !== editingPin.id)); setEditing(null); }}
-            onClose={() => setEditing(null)}
+            onDelete={() => { setPins((prev) => prev.filter((p) => p.id !== editingPin.id)); setEditing(null); reArm(); }}
+            onClose={() => { closeEditor(); reArm(); }}
+            onSend={() => void sendAllRef.current()}
           />
         )}
 
@@ -493,6 +607,8 @@ export default function PreviewPopOut() {
             : agent.detached ? <span className="flex items-center gap-1"><Link2Off size={11} /> not live — the next send resumes it</span>
             : lastReply ? <>Done — {lastReply}</>
             : !hooked ? ""
+            : hover && (tool === "pin" || tool === "move")
+              ? <span className="font-mono text-[11px]">{tool === "move" && moveFrom ? <span className="text-[var(--sakura)]">→ </span> : null}<span className="text-neutral-200">{shortChain(hover)}</span> <span className="text-neutral-600">{hover.selector}</span></span>
             : tool === "pin" ? "Comment mode — click anything to pin it · click a number to reopen its note · Esc to browse"
             : tool === "rect" ? "Drag a region · Esc to cancel"
             : tool === "move" ? (moveFrom ? "Now click where it should go · Esc to cancel" : "Click the thing to move · Esc to cancel")
@@ -521,16 +637,28 @@ export default function PreviewPopOut() {
 
 function nextN(list: Pin[]): number { return list.reduce((m, p) => Math.max(m, p.n), 0) + 1; }
 
+/** The readable end of a component chain. An ecvision element really does report
+ *  `InnerScrollHandlerNew > Hero > Band > Exchange > SignalMatch > Plot`, and a left-truncating
+ *  label cut it to "InnerScrollHandlerNew > Hero …" — the two names that identify nothing. The
+ *  innermost names are the ones that locate code, so the tail is what gets shown; the full chain
+ *  still goes to Claude in the message. */
+function shortChain(el: ElementInfo | undefined, n = 2): string {
+  if (!el) return "";
+  if (!el.components.length) return `<${el.tag}>`;
+  const tail = el.components.slice(-n);
+  return (el.components.length > n ? "… " : "") + tail.join(" > ");
+}
+
 function pinLabel(p: Pin): string {
   if (p.kind === "page") return "whole page";
   if (p.kind === "rect" && p.region) return `region ${Math.round(p.region.box.w)}×${Math.round(p.region.box.h)} · ${p.region.els.length} elements`;
-  if (p.kind === "move" && p.el && p.to) return `${p.el.components.at(-1) || p.el.tag} → ${p.to.components.at(-1) || p.to.tag}`;
-  if (p.el) return p.el.components.length ? p.el.components.join(" > ") : p.el.selector;
+  if (p.kind === "move" && p.el && p.to) return `${shortChain(p.el, 1)} → ${shortChain(p.to, 1)}`;
+  if (p.el) return p.el.components.length ? shortChain(p.el, 3) : p.el.selector;
   return "";
 }
 
-function IconBtn({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" title={title} onClick={onClick} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-white/5 hover:text-neutral-100">{children}</button>;
+function IconBtn({ title, onClick, disabled, children }: { title: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+  return <button type="button" title={title} onClick={onClick} disabled={disabled} className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-400 hover:bg-white/5 hover:text-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent">{children}</button>;
 }
 
 function ToolBtn({ active, disabled, title, onClick, children }: { active: boolean; disabled?: boolean; title: string; onClick: () => void; children: React.ReactNode }) {
@@ -542,17 +670,38 @@ function ToolBtn({ active, disabled, title, onClick, children }: { active: boole
   );
 }
 
-function NoteEditor({ pin, onChange, onDelete, onClose }: { pin: Pin; onChange: (patch: Partial<Pin>) => void; onDelete: () => void; onClose: () => void }) {
+function NoteEditor({ pin, stage, onChange, onDelete, onClose, onSend }: { pin: Pin; stage: { w: number; h: number }; onChange: (patch: Partial<Pin>) => void; onDelete: () => void; onClose: () => void; onSend: () => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [h, setH] = useState(200); // measured height, for the bottom clamp
   useEffect(() => { ref.current?.focus(); }, [pin.id]);
+  // Measured rather than assumed: the card is ~160px bare and ~280px once a crop arrives, and the
+  // crop arrives AFTER the card opens (see `cropped`), so a constant would be wrong half the time.
+  useEffect(() => {
+    if (!boxRef.current) return;
+    const ro = new ResizeObserver(() => setH(boxRef.current?.offsetHeight || 200));
+    ro.observe(boxRef.current);
+    return () => ro.disconnect();
+  }, []);
   // Anchored beside the element when we know where it is; otherwise centred at the top. The stage is
   // the iframe's parent, and boxes are viewport coordinates inside the iframe, which start at the
   // stage's top-left — so a pin's box IS its position here, offset just enough not to cover it.
-  const style: React.CSSProperties = pin.box
-    ? { left: Math.max(8, Math.min(pin.box.x + pin.box.w + 12, (typeof window !== "undefined" ? window.innerWidth : 1200) - 340)), top: Math.max(8, pin.box.y) }
-    : { left: "50%", top: 12, transform: "translateX(-50%)" };
+  //
+  // > 🐛 Only the TOP was clamped, so a pin in the lower third of the page opened a note whose
+  // textarea, Done and Delete were below the stage's hidden overflow — unreachable, unscrollable,
+  // and Esc deleted the pin because the note was still empty. Both axes are clamped now, and a card
+  // that would hang off the bottom flips to sit ABOVE its element instead.
+  const W = 320, M = 8;
+  const style: React.CSSProperties = (() => {
+    if (!pin.box) return { left: "50%", top: 12, transform: "translateX(-50%)" };
+    const right = pin.box.x + pin.box.w + 12;
+    const left = right + W + M <= stage.w ? right : Math.max(M, pin.box.x - W - 12);
+    const below = pin.box.y;
+    const top = below + h + M <= stage.h ? below : Math.max(M, Math.min(stage.h - h - M, pin.box.y + pin.box.h - h));
+    return { left: Math.max(M, Math.min(left, stage.w - W - M)), top: Math.max(M, top) };
+  })();
   return (
-    <div style={style} className="absolute z-20 w-80 rounded-lg border border-white/10 bg-neutral-900 p-2 text-[12px] shadow-2xl">
+    <div ref={boxRef} style={style} className="absolute z-20 w-80 rounded-lg border border-white/10 bg-neutral-900 p-2 text-[12px] shadow-2xl">
       <div className="mb-1 flex items-center gap-2">
         <span className="text-[var(--sakura)]">{circled(pin.n)}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-neutral-500">{pinLabel(pin)}</span>
@@ -569,12 +718,18 @@ function NoteEditor({ pin, onChange, onDelete, onClose }: { pin: Pin; onChange: 
       </div>
       <textarea
         ref={ref} value={pin.note} onChange={(e) => onChange({ note: e.target.value })}
-        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onClose(); } }}
+        onKeyDown={(e) => {
+          // ⌘↩ has to send from HERE, because the textarea has focus immediately after every pick —
+          // the window-level handler bails on any focused input, and this one used to treat ⌘↩ as a
+          // plain Enter and merely close the note. Shift+Enter is a newline, as everywhere.
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onClose(); onSend(); return; }
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onClose(); }
+        }}
         placeholder={pin.kind === "move" ? "why / how it should move (optional)" : "what should change here?"}
         rows={2} className="w-full resize-none rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[12px] text-neutral-100 outline-none focus:border-[var(--sakura)]/60"
       />
       {pin.cropData && <img src={pin.cropData} alt="" className="mt-1.5 max-h-28 w-full rounded border border-white/10 object-contain" />}
-      <div className="mt-1 text-[10.5px] text-neutral-600">Enter or Esc keeps it · an empty note is dropped · click the next thing to keep going</div>
+      <div className="mt-1 text-[10.5px] text-neutral-600">Enter or Esc keeps it · ⌘↩ sends everything · click the next thing to keep going</div>
     </div>
   );
 }

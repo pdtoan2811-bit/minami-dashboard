@@ -38,7 +38,8 @@
   var Z_MARKERS = 2147482999;
   var ERROR_CAP = 50;
   var CROP_PAD = 24;
-  var CROP_TIMEOUT_MS = 4000;
+  var CROP_TIMEOUT_MS = 6000;
+  var CROP_MAX_W = 640;      // thumbnail width cap — it lands in a 320px note
 
   var dashboardOrigin = null;
   var tool = null;            // "pin" | "rect" | null
@@ -48,7 +49,7 @@
   var markerLayer = null;
   var markers = [];
   var errors = [];
-  var capturing = false;      // html-to-image logs through console.error; don't record our own noise
+  var capturing = 0;          // >0 while html-to-image is rendering; its own failed fetches are not the app's
   var lastHello = '';
 
   // Every listener goes through this so a bug in the guest never surfaces as an app error — which
@@ -152,7 +153,12 @@
     if (tid) { s = '[data-testid="' + tid.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]'; if (unique(s)) return s; }
     var parts = [];
     var cur = node;
-    for (var depth = 0; cur && cur.nodeType === 1 && cur !== document.documentElement && depth < 8; depth++) {
+    // > 🐛 The walk stopped at depth 8 and returned whatever it had, unrooted. Ten wrappers deep —
+    // ordinary in a Tailwind/React tree — two different spans produced the SAME selector, matching
+    // two elements; `resolve()` then anchored the marker on the wrong one and Claude was handed a
+    // selector pointing somewhere else. The walk now goes as far as it needs, and anything still
+    // ambiguous is rooted at `body` and admits it (see `ambiguous` below) rather than lying.
+    for (var depth = 0; cur && cur.nodeType === 1 && cur !== document.documentElement && depth < 20; depth++) {
       parts.unshift(piece(cur));
       s = parts.join(' > ');
       if (unique(s)) return s;
@@ -163,7 +169,13 @@
         if (unique(anchored)) return anchored;
       }
     }
-    return parts.join(' > ');
+    var rooted = 'body > ' + parts.join(' > ');
+    return unique(rooted) ? rooted : parts.join(' > ');
+  }
+
+  /** How many elements a selector matches — 1 is the contract, anything else is worth saying. */
+  function matchCount(sel) {
+    try { return document.querySelectorAll(sel).length; } catch (e) { return 0; }
   }
 
   // ── React owner chain ─────────────────────────────────────────────────────────────────────────
@@ -204,7 +216,10 @@
     // Innermost six, reversed: the leaf names are what locate the code; the outer ones are the page.
     while (f && out.length < 6) {
       var name = nameOf(f);
-      if (name && /^[A-Z]/.test(name) && !isInternal(name) && out[out.length - 1] !== name) out.push(name);
+      // A minified name (`J`, `V`, `Kx`) locates nothing — a production-ish dev build or a bundled
+      // library gives plenty of them, and they made the chain read as line noise. Dropped rather
+      // than shown: the names that survive are the ones a grep can actually find.
+      if (name && /^[A-Z]/.test(name) && name.length > 2 && !isInternal(name) && out[out.length - 1] !== name) out.push(name);
       f = f.return;
     }
     return out.reverse();
@@ -216,7 +231,11 @@
     return t.replace(/\s+/g, ' ').trim().slice(0, 200);
   }
   function infoOf(node) {
-    return { selector: selectorFor(node), components: componentsOf(node), tag: node.localName, text: textOf(node), box: boxOf(node) };
+    var sel = selectorFor(node);
+    var n = matchCount(sel);
+    var info = { selector: sel, components: componentsOf(node), tag: node.localName, text: textOf(node), box: boxOf(node) };
+    if (n !== 1) info.ambiguous = n;   // the wrapper says so in the message rather than pretending
+    return info;
   }
 
   function targetAt(x, y) {
@@ -228,14 +247,73 @@
   }
 
   // ── crop ──────────────────────────────────────────────────────────────────────────────────────
-  // One render of the whole body, then a cut: html-to-image only renders whole elements, and cutting
-  // from the body keeps backgrounds and neighbours the way the user sees them. Fixed-position chrome
-  // lands at its unscrolled place in the render, and inner scroll containers come out unscrolled —
-  // accepted, this is a thumbnail for the note, not a screenshot for a bug report.
-  function crop(box) {
+  //
+  // > 🐛 v1 rendered `document.body` and cut the box out of it, so the thumbnail kept the real
+  // background and neighbours. On a real page that is unaffordable: ecvision's home page is
+  // 1280×4363, and one body render measured **19.4s** — five times the 4s timeout. So every crop
+  // came back null AND the host app stayed janky for ~20s afterwards, because a timeout cannot
+  // cancel html-to-image; the work runs to completion either way. Compounding per pin, that is
+  // most of what "buggy as hell" meant.
+  //
+  // Now the SUBJECT is rendered, not the page: the picked element, or the nearest ancestor that
+  // still fits comfortably on screen when the element itself is a sliver (a 2px divider or a bare
+  // <span> is a useless thumbnail). Cost tracks the subject's own size instead of the document's.
+  function cropSubject(node) {
+    if (!node || node.nodeType !== 1) return null;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var r = node.getBoundingClientRect();
+    // Big enough to read on its own — take it as is.
+    if (r.width >= vw * 0.25 && r.height >= 40) return node;
+    var cur = node, best = node;
+    for (var i = 0; i < 4 && cur.parentElement; i++) {
+      cur = cur.parentElement;
+      if (cur === document.body || cur === document.documentElement) break;
+      var cr = cur.getBoundingClientRect();
+      if (cr.width > vw * 1.05 || cr.height > vh * 0.9) break;
+      best = cur;
+      if (cr.width >= vw * 0.25 && cr.height >= 40) break;
+    }
+    return best;
+  }
+
+  function crop(node) {
     return new Promise(function (resolve) {
       var done = false;
-      function finish(v) { if (!done) { done = true; capturing = false; resolve(v); } }
+      function finish(v) { if (!done) { done = true; if (capturing > 0) capturing--; resolve(v); } }
+      setTimeout(function () { finish(null); }, CROP_TIMEOUT_MS);
+      try {
+        var h2i = window.htmlToImage;
+        if (!h2i || typeof h2i.toCanvas !== 'function') return finish(null);
+        var subject = cropSubject(node);
+        if (!subject) return finish(null);
+        var sr = subject.getBoundingClientRect();
+        if (sr.width < 1 || sr.height < 1) return finish(null);
+        // A transparent subject reads as a black rectangle; inherit the page's own ground.
+        var bg = getComputedStyle(subject).backgroundColor;
+        if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') bg = getComputedStyle(document.body).backgroundColor;
+        if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') bg = getComputedStyle(document.documentElement).backgroundColor;
+        if (!bg || bg === 'rgba(0, 0, 0, 0)') bg = undefined;
+        // Cap the pixels: a full-width hero at DPR 1 is already 1280px wide, and this is a
+        // thumbnail in a 320px note.
+        var scale = Math.min(1, CROP_MAX_W / Math.max(1, sr.width));
+        capturing++;
+        h2i.toCanvas(subject, {
+          pixelRatio: scale, backgroundColor: bg, cacheBust: false,
+          filter: function (n) { return !(n && n.nodeType === 1 && n.hasAttribute(ATTR)); },
+        }).then(function (canvas) {
+          if (done) return;
+          try { finish(canvas.toDataURL('image/png')); } catch (e) { finish(null); }
+        }, function () { finish(null); });
+      } catch (e) { finish(null); }
+    });
+  }
+
+  // A region drag has no single node, so it keeps the old body-cut path — but only for the region
+  // case, which is rarer and where the whole point is the space BETWEEN elements. Same timeout.
+  function cropRegion(box) {
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish(v) { if (!done) { done = true; if (capturing > 0) capturing--; resolve(v); } }
       setTimeout(function () { finish(null); }, CROP_TIMEOUT_MS);
       try {
         var h2i = window.htmlToImage;
@@ -246,27 +324,66 @@
         var y1 = Math.min(window.innerHeight, box.y + box.h + CROP_PAD);
         var w = round(x1 - x0), h = round(y1 - y0);
         if (w <= 0 || h <= 0) return finish(null);
-        var bodyRect = document.body.getBoundingClientRect();
+        // Render the smallest common ancestor of the region rather than the body — same reason as
+        // above, and on most pages that is a section, not the whole document.
+        var host = commonAncestorIn(box) || document.body;
+        var hostRect = host.getBoundingClientRect();
         var bg = getComputedStyle(document.body).backgroundColor;
         if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') bg = getComputedStyle(document.documentElement).backgroundColor;
         if (!bg || bg === 'rgba(0, 0, 0, 0)') bg = undefined;
-        capturing = true;
-        h2i.toCanvas(document.body, { pixelRatio: 1, backgroundColor: bg, filter: function (n) { return !(n && n.nodeType === 1 && n.hasAttribute(ATTR)); } })
+        capturing++;
+        h2i.toCanvas(host, { pixelRatio: 1, backgroundColor: bg, cacheBust: false, filter: function (n) { return !(n && n.nodeType === 1 && n.hasAttribute(ATTR)); } })
           .then(function (canvas) {
             if (done) return;
-            var out = document.createElement('canvas');
-            out.width = w; out.height = h;
-            var ctx = out.getContext('2d');
-            // Canvas (0,0) is the body's border-box corner, so viewport coords shift by the body's own
-            // viewport offset — that already includes the scroll.
-            ctx.drawImage(canvas, x0 - bodyRect.left, y0 - bodyRect.top, w, h, 0, 0, w, h);
-            finish(out.toDataURL('image/png'));
+            try {
+              var out = document.createElement('canvas');
+              out.width = w; out.height = h;
+              var ctx = out.getContext('2d');
+              ctx.drawImage(canvas, x0 - hostRect.left, y0 - hostRect.top, w, h, 0, 0, w, h);
+              finish(out.toDataURL('image/png'));
+            } catch (e) { finish(null); }
           }, function () { finish(null); });
       } catch (e) { finish(null); }
     });
   }
 
-  // ── overlay, highlight, rubber band ───────────────────────────────────────────────────────────
+  // The deepest element that contains the whole box — the region's natural backdrop.
+  function commonAncestorIn(box) {
+    var a = targetAt(box.x + 1, box.y + 1);
+    var b = targetAt(box.x + box.w - 1, box.y + box.h - 1);
+    var node = a || b;
+    if (!node) return null;
+    while (node && node !== document.body) {
+      var r = node.getBoundingClientRect();
+      if (r.left <= box.x && r.top <= box.y && r.right >= box.x + box.w && r.bottom >= box.y + box.h) return node;
+      node = node.parentElement;
+    }
+    return document.body;
+  }
+
+  // ── picking: highlight + capture listeners, NOT a blocking overlay ────────────────────────────
+  //
+  // > 🐛 v1 armed a full-viewport `position:fixed` overlay that swallowed every pointer event. It
+  // worked for picking and broke everything else in the app: a wheel over a modal, a sidebar or any
+  // `overflow:auto` panel chained to the ROOT scroller instead (measured: inner 0 / window 150),
+  // and `:hover` never fired, so hover-revealed menus, tooltips and row actions could not be made
+  // to appear — an entire class of UI was un-commentable. Since Comment mode is the default, that
+  // was the app's normal state, and it is most of what "buggy as hell" meant.
+  //
+  // Now nothing blocks the page. The highlight is `pointer-events:none`, and picking listens on the
+  // document in the CAPTURE phase: hover and scroll behave exactly as they do without the script,
+  // and only the click itself is intercepted (`preventDefault` + `stopPropagation` before the app's
+  // own handlers see it). The cursor becomes a crosshair through a stylesheet rather than a layer.
+  var cursorStyle = null;
+  function setCursor(on) {
+    if (on && !cursorStyle) {
+      cursorStyle = el('style', '');
+      cursorStyle.textContent = '*{cursor:crosshair !important;}';
+      document.documentElement.appendChild(cursorStyle);
+    } else if (!on && cursorStyle) { remove(cursorStyle); cursorStyle = null; }
+  }
+  // The rubber band DOES need a blocker — a drag selection over live content would select text and
+  // start native drags — but only while `rect` is armed, which is a deliberate, momentary mode.
   function ensureOverlay() {
     if (overlay) return overlay;
     overlay = el('div', 'position:fixed;inset:0;z-index:' + Z_OVERLAY + ';cursor:crosshair;background:transparent;user-select:none;-webkit-user-select:none;');
@@ -305,10 +422,31 @@
     r.style.width = box.w + 'px'; r.style.height = box.h + 'px';
   }
   function remove(node) { if (node && node.parentNode) node.parentNode.removeChild(node); }
+
+  var docListening = false;
+  function listenDoc(on) {
+    if (on === docListening) return;
+    docListening = on;
+    var m = on ? 'addEventListener' : 'removeEventListener';
+    document[m]('mousemove', onMove, true);
+    document[m]('click', onClick, true);
+    document[m]('mousedown', onSwallow, true);
+    document[m]('mouseup', onSwallow, true);
+  }
+  // Swallow the press/release that belong to an intercepted click, so the app never starts a drag,
+  // opens a menu or focuses a field from the click that was meant for us.
+  var onSwallow = safe(function (e) {
+    if (tool !== 'pin' || e.button !== 0) return;
+    if (isOurs(e.target)) return;
+    e.preventDefault(); e.stopPropagation();
+  });
+
   function disarm() {
     tool = null;
     drag = null;
     hovered = null;
+    listenDoc(false);
+    setCursor(false);
     remove(overlay); overlay = null;
     remove(highlight); highlight = null;
     remove(rubber); rubber = null;
@@ -317,8 +455,10 @@
     disarm();
     if (next !== 'pin' && next !== 'rect') return;
     tool = next;
-    ensureOverlay();
-    if (tool === 'pin') ensureHighlight();
+    if (tool === 'rect') { ensureOverlay(); return; }
+    ensureHighlight();
+    setCursor(true);
+    listenDoc(true);
   }
 
   // ── pointer handling ──────────────────────────────────────────────────────────────────────────
@@ -342,7 +482,7 @@
         if (drag) placeRubber(normBox(drag, mouse));
         return;
       }
-      if (overlay) overlay.style.cursor = markerAt(mouse.x, mouse.y) ? 'pointer' : 'crosshair';
+      if (markerAt(mouse.x, mouse.y)) { placeHighlight(null); return; }
       var node = targetAt(mouse.x, mouse.y);
       placeHighlight(node);
       if (node !== hovered) {
@@ -369,23 +509,31 @@
     if (box.w < 4 || box.h < 4) return;
     var reqId = rid();
     var els = elementsIn(box);
-    crop(box).then(function (png) { post({ t: 'region', reqId: reqId, box: box, els: els, crop: png }); });
+    // The pin lands NOW; the picture catches up. Waiting on the render was up to 6s of nothing
+    // happening after a click, which read as the feature being broken.
+    post({ t: 'region', reqId: reqId, box: box, els: els, crop: null });
+    cropRegion(box).then(function (png) { if (png) post({ t: 'cropped', reqId: reqId, crop: png }); });
   }), true);
 
   var onClick = safe(function (e) {
+    if (tool !== 'pin' && tool !== 'rect') return;
+    if (isOurs(e.target)) return;          // our own marker badge handles itself
     e.preventDefault();
     e.stopPropagation();
-    // Clicking an existing marker reopens its note rather than dropping a new pin on top of it —
-    // the overlay sits above the markers, so this has to be checked here, not on the badge.
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+    // Clicking an existing marker reopens its note rather than dropping a new pin on top of it.
     var mk = markerAt(e.clientX, e.clientY);
     if (mk) { post({ t: 'marker', n: mk }); return; }
     if (tool !== 'pin') return;
-    var node = targetAt(e.clientX, e.clientY);
+    // composedPath()[0] rather than the event target: inside a web component the target is
+    // retargeted to the HOST, which reports the whole widget as one un-pickable blob.
+    var node = (typeof e.composedPath === 'function' && e.composedPath()[0]) || e.target;
+    if (!node || node.nodeType !== 1 || isOurs(node)) node = targetAt(e.clientX, e.clientY);
     if (!node) return;
     var info = infoOf(node);
     var reqId = rid();
-    // The crop is best-effort; the pin must land even when rendering times out or throws.
-    crop(info.box).then(function (png) { post({ t: 'picked', reqId: reqId, el: info, crop: png }); });
+    post({ t: 'picked', reqId: reqId, el: info, crop: null });
+    crop(node).then(function (png) { if (png) post({ t: 'cropped', reqId: reqId, crop: png }); });
   });
 
   // Everything at least half inside the box, biggest first so the containers name the region and the
@@ -436,8 +584,18 @@
   // nothing editable has focus and no modifier is held, so typing "p" in the app's own search box
   // never arms a tool. Escape additionally disarms locally, so an armed overlay can always be escaped
   // even if the wrapper is slow to answer.
+  function isAbort(err) {
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    return /abort/i.test(String(err.message || err));
+  }
+
+  // Shadow-aware: `document.activeElement` is the HOST for shadow content, so typing into an input
+  // inside a web component read as "not typing" and relayed p/r/m/n to the wrapper as hotkeys while
+  // the characters also went into the field.
   function typing() {
     var a = document.activeElement;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
     return !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable);
   }
   window.addEventListener('keydown', safe(function (e) {
@@ -448,7 +606,9 @@
     }
     if (typing() || e.altKey) return;
     var k = e.key.toLowerCase();
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); post({ t: 'key', key: 'Send' }); return; }
+    // Relayed, never prevented: the app may bind ⌘↩ itself (a composer, a search box), and taking
+    // the key away from it for the whole time a preview is open is not ours to do.
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { post({ t: 'key', key: 'Send' }); return; }
     if (e.metaKey || e.ctrlKey) return;
     if (k === 'p' || k === 'r' || k === 'm' || k === 'n') post({ t: 'key', key: k });
   }), true);
@@ -457,7 +617,13 @@
   function resolve(selector) {
     try {
       var node = document.querySelector(selector);
-      return node ? boxOf(node) : null;
+      if (!node) return null;
+      var b = boxOf(node);
+      // A hidden element (closed tab, collapsed accordion, unopened modal) reports 0×0 at (0,0).
+      // Treated as a real box, its marker parked at the top-left corner of the page forever, and
+      // several of them stacked there invisibly. Not visible is not located.
+      if (b.w < 1 && b.h < 1) return null;
+      return b;
     } catch (e) { return null; }
   }
   function anchor(selectors) {
@@ -467,33 +633,51 @@
   }
 
   // ── markers ───────────────────────────────────────────────────────────────────────────────────
+  // > 🐛 Two bugs lived here. (1) The layer was torn down and rebuilt on EVERY push — and the
+  // wrapper pushes on every anchored reply, i.e. ~8× per second of scrolling — so badges were
+  // destroyed under the cursor and a click that started on one finished on a detached node: "the
+  // number sometimes does nothing". (2) A rect pin's document coordinates were recomputed from the
+  // CURRENT scroll on every push, while its viewport box was frozen at pin time, so a rectangle's
+  // number re-based itself every frame and slid away from the content it marked.
+  //
+  // Now the layer is diffed by number, and a rect pin's doc coords are computed ONCE, when that
+  // number is first seen.
   function setMarkers(list) {
-    markers = [];
+    var byN = {};
+    for (var k = 0; k < markers.length; k++) byN[markers[k].n] = markers[k];
+    if (!markerLayer) {
+      markerLayer = el('div', 'position:fixed;inset:0;pointer-events:none;z-index:' + Z_MARKERS + ';');
+      document.documentElement.appendChild(markerLayer);
+    }
+    var next = [];
     for (var i = 0; i < list.length; i++) {
       var m = list[i];
-      // A box without a selector (a rect pin) is fixed to the document, not the viewport, or it would
-      // slide with the content it is meant to sit on.
-      markers.push({ n: m.n, selector: m.selector || null, state: m.state, doc: m.box ? { x: m.box.x + window.scrollX, y: m.box.y + window.scrollY, w: m.box.w, h: m.box.h } : null });
-    }
-    remove(markerLayer); markerLayer = null;
-    if (!markers.length) return;
-    markerLayer = el('div', 'position:fixed;inset:0;pointer-events:none;z-index:' + Z_MARKERS + ';');
-    for (var j = 0; j < markers.length; j++) {
-      var m2 = markers[j];
-      var open = m2.state === 'open';
-      // The badge is the one injected node that takes pointer events: clicking it reopens that pin's
-      // note in the wrapper. In Browse mode it is the only way back to a comment from the page.
-      m2.badge = el('div', 'position:fixed;width:22px;height:22px;border-radius:11px;background:' + (open ? COLOR : '#666') + ';color:#fff;font:bold 12px/22px system-ui,sans-serif;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:auto;cursor:pointer;display:none;');
-      m2.badge.textContent = String(m2.n);
-      m2.badge.setAttribute('data-minami-marker', String(m2.n));
-      m2.badge.addEventListener('click', markerClick(m2.n));
-      markerLayer.appendChild(m2.badge);
-      if (open) {
-        m2.frame = el('div', 'position:fixed;pointer-events:none;outline:1px dashed ' + COLOR + ';display:none;');
-        markerLayer.appendChild(m2.frame);
+      var prev = byN[m.n];
+      var open = m.state === 'open';
+      var rec = prev || { n: m.n };
+      rec.selector = m.selector || null;
+      rec.state = m.state;
+      // Frozen on first sight — the box in the message is in the viewport of the moment it was
+      // pinned, so today's scroll is the only scroll that can convert it.
+      if (!rec.doc) rec.doc = m.box ? { x: m.box.x + window.scrollX, y: m.box.y + window.scrollY, w: m.box.w, h: m.box.h } : null;
+      if (!rec.badge) {
+        rec.badge = el('div', 'position:fixed;width:22px;height:22px;border-radius:11px;color:#fff;font:bold 12px/22px system-ui,sans-serif;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.35);pointer-events:auto;cursor:pointer;display:none;');
+        rec.badge.textContent = String(m.n);
+        rec.badge.setAttribute('data-minami-marker', String(m.n));
+        rec.badge.addEventListener('click', markerClick(m.n));
+        markerLayer.appendChild(rec.badge);
       }
+      rec.badge.style.background = open ? COLOR : '#666';
+      if (open && !rec.frame) {
+        rec.frame = el('div', 'position:fixed;pointer-events:none;outline:1px dashed ' + COLOR + ';display:none;');
+        markerLayer.appendChild(rec.frame);
+      } else if (!open && rec.frame) { remove(rec.frame); rec.frame = null; }
+      delete byN[m.n];
+      next.push(rec);
     }
-    document.documentElement.appendChild(markerLayer);
+    for (var gone in byN) { if (Object.prototype.hasOwnProperty.call(byN, gone)) { remove(byN[gone].badge); remove(byN[gone].frame); } }
+    markers = next;
+    if (!markers.length) { remove(markerLayer); markerLayer = null; return; }
     placeMarkers();
   }
   function markerClick(n) {
@@ -586,33 +770,20 @@
     if (a instanceof Error || (typeof a === 'object' && typeof a.message === 'string')) return (a.name && a.name !== 'Error' ? a.name + ': ' : '') + a.message;
     try { return typeof a === 'object' ? JSON.stringify(a).slice(0, 300) : String(a); } catch (e) { return String(a); }
   }
-  // React's dev warnings are printf-style (`Each child … key prop.%s%s`); without substitution the
-  // component stack that says *which* list is lost to a literal "%s".
-  function formatArgs(args) {
-    var parts = [], i = 0;
-    if (typeof args[0] === 'string' && /%[sdifoOc]/.test(args[0])) {
-      i = 1;
-      parts.push(args[0].replace(/%[sdifoOc]/g, function (spec) {
-        if (i >= args.length) return spec;
-        var v = args[i++];
-        return spec === '%c' ? '' : argText(v);
-      }));
-    }
-    for (; i < args.length; i++) parts.push(argText(args[i]));
-    return parts.join(' ');
-  }
 
-  var origConsoleError = console.error;
-  console.error = function () {
-    try { origConsoleError.apply(console, arguments); } catch (e) { /* console gone */ }
-    try {
-      var frame;
-      for (var i = 0; i < arguments.length && !frame; i++) {
-        if (arguments[i] && arguments[i].stack) frame = frameOf(arguments[i].stack);
-      }
-      pushError('console', formatArgs(arguments), frame);
-    } catch (e) { /* never break the caller */ }
-  };
+  // > 🐛 `console.error` used to be patched so the badge could count logged errors. Two costs, both
+  // paid by the app rather than by us, and the snippet is meant to live in the dev layout forever:
+  //
+  //   1. DevTools attributed EVERY console.error in the app to inspect-core.js:606 — the real call
+  //      site vanished from the console's location column and clicking an error opened our script.
+  //      That breaks ordinary debugging for everything except preview comments.
+  //   2. React's dev warnings go through console.error. Hydration notes, `key` warnings, act()
+  //      warnings and every library's deprecation notice were counted as "errors since last send"
+  //      and offered to Claude to "find the cause and fix it".
+  //
+  // Nothing is patched now. A real uncaught error still arrives via `error`/`unhandledrejection`, a
+  // failed request via the fetch/XHR hooks, and a render crash via the Next.js overlay watcher —
+  // which is the set that was ever worth sending.
 
   window.addEventListener('error', safe(function (e) {
     var frame = (e.error && frameOf(e.error.stack)) || (e.filename ? shortUrl(e.filename) + ':' + e.lineno + (e.colno ? ':' + e.colno : '') : undefined);
@@ -643,7 +814,9 @@
           p.then(function (res) {
             if (res && res.status >= 400) pushError('network', method + ' ' + shortUrl(url) + ' → ' + res.status);
           }, function (err) {
-            pushError('network', method + ' ' + shortUrl(url) + ' → ' + argText(err));
+            // An aborted request is a component unmounting, not a fault: React Query, SWR and the
+            // App Router cancel constantly, and each one used to land in the badge as a failure.
+            if (!isAbort(err)) pushError('network', method + ' ' + shortUrl(url) + ' → ' + argText(err));
           });
         }
       } catch (e) { /* ignore */ }
