@@ -20,7 +20,7 @@ import path from "node:path";
 // ── the pin ───────────────────────────────────────────────────────────────────────────────────
 // Every judgement-layer spawner on this box should be on this model. Opus 5 (anh, 2026-07-29).
 // Overridable per-deploy so a box can be pinned to something else without editing code.
-export const PINNED_MODEL = process.env.MINAMI_PINNED_MODEL || "claude-opus-5";
+export const PINNED_MODEL = process.env.MINAMI_PINNED_MODEL || "claude-opus-5-5";
 
 // The dashboard's own Bento chat sessions. Falls through to the pin rather than repeating the
 // literal, so moving the pin moves this too — that's the whole point of the file.
@@ -79,7 +79,7 @@ function readMinamiBrainModel(): { model: string | null; source: string } {
     if (hits.length) return { model: hits[hits.length - 1], source: "~/Minami/.env BRAIN_MODEL" };
   } catch { /* no .env on this box — fall through to the code default */ }
 
-  // 2. The code default in brain.js: `process.env.BRAIN_MODEL || 'claude-opus-5'`.
+  // 2. The code default in brain.js: `process.env.BRAIN_MODEL || 'claude-opus-5-5'`.
   try {
     const src = fs.readFileSync(path.join(MINAMI_DIR, "src", "brain.js"), "utf8");
     const m = src.match(/BRAIN_MODEL\s*\|\|\s*['"]([^'"]+)['"]/);

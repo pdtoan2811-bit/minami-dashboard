@@ -8,6 +8,21 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-23
+- **Pin moved to Claude Opus 5.5** (`claude-opus-5-5`) — `EXPECTED_MODEL`, `PINNED_MODEL`, the
+  selectable list, the routing price table and `~/Minami/src/brain.js`'s default all move together,
+  or the drift alert lies. It is **cheaper** than the Opus 5 it replaces ($4/$20 vs $5/$25) and reads
+  cache at 5% of base input instead of 10%, so §16's numbers changed too.
+  **It needed a runtime bump first:** Opus 5.5 requires Claude Code **≥ 2.1.280**, and this box had
+  PATH CLI 2.1.241 with the Agent SDK bundling 2.1.270 — pinning without the bump would have 400'd
+  every turn, the exact trap `lib/runtime-version.ts` exists for. Updated the global CLI to 2.1.280
+  and `@anthropic-ai/claude-agent-sdk` to 0.3.280 (bundled runtime 2.1.280), then verified the model
+  answers before changing a pin. The catalog row carries `minCli: "2.1.280"` so a machine that hasn't
+  bumped is declined at the picker rather than mid-turn.
+  Opus 5.5 is listed **before** Opus 5 in `lib/routing.ts`: `tierFromModel` matches by substring and
+  `claude-opus-5-5` contains `claude-opus-5`, so the reverse order would price every 5.5 session as
+  the older, dearer tier — the same trap already recorded for Fable 5.1 vs Fable 5.
+
 ### 2026-09-22
 - **Preview comments — binding a chat no longer costs you the comments** (§21) — the rebind reload
   asked `window.confirm` to discard unsent pins, which gated the only escape from "nothing is

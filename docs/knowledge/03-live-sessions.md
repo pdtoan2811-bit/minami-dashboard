@@ -7,8 +7,8 @@ which `§` ids live where. Section numbers are stable: code comments cite them.
 
 ## 3. Live sessions — `lib/agent/manager.ts`
 
-**Model defaults:** `claude-opus-5`, effort deliberately **unset** (the SDK/model default), autocompact
-at 60%. All three overridable via `MINAMI_DASHBOARD_MODEL` / `_EFFORT` / `_AUTOCOMPACT_PCT`.
+**Model defaults:** `claude-opus-5-5` (pinned 2026-09-23), effort deliberately **unset** (the
+SDK/model default — which on Opus 5.5 is `medium`), autocompact at 60%. All three overridable via `MINAMI_DASHBOARD_MODEL` / `_EFFORT` / `_AUTOCOMPACT_PCT`.
 Deliberately *not* pinned to `--effort high` the way Minami's cloud brain is — that's a
 weekly-subscription-limit lever the dashboard doesn't need.
 

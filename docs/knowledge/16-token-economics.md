@@ -16,15 +16,19 @@ code* — model ids, SDK shapes, migrations, tool schemas — and not to look up
 
 ### The two facts
 
-Claude Opus 5, as of 2026-08-06: **$5 / 1M input, $25 / 1M output.**
+Claude Opus 5.5 (the pin since 2026-09-23), verified against the docs that day:
+**$4 / 1M input, $20 / 1M output** — *cheaper* than the Opus 5 it replaced ($5 / $25).
 
 | | multiple of base input | per 1M |
 |---|---|---|
-| cache **read** | 0.1× | $0.50 |
-| cache **write**, 5-min TTL | 1.25× | $6.25 |
-| cache **write**, 1-hour TTL | 2× | $10.00 |
+| cache **read** | 0.05× | $0.20 |
+| cache **write**, 5-min TTL | 1.25× | $5.00 |
+| cache **write**, 1-hour TTL | 2× | $8.00 |
 
-**A cache write costs 12.5–20× a cache read, per token.** That single ratio explains everything
+Note the cache-read multiple: Opus 5.5 reads cache at **5%** of base input, not the usual 10%, so a
+warm prefix is now a *fortieth* of a fresh read rather than a tenth. (Fable 5.1 is 2.5%.)
+
+**A cache write costs 25–40× a cache read, per token.** That single ratio explains everything
 below: the expensive event is not a long conversation, it is anything that *invalidates the prefix*
 and forces it to be written again.
 

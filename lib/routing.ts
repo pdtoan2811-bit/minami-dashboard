@@ -1,4 +1,4 @@
-// Claude model-routing reference (prices per million tokens, Claude API, verified 2026-07-29).
+// Claude model-routing reference (prices per million tokens, Claude API, verified 2026-09-23).
 // The idea: spend the least while keeping output quality identical — push grunt work (search,
 // reads, status checks) down to cheaper tiers and reserve the top tier for judgement. Edit this
 // table to match the models and prices you actually use.
@@ -7,7 +7,7 @@
 // from 2026-09-01 the standard rate is $3/$15 — bump the row then or the savings bar under-reports
 // what Sonnet turns actually cost.
 
-export type Tier = "Haiku 4.5" | "Sonnet 5" | "Opus 5" | "Opus 4.8" | "Fable 5" | "Fable 5.1";
+export type Tier = "Haiku 4.5" | "Sonnet 5" | "Opus 5.5" | "Opus 5" | "Opus 4.8" | "Fable 5" | "Fable 5.1";
 
 export const MODELS: {
   tier: Tier;
@@ -19,7 +19,11 @@ export const MODELS: {
 }[] = [
   { tier: "Haiku 4.5", id: "claude-haiku-4-5", in: 1, out: 5, tint: "#6cc4a1", note: "search & grunt" },
   { tier: "Sonnet 5", id: "claude-sonnet-5", in: 2, out: 10, tint: "#e8859b", note: "draft & reconcile" },
-  { tier: "Opus 5", id: "claude-opus-5", in: 5, out: 25, tint: "#b98cff", note: "judgement · default" },
+  // Opus 5.5 BEFORE Opus 5, for the same reason Fable 5.1 precedes Fable 5 below: tierFromModel
+  // matches by SUBSTRING, and "claude-opus-5-5" contains "claude-opus-5". Reversed, every 5.5
+  // session would be priced and labelled as the older, DEARER tier.
+  { tier: "Opus 5.5", id: "claude-opus-5-5", in: 4, out: 20, tint: "#b98cff", note: "judgement · default" },
+  { tier: "Opus 5", id: "claude-opus-5", in: 5, out: 25, tint: "#a87ce8", note: "legacy · pre-2026-09-22" },
   // Same $5/$25 as Opus 5 — kept so historical events still tier + price correctly.
   { tier: "Opus 4.8", id: "claude-opus-4-8", in: 5, out: 25, tint: "#8f7ab8", note: "legacy · pre-2026-07-29" },
   // Fable 5.1 BEFORE Fable 5: tierFromModel matches by substring, and "claude-fable-5-1" contains
@@ -31,8 +35,8 @@ export const MODELS: {
 export const ROUTING_RULES: { work: string; tier: Tier; why: string }[] = [
   { work: "grep / glob, read logs, fetch one number, check a status", tier: "Haiku 4.5", why: "finding ≠ thinking — 5× cheaper than Opus" },
   { work: "summarise, draft a reply, build a task, light review", tier: "Sonnet 5", why: "near-Opus quality, ~2.5× cheaper" },
-  { work: "decide, complex code, final synthesis, anything a human reads", tier: "Opus 5", why: "judgement work — don't downgrade" },
-  { work: "very long autonomous run, hardest reasoning", tier: "Fable 5.1", why: "only when Opus visibly struggles — 2× Opus" },
+  { work: "decide, complex code, final synthesis, anything a human reads", tier: "Opus 5.5", why: "judgement work — don't downgrade" },
+  { work: "very long autonomous run, hardest reasoning", tier: "Fable 5.1", why: "only when Opus visibly struggles — 2.5× Opus 5.5" },
 ];
 
 // Resolve a real model id (e.g. "claude-sonnet-5") to its tier/price/tint. Unknown ids fall back to a

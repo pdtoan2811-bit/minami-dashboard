@@ -14,7 +14,8 @@ export const SELECTABLE_MODELS: {
   /** Lowest Claude Code version that will accept this id. See `meetsMinCli`. */
   minCli?: string;
 }[] = [
-  { id: "claude-opus-5", label: "Opus 5", note: "Top tier. Judgement, ambiguity, code that has to be right." },
+  { id: "claude-opus-5-5", label: "Opus 5.5", note: "Top tier, and cheaper than Opus 5 ($4/$20). Judgement, ambiguity, code that has to be right.", minCli: "2.1.280" },
+  { id: "claude-opus-5", label: "Opus 5", note: "Previous Opus. Legacy as of 2026-09-22, still selectable and still $5/$25." },
   { id: "claude-sonnet-5", label: "Sonnet 5", note: "Fast and capable. The right default for high-volume work." },
   { id: "claude-fable-5-1", label: "Fable 5.1", note: "Frontier. Long-horizon agents; when Opus falls short. 2× Opus price.", premium: true, minCli: "2.1.251" },
   // The previous Fable, kept selectable rather than retired. Not nostalgia: the runtime this app
@@ -26,7 +27,7 @@ export const SELECTABLE_MODELS: {
 ];
 
 /**
- * Does `version` (e.g. "2.1.220") satisfy `min` (e.g. "2.1.251")?
+ * Does `version` (e.g. "2.1.220") satisfy `min` (e.g. "2.1.280")?
  *
  * Numeric per-segment, because a string compare gets "2.1.9" > "2.1.251" wrong — and this decides
  * whether a model is offered at all, so being wrong here reintroduces the mid-turn 400 it prevents.
@@ -50,7 +51,7 @@ export function meetsMinCli(version: string | null | undefined, min?: string): b
 // MINAMI_PINNED_MODEL at Fable and the check moves with it and reports green. This constant is the
 // fixed point that makes "did the pin itself move?" an answerable question. Change it only when the
 // box's declared default genuinely changes.
-export const EXPECTED_MODEL = "claude-opus-5";
+export const EXPECTED_MODEL = "claude-opus-5-5";
 
 /** Is this an id the app is willing to send? Anything else is a stale or hand-edited value. */
 export function isSelectableModel(id?: string | null): boolean {
