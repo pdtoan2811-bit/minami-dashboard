@@ -17,6 +17,7 @@
 // corrupt list.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { notify } from "./use-notify";
+import { onPageVisible, pageHidden } from "./page-visible";
 
 export type EventLevel = "info" | "success" | "warn" | "error";
 export type MinamiEvent = {
@@ -79,8 +80,9 @@ export function useEvents() {
       } catch { /* server mid-restart is the expected failure here, not an exception */ }
     };
     tick();
-    const iv = setInterval(tick, POLL_MS);
-    return () => { alive = false; clearInterval(iv); };
+    const iv = setInterval(() => { if (!pageHidden()) tick(); }, POLL_MS);
+    const off = onPageVisible(tick);
+    return () => { alive = false; clearInterval(iv); off(); };
   }, []);
 
   const markSeen = useCallback(() => {

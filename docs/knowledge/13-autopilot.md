@@ -100,3 +100,17 @@ on a timer is just a slower way to fail.
   rescues is a trap for the next reader.
 
 ---
+
+> 🐛 **A second server could abort the live server's merge (found and fixed 2026-09-23).**
+> `startAutopilot()` runs `recoverFromCrash()` at boot, before anything else: if a claim file exists
+> and the checkout is mid-merge, it clears the claim and runs `git merge --abort`. That is right for
+> the one server that owns the checkout after a crash, and wrong for anything else — and
+> `instrumentation.ts` boots it in **every** Next server on this checkout, including
+> `npm run dev:iterate` and any `next start` on a side port. So a dev instance started while the live
+> server was mid-merge would roll that merge back underneath it. `MINAMI_AUTOPILOT_DISABLE=1` already
+> stopped the ticks but not this.
+> Found while setting up a measurement instance for §22, before it ran. Fixed by returning from
+> `startAutopilot()` before crash recovery when the env var is set, and `dev:iterate` now sets it.
+> **Still open:** a bare `next start` without the variable is unguarded. The robust fix is to record
+> the owning PID in the claim and recover only when that PID is dead.
+

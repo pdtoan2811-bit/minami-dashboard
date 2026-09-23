@@ -10,6 +10,8 @@ import { useSetting } from "@/lib/use-settings";
 // both sides.
 import { SELECTABLE_MODELS, contextWindowFor, isPremiumModel, meetsMinCli } from "@/lib/model-catalog";
 import { useAgent, toolCategory, activityLabel, escalationHint, LINK_STALE_MS, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask, type SmithEvidence } from "@/lib/use-agent";
+import { onPageVisible, pageHidden } from "@/lib/page-visible";
+import { fetchSession } from "@/lib/session-fetch";
 import { ensureNotifyPermission, notify, useTitleFlash } from "@/lib/use-notify";
 import Markdown from "@/components/Markdown";
 import ThoughtBlock from "@/components/ThoughtBlock";
@@ -198,6 +200,8 @@ const WINDOWS: { label: string; days: number | null }[] = [
   { label: "24h", days: 1 }, { label: "3d", days: 3 }, { label: "7d", days: 7 }, { label: "30d", days: 30 }, { label: "All", days: null },
 ];
 const MAX_PANES = 4;
+// How many tiles you just LEFT keep their chats mounted (hidden) — see `parked` in BentoHome.
+const PARK_MAX = 2;
 // useLayoutEffect is a no-op (and warns) during Next's server prerender.
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
@@ -505,6 +509,18 @@ export default function BentoHome() {
   const [openPanel, setOpenPanel] = useSetting<{ name: string; cwd: string; topic: boolean; panes: Pane[] } | null>("openPanel", null);
   const restoredRef = useRef(false);
   const [newTopic, setNewTopic] = useState<Project | null>(null); // ad-hoc topic opened via the folder picker
+  // ── Tiles you just left stay MOUNTED ─────────────────────────────────────────────────────────────
+  // Measured 2026-09-23: switching tiles unmounted every chat in the panel, so going back to one you
+  // left two seconds earlier re-fetched each transcript, re-opened each stream and re-rendered every
+  // turn — ~600ms and a visible reload, every time you clicked back and forth. So the last PARK_MAX
+  // tiles keep their chats rendered with `display:none`, exactly as a collapsed pane inside one tile
+  // already is (see the grid). Coming back hands React the same pane keys in the same parent, so it
+  // reuses the live components: no fetch, no reconnect, scroll where you left it.
+  //
+  // Bounded on purpose: a parked chat keeps its stream attached, and that also stops the server reaping
+  // the session (IDLE_REAP_MS counts listeners). Two tiles covers "back and forth" without turning
+  // every tile you ever touched into a standing connection.
+  const [parked, setParked] = useState<{ project: string; panes: Pane[]; activePane: number }[]>([]);
   // Which tile is currently expanded into the flow canvas, and for which session. One at a time: two
   // canvases in a grid is two things fighting for the same attention, and the grid has room for one.
   const [flowFor, setFlowFor] = useState<{ project: string; sid: string } | null>(null);
@@ -549,7 +565,9 @@ export default function BentoHome() {
     }).catch(() => setLoaded(true)),
     [],
   );
-  useEffect(() => { let a = true; const t = () => { if (a) loadSessions(); }; t(); const iv = setInterval(t, 5000); return () => { a = false; clearInterval(iv); }; }, [loadSessions]);
+  // First load always runs (a tab opened in the background still needs a board); ticks pause while
+  // the tab is hidden and catch up the moment it's visible again. See lib/page-visible.ts.
+  useEffect(() => { let a = true; const t = () => { if (a && !pageHidden()) loadSessions(); }; loadSessions(); const iv = setInterval(t, 5000); const off = onPageVisible(t); return () => { a = false; clearInterval(iv); off(); }; }, [loadSessions]);
   // Live activity per session (what each running dashboard-driven session is doing right now) — polled
   // fast so a tile can show "thinking… / running: … / reading X" live while a box works.
   const [liveAct, setLiveAct] = useState<Record<string, { phase: string; label: string; busy: boolean; cwd: string; turnStartedAt?: number | null }>>({});
@@ -561,12 +579,18 @@ export default function BentoHome() {
       const sig = JSON.stringify(d.activity || {});
       if (sig !== liveActSig.current) { liveActSig.current = sig; setLiveAct(d.activity || {}); }
     }).catch(() => {});
-    t(); const iv = setInterval(t, 1500); return () => { a = false; clearInterval(iv); };
+    // The fastest poll on the page — the one most worth pausing for a hidden tab.
+    const tick = () => { if (!pageHidden()) t(); };
+    t(); const iv = setInterval(tick, 1500); const off = onPageVisible(t); return () => { a = false; clearInterval(iv); off(); };
   }, []);
   // Read by `openProject`, which must NOT re-create itself every 1.5s: it is the onClick of every tile
   // on the board, so a new identity per poll re-renders the whole grid twice a second for a value that
   // is only ever read at the instant of a click.
   const liveActRef = useRef(liveAct);
+  // Read by `openProject` to park the tile being left. A ref, not deps, for the reason given at
+  // `openProject`: it is every tile's onClick and must not change identity on every state change.
+  const leavingRef = useRef({ project, panes, activePane, newTopic, parked });
+  leavingRef.current = { project, panes, activePane, newTopic, parked };
   liveActRef.current = liveAct;
   // The open project's folder, read at click time by `addPane`. A ref for the same reason as the two
   // above: it is used inside a callback that must not be rebuilt as the board polls.
@@ -652,6 +676,23 @@ export default function BentoHome() {
   );
 
   const openProject = useCallback((p: Project) => {
+    const cur = leavingRef.current;
+    const back = cur.parked.find((x) => x.project === p.name);
+    // Park the tile we're leaving. Not a new-topic scratch panel: it has no tile to come back through.
+    setParked([
+      ...(cur.project && cur.project !== p.name && !cur.newTopic && cur.panes.length ? [{ project: cur.project, panes: cur.panes, activePane: cur.activePane }] : []),
+      ...cur.parked.filter((x) => x.project !== p.name && x.project !== cur.project),
+    ].slice(0, PARK_MAX));
+    if (back) {
+      // Coming back: exactly as you left it — the same Pane objects (so the same React keys, which is
+      // what lets the mounted chats be reused) and the same tab. Deliberately NOT re-derived through the
+      // ordering rules below: those decide where you land on a FRESH open, and re-running them here
+      // would move the tab you were reading. Batched with the setParked above in one render, so there
+      // is never a frame in which these chats are in neither list — which would unmount them.
+      setNewTopic(null); setProject(p.name); setPanes(back.panes); setAddMenu(false); closedTabs.current = [];
+      setActivePane(Math.min(back.activePane, back.panes.length - 1));
+      return;
+    }
     // Default: open the recent combination (up to 4 sessions active within the date filter). If the
     // user has customized which chats are open for this topic before, restore that instead.
     const recent = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity).slice(0, MAX_PANES).map((s) => s.id);
@@ -709,7 +750,8 @@ export default function BentoHome() {
     const ids = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity).slice(0, MAX_PANES).map((s) => s.id);
     for (const id of ids) {
       if (!id || transcriptCache.has(id)) continue;
-      fetch(`/api/bento/session/${id}`).then((r) => r.json()).then((d) => { if (d?.turns) cacheTranscript(id, d); }).catch(() => {});
+      // Coalesced: hover-then-click used to fetch twice, because the pane mounts before this lands.
+      fetchSession(id).then((d) => { if (d?.turns) cacheTranscript(id, d); }).catch(() => {});
     }
   }, []);
   const startTopic = (cwd: string, label?: string) => {
@@ -762,7 +804,9 @@ export default function BentoHome() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setAddMenu(false); setOpenPanel(null); setActivePane(0); closedTabs.current = []; };
+  // Parked tiles go too: closing the panel unmounts the grid they live in, so keeping the list would
+  // only restore stale Pane objects into fresh components later.
+  const closePanel = () => { setProject(null); setNewTopic(null); setPanes([]); setParked([]); setAddMenu(false); setOpenPanel(null); setActivePane(0); closedTabs.current = []; };
   // Tabs close the way browser tabs do: an ✕ on the tab, middle-click, ⌥W — and ⌥⇧T puts the last one
   // back. Where the analogy stops: closing a tab here is a VIEW action, not a lifecycle one. The
   // session keeps running server-side (nothing is sent to it; the pane just unsubscribes, and the
@@ -1531,7 +1575,38 @@ export default function BentoHome() {
                 afford the breathing room. */}
             <div className={`grid min-h-0 flex-1 ${focusPane != null ? "gap-2 p-2" : "gap-1 p-1"}`}
               style={{ gridTemplateColumns: focusPane != null || panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
-              {panes.map((pane, idx) => (
+              {/* ONE flat keyed list — this tile's panes, then the parked tiles' (see `parked`). It has
+                  to be a single array: React matches keys within one children array only, so rendering
+                  parked chats in a second `.map()` — or any other parent — would remount them on every
+                  switch, which is the whole cost this exists to remove. */}
+              {[
+                ...panes.map((pane, idx) => ({ pane, idx, pk: null as null | (typeof parked)[number] })),
+                ...parked.filter((pk) => pk.project !== project).flatMap((pk) => pk.panes.map((pane, idx) => ({ pane, idx, pk }))),
+              ].map(({ pane, idx, pk }) => {
+                if (pk) {
+                  const pp = allProjects.find((x) => x.name === pk.project);
+                  // Filtered off the board while parked: nothing to render it against — let it go.
+                  if (!pp) return null;
+                  return (
+                    // Parked: hidden and unreachable, so the view callbacks are no-ops. Everything it
+                    // still RECEIVES stays identical to when it was on screen (sessions, cwd, tools),
+                    // because a prop change is exactly what could make a live chat re-derive its cwd or
+                    // re-attach. `onLive` is the one that must still work: a brand-new chat can learn its
+                    // session id while you're looking at another tile, and losing it is the "the chat was
+                    // thrown away" bug the allBlank guard in openProject describes.
+                    <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={pp.sessions} cwd={pane.cwd || pp.cwd} isolated={!!pane.cwd} idx={idx} count={pk.panes.length} showTools={showTools} agentsHere={cwdAgentCount[pane.cwd || pp.cwd] || 0}
+                      collapsed focused={false}
+                      onFocus={() => {}} onOpenFlow={() => {}} onPick={() => {}} onClose={() => {}}
+                      openSids={pk.panes.map((p) => p.sid).filter(Boolean)}
+                      onLive={(sid) => {
+                        const nextPanes = pk.panes.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x));
+                        setParked((prev) => prev.map((x) => (x.project === pk.project ? { ...x, panes: nextPanes } : x)));
+                        setOpenPanesMap((prev) => ({ ...prev, [pk.project]: nextPanes }));
+                      }}
+                      onBusy={reportPaneAct} />
+                  );
+                }
+                return (
                 // Keyed by pane.key PLUS switchGen (not sessionId): the "own live turn just got a real
                 // session id" transition (onLive below) must NOT remount — that would tear down the
                 // in-flight EventSource/turns mid-stream for no reason. An explicit user pick of a
@@ -1553,7 +1628,8 @@ export default function BentoHome() {
                   // Same path as the tab's ✕ and ⌥W, so all three agree about which tab gains focus
                   // afterwards and all three feed the ⌥⇧T stack.
                   onClose={() => closePane(idx)} />
-              ))}
+                );
+              })}
             </div>
           </>
         )}
@@ -2253,21 +2329,34 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // wholesale — merging older turns into it would mean every poll silently discarded them.
   const [older, setOlder] = useState<{ turns: Turn[]; start: number } | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  // A hidden pane — collapsed inside its tile, or parked with a tile you left — does not poll. Read
+  // through a ref so hiding doesn't re-run the effect below: that effect repaints from
+  // transcriptCache, and if this transcript had been evicted from that LRU, re-running it would blank
+  // the very pane parking exists to keep warm. Refresh-on-show is the separate effect after it.
+  const collapsedRef = useRef(collapsed); collapsedRef.current = collapsed;
+  const loadRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    if (isNew || agent.live) return;
+    if (isNew || agent.live) { loadRef.current = null; return; }
     let a = true;
     // Paint the cached copy immediately on (re)mount / session switch, then refresh in the background.
     const cached = transcriptCache.get(sessionId);
     if (cached) { setDetail(cached); sigRef.current = `${cached.turns.length}:${cached.turns.at(-1)?.text.length || 0}`; }
     else { setDetail(null); sigRef.current = ""; }
-    const load = () => fetch(`/api/bento/session/${sessionId}`).then((r) => r.json()).then((d) => {
+    // Coalesced with every other caller wanting this transcript right now (lib/session-fetch.ts) —
+    // a background refresh, so any in-flight request is fresh enough.
+    const load = () => fetchSession(sessionId).then((d) => {
       if (!a || !d) return;
       const sig = `${d.turns?.length || 0}:${d.turns?.at(-1)?.text?.length || 0}`;
       if (sig === sigRef.current) return;
       sigRef.current = sig; cacheTranscript(sessionId, d); setDetail(d);
     }).catch(() => {});
-    load(); const iv = setInterval(load, 2500); return () => { a = false; clearInterval(iv); };
+    loadRef.current = load;
+    const tick = () => { if (!collapsedRef.current && !pageHidden()) load(); };
+    load(); const iv = setInterval(tick, 2500); const off = onPageVisible(tick);
+    return () => { a = false; loadRef.current = null; clearInterval(iv); off(); };
   }, [sessionId, isNew, agent.live]);
+  // Shown again (un-collapsed, or its tile brought back): refresh now rather than up to 2.5s later.
+  useEffect(() => { if (!collapsed) loadRef.current?.(); }, [collapsed]);
   const cur = sessions.find((s) => s.id === sessionId);
   // A pane resuming an EXISTING session must run in THAT session's own launch directory — `--resume` is
   // scoped to the folder the transcript is filed under (see lib/claude-sessions.ts), so handing the CLI a

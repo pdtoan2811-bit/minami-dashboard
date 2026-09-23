@@ -5,6 +5,7 @@
 // (so Markdown/tools render exactly as elsewhere and any streaming gap is healed).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IDLE_ACTIVITY, type ActivityState, type FinishedTask, type ToolOutput } from "./agent/labels";
+import { fetchSession } from "./session-fetch";
 // Type-only, so nothing of manager.ts (node:fs, the SDK) reaches the browser bundle — the shape is
 // the server's to define, and a client-side copy is exactly the drift the `smith` event would hide.
 import type { AskTeamPacket, SmithEvidence } from "./agent/manager";
@@ -171,7 +172,9 @@ export function useAgent(paneKey: string) {
     if (!id) return;
     const gen = turnsGenRef.current;
     try {
-      const d = await fetch(`/api/bento/session/${id}`).then((r) => r.json());
+      // `notBefore: now` — this runs to read what the turn just wrote, so a request already in the air
+      // from before the turn ended can't answer it. See lib/session-fetch.ts.
+      const d = await fetchSession(id, Date.now());
       if (gen !== turnsGenRef.current) return; // superseded by a newer send() — let its own flow win
       if (Array.isArray(d?.turns)) {
         setTurns((prev) => {
@@ -303,7 +306,9 @@ export function useAgent(paneKey: string) {
           const resyncStartedAt = Date.now();
           const sid = sessionIdRef.current;
           if (sid) {
-            fetch(`/api/bento/session/${sid}`).then((r) => r.json()).then((d) => {
+            // `notBefore: resyncStartedAt` keeps the freshness guarantee the check below relies on:
+            // never answer this resync with a request that started before the snapshot.
+            fetchSession(sid, resyncStartedAt).then((d) => {
               const seed: AgentTurn[] = Array.isArray(d?.turns) ? d.turns.map((t: AgentTurn) => ({ role: t.role, text: t.text, tools: t.tools || [] })) : [];
               // Whether to trust the locally-held streaming turn over `overlay` (this event's `ev.partial`,
               // captured the instant this resync began) hinges on whether the connection was actually alive

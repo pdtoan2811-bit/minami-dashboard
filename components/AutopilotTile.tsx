@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Bot, Check, GitMerge, Loader2, Rocket, TriangleAlert, X } from "lucide-react";
 import type { MinamiEvent } from "@/lib/use-events";
+import { onPageVisible, pageHidden } from "@/lib/page-visible";
 
 type Cfg = { enabled: boolean; merge: boolean; deploy: boolean; resolve: boolean; settleMs: number; everyMs: number };
 type Task = { name: string; ahead: string; dirty: boolean; live: boolean | null; lastCommitTs: number };
@@ -79,8 +80,9 @@ export default function AutopilotTile({ className = "" }: { className?: string }
   }, []);
   useEffect(() => {
     load();
-    const iv = setInterval(load, 10_000);
-    return () => clearInterval(iv);
+    const iv = setInterval(() => { if (!pageHidden()) load(); }, 10_000);
+    const off = onPageVisible(load);
+    return () => { clearInterval(iv); off(); };
   }, [load]);
 
   // Its own work, newest first. Deploys count: "put it live" is half of what was promised, and the
@@ -129,7 +131,12 @@ export default function AutopilotTile({ className = "" }: { className?: string }
         // Deliberately NOT a project tile: no 3D icon, no request counts, a flatter surface and a
         // machine glyph. It sits in the same grid because that's where you look, but it must never be
         // mistaken for a folder you can open.
-        className={`group relative flex flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left backdrop-blur transition-colors ${className} ${
+        //
+        // NO backdrop-blur, for the reason measured at the bento tile in app/page.tsx (30.6% GPU with,
+        // 4.6% without): the status dot below pulses whenever autopilot is on, and a pulsing
+        // descendant forces a `backdrop-filter` box to re-blur itself every frame, forever. This tile
+        // had it anyway until 2026-09-23 — the fix was applied to project tiles and never reached here.
+        className={`group relative flex flex-col overflow-hidden rounded-[1.4rem] border p-4 text-left transition-colors ${className} ${
           blockedNames.length ? "border-[#f0a868]/50 bg-[#f0a868]/[0.06]"
           : on ? "border-[var(--sakura)]/35 bg-[var(--sakura)]/[0.05] hover:border-[var(--sakura)]/60"
           : "border-white/10 bg-white/[0.02] hover:border-white/25"}`}

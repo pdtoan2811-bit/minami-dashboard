@@ -354,6 +354,13 @@ async function tick(): Promise<void> {
 /** Called once per server instance from instrumentation.ts. Safe to call twice; the second is a no-op. */
 export function startAutopilot(): void {
   if (timer) return;
+  // A SECOND server on this checkout must not run any of this — not the ticks, and above all not the
+  // crash recovery. recoverFromCrash() assumes it is the only server: it clears the claim and runs
+  // `git merge --abort` on the main checkout. `npm run dev:iterate` boots this same instrumentation
+  // hook, so before this guard, starting a dev instance while the live server was mid-merge aborted
+  // that merge underneath it. Found 2026-09-23 while setting up a side instance for a performance
+  // measurement; the env var already stopped ticks but not this. dev:iterate now sets it.
+  if (process.env.MINAMI_AUTOPILOT_DISABLE === "1") return;
   void recoverFromCrash();
   const cfg = readConfig();
   timer = setInterval(() => { void tick(); }, cfg.everyMs);

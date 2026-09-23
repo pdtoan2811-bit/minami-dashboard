@@ -36,6 +36,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import { pageHidden } from "@/lib/page-visible";
 
 type SpawnerPin = {
   name: string;
@@ -242,7 +243,8 @@ export function AccountStatus() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, POLL_MS);
+    // Already reloads when the tab comes back (below) — so a hidden tab has no reason to keep polling.
+    const t = setInterval(() => { if (!pageHidden()) load(); }, POLL_MS);
     const onVis = () => {
       const vis = document.visibilityState === "visible";
       setTabVisible(vis);

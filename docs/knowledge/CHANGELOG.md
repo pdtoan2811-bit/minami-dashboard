@@ -9,6 +9,19 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-23
+- **Client performance — switching tiles no longer reloads them** (§22, new) — audit measured the
+  server at <50 ms for any transcript and put every cost in the browser: going back to a tile you left
+  re-fetched each transcript twice, re-opened each stream and stalled the main thread; opening a
+  four-chat tile fetched each transcript 3–4× in 5 s. Fixed: the last two tiles you left stay mounted
+  hidden (`parked`, one flat keyed list so React reuses them); `lib/session-fetch.ts` coalesces
+  duplicate transcript requests with a per-caller freshness floor (the snapshot resync and post-turn
+  reconcile need one); `lib/page-visible.ts` pauses every home-page poll for a hidden tab, and hidden
+  panes stop their 2.5 s poll. Verified on a production side instance: going back → 0 stream
+  re-opens (was 4), 1 transcript fetch (was 8), 0 ms of main-thread stalls (was 159).
+- **Autopilot tile blur removed** (§22 🐛) — it pulsed a dot inside `backdrop-blur`, the pattern §5e
+  measured at 30.6% vs 4.6% GPU; the earlier fix covered project tiles and never reached it.
+- **Autopilot boot guard** (§13 🐛) — `MINAMI_AUTOPILOT_DISABLE=1` now also skips `recoverFromCrash()`,
+  which could `git merge --abort` the live server's merge from a second server; `dev:iterate` sets it.
 - **Pin moved to Claude Opus 5.5** (`claude-opus-5-5`) — `EXPECTED_MODEL`, `PINNED_MODEL`, the
   selectable list, the routing price table and `~/Minami/src/brain.js`'s default all move together,
   or the drift alert lies. It is **cheaper** than the Opus 5 it replaces ($4/$20 vs $5/$25) and reads

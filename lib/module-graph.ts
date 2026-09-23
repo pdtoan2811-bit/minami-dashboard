@@ -101,6 +101,10 @@ export const NODES: ModuleNode[] = [
   { id: "l/useagent", label: "use-agent.ts", sub: "client SSE + reconnect", layer: "core", row: 2, pipeline: "live" },
   // Forwarding a question. Split in two on purpose: the roster read uses node:fs, the instruction
   // text is rendered by AskCard in the browser, and one module would drag fs into the client bundle.
+  // §22. Both exist to make a click cost less: one request per transcript however many callers want
+  // it, and polls that stop for a hidden tab.
+  { id: "l/sessionfetch", label: "session-fetch.ts", sub: "coalesced transcript GET\n(per-caller freshness)", layer: "core", row: 6, pipeline: "read" },
+  { id: "l/pagevisible", label: "page-visible.ts", sub: "pause polls for a hidden tab", layer: "core", row: 7, pipeline: "live" },
   { id: "l/teamroster", label: "team-roster.ts", sub: "reads team-ask's team.json", layer: "core", row: 4, pipeline: "live" },
   { id: "l/teamforward", label: "team-forward.ts", sub: "the \"go ask them\" answer text", layer: "core", row: 5, pipeline: "live" },
   { id: "l/sessions", label: "claude-sessions.ts", sub: "windowed parser + caches", layer: "core", row: 3, pipeline: "read" },
@@ -223,6 +227,10 @@ export const EDGES: ModuleEdge[] = [
   { from: "c/BrowserPanel", to: "c/PanelTabs", kind: "import" },
   { from: "app/page", to: "c/AskCard", kind: "import" },
   { from: "c/AskCard", to: "l/teamforward", kind: "import" },
+  { from: "app/page", to: "l/sessionfetch", kind: "import" },
+  { from: "l/useagent", to: "l/sessionfetch", kind: "import" },
+  { from: "l/sessionfetch", to: "r/session", kind: "http" },
+  { from: "app/page", to: "l/pagevisible", kind: "import" },
   { from: "c/AskCard", to: "r/team", kind: "http" },
   { from: "r/team", to: "l/teamroster", kind: "import" },
   // The roster is also a PROMPT input: every session is told who it can ask and how.
