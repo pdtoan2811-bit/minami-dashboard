@@ -4,7 +4,7 @@
 // prompts, and — when a turn finishes — reconciles the transcript from the authoritative JSONL file
 // (so Markdown/tools render exactly as elsewhere and any streaming gap is healed).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { IDLE_ACTIVITY, type ActivityState, type FinishedTask, type ToolOutput } from "./agent/labels";
+import { IDLE_ACTIVITY, type ActivityState, type FinishedTask, type TaskKind, type ToolOutput } from "./agent/labels";
 import { fetchSession } from "./session-fetch";
 // Type-only, so nothing of manager.ts (node:fs, the SDK) reaches the browser bundle — the shape is
 // the server's to define, and a client-side copy is exactly the drift the `smith` event would hide.
@@ -27,7 +27,7 @@ export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
 export type AskTeamPrompt = { id: string; packet: AskTeamPacket } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 // `agent`/`status` only ride along on kind "task" — see manager.ts's AgentEvent for why.
-export type Notice = { kind: string; text: string; at: number; agent?: string; status?: "completed" | "failed" | "stopped" };
+export type Notice = { kind: string; text: string; at: number; agent?: string; taskKind?: TaskKind; status?: "completed" | "failed" | "stopped" };
 
 export { activityLabel, toolCategory, escalationHint } from "./agent/labels";
 export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem, LiveTask, FinishedTask, TaskKind } from "./agent/labels";
@@ -402,7 +402,7 @@ export function useAgent(paneKey: string) {
           }));
           break;
         case "notice":
-          setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now(), agent: ev.agent, status: ev.status }]);
+          setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now(), agent: ev.agent, taskKind: ev.taskKind, status: ev.status }]);
           break;
         case "task_end":
           // Dedup on taskId: a reconnect can replay the tail of the buffer, and the same ending twice

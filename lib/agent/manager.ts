@@ -351,7 +351,7 @@ export type AgentEvent =
   // "restarting" is the deploy path telling every open pane that the server is about to be swapped for
   // a new build — see drainForRestart() below. It's the one notice the user gets BEFORE the disruption
   // rather than after, which is the whole point: an unexplained dead turn reads as a bug.
-  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting" | "model" | "repo" | "blacksmith"; text: string; agent?: string; status?: "completed" | "failed" | "stopped" }
+  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting" | "model" | "repo" | "blacksmith"; text: string; agent?: string; taskKind?: TaskKind; status?: "completed" | "failed" | "stopped" }
   | { t: "permission"; id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } // waiting on the user
   | { t: "hold"; hold: boolean } // the Flow view's brake: park every tool call at the gate (REPLACE semantics)
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
@@ -486,6 +486,9 @@ type Session = {
   note: string | null; // transient detail that outranks the phase label
   liveTools: Map<string, LiveTool & { startedAt: number }>; // tool_use_id → in-flight tool call
   liveTasks: Map<string, LiveTask>; // task_id → running subagent / background task
+  /** Tasks the level signal (background_tasks_changed) retired before their task_notification edge
+   *  arrived — kept briefly so the edge can still write the Finished record. See that case. */
+  settledTasks: Map<string, { t: LiveTask; at: number }>;
   toolBufs: Map<number, { id: string; name: string; buf: string }>; // block index → streaming tool input
   /** The in-flight `ask_team` call, if any — kept so a pane that (re)attaches mid-wait gets the card
    *  back from the snapshot instead of finding a session that is "running a tool" for half an hour. */
@@ -694,7 +697,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     partialThinking: "",
     sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
     smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
-    phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), askTeam: null,
+    phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), settledTasks: new Map(), askTeam: null,
     toolBufs: new Map(),
   };
   store.set(key, s);
@@ -1162,7 +1165,7 @@ function handleCommandLifecycle(s: Session, m: any) {
     s.sawThinking = false;
     s.partial = "";
     s.partialThinking = "";
-    resetActivity(s, "thinking");
+    resetActivity(s, "thinking", { keepTasks: true }); // background agents outlive turns — see sendMessage
     broadcast(s, { t: "started", uuid: started.uuid, text: started.text });
     broadcast(s, { t: "queued", queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })) });
     broadcast(s, { t: "busy", busy: true });
@@ -1336,13 +1339,14 @@ function handleSystem(s: Session, m: any) {
     }
 
     case "task_notification": {
-      const t = s.liveTasks.get(m.task_id);
+      const t = s.liveTasks.get(m.task_id) || s.settledTasks.get(m.task_id)?.t;
       s.liveTasks.delete(m.task_id);
+      s.settledTasks.delete(m.task_id);
       if (!m.skip_transcript && !m.ambient && t) {
         // Last chance for the model: an agent that used no tools never emitted task_progress, so the
         // lookup there never ran. Its transcript certainly exists by now.
         if (t.kind === "agent" && !t.model) resolveTaskModel(s, t, { force: true });
-        broadcast(s, { t: "notice", kind: "task", text: `subagent ${m.status}: ${m.summary || t.description}`, agent: t.agent, status: m.status });
+        broadcast(s, { t: "notice", kind: "task", text: `${t.kind === "agent" ? "subagent" : t.kind} ${m.status}: ${m.summary || t.description}`, agent: t.agent, taskKind: t.kind, status: m.status });
         // The structured record, for the tasks panel's Finished list. Separate from the notice above
         // on purpose: notices are a five-deep transient strip, and a finished task is a durable thing
         // you scroll back to — different lifetime, different consumer.
@@ -1365,8 +1369,26 @@ function handleSystem(s: Session, m: any) {
 
     case "background_tasks_changed":
       // REPLACE semantics, per the SDK: swap the background set wholesale so a missed start/stop
-      // bookend can't wedge a stale "running" indicator.
-      for (const [id, t] of s.liveTasks) if (t.id.startsWith("bg:") && !m.tasks?.some((x: any) => `bg:${x.task_id}` === t.id)) s.liveTasks.delete(id);
+      // bookend can't wedge a stale "running" indicator. This used to prune only the `bg:`
+      // placeholders, so a task registered under its real id by task_started stayed "running" for as
+      // long as its task_notification edge failed to arrive — measured 2026-09-25: a chat-2 pane idle
+      // at "8 agents" when every one of them had notified in the transcript by 10:08, cleared only by
+      // the next send wiping the set (which also hid agents that WERE still running). Any backgrounded
+      // entry missing from the level is over. Foreground entries are exempt: they are never in the
+      // background set, and a subagent's own foreground commands flow here too.
+      // Retired entries park in settledTasks rather than vanishing, because the SDK says the level
+      // "in practice" PRECEDES the edge for the same transition — deleting outright would leave the
+      // notification nothing to build its Finished record and verdict row from.
+      {
+        const live = new Set<string>((m.tasks || []).map((x: any) => String(x.task_id)));
+        const now = Date.now();
+        for (const [id, t] of s.liveTasks) {
+          if (!t.backgrounded || live.has(t.taskId)) continue;
+          s.liveTasks.delete(id);
+          if (!id.startsWith("bg:")) s.settledTasks.set(id, { t, at: now });
+        }
+        for (const [id, v] of s.settledTasks) if (now - v.at > 10 * 60_000) s.settledTasks.delete(id);
+      }
       for (const x of m.tasks || []) {
         if (x.ambient) continue;
         const id = `bg:${x.task_id}`;
@@ -1493,7 +1515,10 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   // Start the indicator on the SAME tick as the send, not when the first SDK event arrives — the gap
   // is often a second or two of cold start, and a blank pane in that window reads as "nothing
   // happened, did my message send?". `spawning` vs `thinking` tells the two kinds of gap apart.
-  resetActivity(s, cold ? "spawning" : "thinking");
+  // keepTasks: a background agent launched two turns ago is still running, and wiping the set here
+  // made a new message hide it — the pane read "no tasks" while the reply talked about stopping two.
+  // Safe now that background_tasks_changed prunes finished entries on its own.
+  resetActivity(s, cold ? "spawning" : "thinking", { keepTasks: true });
   broadcast(s, { t: "busy", busy: true });
   broadcast(s, { t: "activity", activity: activityOf(s) });
   if (s.waiter) { const w = s.waiter; s.waiter = null; w(); }

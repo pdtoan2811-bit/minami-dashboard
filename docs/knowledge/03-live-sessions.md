@@ -685,6 +685,23 @@ wider than two.
 > idle-with-agents, with a 3-minute grace window after the last landing so the ✓/✗ verdict is seen
 > rather than vanishing with the fleet.
 
+> 🐛 **Finished agents stayed "running" until the next message (2026-09-25).** A chat-2 pane sat idle
+> at `8 agents` when every one of them had its `<task-notification>` in the transcript by 10:08 —
+> some `task_notification` edges never reached `handleMessage`, and `background_tasks_changed` (the
+> SDK's level signal, documented as the cure for exactly this) pruned only `bg:` placeholders. The
+> set only cleared when a new send ran `resetActivity` without `keepTasks`, which also *hid* agents
+> still running: the next reply talked about stopping two agents while the panel showed none. Fix:
+> the level now retires any **backgrounded** entry it doesn't list (foreground entries are never in
+> it, including a subagent's own commands), parking it in `settledTasks` for 10 min because the
+> level precedes the edge and the edge still has to write the Finished record; and both turn-start
+> paths keep tasks. **The trigger for the lost edge is still unknown** — five probes on the old code
+> (a task finishing mid-turn, a background agent across turns, nested background commands,
+> `TaskStop`, a `SendMessage` resume) all ended clean, so the pruning is the backstop, not a proof.
+> Same day, two rendering fixes: a user turn that is only `<task-notification>` blocks renders as
+> one status line per block (`taskNotesOf` in `app/page.tsx`) instead of a screen-high "You" bubble
+> of XML, and the board labels a row by its kind (`bash`, `workflow`) instead of defaulting to
+> `agent` — the notice now carries `taskKind`.
+
 One-line contexts (tile, cramped status) don't get the board; `taskLabel` instead says
 `4 agents · Explore ×3, Plan` (counts by type) rather than the old `subagent (Explore) +3`, and a
 single agent shows type AND clipped assignment.

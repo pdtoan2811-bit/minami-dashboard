@@ -15,6 +15,11 @@ this to do a piece of work; read the subsystem's own doc.
   top-level turn now sets `busy`; `fleetInFlight()` spares a session with live tasks for up to
   `MINAMI_BG_REAP_MS` (3 h) of SDK silence; `placementPass` and the deploy veto (`liveStats`, agent
   fleets only) ask the same question. Operating protocol for overnight work: `docs/OVERNIGHT.md`.
+- **Finished agents no longer linger as "running"** (§4 🐛, tasks panel) — `background_tasks_changed`
+  now retires any backgrounded task it doesn't list (parked in `settledTasks` so the late
+  notification still records it); a new message no longer wipes still-running agents from the panel.
+  Notification-only turns render as one status line each instead of raw XML "You" bubbles; board
+  rows show `bash`/`workflow` instead of `agent`.
 
 ### 2026-09-23
 - **Client performance — switching tiles no longer reloads them** (§22, new) — audit measured the

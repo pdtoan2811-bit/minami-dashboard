@@ -325,7 +325,7 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
           <span className="flex justify-center">
             <span className="agent-dot h-1.5 w-1.5 rounded-full" style={{ background: TOOL_TINT.task, animationDelay: `${-i * 0.35}s` }} />
           </span>
-          <span className="rounded px-1 py-px font-mono text-[9px] font-medium" style={{ background: TOOL_TINT.task + "1e", color: TOOL_TINT.task }}>{k.agent || "agent"}</span>
+          <span className="rounded px-1 py-px font-mono text-[9px] font-medium" style={{ background: TOOL_TINT.task + "1e", color: TOOL_TINT.task }}>{k.agent || k.kind || "agent"}</span>
           <span className="min-w-0 truncate text-neutral-300" title={k.description}>{k.description}</span>
           {/* Keyed by the tool text: the span REMOUNTS when the agent moves to a new tool, so the
               swap itself is the animation — motion exactly when something real happened, per the
@@ -341,9 +341,9 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
         return (
           <span key={`${n.at}-${i}`} title={n.text} className={`agent-in ${grid} border-t border-white/[0.04] opacity-60`}>
             <span className="agent-land text-center text-[10px] leading-none" style={{ color: tint }}>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
-            <span className="rounded px-1 py-px font-mono text-[9px]" style={{ background: tint + "1e", color: tint }}>{n.agent || "agent"}</span>
-            {/* The notice text is "subagent <status>: <summary>" — the summary half is the payload. */}
-            <span className="col-span-4 min-w-0 truncate text-neutral-400">{n.text.replace(/^subagent \w+: /, "")}</span>
+            <span className="rounded px-1 py-px font-mono text-[9px]" style={{ background: tint + "1e", color: tint }}>{n.agent || n.taskKind || "agent"}</span>
+            {/* The notice text is "<subagent|bash|…> <status>: <summary>" — the summary half is the payload. */}
+            <span className="col-span-4 min-w-0 truncate text-neutral-400">{n.text.replace(/^(?:subagent|bash|workflow|mcp|other) \w+: /, "")}</span>
           </span>
         );
       })}
@@ -2032,6 +2032,44 @@ function SlotTabs({ slot, onPick, fileCount, taskCount, show }: { slot: Slot; on
   );
 }
 
+/** A user turn that is nothing but the CLI's `<task-notification>` blocks — what a background agent or
+ *  shell finishing looks like on disk. The CLI writes it as a user message because that is how the
+ *  model reads it, but nobody typed it: rendered as a "You" bubble, an overnight fan-out filled the
+ *  transcript with screen-high XML cards, one per landing, and the conversation itself scrolled away.
+ *  null when anything else is in the text — a real message coalesced with a notification stays a
+ *  bubble, so nothing a person wrote is ever reduced to a status line. */
+type TaskNote = { status: string; summary: string; result: string };
+function taskNotesOf(text: string): TaskNote[] | null {
+  if (!text || !text.trimStart().startsWith("<task-notification>")) return null;
+  const notes: TaskNote[] = [];
+  const rest = text.replace(/<task-notification>([\s\S]*?)<\/task-notification>/g, (_, body: string) => {
+    const field = (tag: string) => (body.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1] || "").trim();
+    notes.push({ status: field("status"), summary: field("summary"), result: field("result") });
+    return "";
+  });
+  return notes.length && !rest.trim() ? notes : null;
+}
+
+function TaskNoteRows({ notes }: { notes: TaskNote[] }) {
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      {notes.map((n, i) => {
+        const ok = n.status === "completed";
+        const quiet = n.status === "stopped" || n.status === "killed";
+        const tint = ok ? TOOL_TINT.task : quiet ? "#9ca3af" : "#ef7c7c";
+        return (
+          // The result is the agent's last words — often long. It lives in the tooltip so the row
+          // stays one line; the Tasks panel's Finished list is where to read it in full.
+          <div key={i} title={n.result || n.summary} className="flex max-w-[85%] items-center gap-1.5 text-[11px] text-neutral-500">
+            <span style={{ color: tint }}>{ok ? "✓" : quiet ? "⏹" : "✗"}</span>
+            <span className="min-w-0 truncate">{n.summary || `task ${n.status}`}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, onOpenFile, onComment, live, sameSpeaker }: {
   turn: RenderTurn;
   showTools: boolean;
@@ -2052,6 +2090,8 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
   // as chips instead of JSON. Cheap (one lastIndexOf on the common no-block path) — this runs per
   // streamed token on the live row. User turns never carry the block, so skip even that.
   const previewSplit = t.role === "assistant" && t.text ? splitPreviewBlock(t.text) : { body: t.text, previews: [] };
+  const notes = t.role === "user" ? taskNotesOf(t.text) : null;
+  if (notes) return <TaskNoteRows notes={notes} />;
   return (
           // Inline style, not a class: `space-y-*` on the parent writes margin-top via `& > * + *`,
           // whose specificity beats any utility class this element could carry. An inline declaration
@@ -3043,7 +3083,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         {visible.map((t, i) => (
           <TurnRow
             key={i} turn={t} showTools={showTools} shots={browser.shots} onOpenShot={setLightbox} onOpenFile={openFile} onComment={openPreview}
-            sameSpeaker={i > 0 && visible[i - 1].role === t.role}
+            sameSpeaker={i > 0 && visible[i - 1].role === t.role && !(visible[i - 1].role === "user" && taskNotesOf(visible[i - 1].text))}
             // Only the LAST row needs the live indicator, so only it receives props that change on
             // every token. Every earlier row gets a prop set that is identical between renders, and
             // React.memo skips it entirely — which is the entire point of the extraction.
