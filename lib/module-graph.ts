@@ -98,6 +98,8 @@ export const NODES: ModuleNode[] = [
   // ── core ────────────────────────────────────────────────────────────────
   { id: "l/manager", label: "agent/manager.ts", sub: "session registry · SDK query()", layer: "core", row: 0, pipeline: "live" },
   { id: "l/labels", label: "agent/labels.ts", sub: "activity phases + labels", layer: "core", row: 1, pipeline: "live" },
+  { id: "l/taskprogress", label: "task-progress.ts", sub: "per-ask plan → bar + ETA", layer: "core", row: 2, pipeline: "live" },
+  { id: "c/TaskProgressBar", label: "TaskProgressBar", sub: "per-ask bar + ETA\n(tile + pane)", layer: "component", row: 23, pipeline: "live" },
   { id: "l/useagent", label: "use-agent.ts", sub: "client SSE + reconnect", layer: "core", row: 2, pipeline: "live" },
   // Forwarding a question. Split in two on purpose: the roster read uses node:fs, the instruction
   // text is rendered by AskCard in the browser, and one module would drag fs into the client bundle.
@@ -398,6 +400,10 @@ export const EDGES: ModuleEdge[] = [
 
   // core → core
   { from: "l/manager", to: "l/labels", kind: "import" },
+  { from: "l/manager", to: "l/taskprogress", kind: "import" },
+  { from: "l/labels", to: "l/taskprogress", kind: "import" },
+  { from: "app/page", to: "c/TaskProgressBar", kind: "import" },
+  { from: "c/TaskProgressBar", to: "l/taskprogress", kind: "import" },
   { from: "l/useagent", to: "l/labels", kind: "import" },
   { from: "l/sessions", to: "l/labels", kind: "import" },
   { from: "l/sessions", to: "l/enrich", kind: "import" },

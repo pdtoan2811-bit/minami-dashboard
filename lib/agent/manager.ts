@@ -27,6 +27,7 @@ import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
 import { contextWindowFor, isSelectableModel, isPremiumModel, meetsMinCli, SELECTABLE_MODELS } from "../model-catalog";
 import { sdkClaudeVersion } from "../runtime-version";
 import { cachedRepoState, repoBriefing, repoNotice } from "../repo-state";
+import { progressOf, type PlanStatus, type PlanStep, type TaskProgress } from "../task-progress";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
 // effort"). Opus 5 is the current top-tier model (see the claude-api skill's model table); "default
@@ -97,9 +98,19 @@ kind "url" = reachable from THIS machine's browser right now (verify the server 
 // off for surgical single-file work where a swarm is noise.
 const FANOUT_PROMPT = `When a task has independently workable parts — multiple files to sweep, several questions to research, review from more than one angle — briefly state a fan-out plan (which agents, what each covers) and then IMMEDIATELY proceed with it using the Agent tool with parallel invocations; the user has pre-approved fan-out by enabling this mode, so do not wait for a yes. Stay solo only when the task is genuinely serial or trivial. The user-level "fanout" skill, if listed, has the fuller procedure.`;
 
-// Default for panes that haven't chosen (and the send route's fallback). On by default per the
-// mode's design; a box that wants opt-in instead sets MINAMI_DASHBOARD_FANOUT=0.
-const DEFAULT_FANOUT = process.env.MINAMI_DASHBOARD_FANOUT !== "0";
+// The per-ask progress bar (lib/task-progress.ts) can only count plan items the model WROTE, and
+// measured, most turns write none — a 439-turn session in this repo made zero plan calls (§5f). A bar
+// that fills on a timer instead is the fake progress the feature exists to replace, so the fix is to
+// ask for the plan: one short instruction, gated off by MINAMI_DASHBOARD_PROGRESS=0. Trivial asks are
+// exempt on purpose — a one-step plan is a bar that jumps 0 → 100 and tells you nothing.
+const PROGRESS_PROMPT = `The user watches a live progress bar and ETA for each request, computed from your plan tool (TodoWrite, or TaskCreate/TaskUpdate). For any request that will take more than two or three steps, write the plan FIRST — 3 to 7 items, each an outcome in plain words ("Add the ETA to the tile", not "Edit page.tsx") — then mark each item in_progress when you start it and completed the moment it is done, one at a time, never in a batch at the end. Add or remove items when the plan changes; the bar follows. Skip the plan for quick questions and one-step changes.`;
+const PROGRESS_ENABLED = process.env.MINAMI_DASHBOARD_PROGRESS !== "0";
+
+// Default for panes that haven't chosen (and the send route's fallback). OFF since 2026-09-25: with no
+// instruction Claude still spawns agents when IT judges the work divisible ("free"), and the standing
+// "fan out and don't ask" turned small, serial jobs into fleets. Fan-out is now opted into per pane via
+// the ⑂ pill; MINAMI_DASHBOARD_FANOUT=1 restores the old always-on default for a box that wants it.
+const DEFAULT_FANOUT = process.env.MINAMI_DASHBOARD_FANOUT === "1";
 
 // Where the Blacksmith factory's read-only API lives. `smith ui serve` binds 127.0.0.1:4680 by
 // default (local-first, no auth) and re-projects the event log on every request, so polling it is
@@ -462,6 +473,19 @@ type Session = {
    *  `busy` true between the two. Anything that sets `busy = false` must clear it, or the next idle
    *  pane inherits a clock that has been running since the last turn. */
   turnStartedAt: number | null;
+  /** The live ASK's plan, as TodoWrite/TaskCreate/TaskUpdate calls stream in — the source of
+   *  ActivityState.progress (lib/task-progress.ts). Scoped to an ask, not a turn: reset by beginAsk()
+   *  where a human message starts, and deliberately NOT where a task_notification wakes the CLI into a
+   *  turn of its own, because that turn is still working on the same ask. */
+  plan: PlanStep[];
+  /** When the live ask began — the pace anchor. Null until the first ask. */
+  askStartedAt: number | null;
+  /** TaskCreate tool_use_id → the provisional key its step was filed under, until the result's
+   *  "Task #N" gives it the real id that TaskUpdate addresses. */
+  planPending: Map<string, string>;
+  /** ms-per-step of earlier asks in this session (newest last, capped) — the ETA's prior before the
+   *  live ask has finished a step of its own. */
+  paceHist: number[];
   /** Every file this session has WRITTEN (edit-tool targets), across all turns — the placement
    *  pass's evidence. Writes only, deliberately: a research sweep READS everywhere, and moving a
    *  chat because it grepped another repo would relocate half the box. Capped; the decision needs
@@ -521,6 +545,7 @@ function broadcast(s: Session, ev: AgentEvent) {
 function activityOf(s: Session): ActivityState {
   const tools = [...s.liveTools.values()].map(({ id, name, label, parentId }) => ({ id, name, label, parentId }));
   const tasks = [...s.liveTasks.values()];
+  const progress = planProgress(s);
   return {
     phase: s.phase,
     label: phaseLabel(s.phase, tools, tasks, s.note),
@@ -531,7 +556,109 @@ function activityOf(s: Session): ActivityState {
     tools,
     tasks,
     ...(s.note ? { note: s.note } : {}),
+    ...(progress ? { progress } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Per-ask plan tracking → the progress bar and ETA (lib/task-progress.ts).
+//
+// Read off the plan tool calls as they STREAM, not off the JSONL: the tile needs this while the turn
+// runs, and the on-disk transcript is only reconciled at the turn's end. Same two plan tools
+// lib/flow-model.ts folds — TodoWrite (whole-list replace) and TaskCreate/TaskUpdate (incremental, real
+// ids) — because Claude reaches for either, and supporting one means the bar silently never appears for
+// the other. Top-level calls only: a subagent's plan is ITS progress, not the ask's.
+// ---------------------------------------------------------------------------
+
+const PACE_HIST = 12;
+const normTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
+
+/** A human message started a new ask: bank the finished ask's pace as the next one's prior, reset. */
+function beginAsk(s: Session) {
+  s.plan ??= []; s.paceHist ??= []; s.planPending ??= new Map();
+  const p = s.askStartedAt ? progressOf(s.plan, s.askStartedAt) : null;
+  if (p?.paceFrom === "this" && p.paceMs) s.paceHist = [...s.paceHist, p.paceMs].slice(-PACE_HIST);
+  s.plan = [];
+  s.planPending.clear();
+  s.askStartedAt = Date.now();
+}
+
+/** Median, not mean: one step that sat on a 20-minute build would otherwise set every later ETA. */
+function priorPace(s: Session): number | undefined {
+  const h = [...(s.paceHist ?? [])].sort((a, b) => a - b);
+  return h.length ? h[Math.floor(h.length / 2)] : undefined;
+}
+
+function planProgress(s: Session): TaskProgress | null {
+  if (!s.plan?.length) return null;
+  // A session that was already mid-ask when this field shipped (hot reload) has no anchor; the first
+  // plan call stands in for it, which understates the ask's age but never invents a pace.
+  s.askStartedAt ??= Math.min(...s.plan.map((p) => p.startedAt ?? Date.now()));
+  return progressOf(s.plan, s.askStartedAt, priorPace(s));
+}
+
+/** Move a step to `status`, stamping the moments the pace is built from. */
+function setStepStatus(st: PlanStep, status: PlanStatus, now: number) {
+  if (status === "in_progress" && !st.startedAt) st.startedAt = now;
+  if (status === "completed" && !st.doneAt) st.doneAt = now;
+  // Re-opened: its old finish time is no longer a fact about it.
+  if (status !== "completed") delete st.doneAt;
+  st.status = status;
+}
+
+const readPlanStatus = (v: unknown): PlanStatus | null =>
+  v === "pending" || v === "in_progress" || v === "completed" ? v : null;
+
+/** Fold one top-level plan tool call into `s.plan`. Returns whether anything changed. */
+function applyPlanTool(s: Session, id: string | undefined, name: string, input: any): boolean {
+  s.plan ??= []; s.planPending ??= new Map();
+  // An ask that began before this server did (resumed after a deploy) gets its anchor here.
+  s.askStartedAt ??= Date.now();
+  const now = Date.now();
+  if (name === "TodoWrite" && Array.isArray(input?.todos)) {
+    // REPLACE semantics: the list is the whole plan. Timestamps are carried across by title (then by
+    // position, for a reworded item), so a rewrite that only flips one status doesn't restart every
+    // step's clock and throw the pace away.
+    const old = s.plan;
+    const byTitle = new Map(old.map((p) => [normTitle(p.title), p]));
+    s.plan = input.todos.map((t: any, i: number) => {
+      const title = String(t?.content ?? "").trim() || `step ${i + 1}`;
+      const prev = byTitle.get(normTitle(title)) ?? (old.length === input.todos.length ? old[i] : undefined);
+      const st: PlanStep = { key: `todo:${i}`, title, status: prev?.status ?? "pending", ...(prev?.startedAt ? { startedAt: prev.startedAt } : {}), ...(prev?.doneAt ? { doneAt: prev.doneAt } : {}) };
+      setStepStatus(st, readPlanStatus(t?.status) ?? "pending", now);
+      return st;
+    });
+    return true;
+  }
+  if (name === "TaskCreate" && typeof input?.subject === "string" && input.subject) {
+    const key = `task~${normTitle(input.subject)}`;
+    if (!s.plan.some((p) => p.key === key)) s.plan.push({ key, title: input.subject, status: "pending" });
+    if (id) s.planPending.set(id, key);
+    return true;
+  }
+  if (name === "TaskUpdate" && input?.taskId != null) {
+    const st = s.plan.find((p) => p.key === `task#${input.taskId}`);
+    if (!st) return false;
+    const next = readPlanStatus(input.status);
+    if (next) setStepStatus(st, next, now);
+    if (typeof input.subject === "string" && input.subject) st.title = input.subject;
+    // TaskUpdate's "deleted" status: the step is gone from the plan, not finished.
+    if (input.status === "deleted") s.plan = s.plan.filter((p) => p !== st);
+    return true;
+  }
+  return false;
+}
+
+/** TaskCreate's id arrives in its RESULT ("Task #3 created successfully: …") — rekey the step to it. */
+function settlePlanResult(s: Session, toolUseId: string, content: unknown) {
+  const key = s.planPending?.get(toolUseId);
+  if (!key) return;
+  s.planPending.delete(toolUseId);
+  const text = typeof content === "string" ? content
+    : Array.isArray(content) ? content.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join(" ") : "";
+  const m = /Task #(\d+)/.exec(text);
+  const st = s.plan.find((p) => p.key === key);
+  if (m && st) st.key = `task#${m[1]}`;
 }
 
 // Move to `phase` and broadcast. The elapsed clock only restarts when the phase actually changes, so
@@ -695,7 +822,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
+    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, plan: [], askStartedAt: null, planPending: new Map(), paceHist: [], writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
     smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), settledTasks: new Map(), askTeam: null,
     toolBufs: new Map(),
@@ -826,6 +953,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
         type: "preset", preset: "claude_code",
         append: [
           PREVIEW_PROMPT, CONTEXT_PROMPT,
+          ...(PROGRESS_ENABLED ? [PROGRESS_PROMPT] : []),
           // Measured facts about the checkout, ahead of the behavioural rules — the model can't be
           // told to distrust a working tree that renders, so it is handed the answer instead.
           ...(repoBriefing(repo) ? [repoBriefing(repo)!] : []),
@@ -1029,6 +1157,8 @@ function handleMessage(s: Session, m: any) {
           }
           broadcast(s, { t: "tool", name: b.name, input: b.input, id: b.id });
           noteSmithTouch(s, b.name, b.input, !parentId);
+          // The touch() below broadcasts the new progress with the rest of the activity state.
+          if (!parentId) applyPlanTool(s, b.id, b.name, b.input);
           // Top-level only: a subagent's ask_team is the subagent's to wait on. `questions` guards
           // against a partial/foreign input shape rendering a blank card.
           if (!parentId && b.id && isAskTeamTool(b.name) && Array.isArray(b.input?.questions)) {
@@ -1054,6 +1184,7 @@ function handleMessage(s: Session, m: any) {
       let closed = false;
       for (const b of content) {
         if (b?.type !== "tool_result" || !b.tool_use_id) continue;
+        settlePlanResult(s, b.tool_use_id, b.content);
         const t = s.liveTools.get(b.tool_use_id);
         if (!t) continue;
         s.liveTools.delete(b.tool_use_id);
@@ -1161,6 +1292,7 @@ function handleCommandLifecycle(s: Session, m: any) {
     s.queued.splice(i, 1);
     s.busy = true;
     s.turnStartedAt = Date.now(); // a promoted queued message is a new turn, and gets its own clock
+    beginAsk(s); // ...and is a new ask, so it gets its own plan and progress bar
     s.sawText = false;
     s.sawThinking = false;
     s.partial = "";
@@ -1508,6 +1640,7 @@ export function sendMessage(opts: { key: string; cwd: string; message: string; m
   // A cold start is a second or two of that turn and the most anxious part of it; a clock that only
   // began once the subprocess spoke would under-report exactly the wait the user is staring at.
   s.turnStartedAt = Date.now();
+  beginAsk(s);
   s.sawText = false; // fresh turn: the next text block opens the reply, no leading separator
   s.sawThinking = false; // ...and the first thinking pass opens the reasoning, no leading seam
   s.partial = "";
@@ -1968,8 +2101,9 @@ export function liveModels(): { key: string; cwd: string; model: string; premium
   return out;
 }
 
-export function liveActivity(): Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null }> {
-  const out: Record<string, { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null }> = {};
+export type LiveTile = { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; progress?: TaskProgress };
+export function liveActivity(): Record<string, LiveTile> {
+  const out: Record<string, LiveTile> = {};
   const seen = new Set<Session>();
   for (const s of store.values()) {
     if (seen.has(s) || s.closed || !s.sessionId) continue; // store holds each session under 2 keys — dedup
@@ -1982,7 +2116,9 @@ export function liveActivity(): Record<string, { phase: ActivityPhase; label: st
     // the opposite kind of value: a fixed timestamp that does NOT change between polls, so the grid's
     // change-detection still sees a steady object while the tile counts up from it locally. Sending
     // turnMs here instead would reintroduce exactly the churn the line above exists to avoid.
-    out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd, turnStartedAt: s.turnStartedAt };
+    // `progress` is safe here for the same reason: every field in it is a count or a fixed timestamp
+    // (lib/task-progress.ts), so it only changes when the plan does — the tile animates the fill locally.
+    out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd, turnStartedAt: s.turnStartedAt, ...(s.busy && a.progress ? { progress: a.progress } : {}) };
   }
   return out;
 }

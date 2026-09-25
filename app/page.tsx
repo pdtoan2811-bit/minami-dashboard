@@ -32,6 +32,8 @@ import { deriveFileState, writtenBy } from "@/lib/file-view";
 import { rankTopics, type RecentTopic } from "@/lib/topic-rank";
 import BrowserLightbox from "@/components/BrowserLightbox";
 import { FlowStrip } from "@/components/FlowStrip";
+import { TaskProgressBar } from "@/components/TaskProgressBar";
+import type { TaskProgress } from "@/lib/task-progress";
 import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
 import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block";
@@ -421,6 +423,9 @@ function ActivityLine({ activity, elapsed, turnElapsed, link, compact, busy, hid
       </span>
       {/* The fleet, one row per agent — see AgentBoard for the lineage (full-sentence notices → inline
           pills → this). Compact contexts skip it and rely on taskLabel's one-liner instead. */}
+      {/* The ask's plan as a bar + ETA. Hidden while the link is stale: a projection from a server we
+          have stopped hearing from is exactly the photograph-as-report the stale label warns about. */}
+      {activity.progress && !dead && <TaskProgressBar compact={compact} p={activity.progress} />}
       {!compact && <AgentBoard tasks={activity.tasks} finished={finished} />}
     </span>
   );
@@ -570,7 +575,7 @@ export default function BentoHome() {
   useEffect(() => { let a = true; const t = () => { if (a && !pageHidden()) loadSessions(); }; loadSessions(); const iv = setInterval(t, 5000); const off = onPageVisible(t); return () => { a = false; clearInterval(iv); off(); }; }, [loadSessions]);
   // Live activity per session (what each running dashboard-driven session is doing right now) — polled
   // fast so a tile can show "thinking… / running: … / reading X" live while a box works.
-  const [liveAct, setLiveAct] = useState<Record<string, { phase: string; label: string; busy: boolean; cwd: string; turnStartedAt?: number | null }>>({});
+  const [liveAct, setLiveAct] = useState<Record<string, { phase: string; label: string; busy: boolean; cwd: string; turnStartedAt?: number | null; progress?: TaskProgress }>>({});
   const liveActSig = useRef("");
   useEffect(() => {
     let a = true;
@@ -1255,6 +1260,9 @@ export default function BentoHome() {
                           {la.turnStartedAt && <TurnClock since={la.turnStartedAt} />}
                         </div>
                       : big && <p className="relative mt-0.5 line-clamp-1 text-xs text-neutral-400">↳ {p.latest}</p>}
+                    {/* How far along the ask is, and when it should land — only when the ask wrote a plan
+                        (lib/task-progress.ts); a plan-less ask keeps just the clock above. */}
+                    {la?.progress && <div className="relative mt-1 min-w-0"><TaskProgressBar compact p={la.progress} /></div>}
                     {/* Factory progress for THIS project, when Blacksmith is driving it. Matched by
                         folder basename against Blacksmith's own `project` tag rather than by path:
                         the factory anchors all state to its own clone and records the target only by
@@ -1832,16 +1840,17 @@ function ModeControls({ hold, onHold, planning, onPlan, perm, onPerm, model, ses
         title={busy
           ? "Can't switch fan-out while a turn is running — stop it first"
           : blacksmith
-            ? `Fan-out is overridden while Blacksmith is on — the factory owns dispatch, so this session never gets the generic "fan out subagents" instruction. Parallel work here is a wave of role agents through smith. Your pick (${fanout ? "fan-out" : "solo"}) returns when ⚒ is turned off.`
+            ? `Fan-out is overridden while Blacksmith is on — the factory owns dispatch, so this session never gets the generic "fan out subagents" instruction. Parallel work here is a wave of role agents through smith. Your pick (${fanout ? "fan-out" : "free"}) returns when ⚒ is turned off.`
           : fanout
-            ? "Fan-out ON — Claude proposes parallel agents for divisible work and proceeds without asking. Click for solo."
-            : "Solo — Claude works single-threaded. Click to let it fan out subagents by default."}
+            ? "Fan-out ON — Claude is told to split divisible work across parallel agents and proceed without asking. Click for free."
+            : "Free (default) — no fan-out instruction; Claude uses subagents only when it judges the work calls for them. Click to have it fan out by default."}
         className={`flex shrink-0 items-center rounded-lg border p-0.5 transition-colors ${
           busy ? "border-white/10 text-neutral-600"
           : blacksmith ? "border-dashed border-white/10 text-neutral-600 hover:text-neutral-400"
-          : fanout ? "border-white/10 text-neutral-400 hover:text-neutral-200"
-          : "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]"}`}>
-        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">{blacksmith ? "⑂ via smith" : fanout ? "⑂ fan-out" : "⑂ solo"}</span>
+          // Amber marks the state that departs from the default — now fan-out ON, since free is default.
+          : fanout ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#c47f18]"
+          : "border-white/10 text-neutral-400 hover:text-neutral-200"}`}>
+        <span className="rounded-md px-2 py-0.5 text-[10px] font-medium">{blacksmith ? "⑂ via smith" : fanout ? "⑂ fan-out" : "⑂ free"}</span>
       </button>
       {/* Blacksmith: turn this pane into the factory's operator console. Tinted when ON — the inverse
           of fan-out, because here the notable state is having opted IN. Same busy-disable and the same
@@ -2317,9 +2326,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // the picker resolves the label from what the live session reports instead of mirroring the id.
   const [modelDefault, setModelDefault] = useSetting<string | null>("chatModel", null);
   const [model, setModel] = useSetting<string | null>("chatModel:" + effectiveKey, modelDefault);
-  // Fan-out: same two-key shape again. Default ON — the mode exists because "shall I fan out?" as a
-  // question was pure round-trip cost; a pane turns it off for surgical work, not the other way round.
-  const [fanoutDefault, setFanoutDefault] = useSetting<boolean>("chatFanout", true);
+  // Fan-out: same two-key shape again. Default OFF ("free": no instruction, Claude spawns agents only
+  // when it judges the work divisible) since 2026-09-25 — the standing "fan out, don't ask" made small
+  // serial jobs into fleets. The global key was RENAMED from `chatFanout` rather than just re-defaulted:
+  // settings are localStorage and written on click, so a browser that ever touched the pill carries a
+  // stored `true` that a new default can't reach. Per-pane picks (`chatFanout:<key>`) are kept — those
+  // are decisions about one conversation, not the old default.
+  const [fanoutDefault, setFanoutDefault] = useSetting<boolean>("chatFanoutDefault", false);
   const [fanout, setFanout] = useSetting<boolean>("chatFanout:" + effectiveKey, fanoutDefault);
   // Blacksmith: the same two-key shape a third time. Default OFF, and note the asymmetry with fan-out
   // below — this one is deliberately NOT seeded from the per-pane choice. Driving the factory is a

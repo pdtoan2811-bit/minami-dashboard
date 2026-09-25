@@ -9,6 +9,15 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-25
+- **Fan-out is opt-in again; "free" is the default** (§3, system-prompt append) — new chats get no
+  fan-out instruction, so Claude spawns subagents only when it judges they help. The ⑂ pill reads
+  `free` / `fan-out` and is amber when ON. Global default moved to `chatFanoutDefault` so an old
+  stored `true` can't override it; per-pane picks are kept. `MINAMI_DASHBOARD_FANOUT=1` restores on.
+- **Per-ask progress bar + ETA** (§4, new subsection) — the tile and the pane's status line show
+  `done/total · ~Nm left · <step in flight>` for the live ask, counted from the plan items Claude
+  writes (TodoWrite or TaskCreate/TaskUpdate), with an ETA from the observed pace per step. No plan,
+  no bar. Sessions are now asked to plan any multi-step request (`MINAMI_DASHBOARD_PROGRESS=0` to
+  drop that). `lib/task-progress.ts`, `components/TaskProgressBar.tsx`.
 - **The idle reaper no longer kills unattended runs** (§3 🐛, "Memory") — it spared only `busy`, and
   missed both a turn the CLI starts itself on a `task_notification` and a turn that ended with
   background agents still out. Both killed overnight ecvision sessions on 2026-09-24/25. A self-started

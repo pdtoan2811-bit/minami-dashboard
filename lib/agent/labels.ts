@@ -6,6 +6,8 @@
 //
 // This file must stay free of "use client" / node-only imports: both sides import it.
 
+import type { TaskProgress } from "../task-progress";
+
 export type ActivityPhase =
   | "idle" // no turn in flight
   | "spawning" // cold-starting the SDK process for this pane's FIRST message — distinct from
@@ -138,6 +140,9 @@ export type ActivityState = {
   tasks: LiveTask[];
   /** Transient detail that outranks the phase label (retry attempt, compaction size). */
   note?: string;
+  /** The live ask's plan as a bar + ETA — absent when this ask never wrote a plan. See
+   *  lib/task-progress.ts for what it may and may not claim. */
+  progress?: TaskProgress;
 };
 
 export const IDLE_ACTIVITY: ActivityState = { phase: "idle", label: "", elapsedMs: 0, tools: [], tasks: [] };

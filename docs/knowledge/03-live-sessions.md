@@ -350,10 +350,14 @@ append at all. Now the append is unconditional and only its pieces are gated:
   with a fenced ` ```minami-preview ` block of `{kind: url|file|cmd, target, label}[]`. The shell
   strips it and renders chips (§5c). This lives in the manager, not a skill, because a skill loads
   when the model thinks it's relevant and an ending convention only works if it is unconditional.
-- **`FANOUT_PROMPT`, when the pane's fan-out pill is on (the default).** "Propose parallel subagents
-  for divisible work and proceed — the user pre-approved by enabling the mode." The pill's OFF state
-  is the marked one in the UI for the same reason. Fallback for panes that never chose:
-  `MINAMI_DASHBOARD_FANOUT` (unset/1 = on). The fuller procedure lives in the user-level `fanout`
+- **`FANOUT_PROMPT`, when the pane's fan-out pill is on (opt-in since 2026-09-25).** "Propose parallel
+  subagents for divisible work and proceed — the user pre-approved by enabling the mode." The default
+  is **free**: no instruction, so Claude spawns agents only when it judges the work divisible. It was
+  on by default from 2026-09-02; reverted because the standing "fan out, don't ask" turned small serial
+  jobs into fleets. The pill's ON state is now the marked (amber) one. Fallback for panes that never
+  chose: `MINAMI_DASHBOARD_FANOUT` (unset = free, 1 = on). The browser's global default moved to a new
+  key, `chatFanoutDefault`, because the old `chatFanout` was stored on click and a stored `true` would
+  have outlived the change. The fuller procedure lives in the user-level `fanout`
   skill (`~/.claude/skills/fanout/`), which is on the box, not in this repo.
 - **`BLACKSMITH_PROMPT`, when the pane's ⚒ pill is on (2026-09-14).** Turns the pane into the operator
   console for the Blacksmith agent factory. Off by default (`MINAMI_DASHBOARD_BLACKSMITH=1` flips the
@@ -413,8 +417,8 @@ done, only simulated by replacing the process and resuming from disk.
 Two asymmetries between them, both deliberate. Fan-out seeds a global default from the per-pane
 choice (`chatFanout` ← `chatFanout:<key>`), Blacksmith does not: driving the factory is something you
 do in one pane about one epic, and silently making every future chat an operator console would put a
-long, specific prompt in front of unrelated work. And the pill polarity is inverted — fan-out is lit
-when OFF (the marked state is opting out of a default), Blacksmith is lit when ON.
+long, specific prompt in front of unrelated work. Both pills are now lit when ON — the marked state
+is opting in. (Fan-out was lit when OFF while it was the default, 2026-09-02 → 2026-09-25.)
 
 > 🐛 **`askBrowser()` dropped the pane's mode flags (found and fixed 2026-09-14, incidentally).** The
 > browser panel's own send path passed `model` but not `fanout`, so a session born cold from that
@@ -722,6 +726,40 @@ even when empty so columns hold their line.
   Without it a finished tool's label stays on screen — the stale-label bug.
 - Tool labels refine from **streaming partial JSON**, so a fast tool shows its real target
   ("reading package.json") for essentially its whole life rather than a generic placeholder.
+
+### Per-ask progress bar and ETA — `lib/task-progress.ts` (2026-09-25)
+
+`ActivityState.progress` answers "how far along is the thing I just asked for, and when does it land",
+on the bento tile (via `/api/agent/live`) and under the pane's status line, through one component
+(`components/TaskProgressBar.tsx`).
+
+- **The unit is a plan item the model wrote**, read off `TodoWrite` / `TaskCreate` / `TaskUpdate` as
+  they stream (`applyPlanTool` in `manager.ts`, top-level calls only). Not tool calls, not time. An ask
+  with no plan shows **no bar** — the turn clock already covers it, and a bar that fills on a timer is
+  the fake progress this replaced. §5f measured that most turns write no plan, so `PROGRESS_PROMPT`
+  asks for one on any multi-step request (`MINAMI_DASHBOARD_PROGRESS=0` drops it).
+- **Scoped to the ask, not the turn.** `beginAsk()` runs where a *human* message starts (send, and a
+  queued message's `started`) — not where a `task_notification` wakes the CLI into its own turn,
+  which is still working on the same ask.
+- **Fill** = finished steps + credit for the step in flight of elapsed ÷ pace, capped at 0.85 of a step,
+  so only a `completed` status can make the bar claim a step is done.
+- **ETA** = remaining steps × pace. Pace is this ask's own (ask start → last finished step, ÷ steps
+  finished) once it has one; before that, the **median** of earlier asks in the session (`paceHist`).
+  With neither, no ETA. Past the projection it says "Nm over estimate" in amber rather than clamping.
+- **Every field is a count or a fixed timestamp**, so the tile poll's change-detection sees an
+  unchanged object between plan updates; `TaskProgressBar` ticks itself to move the fill.
+- **TaskCreate's real id arrives in its result** ("Task #3 created…"), so a step is filed under a
+  provisional key and re-keyed in `settlePlanResult`. Measured on the first probe: told to use
+  TodoWrite, Haiku used TaskCreate/TaskUpdate anyway — the same finding as §5f, and the reason both
+  paths exist.
+
+Verified 2026-09-25 on `dev:iterate` with a Haiku 3-step probe: `0/3 → 1/3 → 2/3 → 3/3` in the live
+feed; the ETA projected 22s late after step 1, 6s late after step 2. Tile screenshot showed
+`2/4 · ~50s left · Run sleep 15 — step 3`.
+
+> 🐛 **Found while verifying, not fixed:** a session whose `cwd` is under `/tmp` gets no live activity
+> line on its tile at all. macOS `/tmp` is a symlink to `/private/tmp`, and the tile's `la` lookup
+> compares the board's `p.cwd` to the live session's `cwd` as strings. Predates this change.
 
 ---
 
