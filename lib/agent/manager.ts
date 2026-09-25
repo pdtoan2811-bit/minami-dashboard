@@ -476,6 +476,9 @@ type Session = {
   subs: Set<Sub>;
   pending: Map<string, Pending>; // outstanding permission prompts
   idleTimer: ReturnType<typeof setTimeout> | null;
+  /** Wall-clock of the last SDK message of any kind. The idle reaper reads it to tell a fleet that is
+   *  still reporting (task_progress) from a background entry nothing will ever finish — see scheduleIdle. */
+  lastEventAt: number;
 
   // ---- live activity (see lib/agent/labels.ts) ----
   phase: ActivityPhase;
@@ -575,6 +578,25 @@ function resetActivity(s: Session, phase: ActivityPhase, opts?: { keepTasks?: bo
 // window is now long enough to cover a normal context-switch and overridable per-deploy.
 const IDLE_REAP_MS = Math.max(60_000, Number(process.env.MINAMI_IDLE_REAP_MS) || 30 * 60 * 1000);
 
+// How long a session with background tasks still registered may go WITHOUT A SINGLE SDK MESSAGE before
+// the reaper stops believing in them. Background work is the whole point of an unattended run: an
+// orchestrator ends its turn with "I'll pick this up when the agents report", and when a task finishes
+// the CLI wakes itself on the notification. Reaping in between killed the subprocess, and every agent
+// and shell with it (2026-09-25, §3, "Memory"). A live subagent emits
+// task_progress, which keeps lastEventAt fresh, so this bound only catches the quiet ones: a forgotten
+// `npm run dev` in the background, or a task whose end bookend was lost.
+const BG_REAP_MS = Math.max(IDLE_REAP_MS, Number(process.env.MINAMI_BG_REAP_MS) || 3 * 60 * 60 * 1000);
+
+// Work this session's subprocess is carrying between turns: anything that dies if we close it. Every
+// path that closes or kills an idle session asks this, not just `busy`. `agentsOnly` is the deploy
+// veto's reading: a subagent is someone's unattended run, but a background shell is as often a dev
+// server left running, and letting that block every deploy for hours would get the veto --forced.
+function fleetInFlight(s: Session, agentsOnly = false): boolean {
+  if (Date.now() - s.lastEventAt >= BG_REAP_MS) return false;
+  for (const t of s.liveTasks.values()) if (!agentsOnly || t.kind === "agent" || t.kind === "workflow") return true;
+  return false;
+}
+
 // Close a session that's been idle with no listeners for a while, so we don't leak CLI processes.
 function scheduleIdle(s: Session) {
   if (s.idleTimer) clearTimeout(s.idleTimer);
@@ -590,8 +612,8 @@ function scheduleIdle(s: Session) {
       // unblocks and the turn runs to a natural (denied) conclusion instead.
       denyAllPending(s, "No client connected — auto-denied after idle timeout.");
     }
-    if (!s.busy) closeSession(s.key);
-    // Still busy (e.g. the denial above hasn't produced a `result` yet, or a turn is genuinely still
+    if (!s.busy && !fleetInFlight(s)) closeSession(s.key);
+    // Still busy, or background work is still out there (e.g. the denial above hasn't produced a `result` yet, or a turn is genuinely still
     // running unattended) — check again rather than letting this session go unmonitored forever; the
     // "result" handler also re-arms this once the turn actually finishes, so this is just the backstop
     // for whatever falls through that path.
@@ -670,7 +692,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null,
+    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
     smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), askTeam: null,
     toolBufs: new Map(),
@@ -877,6 +899,25 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
 }
 
 function handleMessage(s: Session, m: any) {
+  s.lastEventAt = Date.now();
+  // A turn can begin without send(): when a background agent or shell finishes after the turn that
+  // launched it ended, the CLI dequeues the task_notification and runs a turn of its own. Nothing here
+  // marked that turn busy, so the idle reaper, which only spares `busy`, closed the subprocess mid-turn.
+  // On 2026-09-25 it SIGKILLed a pytest run exactly IDLE_REAP_MS after the last send()-started turn
+  // ended, and an overnight UI-audit loop sat dead until morning (§3, "Memory"). The first top-level model event
+  // while idle is the turn boundary. Top-level only: a background subagent's own messages flow through
+  // here too, and there is no `result` of ours to clear busy after them.
+  if (!s.busy && !m?.parent_tool_use_id && (m?.type === "assistant" || (m?.type === "stream_event" && m.event?.type === "message_start"))) {
+    s.busy = true;
+    s.turnStartedAt = Date.now();
+    s.sawText = false;
+    s.sawThinking = false;
+    s.partial = "";
+    s.partialThinking = "";
+    resetActivity(s, "thinking", { keepTasks: true });
+    broadcast(s, { t: "busy", busy: true });
+    broadcast(s, { t: "activity", activity: activityOf(s) });
+  }
   switch (m?.type) {
     case "system":
       handleSystem(s, m);
@@ -1782,7 +1823,8 @@ function maybeAutoCompact(s: Session) {
 }
 
 async function placementPass(s: Session): Promise<void> {
-  if (s.closed || s.busy || s.pending.size || s.queued.length || s.hold || !s.sessionId) return;
+  // fleetInFlight: relocating is a close-and-respawn, and the old subprocess takes its agents with it.
+  if (s.closed || s.busy || fleetInFlight(s) || s.pending.size || s.queued.length || s.hold || !s.sessionId) return;
   if (!s.writePaths.length) return;
   if (worktreeOf(s.cwd)) return; // already isolated — its placement is settled
   const home = repoRootOf(s.cwd);
@@ -1954,7 +1996,9 @@ function eachSession(): Session[] {
 export function liveStats(): LiveStats {
   const details = eachSession().map((s) => {
     const a = activityOf(s);
-    return { key: s.key, cwd: s.cwd, busy: s.busy, phase: a.phase, label: a.label, sessionId: s.sessionId };
+    // A turn that ended with subagents still out is busy as far as a restart is concerned: the swap
+    // kills them exactly as it would kill a turn, only nobody is watching when it happens.
+    return { key: s.key, cwd: s.cwd, busy: s.busy || fleetInFlight(s, true), phase: a.phase, label: a.label, sessionId: s.sessionId };
   });
   return { sessions: details.length, busy: details.filter((d) => d.busy).length, details };
 }

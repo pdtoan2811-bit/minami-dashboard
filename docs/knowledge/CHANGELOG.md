@@ -8,6 +8,14 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-25
+- **The idle reaper no longer kills unattended runs** (§3 🐛, "Memory") — it spared only `busy`, and
+  missed both a turn the CLI starts itself on a `task_notification` and a turn that ended with
+  background agents still out. Both killed overnight ecvision sessions on 2026-09-24/25. A self-started
+  top-level turn now sets `busy`; `fleetInFlight()` spares a session with live tasks for up to
+  `MINAMI_BG_REAP_MS` (3 h) of SDK silence; `placementPass` and the deploy veto (`liveStats`, agent
+  fleets only) ask the same question. Operating protocol for overnight work: `docs/OVERNIGHT.md`.
+
 ### 2026-09-23
 - **Client performance — switching tiles no longer reloads them** (§22, new) — audit measured the
   server at <50 ms for any transcript and put every cost in the browser: going back to a tile you left

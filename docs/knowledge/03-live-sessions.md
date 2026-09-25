@@ -499,6 +499,46 @@ indistinguishable from a logic error until you instrument it.
 > `lsof -nP -iTCP:<port> -sTCP:ESTABLISHED` dropped 5 → 3 at release, proving the client half worked
 > while the reaper was still cycling.
 
+> 🐛 **2026-09-25 — the reaper killed unattended runs, twice in one night.** It spared only `busy`,
+> and two things it could not see were live work:
+>
+> 1. **A turn the CLI starts on its own.** When a background agent or shell finishes after the turn
+>    that launched it ended, the CLI dequeues the `task_notification` and runs a turn by itself.
+>    `busy` was set only by `send()` and by `started` for a message *we* queued, so that turn ran
+>    with `busy=false`. An overnight ecvision UI-audit orchestrator's last send-started turn ended
+>    01:57:08; a notification-started turn was mid-`pytest` when the reaper fired at 02:27:11 —
+>    `IDLE_REAP_MS` to the second. `pytest` came back `Exit code 137`, the transcript's last line,
+>    and the session sat dead until 07:11.
+> 2. **A turn that ended with a fleet still out.** "I'll pick this up when the agents report" is
+>    `busy=false` with `liveTasks` non-empty. The reaper closed it and every agent and shell died
+>    with the subprocess — the notifications they would have sent never came (the other ecvision
+>    session: two background dev servers `killed` 58 min after its last turn).
+>
+> The tab being closed is what arms this: a hidden pane unpins after 1 min (above), so at night
+> `subs.size` is always 0. Fixes: `handleMessage` treats the first top-level `message_start` /
+> `assistant` while idle as a turn boundary and sets `busy` (top-level only — subagent messages
+> flow through the same loop and have no `result` of ours to clear it). `fleetInFlight(s)` spares a
+> session with registered tasks unless no SDK message of any kind has arrived for `BG_REAP_MS`
+> (3 h, `MINAMI_BG_REAP_MS`) — live subagents emit `task_progress`, so that bound only catches a
+> forgotten background `npm run dev` or a lost end bookend. `placementPass` asks the same question
+> (a relocation is a close), and `liveStats()` counts a session with a live **agent** fleet as
+> busy, so a deploy — autopilot's included — waits instead of killing it. Shells don't block the
+> deploy veto: a dev server left running would otherwise hold every deploy for hours.
+>
+> **How to recognise it in a transcript:** the last record is a `tool_result` (often `Exit code
+> 137`) with no assistant message after it, and the next record is the CLI's resume sentinel
+> `Continue from where you left off.` → `No response requested.` Measure the gap from the last
+> `stop_hook_summary` to the kill: exactly 30 min means the reaper.
+>
+> **Verified against a control**, both on side `next dev` instances with `MINAMI_IDLE_REAP_MS=60000`
+> and no browser attached, sessions driven through `POST /api/agent/send` on Haiku. The old code at
+> `db58740` reaped a turn-ended session with a 150s background shell at ~60s, and SIGKILLed a 100s
+> foreground command inside a notification-started turn (`Exit code 137`, no reply — last night's
+> signature). The fixed code finished both, reported a background-**subagent** session as busy in
+> `liveStats()` after its turn ended, and still reaped every session within ~2 min of going truly
+> idle. Harness gotcha: the Bash tool refuses a foreground `sleep N`, so use `python3 -c
+> "import time; time.sleep(N)"` for the long command.
+
 ### Restart safety — the deploy kills every conversation
 
 Every live session's SDK subprocess is a **child of the Next server process**. `bin/serve.sh` kills
