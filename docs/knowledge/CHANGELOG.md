@@ -9,6 +9,12 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-09-29
+- **`ask_team` cards carry the why, and a recommendation** (§3, `03-live-sessions.md`) — team-ask
+  branch `feat/card-context-recommendation`: option descriptions shown in full (Slack cut them at
+  75 chars), required `doing` / `why_now`, required per-question `recommendation` whose label must
+  match an option (validated before anything posts). `AskTeamCard` and the team briefing follow.
+  *Reported by user: "The subtitle of each option got truncated … always get the recommendation in
+  each of the question".*
 - **Meeting ear moved to `omni:google/gemini-3.8-flash`** (§17, "The omni ear") — benched the
   whole Flash line (9 models × 3 passes of 14 real clips, vs gemini-3.1-pro). 3.1-flash-lite led
   on speed, cost and agreement with pro, but looped on real stutters and dropped quieter voices;

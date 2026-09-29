@@ -330,7 +330,12 @@ const spawnMode = (m: AllowedMode): AllowedMode => (m === "plan" ? "plan" : "def
 export type AgentQuestion = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] };
 // The `ask_team` MCP tool's input (team-ask: github.com/Anhduchb01/team-ask) — one topic, 1–4
 // AskUserQuestion-shaped questions, sent to a teammate's Slack DM. Mirrored here read-only.
-export type AskTeamPacket = { topic: string; context: string; assignee?: string; timeout_minutes?: number; questions: AgentQuestion[] };
+// `doing` / `why_now` / `recommendation` are required by team-ask since the card-context change,
+// but optional here: a pane can replay a packet from a session running an older team-ask build.
+export type AskTeamPacket = {
+  topic: string; context: string; doing?: string; why_now?: string; assignee?: string; timeout_minutes?: number;
+  questions: (AgentQuestion & { recommendation?: { label: string; reason: string } })[];
+};
 export type AgentEvent =
   // `blacksmith` / `fanout` are what the session was BORN with. The pane's pills read localStorage,
   // and a pane that attached to a session another pane started (or that toggled while the swap was

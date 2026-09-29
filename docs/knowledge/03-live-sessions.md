@@ -88,8 +88,20 @@ So the dashboard's part is a read-only mirror. `manager.ts` spots the tool in th
 prefix is whatever `claude mcp add` was given), keeps it on `s.askTeam`, and broadcasts
 `{t:"ask_team", packet}` — REPLACE semantics, `packet:null` when the `tool_result` lands. It rides
 the snapshot, so a pane that reattaches mid-wait gets the card back instead of "running a tool" for
-an hour. `AskTeamCard` draws topic → where → each question → options with consequences, the same
-order as the DM card, and says where to answer. The activity label reads "asking the team on Slack:
+an hour. `AskTeamCard` draws topic → doing → why now → where → each question → options with
+consequences, the recommended one starred with its reason — the same order as the DM card — and
+says where to answer. `doing`, `why_now` and a per-question `recommendation` are required by
+team-ask since 2026-09-29 (a teammate read cards cold and had to reconstruct why they were being
+asked, with no proposal to react to); they are optional in `AskTeamPacket` only so a packet from an
+older team-ask build still renders.
+
+> 🐛 **Option consequences were cut off in Slack.** Slack truncates a radio/checkbox option's
+> `description` at 75 characters whatever its type, and the consequence — the part the answerer
+> needs — is usually past that. team-ask now prints every description in full in a section above
+> the picker and leaves the radio rows as label + ★ Recommended. The question section got a
+> `qtext<i>` block_id because the "Other" modal used to find the question as *the block before the
+> picker*, which is now the option list; the old lookup stays as the fallback for fire cards still
+> sitting in DMs from before the change. The activity label reads "asking the team on Slack:
 <topic>" for the same reason: a session waiting on a person should not look like a wedged tool.
 
 Two things worth knowing. Dashboard sessions get the tool because `settingSources` includes `user`
