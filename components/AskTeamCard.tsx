@@ -42,6 +42,8 @@ export default function AskTeamCard({ ask }: { ask: NonNullable<AskTeamPrompt> }
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-0.5">
+        {p.doing && <p className={`${sc.body} text-neutral-300`}><span className="text-neutral-500">Doing ·</span> {p.doing}</p>}
+        {p.why_now && <p className={`${sc.body} text-neutral-300`}><span className="text-neutral-500">Why them, why now ·</span> {p.why_now}</p>}
         <p className={`${sc.body} text-neutral-400`}><span className="text-neutral-500">Where ·</span> {p.context}</p>
 
         {p.questions.map((q, i) => (
@@ -52,16 +54,25 @@ export default function AskTeamCard({ ask }: { ask: NonNullable<AskTeamPrompt> }
             </p>
             <p className={`mt-0.5 ${sc.question} font-medium text-neutral-50`}>{q.question}</p>
             <div className="mt-1.5 flex flex-col gap-1">
-              {q.options.map((o) => (
-                <div key={o.label} className="flex items-start gap-2 rounded-lg border border-white/10 px-2.5 py-1.5">
-                  <span className={`mt-[3px] ${sc.mark} shrink-0 border border-white/25 ${q.multiSelect ? "rounded-[3px]" : "rounded-full"}`} />
-                  <span className="min-w-0 flex-1">
-                    <span className={`block ${sc.label} font-medium text-neutral-200`}>{o.label}</span>
-                    {o.description && <span className={`mt-0.5 block ${sc.desc} text-neutral-400`}>{o.description}</span>}
-                  </span>
-                </div>
-              ))}
+              {q.options.map((o) => {
+                const rec = q.recommendation?.label === o.label;
+                return (
+                  <div key={o.label} className={`flex items-start gap-2 rounded-lg border px-2.5 py-1.5 ${rec ? "border-[var(--sakura)]/40" : "border-white/10"}`}>
+                    <span className={`mt-[3px] ${sc.mark} shrink-0 border border-white/25 ${q.multiSelect ? "rounded-[3px]" : "rounded-full"}`} />
+                    <span className="min-w-0 flex-1">
+                      <span className={`block ${sc.label} font-medium text-neutral-200`}>
+                        {o.label}
+                        {rec && <span className={`ml-1.5 ${sc.note} font-normal text-[var(--sakura)]`}>★ recommended</span>}
+                      </span>
+                      {o.description && <span className={`mt-0.5 block ${sc.desc} text-neutral-400`}>{o.description}</span>}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
+            {q.recommendation?.reason && (
+              <p className={`mt-1 ${sc.note} text-neutral-400`}><span className="text-[var(--sakura)]">Why {q.recommendation.label} ·</span> {q.recommendation.reason}</p>
+            )}
           </div>
         ))}
 

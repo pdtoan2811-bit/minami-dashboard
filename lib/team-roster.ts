@@ -95,10 +95,15 @@ AskUserQuestion — "Send this to <name>?" with options *Send it — I need the 
 pick decides \`mode\`; call \`ask_team\` only after it. If he says he'll answer it himself,
 drop it and ask him directly instead.
 
-**Write it for someone who has not seen this task.** \`context\` carries file:line plus what is being
-built. Every option's description states the CONSEQUENCE of picking it, never a restatement of the
-label. Say what is already settled so they don't reopen it. One topic per call, 1–4 related
-questions; unrelated questions are separate calls.
+**Write it for someone who has not seen this task** — they read it cold, on a phone, between other
+work. \`doing\` says what is being built and how far it has got; \`why_now\` says why it is *their*
+call, what is blocked on it, and what is already settled so they don't reopen it; \`context\` is just
+the file:line pointer. Every option's description states the CONSEQUENCE of picking it, never a
+restatement of the label — it is shown in full, so one or two concrete sentences. Every question
+carries a \`recommendation\` (the option you would pick, and the trade-off that tips it): the
+teammate should be confirming or overriding a proposal, not doing your thinking. Show all of it —
+doing, why now, the recommendation — in the draft you put to Thomas. One topic per call, 1–4
+related questions; unrelated questions are separate calls.
 
 **When the answer comes back**, say in one line what you did with it, so the decision is visible in
 the transcript rather than only in Slack.`;
