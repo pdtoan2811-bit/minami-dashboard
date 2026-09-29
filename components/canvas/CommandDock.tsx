@@ -78,7 +78,9 @@ const SAY = [
 const EARS = [
   { id: "", lang: undefined as string | undefined, label: "Default", note: "whatever .env says" },
   { id: "openai/whisper-large-v3", lang: "", label: "English", note: "English-only. 99 languages, accent-robust — anh's pick for EN calls" },
-  { id: "omni:google/gemini-3-flash-preview", lang: undefined, label: "VI + EN terms ★", note: "omni LLM, INSTRUCTED to keep English terms — 8/10 terms vs whisper's 4/10" },
+  { id: "omni:google/gemini-3.8-flash", lang: undefined, label: "VI + EN terms ★", note: "omni LLM, INSTRUCTED to keep English terms — never looped, hears quiet voices" },
+  { id: "omni:google/gemini-3.1-flash-lite", lang: undefined, label: "VI + EN fast", note: "~1s faster, half the cost — but loops on stutters and drops quieter voices" },
+  { id: "omni:google/gemini-3-flash-preview", lang: undefined, label: "VI + EN (prev)", note: "the ear before 2026-09-29 — similar quality, but invents whole sentences on silence" },
   { id: "omni:openai/gpt-audio-mini", lang: undefined, label: "VI + EN alt", note: "same trick, second opinion when gemini drifts" },
   { id: "qwen/qwen3-asr-flash-2026-02-10", lang: "vi", label: "VI fluent", note: "smoothest Vietnamese, mangles terminology; pin stops CJK drift" },
   { id: "openai/gpt-4o-mini-transcribe", lang: "", label: "Cheap EN", note: "$0.084/hr, measured correct on this voice" },

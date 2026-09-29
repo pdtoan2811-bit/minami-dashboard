@@ -39,6 +39,9 @@ export type TranscribeEngine = {
    *
    *  `known` is the roster gathered so far, fed back so labels stay stable between chunks. */
   room?: { known: string[] };
+  /** Overrides the omni ear's output cap. Only for scripts/ear-ab.mts's reference model: a model
+   *  that cannot turn reasoning off spends the cap thinking and returns half a sentence. */
+  maxTokens?: number;
 };
 
 export type CanvasMode = {
@@ -141,8 +144,18 @@ export type CanvasMode = {
  *  quality — three separate ASR biasing parameters have been probed inert on this stack
  *  (OpenRouter's provider.options.keyterm, Blaze's `prompt`, whisper's own `prompt`), so a pure ASR
  *  cannot be told that "workflow" is a word. An omni model can, because the instruction is the
- *  message. It costs chat-model rates and roughly doubles latency; that is the trade. */
-const STT_DEFAULT = "omni:google/gemini-3-flash-preview";
+ *  message. It costs chat-model rates and roughly doubles latency; that is the trade.
+ *
+ *  omni: gemini-3.8-flash — chosen by anh 2026-09-29 after benching the whole Flash line (2.5 →
+ *  3.8, nine models, three passes of 14 real clips, vs gemini-3.1-pro; table in §17, harness
+ *  `npx tsx scripts/ear-ab.mts`). NOT the fastest: 3.1-flash-lite was ~1s quicker, half the cost
+ *  and closest to pro — but it looped deterministically on real stutters (2 of ~45 clips, one
+ *  costing 27s and the words) and dropped quieter voices, which room mode cannot afford. 3.8 never
+ *  looped and caught the most speech on the hard clips. Its silence inventions are 1–5 word
+ *  fragments ("Dạ", "một") the judge already discards. 3-flash-preview, the ear before, invented
+ *  100+ word meetings from pure silence. Robustness over a second of latency was the call.
+ */
+const STT_DEFAULT = "omni:google/gemini-3.8-flash";
 const STT_MODEL = process.env.CANVAS_STT_MODEL || STT_DEFAULT;
 
 /** ⚠️ AN EAR OVERRIDE MUST NEVER BE SILENT. This is the fourth time the line above has been

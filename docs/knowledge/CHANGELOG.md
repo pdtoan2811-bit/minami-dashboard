@@ -8,6 +8,17 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-09-29
+- **Meeting ear moved to `omni:google/gemini-3.8-flash`** (§17, "The omni ear") — benched the
+  whole Flash line (9 models × 3 passes of 14 real clips, vs gemini-3.1-pro). 3.1-flash-lite led
+  on speed, cost and agreement with pro, but looped on real stutters and dropped quieter voices;
+  anh chose 3.8 (never looped, hears the most) over ~1s of latency. Lite stays in the dock as
+  "VI + EN fast". The old ear fabricated a 100-word meeting from pure silence. The omni call now sends `reasoning: {effort: "minimal"}`,
+  caps `max_tokens` by audio length, collapses repetition loops, and retries a looped chunk once
+  at temperature 0.3 (flash-lite looped 5/5 on one real stutter, 2.5-flash for 50s). Harness: `scripts/ear-ab.mts`.
+  *Reported by user: "update minami meet with gemini flash 3.8 as the omni model - test a bit",
+  then "check the gemini flash series to get the top quality + speed".*
+
 ### 2026-09-25
 - **Fan-out is opt-in again; "free" is the default** (§3, system-prompt append) — new chats get no
   fan-out instruction, so Claude spawns subagents only when it judges they help. The ⑂ pill reads

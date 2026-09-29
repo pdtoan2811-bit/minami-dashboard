@@ -129,7 +129,7 @@ const CHECKS = [
 ];
 
 const INFO = [
-  ["CANVAS_STT_MODEL", "omni:google/gemini-3-flash-preview", "which ear is listening — lib/canvas-modes.ts is the one declaration"],
+  ["CANVAS_STT_MODEL", "omni:google/gemini-3.8-flash", "which ear is listening — lib/canvas-modes.ts is the one declaration"],
   ["CANVAS_STT_LANGUAGE", "vi", "pinned language — auto-detect made chirp-3 TRANSLATE instead of transcribe"],
   ["CANVAS_DERIVE_MODEL", "", "judge override; blank uses the single default in lib/canvas-modes.ts"],
   ["CANVAS_BUDGET_USD", "50", "monthly ceiling — the omni ear bills on OpenRouter and IS counted"],

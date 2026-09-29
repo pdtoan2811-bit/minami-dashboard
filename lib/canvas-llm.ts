@@ -141,27 +141,64 @@ async function transcribeOmni(
     console.log(`[omni] model=${model} terms=${terms.length} glossaryChars=${glossary.length} audioBytes=${audio.length} format=${format}`);
     console.log(`[omni] SYSTEM >>>${system}<<<`);
   }
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 60_000);
-  let data: any;
-  try {
-    const res = await fetch(`${BASE}/chat/completions`, {
-      method: "POST", headers: headers(), signal: ctl.signal,
-      body: JSON.stringify({
-        model,
-        // Deterministic: this is transcription, and creativity here is called hallucination.
-        temperature: 0,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: [{ type: "input_audio", input_audio: { data: audio.toString("base64"), format } }] },
-        ],
-      }),
-    });
-    data = JSON.parse(await res.text());
-  } finally { clearTimeout(t); }
-  if (data?.error) throw new Error(JSON.stringify(data.error).slice(0, 200));
-  bill(spend, data, t0);
-  let text = String(data?.choices?.[0]?.message?.content ?? "").trim();
+  const ask = async (temperature: number) => {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 60_000);
+    let data: any;
+    try {
+      const res = await fetch(`${BASE}/chat/completions`, {
+        method: "POST", headers: headers(), signal: ctl.signal,
+        body: JSON.stringify({
+          model,
+          temperature,
+          /** ⚠️ `effort: "minimal"`, NOT `enabled: false` — the opposite of the judge's rule, per model.
+           *  The 3.x Flash line reasons by default and 3.8 REJECTS enabled:false with a 400
+           *  ("Reasoning is mandatory for this endpoint"). Left unset, 3.8 spent 475 reasoning tokens
+           *  on a 10s clip — ~5x the cost and 2x the latency of the transcript itself. `minimal`
+           *  measured 0 reasoning tokens on 2026-09-29. Transcription has nothing to think about. */
+          reasoning: { effort: "minimal" },
+          /** ⚠️ A CAP, BECAUSE AT temperature 0 A LOOP IS DETERMINISTIC. gemini-3.1-flash-lite, given
+           *  one real 9s clip plus this glossary prompt, looped until the 60s abort 5 runs of 5 —
+           *  without it the chunk is lost AND the board stalls a minute. 2.5-flash did the same (50s,
+           *  100x the words). Normal speech runs ~15 tokens/s; 40/s leaves room-mode labels headroom.
+           *  WAV is the live path (16 kHz mono S16LE = 32 bytes/ms); other formats get the floor. */
+          max_tokens: engine.maxTokens ?? Math.max(256, Math.ceil((format === "wav" ? audio.length / 32_000 : 0) * 40)),
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: [{ type: "input_audio", input_audio: { data: audio.toString("base64"), format } }] },
+          ],
+        }),
+      });
+      data = JSON.parse(await res.text());
+    } finally { clearTimeout(t); }
+    if (data?.error) throw new Error(JSON.stringify(data.error).slice(0, 200));
+    bill(spend, data, t0);
+    const raw = String(data?.choices?.[0]?.message?.content ?? "").trim();
+    /** The cap stops a loop; this removes its residue. A word or ≤3-word phrase repeated 5+ times
+     *  in a row is never speech worth a card — collapse it to two so the judge sees the stutter,
+     *  not a wall. */
+    const text = raw.replace(/((?:[\p{L}\p{N}]+[\s,.]+){1,3}?)\1{4,}/gu, "$1$1").trim();
+    const finish = data?.choices?.[0]?.finish_reason;
+    return { text, finish, looped: text !== raw || finish === "length" || finish === "error" };
+  };
+
+  // Deterministic by default: this is transcription, and creativity here is called hallucination.
+  const first = await ask(0);
+  let text = first.text;
+  /** ⚠️ A LOOP GETS ONE RETRY AT 0.3 — and only a loop. 3.1-flash-lite looped on 2 of ~45 real
+   *  clips, both times on a genuine stutter ("cái cái cái cái kia", "xong rồi, xong rồi"), and at
+   *  temperature 0 it loops the same way every time: 5 runs of 5. One ended at the cap, the other
+   *  with finish=error and nothing but the repeated phrase — "bot này" and "mind map này" lost.
+   *  At 0.3 both came back whole. Frequency penalty was probed and changed nothing. Sampling stays
+   *  at 0 for every other chunk, since randomness is what invents speech on silence. */
+  if (first.looped) {
+    console.warn(`[omni] repetition loop (finish=${first.finish}) — retrying once at temperature 0.3`);
+    const second = await ask(0.3).catch((e) => { console.warn(`[omni] retry failed: ${e}`); return null; });
+    // Accept any retry that ENDED on its own. A collapse inside it is fine — a real 5x stutter is
+    // what triggered this, and the collapse keeps it to two.
+    if (second?.finish === "stop" && second.text) text = second.text;
+    console.warn(`[omni] retry ${text === first.text ? "did not help — kept the collapsed first answer" : "recovered the chunk"} (finish=${second?.finish})`);
+  }
 
   /** ⚠️ BELT AND BRACES AGAINST INVENTION. An instruction is a request, not a guarantee, and this
    *  particular failure puts fabricated cards on a screen anh is sharing with a customer — so it gets

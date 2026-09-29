@@ -325,7 +325,7 @@ SOFTWARE.
 
   ".gitignore": `node_modules/\n.next/\n.next-*/\n.env.local\n*.log\n\n# Bring your own memes. The folders ship; the images are yours.\npublic/memes/**/*.gif\npublic/memes/**/*.png\npublic/memes/**/*.jpg\npublic/memes/**/*.webp\n`,
 
-  ".env.example": `# The two keys this needs, and nothing else.\n\n# https://recall.ai — puts a bot in the call and streams per-participant audio\nRECALL_API_KEY=\nRECALL_REGION=us-west-2\n\n# https://openrouter.ai — the ear (audio in) and the judge (cards out)\nOPENROUTER_API_KEY=\n\n# Any long random string. Shared by the receiver and the app; without it ingest is refused.\nCANVAS_INGEST_TOKEN=\n\n# Optional. Defaults are in lib/canvas-modes.ts and are the ones actually in use.\n# CANVAS_STT_MODEL=omni:google/gemini-3-flash-preview\n# CANVAS_SILENCE_MS=1000\n`,
+  ".env.example": `# The two keys this needs, and nothing else.\n\n# https://recall.ai — puts a bot in the call and streams per-participant audio\nRECALL_API_KEY=\nRECALL_REGION=us-west-2\n\n# https://openrouter.ai — the ear (audio in) and the judge (cards out)\nOPENROUTER_API_KEY=\n\n# Any long random string. Shared by the receiver and the app; without it ingest is refused.\nCANVAS_INGEST_TOKEN=\n\n# Optional. Defaults are in lib/canvas-modes.ts and are the ones actually in use.\n# CANVAS_STT_MODEL=omni:google/gemini-3.8-flash\n# CANVAS_SILENCE_MS=1000\n`,
 
   "README.md": `# minami-meet
 
