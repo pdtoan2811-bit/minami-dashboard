@@ -9,6 +9,11 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **`/glance`, the cover-screen view** (§23, `app/glance/`, `lib/use-cover.ts`). Built for the Flip 7
+  Flex Window (360×400). It shows counts, up to three needs-you lines with their wait, or the running
+  chats, and one Pause all / Resume all button that uses the hold brake. There is no transcript,
+  composer or approve button. `Need.since` is new on the live feed, and `/api/bento/sessions` accepts
+  `?ids=`. `useCoverScreen()` is ready for the main page to redirect with.
 - **The phone shell covers touch tablets and unfolded foldables** (§23). It now uses a `compact:`
   variant / `useCompact()`: narrow, or touch-only up to 1199px. *Reported by user: "On find n5, the
   screen go as if it's a desktop".*

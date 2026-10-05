@@ -219,6 +219,9 @@ export const NODES: ModuleNode[] = [
   { id: "l/density", label: "density.ts", sub: "measured tiers + context\n(roomy · snug · tight · micro)", layer: "core", row: 20 },
   // The few decisions that are about the DEVICE, not the box: a phone forces tabs and stacks the slot (§23).
   { id: "l/use-media", label: "use-media.ts", sub: "useMediaQuery / usePhone\n(device, not box — §23)", layer: "core", row: 20 },
+  // The Flip 7 cover screen: counts, needs-you lines, one Pause-all button. Read-only bar the brake (§23).
+  { id: "app/glance", label: "/glance", sub: "cover-screen view (Flex Window)\nneeds · running · pause all", layer: "surface", row: 9, pipeline: "live" },
+  { id: "l/use-cover", label: "use-cover.ts", sub: "useCoverScreen()\nviewport AND screen ≤ 420×480", layer: "core", row: 21 },
   // Shared so "the browser matches the file preview" is a fact about the code, not a thing to re-check.
   { id: "c/PanelTabs", label: "PanelTabs", sub: "one tab row, worn by\nthe file AND browser panels", layer: "component", row: 23 },
 
@@ -494,4 +497,8 @@ export const EDGES: ModuleEdge[] = [
   { from: "r/inspectjs", to: "p/inspectcore", kind: "http", label: "concatenates at request" },
   { from: "p/inspectcore", to: "app/preview", kind: "http", label: "postMessage (hello · picked · errors)" },
   { from: "app/page", to: "app/preview", kind: "http", label: "window.open from a url chip" },
+  { from: "app/glance", to: "r/agent", kind: "http", label: "/live, 5s while visible" },
+  { from: "app/glance", to: "r/hold", kind: "http", label: "pause / resume all" },
+  { from: "app/glance", to: "r/sessions", kind: "http", label: "?ids= titles only" },
+  { from: "app/glance", to: "l/pagevisible", kind: "import" },
 ];

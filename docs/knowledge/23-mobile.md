@@ -224,6 +224,55 @@ Back → the chat. The ↗ button still opens a real tab, for pages that refuse 
 Not covered: bare URLs in prose, which the Markdown renderer doesn't turn into links at all. The §21
 comment pop-out, which iframes the localhost URL, is also not covered.
 
+### The cover screen — `/glance`, `lib/use-cover.ts`
+
+The Flip 7's Flex Window (~360×400 CSS px, read at arm's length) gave the full board a "micro" pane
+that showed nothing usable. `/glance` is a separate route built for that screen. It answers one
+question, "does anything need me, and how long has it waited?", and offers one action.
+
+- **Counts strip:** needs you / running / done. "Done" means the turn ended OK in the last 30 min. The
+  number is 20px and the word 16px.
+- **Up to three lines.** If anything needs you, the lines are the needs, sorted by soonest `expiresAt`
+  (a held step auto-denies then), then by longest wait. Otherwise they are the three most recently
+  started running chats with their live label. Each line shows the chat title (`task || title`, the
+  board's `titleOf`), the need's summary cut to six words, and its age. Tapping a line goes to
+  `/?open=<sessionId>`. Overflow is shown as "· +N more" on the label row, because a row of its own
+  under the list pushed the third line under the button.
+- **One button: Pause all / Resume all.** It uses the Flow brake (`/api/agent/hold`, key
+  `live:<sessionId>`) on every busy, un-held session. Pause has no confirm, because it only parks the
+  next tool call and nothing is lost. Resume lets work run unattended again, so it needs a second tap,
+  and that confirm lapses after 4s.
+- **Deliberately absent:** transcript, composer, approve/deny. 360px can't show enough of a command to
+  approve it safely.
+- **Status by shape and motion:** a still solid ring means needs you, a turning dashed ring means
+  running, two bars mean paused, ✓ means done. Under reduced motion the dashed ring stops turning, and
+  the dash still tells it apart from the solid ring.
+- **Polling:** `/api/agent/live` every 5s, only while the page is visible, and immediately on
+  `visibilitychange`. If a poll fails the board stays up, the header says "offline", and the label
+  says "Not updating" instead of "All quiet". Otherwise a dead poll and an idle box would look
+  identical.
+
+Two server additions came with it. `Need.since` (set when the pending call is created) records how
+long a need has waited. Nothing else did: `expiresAt` exists only for held steps, and `phaseSince`
+moves on every `touch()`. `/api/bento/sessions?ids=a,b` narrows the reply, because the unfiltered list
+was 54 KB on the author's box and the glance needs about three titles.
+
+**`useCoverScreen()`** (`lib/use-cover.ts`) is for the main page's redirect. It requires the viewport
+to be ≤420×480 **and** `screen` to be that small. Viewport alone would also match a laptop window
+dragged small, and a phone's main screen with the keyboard up (`resizes-content` shrinks the
+viewport). Redirecting someone mid-typing would lose the screen they were on. Checked in Playwright:
+cover 360×400 true; Flip main 412×960 false; 412×450 viewport on a 412×960 screen false; 400×450 window
+on a laptop screen false.
+
+**Getting it onto the Flex Window.** Samsung's own *Labs → Apps allowed on cover screen* is a short
+allowlist (Messages, WhatsApp, YouTube, Maps…), and Chrome isn't on it. The route that works is Good
+Lock → MultiStar → *I ♡ Galaxy Foldable* → **Launcher Widget**. Pick the apps, then add the Good Lock
+Launcher widget under Settings → Cover screen → Widgets. That picker lists every installed app, and an
+installed PWA (WebAPK) is its own app, so it should appear there. Press reports confirm Chrome works
+this way; nobody has confirmed a WebAPK specifically. Not yet tried on the device. The installed app
+opens at `start_url` (`/`), so either the main page redirects via `useCoverScreen()`, or you install a
+second shortcut to `/glance`.
+
 ### How to re-audit
 
 There is no checked-in harness. The audit was two throwaway Playwright scripts (route × viewport
