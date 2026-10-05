@@ -14,6 +14,7 @@
 // accepts a mid-session change and then ignores it). safeMode() clamps any unrecognised string to
 // "default", so only an explicit, recognised value can ever widen permissions.
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import pathMod from "node:path";
@@ -478,6 +479,12 @@ type Session = {
    *  `busy` true between the two. Anything that sets `busy = false` must clear it, or the next idle
    *  pane inherits a clock that has been running since the last turn. */
   turnStartedAt: number | null;
+  /** How the last turn ended — the inbox's "Finished" / "Failed" groups and the done-push (§23).
+   *  `text` is the opening of the final assistant reply, so a row can say what it did without
+   *  the chat being opened. */
+  ended: { at: number; ok: boolean; text?: string; error?: string; turnMs?: number } | null;
+  /** The newest top-level assistant text this turn — what becomes `ended.text`. */
+  lastText: string;
   /** The live ASK's plan, as TodoWrite/TaskCreate/TaskUpdate calls stream in — the source of
    *  ActivityState.progress (lib/task-progress.ts). Scoped to an ask, not a turn: reset by beginAsk()
    *  where a human message starts, and deliberately NOT where a task_notification wakes the CLI into a
@@ -827,7 +834,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, plan: [], askStartedAt: null, planPending: new Map(), paceHist: [], writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
+    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, ended: null, lastText: "", plan: [], askStartedAt: null, planPending: new Map(), paceHist: [], writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
     smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), settledTasks: new Map(), askTeam: null,
     toolBufs: new Map(),
@@ -890,6 +897,8 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     } else {
       broadcast(s, { t: "permission", id, toolName, input, held, expiresAt });
     }
+    // After the entry is stored (microtask), so a listener reading liveActivity() sees it.
+    queueMicrotask(() => { if (s.sessionId && s.pending.has(id)) liveEvents.emit("need", { sessionId: s.sessionId, cwd: s.cwd, need: needOf(id, toolName, input, held, expiresAt) }); });
     const p = new Promise<Decision>((resolve) => {
       const entry: Pending = { resolve, toolName, input, expiresAt };
       if (held) {
@@ -1003,6 +1012,8 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       for await (const m of s.q as AsyncIterable<any>) handleMessage(s, m);
     } catch (e: any) {
       broadcast(s, { t: "error", message: String(e?.message || e) });
+      s.ended = { at: Date.now(), ok: false, error: String(e?.message || e).slice(0, 300) };
+      if (s.sessionId) liveEvents.emit("ended", { sessionId: s.sessionId, cwd: s.cwd, ended: s.ended });
     } finally {
       s.busy = false;
       s.turnStartedAt = null;
@@ -1145,6 +1156,10 @@ function handleMessage(s: Session, m: any) {
       // task, not the top line, so they're recorded with parentId and filtered out of phaseLabel().
       const parentId = m.parent_tool_use_id ?? null;
       const content = m.message?.content;
+      if (Array.isArray(content) && !parentId) {
+        const txt = content.filter((b: any) => b?.type === "text" && typeof b.text === "string").map((b: any) => b.text).join(" ").trim();
+        if (txt) s.lastText = txt.slice(0, 400);
+      }
       if (Array.isArray(content)) {
         let changed = false;
         for (const b of content) {
@@ -1229,6 +1244,12 @@ function handleMessage(s: Session, m: any) {
         s.smith.turnWork = 0;
       }
       broadcast(s, { t: "result", subtype: m.subtype, costUsd: m.total_cost_usd ?? m.cost_usd });
+      {
+        const ok = m.subtype === "success";
+        s.ended = { at: Date.now(), ok, ...(s.lastText ? { text: s.lastText } : {}), ...(ok ? {} : { error: String(m.subtype) }), ...(s.turnStartedAt ? { turnMs: Date.now() - s.turnStartedAt } : {}) };
+        s.lastText = "";
+        if (s.sessionId) liveEvents.emit("ended", { sessionId: s.sessionId, cwd: s.cwd, ended: s.ended });
+      }
       if (handover) {
         // Phase, not idle: the pane should read as still working, because it is.
         // The clock restarts here rather than waiting for `started`: this turn is over, and the ~2ms
@@ -2106,7 +2127,27 @@ export function liveModels(): { key: string; cwd: string; model: string; premium
   return out;
 }
 
-export type LiveTile = { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; progress?: TaskProgress };
+/** What a chat is blocked on (§23) — the inbox's "Needs you" group, the pinned card, the push.
+ *  Under bypassPermissions (this box's default) ordinary tool approvals almost never happen: the
+ *  realistic needs are Claude's question, a plan to review (ExitPlanMode), and steps parked by the
+ *  hold brake, which auto-DENY at `expiresAt`. `permission` covers a session set to ask/auto-edits. */
+export type Need = { id: string; kind: "question" | "plan" | "held" | "permission"; tool: string; summary: string; options?: string[]; expiresAt?: number };
+export function needOf(id: string, toolName: string, input: unknown, held: boolean, expiresAt?: number): Need {
+  const i = (input || {}) as Record<string, any>;
+  if (toolName === "AskUserQuestion") {
+    const q = Array.isArray(i.questions) ? i.questions[0] : null;
+    const opts = Array.isArray(q?.options) ? q.options.map((o: any) => String(o?.label ?? o)).slice(0, 4) : undefined;
+    return { id, kind: "question", tool: toolName, summary: String(q?.question || "Claude has a question").slice(0, 200), ...(opts?.length && (i.questions?.length ?? 1) === 1 && !q?.multiSelect ? { options: opts } : {}) };
+  }
+  if (toolName === "ExitPlanMode") return { id, kind: "plan", tool: toolName, summary: "Plan ready for review", ...(expiresAt ? { expiresAt } : {}) };
+  const target = i.command ?? i.file_path ?? i.notebook_path ?? i.url ?? i.pattern ?? i.path ?? "";
+  return { id, kind: held ? "held" : "permission", tool: toolName, summary: `${toolName}${target ? " · " + String(target).replace(/\s+/g, " ").slice(0, 160) : ""}`, ...(expiresAt ? { expiresAt } : {}) };
+}
+/** Server-side signals for anything that reacts to chats without a browser attached — web push
+ *  (lib/push). "need": a chat became blocked on the user. "ended": a turn finished or failed. */
+export const liveEvents: EventEmitter = ((globalThis as any).__minamiLiveEvents ??= new EventEmitter());
+
+export type LiveTile = { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; progress?: TaskProgress; need?: Need; needs?: number; ended?: { at: number; ok: boolean; text?: string; error?: string; turnMs?: number }; mode?: string; hold?: boolean };
 export function liveActivity(): Record<string, LiveTile> {
   const out: Record<string, LiveTile> = {};
   const seen = new Set<Session>();
@@ -2123,7 +2164,12 @@ export function liveActivity(): Record<string, LiveTile> {
     // turnMs here instead would reintroduce exactly the churn the line above exists to avoid.
     // `progress` is safe here for the same reason: every field in it is a count or a fixed timestamp
     // (lib/task-progress.ts), so it only changes when the plan does — the tile animates the fill locally.
-    out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd, turnStartedAt: s.turnStartedAt, ...(s.busy && a.progress ? { progress: a.progress } : {}) };
+    // `need` / `ended` are as stable between polls as the fields above: they change only when a
+    // pending entry is added or settled, or a turn ends — so the grid's change-detection still holds.
+    const first = s.pending.entries().next().value as [string, Pending] | undefined;
+    const need = first ? needOf(first[0], first[1].toolName, first[1].input, !!first[1].timer, first[1].expiresAt) : undefined;
+    out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd, turnStartedAt: s.turnStartedAt, ...(s.busy && a.progress ? { progress: a.progress } : {}),
+      ...(need ? { need, needs: s.pending.size } : {}), ...(s.ended ? { ended: s.ended } : {}), mode: s.mode, ...(s.hold ? { hold: true } : {}) };
   }
   return out;
 }
