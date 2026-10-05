@@ -36,7 +36,9 @@ async function status(): Promise<ServeStatus> {
  *  listening port — the dashboard itself is `:443 → 127.0.0.1:3000`, so a link to localhost:3000 must
  *  come back as the bare host, not as a second `:3000` entry. */
 function find(s: ServeStatus, port: number): string | null {
-  const targets = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
+  // `http://::1:<port>` is how serve REPORTS an IPv6 target (brackets stripped) — an entry someone
+  // added by hand that way is still this port's, even though it cannot actually proxy (see below).
+  const targets = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`, `http://::1:${port}`]);
   for (const [hostPort, web] of Object.entries(s.Web || {})) {
     const proxy = web.Handlers?.["/"]?.Proxy?.replace(/\/+$/, "");
     if (proxy && targets.has(proxy)) return `https://${hostPort.replace(/:443$/, "")}`;
@@ -44,11 +46,22 @@ function find(s: ServeStatus, port: number): string | null {
   return null;
 }
 
-async function listening(port: number): Promise<boolean> {
+// Both families, IPv4 first. A Next dev server started with `-H localhost` (the ecvision pitch bench
+// on :3120 is one) binds `[::1]` ONLY, so probing 127.0.0.1 alone reported "nothing is running" for a
+// server that was up — and a serve entry proxying to 127.0.0.1 would have been a dead link anyway.
+// So the probe also decides the proxy target: 127.0.0.1 if that answered, else the NAME `localhost`.
+// Not `[::1]` — serve stores it unbracketed as `http://::1:<port>` and then answers every request with
+// "unknown proxy destination"; the name resolves to both families and works.
+const LOOPBACKS = ["127.0.0.1", "[::1]"];
+
+async function answeringHost(port: number): Promise<string | null> {
   // Any HTTP answer counts, including a 404 or 500 — the question is "is a server there", and a
   // dev server mid-compile can take a while to say anything at all.
-  try { await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(4000), redirect: "manual" }); return true; }
-  catch { return false; }
+  for (const h of LOOPBACKS) {
+    try { await fetch(`http://${h}:${port}/`, { signal: AbortSignal.timeout(4000), redirect: "manual" }); return h; }
+    catch { /* try the other family */ }
+  }
+  return null;
 }
 
 export type ExposeResult = { ok: true; base: string; created: boolean } | { ok: false; status: number; error: string };
@@ -61,8 +74,9 @@ export async function exposePort(port: number): Promise<ExposeResult> {
   if (existing) return { ok: true, base: existing, created: false };
   // Don't mint a serve entry for nothing: it would outlive this click and point the next visitor at
   // whatever happens to bind the port later.
-  if (!(await listening(port))) return { ok: false, status: 404, error: `nothing is running on localhost:${port}` };
-  try { await exec(cli(), ["serve", "--bg", `--https=${port}`, `http://127.0.0.1:${port}`], { timeout: 15000 }); }
+  const host = await answeringHost(port);
+  if (!host) return { ok: false, status: 404, error: `nothing is running on localhost:${port}` };
+  try { await exec(cli(), ["serve", "--bg", `--https=${port}`, `http://${host === "[::1]" ? "localhost" : host}:${port}`], { timeout: 15000 }); }
   catch (e) { return { ok: false, status: 502, error: `tailscale serve failed: ${(e as Error).message.split("\n")[0]}` }; }
   const made = find(await status(), port);
   return made ? { ok: true, base: made, created: true } : { ok: false, status: 502, error: "tailscale serve reported success but lists no entry" };
