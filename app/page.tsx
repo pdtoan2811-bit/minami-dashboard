@@ -40,6 +40,7 @@ import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block
 import { openLocalUrl, PREVIEW_EVENT } from "@/lib/open-local";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { ChatSheet } from "@/components/ChatSheet";
+import { Inbox, type InboxLive } from "@/components/Inbox";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
@@ -507,6 +508,11 @@ export default function BentoHome() {
   const gridFits = !useMediaQuery("(max-width: 639px)");
   // The phone shell (bottom bar + sheet) shows one chat at a time, so it is always tabs too.
   const compact = useCompact();
+  // The Find N5 unfolded (and touch tablets): list + chat side by side, Material's list-detail layout.
+  // 700px is where a 288px list still leaves the chat ~460px — below that, code blocks wrap to mush.
+  const split = useMediaQuery("(min-width: 700px)") && compact;
+  // What the phone opens to: the cross-topic inbox (default) or the topic board.
+  const [homeView, setHomeView] = useSetting<"inbox" | "topics">("homeView", "inbox");
   const paneView = gridFits && !compact ? savedPaneView : "tabs";
   const [activePane, setActivePane] = useState(0);
   // `compact` (declared above): the tab strip gives way to one bottom chat bar + a sheet
@@ -621,7 +627,7 @@ export default function BentoHome() {
   useEffect(() => { let a = true; const t = () => { if (a && !pageHidden()) loadSessions(); }; loadSessions(); const iv = setInterval(t, 5000); const off = onPageVisible(t); return () => { a = false; clearInterval(iv); off(); }; }, [loadSessions]);
   // Live activity per session (what each running dashboard-driven session is doing right now) — polled
   // fast so a tile can show "thinking… / running: … / reading X" live while a box works.
-  const [liveAct, setLiveAct] = useState<Record<string, { phase: string; label: string; busy: boolean; cwd: string; turnStartedAt?: number | null; progress?: TaskProgress }>>({});
+  const [liveAct, setLiveAct] = useState<Record<string, InboxLive & { phase: string; label: string; busy: boolean; cwd: string; turnStartedAt?: number | null; progress?: TaskProgress; mode?: string; hold?: boolean }>>({});
   const liveActSig = useRef("");
   useEffect(() => {
     let a = true;
@@ -633,6 +639,22 @@ export default function BentoHome() {
     // The fastest poll on the page — the one most worth pausing for a hidden tab.
     const tick = () => { if (!pageHidden()) t(); };
     t(); const iv = setInterval(tick, 1500); const off = onPageVisible(t); return () => { a = false; clearInterval(iv); off(); };
+  }, []);
+  // When each chat was last seen, on ANY device (lib/seen.ts) — the inbox's New group. Polled slowly;
+  // the pane that marks a chat seen also tells this page directly (`minami:seen`), so the row clears
+  // the moment you've read it rather than up to 15s later.
+  const [seen, setSeen] = useState<{ seen: Record<string, number>; floor: number }>({ seen: {}, floor: Date.now() });
+  useEffect(() => {
+    let a = true;
+    const t = () => fetch("/api/agent/seen").then((r) => r.json()).then((d) => { if (a && d?.seen) setSeen({ seen: d.seen, floor: d.floor || 0 }); }).catch(() => {});
+    const onSeen = (e: Event) => { const id = (e as CustomEvent<string>).detail; setSeen((p) => ({ ...p, seen: { ...p.seen, [id]: Date.now() } })); };
+    window.addEventListener("minami:seen", onSeen);
+    t(); const iv = setInterval(() => { if (!pageHidden()) t(); }, 15000);
+    return () => { a = false; clearInterval(iv); window.removeEventListener("minami:seen", onSeen); };
+  }, []);
+  const markRead = useCallback((id: string) => {
+    window.dispatchEvent(new CustomEvent("minami:seen", { detail: id }));
+    fetch("/api/agent/seen", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: id }) }).catch(() => {});
   }, []);
   // Read by `openProject`, which must NOT re-create itself every 1.5s: it is the onClick of every tile
   // on the board, so a new identity per poll re-renders the whole grid twice a second for a value that
@@ -721,6 +743,13 @@ export default function BentoHome() {
   // it's read (the ＋ menu, the chat switcher, `continueTarget`), then the unfiltered one purely to
   // keep what's on screen on screen.
   const allProjects = useMemo(() => groupProjects(pool), [pool]);
+  // The inbox lists every chat in the date window across all topics, plus any chat running or waiting
+  // on you whatever its age — a question doesn't stop needing an answer because it's 4 days old.
+  const inboxSessions = useMemo(() => {
+    const ids = new Set(windowed.map((x) => x.id));
+    return [...windowed, ...pool.filter((x) => !ids.has(x.id) && (liveAct[x.id]?.need || liveAct[x.id]?.busy))]
+      .map((x) => ({ id: x.id, project: x.project, title: titleOf(x), tail: x.tail || "", lastActivity: x.lastActivity, lastRole: x.lastRole || "" }));
+  }, [windowed, pool, liveAct]);
   const openProj = useMemo(
     () => (project ? allProjects.find((p) => p.name === project) ?? null : null),
     [allProjects, project],
@@ -805,6 +834,49 @@ export default function BentoHome() {
       fetchSession(id).then((d) => { if (d?.turns) cacheTranscript(id, d); }).catch(() => {});
     }
   }, []);
+  // Open ONE chat, from any topic, in one tap — the inbox's whole point (§23). Hopping between projects
+  // used to mean back → tile → tab; now it is this. `openProject` restores (or parks) the topic's
+  // panes, then this lands on the chat: focuses it if it's already a tab, adds it if there's room,
+  // otherwise swaps it into the tab you were reading (same remount path as the ⌄ switcher).
+  const activePaneRef = useRef(0);
+  activePaneRef.current = activePane;
+  const openChat = useCallback((sid: string) => {
+    const meta = sessionsRef.current.find((x) => x.id === sid);
+    const p = meta && allProjects.find((x) => x.name === meta.project);
+    if (!meta || !p) return;
+    if (project !== p.name) openProject(p);
+    const cwd = meta.cwd && meta.cwd !== p.cwd ? meta.cwd : undefined;
+    setPanes((prev) => {
+      const at = prev.findIndex((x) => x.sid === sid);
+      if (at >= 0) { setActivePane(at); return prev; }
+      if (prev.length < MAX_PANES) { setActivePane(prev.length); return [...prev, { ...mkPane(sid), ...(cwd ? { cwd } : {}) }]; }
+      const j = Math.min(activePaneRef.current, prev.length - 1);
+      return prev.map((x, k) => (k === j ? { ...x, sid, switchGen: (x.switchGen || 0) + 1, ...(cwd ? { cwd } : { cwd: undefined }) } : x));
+    });
+    setPaneView("tabs");
+  }, [allProjects, project, openProject, setPaneView]);
+  // Most-recently-visited chats, across topics — what the chat bar's swipe walks. While a swipe
+  // sequence is in progress (cursor younger than 4s) the list is NOT reordered, or each swipe would
+  // just bounce between the same two chats.
+  const mru = useRef<string[]>([]);
+  const mruCursor = useRef<{ i: number; at: number } | null>(null);
+  const currentSid = project && focusPane != null ? panes[focusPane]?.sid : "";
+  useEffect(() => {
+    if (!currentSid) return;
+    if (mruCursor.current && Date.now() - mruCursor.current.at < 4000) return;
+    mruCursor.current = null;
+    mru.current = [currentSid, ...mru.current.filter((x) => x !== currentSid)].slice(0, 12);
+  }, [currentSid]);
+  // `/?open=<sessionId>` — where a notification, the cover-screen glance or a link lands. Honoured once,
+  // as soon as the sessions it names have loaded, then removed so a reload doesn't re-open it.
+  const openParam = useRef<string | null>(typeof window !== "undefined" ? new URLSearchParams(location.search).get("open") : null);
+  useEffect(() => {
+    const sid = openParam.current;
+    if (!sid || !sessions.some((x) => x.id === sid)) return;
+    openParam.current = null;
+    history.replaceState(history.state, "", location.pathname);
+    openChat(sid);
+  }, [sessions, openChat]);
   const startTopic = (cwd: string, label?: string) => {
     const name = label || cwd.split("/").filter(Boolean).pop() || cwd;
     setPicker(false); setProject(null); setAddMenu(false);
@@ -1176,7 +1248,7 @@ export default function BentoHome() {
   return (
     <div ref={shellRef} className={`bg-bento flex h-dvh w-screen overflow-hidden text-neutral-100 ${isDragging ? "cursor-col-resize select-none" : ""}`} style={{ ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
       {/* Left: bento — full grid, or the rail once the chat panel has taken the room. */}
-      {railed ? (
+      {railed && !split ? (
         <div className={`hidden shrink-0 ${compact ? "" : "md:block"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`} style={{ width: RAIL_W }}>
           <BentoRail
             projects={projects} current={project} accent={accent} fmtNum={short} busyCwds={busyCwds} icons={topicIcons}
@@ -1189,20 +1261,34 @@ export default function BentoHome() {
       // `@container`: the header's controls have to thin out by the BENTO COLUMN's width, not the
       // window's. At a 60% chat panel this column is ~500px on a wide display — plenty of window,
       // nowhere near enough column, and the old `md:` breakpoints happily overflowed it.
-      <div className={`@container flex min-w-0 flex-col w-full ${compact ? "" : "md:w-[var(--lw)]"} ${proj ? (compact ? "hidden" : "hidden md:flex") : ""} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      <div className={`@container flex min-w-0 flex-col ${split ? `shrink-0 border-r border-white/10 ${keyboardUp && proj ? "w-[72px]" : "w-[288px]"}` : `w-full ${compact ? "" : "md:w-[var(--lw)]"} ${proj ? (compact ? "hidden" : "hidden md:flex") : ""}`} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {/* Only the full-width (no project open) case needs the bell's gutter: with a panel open the
             bento is a left column whose right edge is nowhere near the viewport corner. */}
-        <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 pb-2 pl-6 pt-5 ${proj ? "pr-6" : "pr-16"}`}>
-          <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">Minami Bento</h1>
-          <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>
+        {/* Split (N5 unfolded) with the keyboard up: the list is an icon strip, no header at all. */}
+        {!(split && keyboardUp && proj) && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${compact ? "px-3 pb-1 pt-3" : `pb-2 pl-6 pt-5 ${proj ? "pr-6" : "pr-16"}`}`}>
+          <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">{compact ? "Minami" : "Minami Bento"}</h1>
+          {!compact && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>}
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
           {/* On a phone the search + Bento/Metrics/Settings row docks at the bottom, in the thumb's zone —
                 same band as the chat bar inside a topic, so navigation is always found in one place.
                 Fixed, so with `interactive-widget=resizes-content` it rides up on the keyboard while
                 you search, the way Safari's bottom address bar does. */}
-            <div className="ml-auto flex items-center gap-2 compact:fixed compact:inset-x-0 compact:bottom-0 compact:z-40 compact:ml-0 compact:border-t compact:border-white/10 compact:bg-neutral-950/95 compact:px-3 compact:pt-2 compact:pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 compact:min-w-0 compact:flex-1 compact:py-2 compact:text-sm rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
-            <Segmented className="hidden @min-[700px]:flex" value={winDays} onChange={setWinDays}
+            {/* In split view the list pane is 288px: the bar stays at the top of it (Material's
+                list-detail puts the list's own controls in its header), never across the chat. */}
+            <div className={`ml-auto flex items-center gap-2 ${compact && !split ? "fixed inset-x-0 bottom-0 z-40 ml-0 border-t border-white/10 bg-neutral-950/95 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2" : split ? "w-full ml-0" : ""}`}>
+            {/* Inbox | Topics — the phone's two homes. Inbox: every chat by what it needs from you.
+                Topics: the bento board. 44px tall, in the thumb band. */}
+            {compact && (
+              <div className="flex shrink-0 rounded-xl border border-white/10 p-0.5">
+                {(["inbox", "topics"] as const).map((v) => (
+                  <button key={v} onClick={() => setHomeView(v)}
+                    className={`rounded-lg px-3 py-2 text-[13px] font-medium ${homeView === v ? "bg-[var(--sakura)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Topics"}</button>
+                ))}
+              </div>
+            )}
+            {(!compact || homeView === "topics") && <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className={`w-24 @min-[620px]:w-32 compact:min-w-0 compact:flex-1 compact:py-2 compact:text-sm rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]`} />}
+            {compact && homeView === "inbox" && <span className="flex-1" />}
+            <Segmented className={`hidden ${split ? "" : "@min-[700px]:flex"}`} value={winDays} onChange={setWinDays}
               options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
             {!proj && <Segmented className="hidden md:flex" title="Sort projects" lead="↕" value={sortBy} onChange={setSortBy}
               options={[{ value: "recent", label: "Recent" }, { value: "busy", label: "Busy" }, { value: "name", label: "A–Z" }] as const} />}
@@ -1215,9 +1301,16 @@ export default function BentoHome() {
               className="hidden rounded-lg border border-white/10 p-1.5 text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-200 md:block"><PanelLeftClose className="h-3.5 w-3.5" /></button>}
             <Nav />
           </div>
-        </header>
+        </header>}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3 compact:pb-24">
+        {compact && homeView === "inbox" ? (
+          <div className={`flex min-h-0 flex-1 flex-col ${split ? "" : "pb-20"}`}>
+            <Inbox sessions={inboxSessions} live={liveAct} seen={seen.seen} floor={seen.floor} icons={topicIcons}
+              current={proj && focusPane != null ? panes[focusPane]?.sid : null} strip={split && keyboardUp && !!proj}
+              onOpen={openChat} onMarkRead={markRead} />
+          </div>
+        ) : (
+        <div className={`min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3 ${split ? "" : "compact:pb-24"}`}>
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? (
             <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">
@@ -1228,13 +1321,13 @@ export default function BentoHome() {
           : (
             // With the flow open, this becomes a single full-height cell rather than a grid: the canvas is
             // the screen, so it should get all of it instead of three fixed rows with dead space below.
-            <div className={`grid gap-3 ${flowFor ? "h-full grid-cols-1 grid-rows-1" : `auto-rows-[10.5rem] [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}`}>
+            <div className={`grid gap-3 ${flowFor ? "h-full grid-cols-1 grid-rows-1" : `auto-rows-[10.5rem] [grid-auto-flow:dense] ${split ? "grid-cols-1" : proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}`}>
               {projects.map((p, i) => {
                 const r = p.weight / maxW;
                 // No featured 2×2 tile on a phone: at 412px it was half a screen of empty card. It drops
                 // to a wide tile — `big` also drives the larger type and icons, which only fit in two rows.
                 const big = r >= 0.6 && gridFits, wide = !big && r >= 0.28;
-                const span = big ? "col-span-2 row-span-2" : wide ? "col-span-2" : "";
+                const span = split ? "" : big ? "col-span-2 row-span-2" : wide ? "col-span-2" : "";
                 const pc = accent(p.name);
                 const activeSel = i === sel && !proj;
                 const age = Date.now() - p.last;
@@ -1383,6 +1476,7 @@ export default function BentoHome() {
             </div>
           )}
         </div>
+        )}
       </div>
       )}
 
@@ -1437,7 +1531,8 @@ export default function BentoHome() {
           surface in the app, and it hosts the think-dots and activity shimmer of every open pane — so
           a single bouncing dot invalidated ~614k pixels of blur every frame. It sits BESIDE the grid as
           a flex sibling, never over it, so there was never anything behind it but the page gradient. */}
-      <div className={`min-h-0 bg-neutral-900/50 w-full ${compact ? "" : railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      <div className={`min-h-0 bg-neutral-900/50 ${split ? "min-w-0 flex-1" : `w-full ${compact ? "" : railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"}`} ${proj ? "flex flex-col" : split ? "flex items-center justify-center" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+        {!proj && split && <p className="px-8 text-center text-sm text-neutral-500">Pick a chat on the left — or ＋ to start one.</p>}
         {proj && (
           <>
             {/* ── Panel chrome: a tab row that never moves, details that reveal BENEATH it ─────────
@@ -1715,15 +1810,22 @@ export default function BentoHome() {
               const la = pn?.sid ? liveAct[pn.sid] : undefined;
               const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : pn ? paneAct[pn.key] : undefined;
               const tint = PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking;
-              // A horizontal swipe on the bar steps through the open chats, the way a phone's own
-              // tab switcher does. Only on the bar — the transcript below scrolls code blocks
-              // sideways, and a swipe there that changed chats would be a trap.
+              // A horizontal swipe on the bar steps through the chats you've RECENTLY VISITED, in any
+              // topic — Android's gesture-bar swipe between recent apps, applied to chats. Right = back to the
+              // previous one, left = forward again. Across projects on purpose: hopping between two projects
+              // used to be back → tile → tab, twice (§23). Only on the bar — the transcript scrolls code blocks
+              // sideways, and a swipe there would be a trap.
               const swipe = (e: TouchEvent<HTMLDivElement>) => {
                 const t0 = (e.currentTarget as HTMLElement).dataset;
                 if (e.type === "touchstart") { t0.x = String(e.touches[0].clientX); t0.y = String(e.touches[0].clientY); return; }
                 const dx = e.changedTouches[0].clientX - Number(t0.x), dy = e.changedTouches[0].clientY - Number(t0.y);
-                if (Math.abs(dx) < 60 || Math.abs(dy) > 40 || panes.length < 2) return;
-                setActivePane((i + (dx < 0 ? 1 : -1) + panes.length) % panes.length);
+                if (Math.abs(dx) < 60 || Math.abs(dy) > 40) return;
+                const list = mru.current;
+                const at = mruCursor.current && Date.now() - mruCursor.current.at < 4000 ? mruCursor.current.i : 0;
+                const next = Math.max(0, Math.min(list.length - 1, at + (dx > 0 ? 1 : -1)));
+                if (next === at || !list[next]) return;
+                mruCursor.current = { i: next, at: Date.now() };
+                openChat(list[next]);
               };
               return (
                 // Bottom-docked, Safari-style: the thumb's natural zone, directly under the composer,
@@ -2411,6 +2513,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
   const [menu, setMenu] = useState(false);
   const [modeOpen, setModeOpen] = useState(false); // the folded session-controls pill, in a cramped pane
+  useBackLayer(modeOpen, () => setModeOpen(false));
   // Key the agent by the SESSION (once it has an id), not the pane. That's what lets ANY pane showing a
   // running session stream it live — and lets a pane reattach after a project switch / refresh — rather
   // than streaming only in the exact pane that started it. Blank chats use their pane key until they get
@@ -2799,6 +2902,18 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // On a phone the slot stacks under the transcript and takes over half the screen, so it opens only
   // when asked, per pane, and closing it there doesn't touch the desk's persisted `browserHidden` —
   // otherwise opening the phone would decide whether the desktop panes show their browser.
+  // Seen (lib/seen.ts): the pane is on screen, the turn is over and the page is visible for a beat —
+  // then the reply has been read, on whichever device this is. Clears the inbox's New/Failed row.
+  useEffect(() => {
+    const sid = agent.sessionId || sessionId;
+    if (!sid || collapsed || agent.busy) return;
+    const t = setTimeout(() => {
+      if (document.visibilityState !== "visible") return;
+      window.dispatchEvent(new CustomEvent("minami:seen", { detail: sid }));
+      fetch("/api/agent/seen", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: sid }) }).catch(() => {});
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [agent.sessionId, sessionId, collapsed, agent.busy]);
   // In the phone shell the panel's chat bar + sheet own switching and closing (§23), so this pane's own
   // ⌄ switcher and ✕ would be second and third copies of the same controls, at a third of the size.
   const compact = useCompact();
@@ -3366,7 +3481,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           + composer came to ~160px of the ~354px a four-pane grid gives each column.
           `onFocusCapture`/`onBlurCapture` are what make it breathe — see `composing` above. */}
       <div className={`border-t border-white/10 ${roomy ? "px-4 py-3" : "px-3 py-2"}`}>
-        {roomy ? (
+        {roomy && !compact ? (
           // The flow door is a CHIP on the control row, never its own row.
           //
           // It used to be a full-width strip above this row — ~42px with its margin, permanently, in
@@ -3382,7 +3497,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{tasksEl}{statusEl}</span>
           </div>
-        ) : atLeast(dc, "tight") ? (
+        ) : atLeast(dc, "tight") || compact ? (
           // Cramped: the flow strip's row and the control row become ONE 22px bar. Nothing is removed —
           // the strip becomes a chip and the six controls fold into a pill that states the two things
           // you'd actually check at a glance (plan-vs-code, and the approval level) and opens the real
@@ -3391,20 +3506,47 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           // live) is wider than the row, and `overflow-hidden` on its shrink-0 children cut "live" in half.
           <div className="relative mb-1.5 flex flex-wrap items-center gap-1.5 gap-y-1">
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
+            {/* Phone: pause is its own thumb-sized button beside the chip — the one control you need
+                fast, and the safe direction, so it never hides inside the sheet (§23). */}
+            {compact && (
+              <button onClick={() => agent.setHold(!agent.hold)} aria-label={agent.hold ? "Resume — stop holding tool calls" : "Pause — hold every tool call for review"}
+                className={`flex h-9 shrink-0 items-center gap-1 rounded-lg border px-2.5 text-[12px] ${agent.hold ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#f0a868]" : "border-white/10 text-neutral-400"}`}>
+                {agent.hold ? "▶ resume" : "⏸"}
+              </button>
+            )}
             <button onClick={() => setModeOpen((v) => !v)} title="Session controls — pause, Plan vs Code, approval level"
-              className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
+              className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors compact:h-9 compact:rounded-lg compact:px-2.5 compact:text-[12px] ${
                 modeOpen ? "border-white/25 text-neutral-200" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>
               {/* Held and bypass keep their colour even folded. A pane that is parking every tool call,
                   or auto-approving every one of them, may not say so in the same grey as everything
                   else — the whole point of folding is that what stays must still be readable at a
                   glance, and those two are the states you must never misread. */}
-              {agent.hold && <span className="text-[#c47f18]">⏸</span>}
+              {agent.hold && <span className="text-[#c47f18]">⏸{compact ? " held ·" : ""}</span>}
+              {/* The model only when it isn't the default — the chip states what you CHANGED, nothing else. */}
+              {compact && model && model !== modelDefault && <span>{(SELECTABLE_MODELS.find((m) => m.id === model)?.label || model).split(" ")[0].toLowerCase()} ·</span>}
               <span className={planning ? "text-[var(--sakura)]" : ""}>{planning ? "plan" : "code"}</span>
               {!planning && <span className={perm === "bypassPermissions" ? "text-green-400" : ""}>· {PERM_LABEL[perm]}</span>}
               <span className="text-neutral-600">⌄</span>
             </button>
             <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{tasksEl}{statusEl}</span>
-            {modeOpen && (
+            {modeOpen && compact && (
+              // Phone: a bottom sheet, not a popover — thumb-sized rows, in the thumb's band. Switching TO
+              // bypass asks first (every tool call would then run unasked); every safer change is instant.
+              <div className="fixed inset-0 z-[70] flex flex-col justify-end" role="dialog" aria-label="Session controls">
+                <div className="absolute inset-0 bg-black/60" onClick={() => setModeOpen(false)} />
+                <div className="relative rounded-t-2xl border-t border-white/10 bg-neutral-900 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 shadow-2xl">
+                  <button onClick={() => setModeOpen(false)} aria-label="Close" className="flex w-full justify-center py-2"><span className="h-1 w-10 rounded-full bg-white/20" /></button>
+                  <p className="pb-3 text-[11px] font-semibold uppercase tracking-[0.09em] text-neutral-500">Session</p>
+                  <div className="flex flex-wrap items-center gap-2 [&_button]:min-h-10 [&_button]:text-[13px]">
+                    <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm}
+                      onPerm={(m) => { if (m === "bypassPermissions" && perm !== m && !window.confirm("Switch to bypass? Every tool call will run without asking.")) return; setPermLevel(m); }}
+                      model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} sessionBlacksmith={agent.sessionBlacksmith} smith={agent.smith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
+                  </div>
+                  {agent.busy && <p className="pt-3 text-[12px] text-neutral-500">Model and smith changes apply from the next message.</p>}
+                </div>
+              </div>
+            )}
+            {modeOpen && !compact && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setModeOpen(false)} />
                 {/* Opens UPWARD: it hangs off the composer, which is already at the bottom of the pane,

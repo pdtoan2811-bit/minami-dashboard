@@ -3,9 +3,9 @@ import { markSeen, seenAll } from "@/lib/seen";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// GET → { seen: { [sessionId]: ms } }   POST { sessionId } → marks it seen now (lib/seen.ts, §23).
+// GET → { seen: { [sessionId]: ms }, floor }   POST { sessionId } → marks it seen now (lib/seen.ts, §23).
 export function GET() {
-  return Response.json({ seen: seenAll() });
+  return Response.json(seenAll());
 }
 
 export async function POST(req: Request) {
