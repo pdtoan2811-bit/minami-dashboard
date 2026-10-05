@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **The phone shell covers touch tablets and unfolded foldables** (§23). It now uses a `compact:`
+  variant / `useCompact()`: narrow, or touch-only up to 1199px. *Reported by user: "On find n5, the
+  screen go as if it's a desktop".*
 - **Phone navigation docks at the bottom** (§23). The chat bar sits under the composer, Safari-style,
   and hides while the keyboard is up. Home's search and nav row moved to the bottom too. *Asked for
   by user: "in phone view, the UX to navigate should be on the bottom of the screen".*

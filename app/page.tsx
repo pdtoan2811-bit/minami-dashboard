@@ -45,7 +45,7 @@ import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
-import { useMediaQuery, usePhone } from "@/lib/use-media";
+import { useCompact, useMediaQuery, usePhone } from "@/lib/use-media";
 import { motion } from "motion/react";
 import { Fragment, memo, type TouchEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Bot, ChevronDown, ChevronLeft, ChevronRight, Chrome, Clock, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, MessageSquarePlus, PanelLeftClose, Pencil, Plus, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
@@ -505,12 +505,12 @@ export default function BentoHome() {
   // the phone doesn't quietly flip the desk back to tabs. The unfolded Find N5 (~750px) keeps the grid:
   // two panes side by side is genuinely usable there.
   const gridFits = !useMediaQuery("(max-width: 639px)");
-  const paneView = gridFits ? savedPaneView : "tabs";
+  // The phone shell (bottom bar + sheet) shows one chat at a time, so it is always tabs too.
+  const compact = useCompact();
+  const paneView = gridFits && !compact ? savedPaneView : "tabs";
   const [activePane, setActivePane] = useState(0);
-  // Below 640px the tab strip gives way to one chat bar + a bottom sheet (components/ChatSheet.tsx,
-  // §23). Same threshold as `gridFits` on purpose: where there is room for two panes side by side there
-  // is room for a readable tab strip, and below it there is room for neither.
-  const compact = !gridFits;
+  // `compact` (declared above): the tab strip gives way to one bottom chat bar + a sheet
+  // (components/ChatSheet.tsx, §23) below 640px, and on any touch-only screen up to tablet width.
   const [chatSheet, setChatSheet] = useState(false);
   // "The keyboard is up", for hiding the bottom chat bar. Focus alone is the wrong signal: Android's
   // Back dismisses the keyboard and LEAVES the textarea focused, which would strand the bar hidden. So:
@@ -1177,7 +1177,7 @@ export default function BentoHome() {
     <div ref={shellRef} className={`bg-bento flex h-dvh w-screen overflow-hidden text-neutral-100 ${isDragging ? "cursor-col-resize select-none" : ""}`} style={{ ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
       {/* Left: bento — full grid, or the rail once the chat panel has taken the room. */}
       {railed ? (
-        <div className={`hidden shrink-0 md:block ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`} style={{ width: RAIL_W }}>
+        <div className={`hidden shrink-0 ${compact ? "" : "md:block"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`} style={{ width: RAIL_W }}>
           <BentoRail
             projects={projects} current={project} accent={accent} fmtNum={short} busyCwds={busyCwds} icons={topicIcons}
             onOpen={(p) => openProject(projects.find((x) => x.name === p.name)!)}
@@ -1189,7 +1189,7 @@ export default function BentoHome() {
       // `@container`: the header's controls have to thin out by the BENTO COLUMN's width, not the
       // window's. At a 60% chat panel this column is ~500px on a wide display — plenty of window,
       // nowhere near enough column, and the old `md:` breakpoints happily overflowed it.
-      <div className={`@container flex min-w-0 flex-col w-full md:w-[var(--lw)] ${proj ? "hidden md:flex" : ""} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      <div className={`@container flex min-w-0 flex-col w-full ${compact ? "" : "md:w-[var(--lw)]"} ${proj ? (compact ? "hidden" : "hidden md:flex") : ""} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {/* Only the full-width (no project open) case needs the bell's gutter: with a panel open the
             bento is a left column whose right edge is nowhere near the viewport corner. */}
         <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 pb-2 pl-6 pt-5 ${proj ? "pr-6" : "pr-16"}`}>
@@ -1200,8 +1200,8 @@ export default function BentoHome() {
                 same band as the chat bar inside a topic, so navigation is always found in one place.
                 Fixed, so with `interactive-widget=resizes-content` it rides up on the keyboard while
                 you search, the way Safari's bottom address bar does. */}
-            <div className="ml-auto flex items-center gap-2 max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:z-40 max-sm:ml-0 max-sm:border-t max-sm:border-white/10 max-sm:bg-neutral-950/95 max-sm:px-3 max-sm:pt-2 max-sm:pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 max-sm:min-w-0 max-sm:flex-1 max-sm:py-2 max-sm:text-sm rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
+            <div className="ml-auto flex items-center gap-2 compact:fixed compact:inset-x-0 compact:bottom-0 compact:z-40 compact:ml-0 compact:border-t compact:border-white/10 compact:bg-neutral-950/95 compact:px-3 compact:pt-2 compact:pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 compact:min-w-0 compact:flex-1 compact:py-2 compact:text-sm rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
             <Segmented className="hidden @min-[700px]:flex" value={winDays} onChange={setWinDays}
               options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
             {!proj && <Segmented className="hidden md:flex" title="Sort projects" lead="↕" value={sortBy} onChange={setSortBy}
@@ -1217,7 +1217,7 @@ export default function BentoHome() {
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 max-sm:px-3 max-sm:pb-24">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3 compact:pb-24">
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? (
             <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">
@@ -1387,7 +1387,7 @@ export default function BentoHome() {
       )}
 
       {/* draggable divider (persists panel width, and snaps the bento to the rail) */}
-      {proj && <div onMouseDown={() => { pendingW.current = panelW; setDragging(true); }} onDoubleClick={() => setRail((v) => !v)}
+      {proj && !compact && <div onMouseDown={() => { pendingW.current = panelW; setDragging(true); }} onDoubleClick={() => setRail((v) => !v)}
         title={railed ? "Drag right to bring the bento back (or double-click)" : "Drag to resize · drag left to collapse the bento"}
         className="group/div relative hidden w-1.5 shrink-0 cursor-col-resize bg-white/[0.06] transition-colors hover:bg-[var(--sakura)]/60 md:block">
         {/* The handle. Every other way to switch views was something you had to already know: drag the
@@ -1437,7 +1437,7 @@ export default function BentoHome() {
           surface in the app, and it hosts the think-dots and activity shimmer of every open pane — so
           a single bouncing dot invalidated ~614k pixels of blur every frame. It sits BESIDE the grid as
           a flex sibling, never over it, so there was never anything behind it but the page gradient. */}
-      <div className={`min-h-0 bg-neutral-900/50 w-full ${railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      <div className={`min-h-0 bg-neutral-900/50 w-full ${compact ? "" : railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {proj && (
           <>
             {/* ── Panel chrome: a tab row that never moves, details that reveal BENEATH it ─────────
@@ -1650,7 +1650,7 @@ export default function BentoHome() {
                 padding cost ~24px of each column's width and height in a 2×2 — at four panes that was
                 most of a line of transcript per pane, spent on air. Tabs view has one pane and can
                 afford the breathing room. */}
-            <div className={`grid min-h-0 flex-1 ${focusPane != null ? "gap-2 p-2 max-md:p-1 max-sm:p-0" : "gap-1 p-1"}`}
+            <div className={`grid min-h-0 flex-1 ${focusPane != null ? "gap-2 p-2 max-md:p-1 compact:p-0" : "gap-1 p-1"}`}
               style={{ gridTemplateColumns: focusPane != null || panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
               {/* ONE flat keyed list — this tile's panes, then the parked tiles' (see `parked`). It has
                   to be a single array: React matches keys within one children array only, so rendering
@@ -2374,7 +2374,7 @@ function IsolatedBar({ cwd, busy }: { cwd: string; busy: boolean }) {
   return (
     <div className="mx-auto mb-1 flex max-w-full items-center gap-1.5 rounded-full border border-[#6cc4a1]/30 bg-[#6cc4a1]/10 px-3 py-1 text-[11px] text-[#6cc4a1]">
       <GitBranch className="h-3 w-3 shrink-0" />
-      <span className="min-w-0 truncate">isolated in <code className="text-[10px]">{task}</code><span className="max-sm:hidden"> — nothing here can overwrite another chat</span></span>
+      <span className="min-w-0 truncate">isolated in <code className="text-[10px]">{task}</code><span className="compact:hidden"> — nothing here can overwrite another chat</span></span>
       {/* Never mid-turn: `task.mjs merge` builds the tree and moves the branch, and doing that under a
           running agent is the collision this whole feature exists to avoid. */}
       <button onClick={merge} disabled={busy || state === "merging" || state === "done"}
@@ -2799,10 +2799,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // On a phone the slot stacks under the transcript and takes over half the screen, so it opens only
   // when asked, per pane, and closing it there doesn't touch the desk's persisted `browserHidden` —
   // otherwise opening the phone would decide whether the desktop panes show their browser.
-  const phone = usePhone();
-  // Below 640px the panel's chat bar + sheet own switching and closing (§23), so this pane's own ⌄
-  // switcher and ✕ would be second and third copies of the same controls, at a third of the size.
-  const compact = useMediaQuery("(max-width: 639px)");
+  // In the phone shell the panel's chat bar + sheet own switching and closing (§23), so this pane's own
+  // ⌄ switcher and ✕ would be second and third copies of the same controls, at a third of the size.
+  const compact = useCompact();
+  // A touch tablet in the phone shell gets the phone's side slot too (stacked, opened on tap).
+  const phone = usePhone() || compact;
   const [phoneSlotOpen, setPhoneSlotOpen] = useState(false);
   const slotClosed = phone ? !phoneSlotOpen : browserPanelHidden;
   // Only the visible pane's slot is a layer: a tab you've switched away from keeps its slot open
@@ -3035,7 +3036,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     // `collapsed` is display:none, NOT unmounted — see the grid in BentoHome. A collapsed pane keeps
     // streaming, keeps its draft, keeps its scroll position, and costs one style bit.
     <DensityContext.Provider value={d}>
-    <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-neutral-900/40 max-sm:rounded-none max-sm:border-0 ${collapsed ? "hidden " : ""}${focused ? "border-[var(--sakura)]/30" : "border-white/10"} ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 && !focused ? "col-span-2" : ""}`}>
+    <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-neutral-900/40 compact:rounded-none compact:border-0 ${collapsed ? "hidden " : ""}${focused ? "border-[var(--sakura)]/30" : "border-white/10"} ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 && !focused ? "col-span-2" : ""}`}>
       {/* The header is chrome about the pane, not content in it, so it is the first thing to thin out.
           Sized off `d` rather than `dc`: the title bar must not twitch every time the composer takes
           focus — only the footer, which is what you're reaching for, is allowed to move.
