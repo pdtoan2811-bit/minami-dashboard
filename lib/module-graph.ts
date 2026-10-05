@@ -60,6 +60,7 @@ export const NODES: ModuleNode[] = [
   { id: "c/AskTeamCard", label: "AskTeamCard", sub: "ask_team mirror (read-only)", layer: "component", row: 1, pipeline: "live" },
   { id: "c/BrowserPanel", label: "BrowserPanel", sub: "browser window for a\nheadless browser", layer: "component", row: 2, pipeline: "live" },
   { id: "c/BrowserLightbox", label: "BrowserLightbox", sub: "full-size viewer\n(portalled to body)", layer: "component", row: 15, pipeline: "live" },
+  { id: "l/useback", label: "use-back.ts", sub: "Android Back → topmost layer\n(one history entry per layer)", layer: "core", row: 31 },
   { id: "c/ChatSheet", label: "ChatSheet", sub: "phone chat switcher\n(bottom sheet, <640px)", layer: "component", row: 27 },
   { id: "c/Markdown", label: "Markdown", sub: "memoised renderer\n(chat + thought tones)", layer: "component", row: 3 },
   { id: "c/ThoughtBlock", label: "ThoughtBlock", sub: "reasoning passes,\nseam-split", layer: "component", row: 16, pipeline: "live" },

@@ -13,6 +13,7 @@
 // `**` delimiters rather than actual bold: changing font-weight would shift the text off the caret.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useDensityTier, type Density } from "@/lib/density";
+import { useMediaQuery } from "@/lib/use-media";
 
 // useLayoutEffect is a no-op (and warns) during Next's server prerender.
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
@@ -210,6 +211,7 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
   placeholder?: string;
   disabled?: boolean;
 }) {
+  const touchOnly = useMediaQuery("(hover: none) and (pointer: coarse)");
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
   const maxH = MAX_H[useDensityTier()];
@@ -389,10 +391,13 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
     const m = LIST.exec(line);
     const markerLen = m ? line.length - m[7].length : 0;
 
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSubmit(); return; }
+    // A phone keyboard has no Shift, so Enter-sends left no way to write a second line at all. On a
+    // touch-only device Enter is a newline (and continues lists, like Shift+Enter) and ↵ sends — the
+    // convention of every messaging app on Android.
+    if (e.key === "Enter" && !e.shiftKey && !touchOnly) { e.preventDefault(); onSubmit(); return; }
 
-    // Shift+Enter — continue the list you're in, or step out of an empty item.
-    if (e.key === "Enter" && e.shiftKey && m) {
+    // Shift+Enter (or plain Enter on a phone) — continue the list you're in, or step out of an empty item.
+    if (e.key === "Enter" && (e.shiftKey || touchOnly) && m) {
       e.preventDefault();
       if (!m[7].trim()) { replaceRange(el, ls, le, m[1], ls + m[1].length); return; } // empty item → drop the marker
       const next = m[2]
@@ -452,6 +457,8 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
         ref={ref}
         value={value}
         rows={1}
+        // The soft keyboard's action key says what Enter will do: a newline on touch (see onKeyDown).
+        enterKeyHint={touchOnly ? "enter" : "send"}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
