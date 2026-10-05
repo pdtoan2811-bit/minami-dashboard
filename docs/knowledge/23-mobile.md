@@ -183,6 +183,15 @@ is tailnet-only, and anyone on the tailnet can already drive the dashboard, so i
 > Vite app opened this way needs the same line. A Next dev server loads without it, but its HMR
 > socket is refused until `allowedDevOrigins` lists the host.
 
+**On a phone the preview opens inside the app** (`components/PreviewOverlay.tsx`). From the installed
+app, a new tab is a Chrome tab in a separate task. Back there closed it and dropped you in Chrome or
+on the home screen, never back in the chat. Reported: "when i back, im out of the app". On a
+touch-only device `openLocalUrl` now fires `minami:preview` instead. The overlay frames the tailnet
+URL and is a `useBackLayer` layer. The framed page's own navigations stack *above* that layer's
+history entry, so Back walks the preview's pages first and then closes it. Verified through the
+tailnet against the :3120 bench: open the chip, go to `/` inside the frame, Back → `/close-widgets/`,
+Back → the chat. The ↗ button still opens a real tab, for pages that refuse to be framed.
+
 Not covered: bare URLs in prose, which the Markdown renderer doesn't turn into links at all. The §21
 comment pop-out, which iframes the localhost URL, is also not covered.
 

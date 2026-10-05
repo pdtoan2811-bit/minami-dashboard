@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **Localhost previews open inside the app on a phone** (§23, `components/PreviewOverlay.tsx`). Back
+  walks the preview's pages, then returns to the chat, instead of leaving the app. *Reported by user:
+  "when i back, im out of the app on mobile phone".*
 - **The installed app updates itself after a deploy** (§23, `lib/use-build-refresh.ts`, `/api/build`).
   It reloads on foreground when the server's build id differs, and `/` is now `no-cache`. *Reported by
   user: "on the web installed version to android, the back and all intuitive UX didnt work".*
