@@ -37,7 +37,8 @@ import type { TaskProgress } from "@/lib/task-progress";
 import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
 import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block";
-import { openLocalUrl } from "@/lib/open-local";
+import { openLocalUrl, PREVIEW_EVENT } from "@/lib/open-local";
+import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { ChatSheet } from "@/components/ChatSheet";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
@@ -511,6 +512,13 @@ export default function BentoHome() {
   // is room for a readable tab strip, and below it there is room for neither.
   const compact = !gridFits;
   const [chatSheet, setChatSheet] = useState(false);
+  // A localhost preview opened from a phone (lib/open-local.ts → components/PreviewOverlay.tsx).
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => setPreview((e as CustomEvent<string>).detail);
+    window.addEventListener(PREVIEW_EVENT, on);
+    return () => window.removeEventListener(PREVIEW_EVENT, on);
+  }, []);
   // The identity header hides itself and comes back on hover. Persisted, because "I want to see the
   // repo path at all times" is a preference about the app, not about this project.
   const [headerPinned, setHeaderPinned] = useSetting<boolean>("panelHeaderPinned", false);
@@ -1077,6 +1085,7 @@ export default function BentoHome() {
   useBackLayer(!!flowFor, () => setFlowFor(null));
   useBackLayer(picker, () => setPicker(false));
   useBackLayer(addMenu, () => setAddMenu(false));
+  useBackLayer(!!preview, () => setPreview(null));
   // ⌘B / Ctrl+B toggles the bento between grid and rail — the shortcut every editor with a sidebar
   // already trained everyone to reach for. Both buttons name it in their tooltip, which is the only
   // reason a shortcut ever gets discovered.
@@ -1750,6 +1759,7 @@ export default function BentoHome() {
           below the lightbox and folder picker (z-[90]/z-[100]) so a modal still covers it. */}
       <div className="fixed right-3 top-2.5 z-[60]"><NotificationBell /></div>
 
+      {preview && <PreviewOverlay href={preview} onClose={() => setPreview(null)} />}
       {picker && <FolderPicker onPick={startTopic} onClose={() => setPicker(false)} recents={recentTopics} />}
     </div>
   );
