@@ -43,6 +43,7 @@ import { ChatSheet } from "@/components/ChatSheet";
 import { Inbox, type InboxLive } from "@/components/Inbox";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
+import { useCoverScreen } from "@/lib/use-cover";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
@@ -1174,6 +1175,10 @@ export default function BentoHome() {
   // registration is order of opening, so whatever opened last closes first: sheet before topic, a
   // flow opened from inside a topic before the topic itself.
   useBuildRefresh();
+  // On the Flip's cover screen (Flex Window) the app opens as the glance view: counts, what needs you,
+  // Pause all — a transcript at 360×400 held at arm's length is not readable (app/glance, §23).
+  const cover = useCoverScreen();
+  useEffect(() => { if (cover) location.replace("/glance"); }, [cover]);
   useBackLayer(!!proj, closePanel);
   useBackLayer(chatSheet, () => setChatSheet(false));
   useBackLayer(!!flowFor, () => setFlowFor(null));
