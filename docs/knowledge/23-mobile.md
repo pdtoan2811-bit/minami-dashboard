@@ -63,6 +63,41 @@ can be widened by dragging the divider. On a phone, the narrow pane is all the r
 - **Desk-only chrome.** The `⌥1–4` shortcut labels are hidden below `md` (there is no ⌥ on a phone),
   `esc ✕` becomes `✕`, and the send/stop/attach buttons grow under `pointer-coarse:`.
 
+### The chat bar and sheet, below 640px — `components/ChatSheet.tsx`
+
+A second pass on the same day, after using it, not auditing it ("layout awful, switching chats
+awful, closing chats awful, buttons too small"). Measured at 412×915 with touch emulation, the
+panel's chrome was a tab strip of three 68px tabs truncated to "Verify di…". Each tab's ✕ was a
+**16×11px** target. There was a second ✕ in the pane header, which also closed the chat, and a third
+beside ＋, which closed the whole *project*. So three close glyphs did two different things, and none
+of them was thumb-sized. Every icon in the pane header was 20–26px.
+
+Below 640px (the same threshold as `gridFits`: room for two panes side by side is also room for a
+readable tab strip) the strip is replaced by **one bar**:
+
+- **‹ back** to all topics (the old esc ✕), 40px.
+- **The current chat as one button**: status dot, full-width title, `2/3`. Tapping it opens the sheet.
+  A horizontal swipe *on the bar* steps through the open chats. The swipe is on the bar only, because
+  the transcript scrolls code blocks sideways.
+- **＋** for a new chat, 40px.
+
+The sheet lists the open chats as 56px rows, each with its own 44px ✕. Below them are *New chat* and
+the topic's other chats. When all four slots are taken, picking another chat swaps it into the
+current pane through the same `switchGen` remount as the desktop ⌄ switcher, rather than refusing.
+The pane's own ⌄ and ✕ are hidden at this width, because the bar and the sheet own switching and
+closing.
+
+Also in this pass:
+
+- **Edge to edge.** Below 640px a focused pane loses its frame (padding, border, radius).
+- **Touch sizes.** Pane-header icons are ≥40px under `pointer-coarse:`. The tab ✕, ＋ and project ✕
+  also grow there, which covers the unfolded N5, where the tab strip stays.
+- **No featured 2×2 tile on a phone.** The heaviest topic's double-height card was half a screen of
+  empty space, and squashing it into one row clipped its stats. Below 640px it is an ordinary wide
+  tile. The search box takes its own full-width row.
+- **The isolated-worktree banner** drops its explanation clause on a phone. Before, it ran off the
+  edge and took the *merge back* button with it.
+
 ### Installing it as an app
 
 `app/manifest.ts` + `public/app-icon-{192,512}.png` (the 🌸 on the ground gradient, full-bleed so one

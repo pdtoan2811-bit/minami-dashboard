@@ -38,13 +38,14 @@ import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
 import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block";
 import { openLocalUrl } from "@/lib/open-local";
+import { ChatSheet } from "@/components/ChatSheet";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
 import { useMediaQuery, usePhone } from "@/lib/use-media";
 import { motion } from "motion/react";
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bot, ChevronLeft, ChevronRight, Chrome, Clock, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, MessageSquarePlus, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
+import { Fragment, memo, type TouchEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, Chrome, Clock, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, MessageSquarePlus, PanelLeftClose, Pencil, Plus, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
 
 type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
@@ -503,6 +504,11 @@ export default function BentoHome() {
   const gridFits = !useMediaQuery("(max-width: 639px)");
   const paneView = gridFits ? savedPaneView : "tabs";
   const [activePane, setActivePane] = useState(0);
+  // Below 640px the tab strip gives way to one chat bar + a bottom sheet (components/ChatSheet.tsx,
+  // §23). Same threshold as `gridFits` on purpose: where there is room for two panes side by side there
+  // is room for a readable tab strip, and below it there is room for neither.
+  const compact = !gridFits;
+  const [chatSheet, setChatSheet] = useState(false);
   // The identity header hides itself and comes back on hover. Persisted, because "I want to see the
   // repo path at all times" is a preference about the app, not about this project.
   const [headerPinned, setHeaderPinned] = useSetting<boolean>("panelHeaderPinned", false);
@@ -1148,8 +1154,8 @@ export default function BentoHome() {
           <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">Minami Bento</h1>
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
-          <div className="ml-auto flex items-center gap-2">
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
+          <div className="ml-auto flex items-center gap-2 max-sm:ml-0 max-sm:w-full">
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 max-sm:min-w-0 max-sm:flex-1 max-sm:py-2 max-sm:text-sm rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
             <Segmented className="hidden @min-[700px]:flex" value={winDays} onChange={setWinDays}
               options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
             {!proj && <Segmented className="hidden md:flex" title="Sort projects" lead="↕" value={sortBy} onChange={setSortBy}
@@ -1179,7 +1185,9 @@ export default function BentoHome() {
             <div className={`grid gap-3 ${flowFor ? "h-full grid-cols-1 grid-rows-1" : `auto-rows-[10.5rem] [grid-auto-flow:dense] ${proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}`}>
               {projects.map((p, i) => {
                 const r = p.weight / maxW;
-                const big = r >= 0.6, wide = !big && r >= 0.28;
+                // No featured 2×2 tile on a phone: at 412px it was half a screen of empty card. It drops
+                // to a wide tile — `big` also drives the larger type and icons, which only fit in two rows.
+                const big = r >= 0.6 && gridFits, wide = !big && r >= 0.28;
                 const span = big ? "col-span-2 row-span-2" : wide ? "col-span-2" : "";
                 const pc = accent(p.name);
                 const activeSel = i === sel && !proj;
@@ -1306,7 +1314,7 @@ export default function BentoHome() {
                     <button
                       onClick={(e) => { e.stopPropagation(); const best = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity); setFlowFor({ project: p.name, sid: (best.find((x) => x.active) || best[0]).id }); }}
                       title={`See ${p.name}'s journey — every ask, what it did, what's still open`}
-                      className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-lg border border-white/15 bg-black/30 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-neutral-400 transition-colors hover:border-[#c47f18]/60 hover:text-[#c47f18]">
+                      className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-lg border border-white/15 bg-black/30 px-1.5 py-0.5 text-[9px] pointer-coarse:px-2.5 pointer-coarse:py-1.5 pointer-coarse:text-[10px] uppercase tracking-wider text-neutral-400 transition-colors hover:border-[#c47f18]/60 hover:text-[#c47f18]">
                       <Workflow className="h-2.5 w-2.5" />flow
                     </button>
                   )}
@@ -1405,7 +1413,66 @@ export default function BentoHome() {
                   the padding box, so those 6px are the only place the selected tab's tail can hang
                   without being cut off — and keeping it symmetric means `items-center` still aligns the
                   tabs with the ＋/esc controls beside them. Total row height is unchanged. */}
-              <div className="flex items-center gap-1 pl-2 pr-14">
+              {compact && (() => {
+                const i = focusPane ?? 0;
+                const pn = panes[i];
+                const s = pn?.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
+                const la = pn?.sid ? liveAct[pn.sid] : undefined;
+                const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : pn ? paneAct[pn.key] : undefined;
+                const tint = PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking;
+                // A horizontal swipe on the bar steps through the open chats, the way a phone's own
+                // tab switcher does. Only on the bar — the transcript below scrolls code blocks
+                // sideways, and a swipe there that changed chats would be a trap.
+                const swipe = (e: TouchEvent<HTMLDivElement>) => {
+                  const t0 = (e.currentTarget as HTMLElement).dataset;
+                  if (e.type === "touchstart") { t0.x = String(e.touches[0].clientX); t0.y = String(e.touches[0].clientY); return; }
+                  const dx = e.changedTouches[0].clientX - Number(t0.x), dy = e.changedTouches[0].clientY - Number(t0.y);
+                  if (Math.abs(dx) < 60 || Math.abs(dy) > 40 || panes.length < 2) return;
+                  setActivePane((i + (dx < 0 ? 1 : -1) + panes.length) % panes.length);
+                };
+                return (
+                  <div className="flex items-center gap-1.5 py-1.5 pl-1.5 pr-14" onTouchStart={swipe} onTouchEnd={swipe}>
+                    <button onClick={closePanel} aria-label="Back to all topics"
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-neutral-300 active:bg-white/10"><ChevronLeft className="h-5 w-5" /></button>
+                    <button onClick={() => setChatSheet(true)} aria-label="Switch or close chats"
+                      className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-left active:bg-white/10">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tint, opacity: act?.busy ? 1 : 0.35 }} />
+                      <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{s ? titleOf(s) : "New chat"}</span>
+                      {panes.length > 1 && <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[11px] tabular-nums text-neutral-300">{i + 1}/{panes.length}</span>}
+                      <ChevronDown className="h-4 w-4 shrink-0 text-neutral-500" />
+                    </button>
+                    <button onClick={() => addPane()} disabled={panes.length >= MAX_PANES} aria-label="New chat"
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--sakura)]/40 text-[var(--sakura)] active:bg-[var(--sakura)]/10 disabled:opacity-40"><Plus className="h-5 w-5" /></button>
+                  </div>
+                );
+              })()}
+              {compact && chatSheet && (
+                <ChatSheet
+                  open={panes.map((pn, j) => {
+                    const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
+                    const la = pn.sid ? liveAct[pn.sid] : undefined;
+                    const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : paneAct[pn.key];
+                    return { key: pn.key, title: s ? titleOf(s) : "New chat", sub: act?.busy ? act.label || act.phase : s ? `${goalOf(s)} · ${ago(s.lastActivity)}` : proj.name,
+                      tint: PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking, busy: !!act?.busy, on: j === (focusPane ?? 0) };
+                  })}
+                  others={[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id))
+                    .map((s) => ({ id: s.id, cwd: s.cwd, title: titleOf(s), sub: `${goalOf(s)} · ${ago(s.lastActivity)}`, dot: s.active ? "#4ade80" : TIER_TINT[s.tier] }))}
+                  full={panes.length >= MAX_PANES}
+                  onSelect={(j) => { setActivePane(j); setChatSheet(false); }}
+                  // Closing the last open chat takes the panel with it (closePane's own rule), and
+                  // with it this sheet — there is nothing left to choose between.
+                  onClosePane={(j) => { if (panes.length === 1) setChatSheet(false); closePane(j); }}
+                  onOpen={(o) => {
+                    setChatSheet(false);
+                    // Full: swap it into the chat you're looking at — the same remount path as the
+                    // desktop pane's ⌄ switcher (switchGen), rather than a dead "close one first".
+                    if (panes.length >= MAX_PANES) { const j = focusPane ?? 0; setPanes((p) => p.map((x, k) => (k === j ? { ...x, sid: o.id, switchGen: (x.switchGen || 0) + 1 } : x))); }
+                    else addPane(o.id, o.cwd);
+                  }}
+                  onNew={() => { setChatSheet(false); addPane(); }}
+                  onDismiss={() => setChatSheet(false)} />
+              )}
+              <div className={`items-center gap-1 pl-2 pr-14 ${compact ? "hidden" : "flex"}`}>
                 <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {panes.map((pn, i) => {
                     const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
@@ -1437,7 +1504,7 @@ export default function BentoHome() {
                         // the transcript, and would collide again on the next accent — so selection
                         // moves off colour instead: it is the only FILLED tab, and the only one with a
                         // tail. A working tab is outlined and tinted, never filled.
-                        className={`group/tab relative flex min-w-0 shrink items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] transition-colors max-md:min-w-[6.5rem] max-md:max-w-[11rem] max-md:py-1.5 ${
+                        className={`group/tab relative flex min-w-0 shrink items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] transition-colors max-md:min-w-[6.5rem] max-md:max-w-[11rem] max-md:py-1.5 pointer-coarse:py-2 ${
                           on ? "border-[var(--sakura)] bg-[var(--sakura)]/[0.18] text-neutral-50"
                             // An unfocused tab is `text-neutral-500` on a hairline border — i.e. it reads
                             // as disabled, which is wrong for the one that's mid-turn. Tinting the border
@@ -1482,7 +1549,7 @@ export default function BentoHome() {
                             closed the chat. `hover:none` takes it out of hit-testing; select, then close. */}
                         <button onClick={() => closePane(i)}
                           title={panes.length === 1 ? "Close this chat (⌥W) — closes the panel; the session keeps running" : "Close this chat (⌥W) — the session keeps running"}
-                          className={`shrink-0 rounded px-1 leading-none transition-opacity hover:bg-white/15 hover:text-neutral-100 ${
+                          className={`shrink-0 rounded px-1 leading-none transition-opacity hover:bg-white/15 pointer-coarse:px-2 pointer-coarse:py-1.5 hover:text-neutral-100 ${
                             on ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 [@media(hover:none)]:pointer-events-none"}`}>✕</button>
                         {/* The tab-wide half of the running signal (globals.css). Outside the label
                             button on purpose: it spans the whole tab, close box included, so it reads
@@ -1515,7 +1582,7 @@ export default function BentoHome() {
                       "open another" are the same reach, and a shortcut nobody is told about is one
                       nobody uses. */}
                   <button onClick={() => setAddMenu((v) => !v)} disabled={panes.length >= MAX_PANES} title="Add a chat — ⌥⇧T reopens the last one you closed"
-                    className="rounded-lg border border-[var(--sakura)]/40 px-2 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40">＋</button>
+                    className="rounded-lg border border-[var(--sakura)]/40 px-2 py-1 text-[11px] text-[var(--sakura)] transition-colors hover:bg-[var(--sakura)]/10 disabled:opacity-40 pointer-coarse:px-3.5 pointer-coarse:py-2">＋</button>
                   {addMenu && (
                     <>
                       <div className="fixed inset-0 z-20" onClick={() => setAddMenu(false)} />
@@ -1538,7 +1605,7 @@ export default function BentoHome() {
                     </>
                   )}
                 </div>
-                <button onClick={closePanel} title="Close this project (esc)" className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10"><span className="max-md:hidden">esc </span>✕</button>
+                <button onClick={closePanel} title="Close this project (esc)" className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10 pointer-coarse:px-3 pointer-coarse:py-2"><span className="max-md:hidden">esc </span>✕</button>
               </div>
 
               {/* The grid-rows 0fr→1fr trick, not max-height: it animates to the content's REAL height,
@@ -1596,7 +1663,7 @@ export default function BentoHome() {
                 padding cost ~24px of each column's width and height in a 2×2 — at four panes that was
                 most of a line of transcript per pane, spent on air. Tabs view has one pane and can
                 afford the breathing room. */}
-            <div className={`grid min-h-0 flex-1 ${focusPane != null ? "gap-2 p-2 max-md:p-1" : "gap-1 p-1"}`}
+            <div className={`grid min-h-0 flex-1 ${focusPane != null ? "gap-2 p-2 max-md:p-1 max-sm:p-0" : "gap-1 p-1"}`}
               style={{ gridTemplateColumns: focusPane != null || panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
               {/* ONE flat keyed list — this tile's panes, then the parked tiles' (see `parked`). It has
                   to be a single array: React matches keys within one children array only, so rendering
@@ -2255,12 +2322,12 @@ function IsolatedBar({ cwd, busy }: { cwd: string; busy: boolean }) {
   return (
     <div className="mx-auto mb-1 flex max-w-full items-center gap-1.5 rounded-full border border-[#6cc4a1]/30 bg-[#6cc4a1]/10 px-3 py-1 text-[11px] text-[#6cc4a1]">
       <GitBranch className="h-3 w-3 shrink-0" />
-      <span className="shrink-0">isolated in <code className="text-[10px]">{task}</code> — nothing here can overwrite another chat</span>
+      <span className="min-w-0 truncate">isolated in <code className="text-[10px]">{task}</code><span className="max-sm:hidden"> — nothing here can overwrite another chat</span></span>
       {/* Never mid-turn: `task.mjs merge` builds the tree and moves the branch, and doing that under a
           running agent is the collision this whole feature exists to avoid. */}
       <button onClick={merge} disabled={busy || state === "merging" || state === "done"}
         title={busy ? "Wait for this turn to finish" : "Verify, build and merge this chat's work back into the base branch"}
-        className="ml-1 shrink-0 rounded-full border border-[#6cc4a1]/40 px-1.5 py-0.5 text-[10px] transition-colors hover:bg-[#6cc4a1]/15 disabled:opacity-40">
+        className="ml-1 shrink-0 rounded-full border border-[#6cc4a1]/40 px-1.5 py-0.5 text-[10px] pointer-coarse:px-2.5 pointer-coarse:py-1 transition-colors hover:bg-[#6cc4a1]/15 disabled:opacity-40">
         {state === "merging" ? "merging…" : state === "done" ? "merged ✓" : "merge back"}
       </button>
       {msg && <span className="min-w-0 truncate text-[10px] text-neutral-400" title={msg}>{msg}</span>}
@@ -2681,6 +2748,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // when asked, per pane, and closing it there doesn't touch the desk's persisted `browserHidden` —
   // otherwise opening the phone would decide whether the desktop panes show their browser.
   const phone = usePhone();
+  // Below 640px the panel's chat bar + sheet own switching and closing (§23), so this pane's own ⌄
+  // switcher and ✕ would be second and third copies of the same controls, at a third of the size.
+  const compact = useMediaQuery("(max-width: 639px)");
   const [phoneSlotOpen, setPhoneSlotOpen] = useState(false);
   const slotClosed = phone ? !phoneSlotOpen : browserPanelHidden;
   const showSlot = useCallback(() => (phone ? setPhoneSlotOpen(true) : setBrowserPanelHidden(false)), [phone, setBrowserPanelHidden]);
@@ -2907,7 +2977,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     // `collapsed` is display:none, NOT unmounted — see the grid in BentoHome. A collapsed pane keeps
     // streaming, keeps its draft, keeps its scroll position, and costs one style bit.
     <DensityContext.Provider value={d}>
-    <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-neutral-900/40 ${collapsed ? "hidden " : ""}${focused ? "border-[var(--sakura)]/30" : "border-white/10"} ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 && !focused ? "col-span-2" : ""}`}>
+    <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-neutral-900/40 max-sm:rounded-none max-sm:border-0 ${collapsed ? "hidden " : ""}${focused ? "border-[var(--sakura)]/30" : "border-white/10"} ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 && !focused ? "col-span-2" : ""}`}>
       {/* The header is chrome about the pane, not content in it, so it is the first thing to thin out.
           Sized off `d` rather than `dc`: the title bar must not twitch every time the composer takes
           focus — only the footer, which is what you're reaching for, is allowed to move.
@@ -2921,7 +2991,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
       <div className={`relative flex items-center gap-2 border-b border-white/[0.07] ${
         focused ? "px-2 py-1" : atLeast(d, "snug") ? "px-4 py-2" : atLeast(d, "tight") ? "px-3 py-1.5" : "px-2 py-1"}`}>
         {!focused && atLeast(d, "tight") && <ProjectIcon name={proj} />}
-        <button onClick={() => setMenu((v) => !v)}
+        {!(compact && focused) && <button onClick={() => setMenu((v) => !v)}
           title={focused ? `${isNew ? "New chat" : cur ? titleOf(cur) : ""} — switch chat` : undefined}
           className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-white/10">
           {!focused && (
@@ -2934,12 +3004,12 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             </span>
           )}
           <span className="text-neutral-500">⌄</span>
-        </button>
+        </button>}
         {/* Reopen the shared side slot. Two buttons rather than one, because "show the browser" and
             "show the files" are different intents and the slot has to know which one you meant. */}
         {canShowBrowser && slotHidden && (
           <button onClick={() => openSlot("browser")} title={roomForSlot ? "Show browser view" : "Expand this chat to show the browser view"}
-            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 && !canShowFile ? "ml-auto" : ""}`}>
+            className={`flex shrink-0 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10 ${count === 1 && !canShowFile ? "ml-auto" : ""}`}>
             <Chrome className="h-3.5 w-3.5" />
             {/* A hidden panel shouldn't hide a broken page — surface the error count on the reopen button. */}
             {browser.consoleErrors > 0 && <span className="text-[9px] tabular-nums text-[#ef7c7c]">{browser.consoleErrors}</span>}
@@ -2947,20 +3017,20 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         )}
         {canShowFile && slotHidden && (
           <button onClick={() => openSlot("file")} title={roomForSlot ? "Show files touched in this chat" : "Expand this chat to show the files it touched"}
-            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 && !canShowTasks ? "ml-auto" : ""}`}>
+            className={`flex shrink-0 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10 ${count === 1 && !canShowTasks ? "ml-auto" : ""}`}>
             <FileText className="h-3.5 w-3.5" />
             <span className="text-[9px] tabular-nums">{files.files.length}</span>
           </button>
         )}
         {hasLocalPreview && (
           <button onClick={() => openPreview()} title="Comment on the localhost preview — pins there are sent to this chat"
-            className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 hover:text-[var(--sakura)]">
+            className="flex shrink-0 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10 hover:text-[var(--sakura)]">
             <MessageSquarePlus className="h-3.5 w-3.5" />
           </button>
         )}
         {canShowTasks && slotHidden && (
           <button onClick={() => openSlot("tasks")} title={roomForSlot ? "Show background tasks" : "Expand this chat to show its background tasks"}
-            className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 ${count === 1 ? "ml-auto" : ""}`}>
+            className={`flex shrink-0 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-neutral-500 transition-colors hover:bg-white/10 pointer-coarse:min-h-10 pointer-coarse:min-w-10 ${count === 1 ? "ml-auto" : ""}`}>
             <Bot className="h-3.5 w-3.5" />
             {agent.activity.tasks.length > 0 && <span className="text-[9px] tabular-nums" style={{ color: TOOL_TINT.task }}>{agent.activity.tasks.length}</span>}
           </button>
@@ -2969,7 +3039,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             once per pane, when the real decision is made once for the panel. That switch now lives in
             the tab row (see the panel chrome), and the tab itself is how you choose a pane. What's left
             here is close, which genuinely is per-pane. */}
-        {count > 1 && <button onClick={onClose} title="Close this chat (⌥W) — the session keeps running; ⌥⇧T reopens it" className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
+        {count > 1 && !compact && <button onClick={onClose} title="Close this chat (⌥W) — the session keeps running; ⌥⇧T reopens it" className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:bg-white/10">✕</button>}
         {menu && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />
