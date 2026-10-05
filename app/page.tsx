@@ -40,6 +40,7 @@ import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
+import { useMediaQuery, usePhone } from "@/lib/use-media";
 import { motion } from "motion/react";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Bot, ChevronLeft, ChevronRight, Chrome, Clock, FileText, GitBranch, Globe, Grid2x2, HelpCircle, ListChecks, MessageSquarePlus, PanelLeftClose, Pencil, Puzzle, Search, SquareTerminal, Workflow, Wrench, type LucideIcon } from "lucide-react";
@@ -493,7 +494,13 @@ export default function BentoHome() {
   // doing", which is a real question, just not the common one.
   //
   // Persisted, because it's a statement about how you want to work, not about this topic.
-  const [paneView, setPaneView] = useSetting<"tabs" | "grid">("paneView", "tabs");
+  const [savedPaneView, setPaneView] = useSetting<"tabs" | "grid">("paneView", "tabs");
+  // A phone-width screen is always tabs. Two columns of ~190px is not a smaller grid, it's two columns
+  // nobody can read. This overrides the EFFECTIVE view only and never writes the setting, so picking up
+  // the phone doesn't quietly flip the desk back to tabs. The unfolded Find N5 (~750px) keeps the grid:
+  // two panes side by side is genuinely usable there.
+  const gridFits = !useMediaQuery("(max-width: 639px)");
+  const paneView = gridFits ? savedPaneView : "tabs";
   const [activePane, setActivePane] = useState(0);
   // The identity header hides itself and comes back on hover. Persisted, because "I want to see the
   // repo path at all times" is a preference about the app, not about this project.
@@ -1118,7 +1125,7 @@ export default function BentoHome() {
   );
 
   return (
-    <div ref={shellRef} className={`bg-bento flex h-screen w-screen overflow-hidden text-neutral-100 ${isDragging ? "cursor-col-resize select-none" : ""}`} style={{ ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
+    <div ref={shellRef} className={`bg-bento flex h-dvh w-screen overflow-hidden text-neutral-100 ${isDragging ? "cursor-col-resize select-none" : ""}`} style={{ ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
       {/* Left: bento — full grid, or the rail once the chat panel has taken the room. */}
       {railed ? (
         <div className={`hidden shrink-0 md:block ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`} style={{ width: RAIL_W }}>
@@ -1429,7 +1436,7 @@ export default function BentoHome() {
                         // the transcript, and would collide again on the next accent — so selection
                         // moves off colour instead: it is the only FILLED tab, and the only one with a
                         // tail. A working tab is outlined and tinted, never filled.
-                        className={`group/tab relative flex min-w-0 shrink items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] transition-colors ${
+                        className={`group/tab relative flex min-w-0 shrink items-center gap-1.5 rounded-lg border py-1 pl-2 pr-1 text-[11px] transition-colors max-md:min-w-[6.5rem] max-md:max-w-[11rem] max-md:py-1.5 ${
                           on ? "border-[var(--sakura)] bg-[var(--sakura)]/[0.18] text-neutral-50"
                             // An unfocused tab is `text-neutral-500` on a hairline border — i.e. it reads
                             // as disabled, which is wrong for the one that's mid-turn. Tinting the border
@@ -1450,7 +1457,7 @@ export default function BentoHome() {
                         <button onClick={() => { setPaneView("tabs"); setActivePane(i); }}
                           title={`${s ? titleOf(s) : "New chat"}  (⌥${i + 1})${act?.label ? ` — ${act.label}` : ""}`}
                           className="flex min-w-0 flex-1 items-center gap-1.5">
-                          <span className={`shrink-0 tabular-nums text-[9px] ${on ? "text-[var(--sakura)]" : "text-neutral-600"}`}>⌥{i + 1}</span>
+                          <span className={`shrink-0 tabular-nums text-[9px] max-md:hidden ${on ? "text-[var(--sakura)]" : "text-neutral-600"}`}>⌥{i + 1}</span>
                           {/* The slot is ALWAYS rendered, even at rest. Mounting the dot on the first
                               busy frame shifted the label 12px sideways every time a turn started or
                               ended — on the tab you were about to click.
@@ -1468,11 +1475,14 @@ export default function BentoHome() {
                         {/* Always rendered, only sometimes visible. Revealing it on hover ALONE would
                             widen the tab at the moment you reached for it and slide the label out from
                             under the cursor — the same mis-click that moved the header peek below this
-                            row. Reserving the width costs 18px per tab, at a hard maximum of four. */}
+                            row. Reserving the width costs 18px per tab, at a hard maximum of four.
+                            On a touchscreen there is no hover to reveal it, so an unlit tab's ✕ is an
+                            invisible close target sitting on the label — a thumb aimed at the tab's end
+                            closed the chat. `hover:none` takes it out of hit-testing; select, then close. */}
                         <button onClick={() => closePane(i)}
                           title={panes.length === 1 ? "Close this chat (⌥W) — closes the panel; the session keeps running" : "Close this chat (⌥W) — the session keeps running"}
                           className={`shrink-0 rounded px-1 leading-none transition-opacity hover:bg-white/15 hover:text-neutral-100 ${
-                            on ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100"}`}>✕</button>
+                            on ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 [@media(hover:none)]:pointer-events-none"}`}>✕</button>
                         {/* The tab-wide half of the running signal (globals.css). Outside the label
                             button on purpose: it spans the whole tab, close box included, so it reads
                             as a property of the chat rather than of its title. */}
@@ -1487,7 +1497,7 @@ export default function BentoHome() {
                 {/* One switch for the whole panel, replacing the per-pane ⤢. A maximise button on each
                     pane asked "which of these do you want bigger" four times over; this asks "how do you
                     want to read" once, which is the actual decision. */}
-                {panes.length > 1 && (
+                {panes.length > 1 && gridFits && (
                   <div className="flex shrink-0 items-center rounded-lg border border-white/10 p-0.5" title="Read one chat at a time (⌥1–4), or watch all of them at once (⌥0)">
                     {([["tabs", "tabs"], ["grid", "grid"]] as const).map(([k, label]) => (
                       <button key={k} onClick={() => setPaneView(k)}
@@ -1527,7 +1537,7 @@ export default function BentoHome() {
                     </>
                   )}
                 </div>
-                <button onClick={closePanel} title="Close this project (esc)" className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10">esc ✕</button>
+                <button onClick={closePanel} title="Close this project (esc)" className="shrink-0 rounded-md px-2 py-1 text-xs text-neutral-500 transition-colors hover:bg-white/10"><span className="max-md:hidden">esc </span>✕</button>
               </div>
 
               {/* The grid-rows 0fr→1fr trick, not max-height: it animates to the content's REAL height,
@@ -1545,7 +1555,11 @@ export default function BentoHome() {
                   // — the peek would unfurl behind the menu every single time you used it. A peek is for
                   // when you want the header; here you have already said you want the chat list, and
                   // `focus-within` has to go too or focusing the menu re-triggers it.
-                  : `absolute inset-x-0 top-full z-20 grid-rows-[0fr] ${addMenu ? "" : "group-hover/chrome:grid-rows-[1fr] group-focus-within/chrome:grid-rows-[1fr]"}`}`}>
+                  // KEYBOARD focus only (`:focus-visible`), not `focus-within`: a tap on a tab focuses it,
+                  // so on a phone every tab switch unfurled this over the pane's own header and left it
+                  // there — covering the chat switcher and the browser/files buttons until you tapped
+                  // somewhere neutral. Hover is already hover-capable-devices-only in Tailwind v4.
+                  : `absolute inset-x-0 top-full z-20 grid-rows-[0fr] ${addMenu ? "" : "group-hover/chrome:grid-rows-[1fr] group-has-[:focus-visible]/chrome:grid-rows-[1fr]"}`}`}>
                 <div className="overflow-hidden">
                   {/* pr-14, not px-4: the notification bell is fixed to the viewport's top-right corner
                       and would otherwise sit on top of these controls. Reserving the gutter keeps the
@@ -1581,7 +1595,7 @@ export default function BentoHome() {
                 padding cost ~24px of each column's width and height in a 2×2 — at four panes that was
                 most of a line of transcript per pane, spent on air. Tabs view has one pane and can
                 afford the breathing room. */}
-            <div className={`grid min-h-0 flex-1 ${focusPane != null ? "gap-2 p-2" : "gap-1 p-1"}`}
+            <div className={`grid min-h-0 flex-1 ${focusPane != null ? "gap-2 p-2 max-md:p-1" : "gap-1 p-1"}`}
               style={{ gridTemplateColumns: focusPane != null || panes.length <= 1 ? "1fr" : "repeat(2, minmax(0,1fr))", gridAutoRows: "minmax(0, 1fr)" }}>
               {/* ONE flat keyed list — this tile's panes, then the parked tiles' (see `parked`). It has
                   to be a single array: React matches keys within one children array only, so rendering
@@ -2662,6 +2676,14 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // preference, and making it per-session would mean every NEW chat pops the panel open again, which is
   // the annoyance itself.
   const [browserPanelHidden, setBrowserPanelHidden] = useSetting("browserHidden", false);
+  // On a phone the slot stacks under the transcript and takes over half the screen, so it opens only
+  // when asked, per pane, and closing it there doesn't touch the desk's persisted `browserHidden` —
+  // otherwise opening the phone would decide whether the desktop panes show their browser.
+  const phone = usePhone();
+  const [phoneSlotOpen, setPhoneSlotOpen] = useState(false);
+  const slotClosed = phone ? !phoneSlotOpen : browserPanelHidden;
+  const showSlot = useCallback(() => (phone ? setPhoneSlotOpen(true) : setBrowserPanelHidden(false)), [phone, setBrowserPanelHidden]);
+  const hideSlot = useCallback(() => (phone ? setPhoneSlotOpen(false) : setBrowserPanelHidden(true)), [phone, setBrowserPanelHidden]);
   // Layout is a per-user preference, not per-pane state: 300px side-by-side (the old hardcoded width)
   // is unusable in a 3- or 4-pane grid, so both the split and the side/stacked choice persist.
   const [browserStacked, setBrowserStacked] = useSetting("browserStacked", false);
@@ -2723,8 +2745,8 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   const openFile = useCallback((p: string) => {
     setFilePath(p);
     setSlot("file");
-    setBrowserPanelHidden(false); // the slot is shared, so un-hiding it is what makes the file visible
-  }, [setSlot, setBrowserPanelHidden]);
+    showSlot(); // the slot is shared, so un-hiding it is what makes the file visible
+  }, [setSlot, showSlot]);
 
   // The §21 pop-out: the app in a window of its own, bound to THIS conversation so what gets pinned
   // there lands here. Named window per session, so a second click focuses it rather than spawning
@@ -2764,8 +2786,14 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // instead of one readable one, so below `snug` the slot doesn't open at all — and the header's reopen
   // button (see below) becomes "expand this pane", which is the only place the panel CAN fit. Nothing is
   // lost or silently dropped: the button still shows the error/file count, and one click gets you there.
-  const roomForSlot = atLeast(d, "snug");
-  const showSidePanel = !!activeSlot && !browserPanelHidden && roomForSlot;
+  //
+  // A phone is the exception: its focused pane is ~400px wide, so it never reaches `snug`, and "expand
+  // this pane" is a no-op because the pane already has the whole screen — the browser, files and tasks
+  // were unreachable from the phone at all. What a phone does have is height, so there the slot opens
+  // STACKED under the transcript, whatever the side/stacked preference says (it is a desk preference).
+  const roomForSlot = atLeast(d, "snug") || (phone && focused);
+  const slotStacked = browserStacked || phone;
+  const showSidePanel = !!activeSlot && !slotClosed && roomForSlot;
   const showBrowserPanel = showSidePanel && activeSlot === "browser";
   // Toolbar controls can't touch the browser directly (there's no server-side handle on it — see
   // browser-view.ts), so they ask the agent, exactly the way Claude Code models navigation as a tool
@@ -2867,10 +2895,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // The slot is reachable from the header whenever it isn't showing — either because it was hidden by
   // hand, or because this pane is too small to hold it. The two cases need different buttons: one
   // reopens, the other has to make room first.
-  const slotHidden = !!activeSlot && (browserPanelHidden || !roomForSlot);
+  const slotHidden = !!activeSlot && (slotClosed || !roomForSlot);
   const openSlot = (which: Slot) => {
     setSlot(which);
-    setBrowserPanelHidden(false);
+    showSlot();
     if (!roomForSlot) onFocus(); // no room here — take the panel, which is where the room is
   };
 
@@ -3229,7 +3257,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           // the strip becomes a chip and the six controls fold into a pill that states the two things
           // you'd actually check at a glance (plan-vs-code, and the approval level) and opens the real
           // controls on click. ~54px of the pane handed back to the transcript.
-          <div className="relative mb-1.5 flex items-center gap-1.5">
+          // Wraps rather than clips: at phone width the status cluster (ask progress, mode pill, ctx, tasks,
+          // live) is wider than the row, and `overflow-hidden` on its shrink-0 children cut "live" in half.
+          <div className="relative mb-1.5 flex flex-wrap items-center gap-1.5 gap-y-1">
             <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             <button onClick={() => setModeOpen((v) => !v)} title="Session controls — pause, Plan vs Code, approval level"
               className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
@@ -3292,7 +3322,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             <div className="relative shrink-0 self-end">
               <button onClick={() => setAttachMenu((v) => !v)} disabled={!cwd || nativeBusy}
                 title="Attach a file or folder (inserts its path for Claude to read) — or just drag one in"
-                className="rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30">📎</button>
+                className="rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30 pointer-coarse:px-2 pointer-coarse:py-1.5">📎</button>
               {attachMenu && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setAttachMenu(false)} />
@@ -3325,19 +3355,19 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
               and that's two clicks that must not fight over one slot. */}
           {agent.busy && (
             <button onClick={agent.stop} disabled={agent.stopping} title="Stop this turn (anything queued still runs)"
-              className="shrink-0 rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-50">
+              className="shrink-0 rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-medium pointer-coarse:px-3.5 pointer-coarse:py-2 text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-50">
               {agent.stopping ? "⋯" : "■"}
             </button>
           )}
           <button onClick={submit} disabled={!input.trim() || !cwd}
             title={agent.busy ? "Queue this for after the current turn" : "Send"}
-            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30 ${agent.busy ? "bg-[#c47f18]/90" : "bg-[var(--sakura)]"}`}>
+            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30 pointer-coarse:px-3.5 pointer-coarse:py-2 ${agent.busy ? "bg-[#c47f18]/90" : "bg-[var(--sakura)]"}`}>
             {agent.busy ? "＋↵" : "↵"}
           </button>
         </div>
       </div>
       </div>
-      {showSidePanel && !browserStacked && (
+      {showSidePanel && !slotStacked && (
         <>
         <div onMouseDown={() => { pendingBrowserW.current = browserW; setBrowserDrag(true); }} title="Drag to resize"
           className="group relative w-1 shrink-0 cursor-col-resize bg-white/[0.07] transition-colors hover:bg-[#5ec8f8]/40">
@@ -3352,7 +3382,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
               state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
               live={!!cwd && !agent.busy} stacked={false}
               onOpenShot={setLightbox} onAsk={askBrowser}
-              onClose={() => setBrowserPanelHidden(true)}
+              onClose={hideSlot}
               onToggleLayout={() => setBrowserStacked(true)}
               onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
             />
@@ -3360,13 +3390,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             <TasksPanel
               running={agent.activity.tasks} finished={agent.finishedTasks} sessionId={sessionId} stacked={false}
               onStop={agent.stopTask} onClearFinished={agent.clearFinished}
-              onClose={() => setBrowserPanelHidden(true)}
+              onClose={hideSlot}
               onToggleLayout={() => setBrowserStacked(true)}
             />
           ) : (
             <FilePanel
               state={files} cwd={cwd} stacked={false} activePath={filePath} onPick={setFilePath}
-              onClose={() => setBrowserPanelHidden(true)}
+              onClose={hideSlot}
               onToggleLayout={() => setBrowserStacked(true)}
             />
           )}
@@ -3374,15 +3404,15 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         </>
       )}
       </div>
-      {showSidePanel && browserStacked && (
-        <div className="flex min-h-0 shrink-0 flex-col" style={{ flexBasis: "45%" }}>
+      {showSidePanel && slotStacked && (
+        <div className="flex min-h-0 shrink-0 flex-col" style={{ flexBasis: phone ? "55%" : "45%" }}>
           {slotChoices > 1 && <SlotTabs slot={activeSlot!} onPick={setSlot} fileCount={files.files.length} taskCount={agent.activity.tasks.length} show={{ browser: canShowBrowser, file: canShowFile, tasks: canShowTasks }} />}
           {activeSlot === "browser" ? (
             <BrowserPanel
               state={browser} busy={browserBusy} actionLabel={browserActionLabel} cwd={cwd}
               live={!!cwd && !agent.busy} stacked
               onOpenShot={setLightbox} onAsk={askBrowser}
-              onClose={() => setBrowserPanelHidden(true)}
+              onClose={hideSlot}
               onToggleLayout={() => setBrowserStacked(false)}
               onPopOut={() => window.open(`/browser/${sessionId || "live"}?cwd=${encodeURIComponent(cwd)}`, `browser-${sessionId}`, "width=1100,height=880")}
             />
@@ -3390,13 +3420,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             <TasksPanel
               running={agent.activity.tasks} finished={agent.finishedTasks} sessionId={sessionId} stacked
               onStop={agent.stopTask} onClearFinished={agent.clearFinished}
-              onClose={() => setBrowserPanelHidden(true)}
+              onClose={hideSlot}
               onToggleLayout={() => setBrowserStacked(false)}
             />
           ) : (
             <FilePanel
               state={files} cwd={cwd} stacked activePath={filePath} onPick={setFilePath}
-              onClose={() => setBrowserPanelHidden(true)}
+              onClose={hideSlot}
               onToggleLayout={() => setBrowserStacked(false)}
             />
           )}

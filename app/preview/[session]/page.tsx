@@ -591,7 +591,7 @@ export default function PreviewPopOut() {
   const busyLabel = agent.busy ? agent.activity.label : "";
 
   return (
-    <main className="flex h-screen flex-col overflow-hidden bg-neutral-950 text-neutral-100">
+    <main className="flex h-dvh flex-col overflow-hidden bg-neutral-950 text-neutral-100">
       {/* ── toolbar ── */}
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-white/10 bg-neutral-900/80 px-2 text-[12px]">
         <IconBtn title={histState.back ? "Back" : "Nothing to go back to yet"} disabled={!histState.back} onClick={() => nav(-1)}><ArrowLeft size={14} /></IconBtn>

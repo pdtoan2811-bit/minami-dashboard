@@ -77,12 +77,15 @@ function Table({ head, rows, tone = "chat" }: { head: string[]; rows: string[][]
     <div className="my-1 overflow-x-auto rounded-xl border border-white/10">
       <table className="w-full border-collapse text-[13px]">
         <thead className="bg-white/[0.04] text-left text-neutral-300">
-          <tr>{head.map((h, i) => <th key={i} className="border-b border-white/10 px-3 py-1.5 font-semibold">{inline(h, `th${i}`, tone)}</th>)}</tr>
+          <tr>{head.map((h, i) => <th key={i} className="min-w-[7rem] border-b border-white/10 px-3 py-1.5 font-semibold">{inline(h, `th${i}`, tone)}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((r, ri) => (
             <tr key={ri} className="border-b border-white/[0.06] last:border-0">
-              {r.map((c, ci) => <td key={ci} className={`px-3 py-1.5 align-top [overflow-wrap:anywhere] ${tone === "thought" ? "text-neutral-400" : "text-neutral-200"}`}>{inline(c, `td${ri}-${ci}`, tone)}</td>)}
+              {/* min-w on every cell is what lets the wrapper's overflow-x-auto ever engage. With only
+                  `anywhere` wrapping, a 4-column table on a phone-width pane squeezed each column to a
+                  word or two per line ("mid- / merge") and never scrolled; past the floor it scrolls. */}
+              {r.map((c, ci) => <td key={ci} className={`min-w-[7rem] px-3 py-1.5 align-top [overflow-wrap:anywhere] ${tone === "thought" ? "text-neutral-400" : "text-neutral-200"}`}>{inline(c, `td${ri}-${ci}`, tone)}</td>)}
             </tr>
           ))}
         </tbody>

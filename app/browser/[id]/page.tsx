@@ -65,13 +65,13 @@ export default function PopOutBrowser() {
   }, [browser.title, browser.url]);
 
   if (!sessionId) {
-    return <main className="flex h-screen items-center justify-center bg-neutral-950 text-[12px] text-neutral-500">
+    return <main className="flex h-dvh items-center justify-center bg-neutral-950 text-[12px] text-neutral-500">
       This window needs a session — reopen it from a chat&apos;s browser panel.
     </main>;
   }
 
   return (
-    <main className="flex h-screen flex-col overflow-hidden bg-neutral-950 text-neutral-100">
+    <main className="flex h-dvh flex-col overflow-hidden bg-neutral-950 text-neutral-100">
       <BrowserPanel
         state={browser} busy={busy} actionLabel={label} cwd={cwd}
         live={false} stacked={false}

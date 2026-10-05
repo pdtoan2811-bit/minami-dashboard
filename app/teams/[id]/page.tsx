@@ -39,7 +39,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   useEffect(() => { load(); const h = setInterval(load, 4000); return () => clearInterval(h); }, [load]);
 
   return (
-    <div className="bg-bento min-h-screen text-neutral-100">
+    <div className="bg-bento min-h-dvh text-neutral-100">
       <header className="flex items-center gap-3 px-6 py-5">
         <Link href="/teams" className="text-neutral-600 hover:text-neutral-300">←</Link>
         <div className="min-w-0">
