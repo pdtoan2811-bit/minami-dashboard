@@ -62,6 +62,8 @@ export const NODES: ModuleNode[] = [
   { id: "c/BrowserLightbox", label: "BrowserLightbox", sub: "full-size viewer\n(portalled to body)", layer: "component", row: 15, pipeline: "live" },
   { id: "l/useback", label: "use-back.ts", sub: "Android Back → topmost layer\n(one history entry per layer)", layer: "core", row: 31 },
   { id: "c/PreviewOverlay", label: "PreviewOverlay", sub: "phone: localhost preview\nin-app, Back-aware", layer: "component", row: 28 },
+  { id: "c/Inbox", label: "Inbox", sub: "phone home: every chat by\nwhat it needs (§23)", layer: "component", row: 29 },
+  { id: "r/seen", label: "/api/agent/seen", sub: "server-side read marks\n(lib/seen.ts)", layer: "route", row: 19 },
   { id: "c/ChatSheet", label: "ChatSheet", sub: "phone chat switcher\n(bottom sheet, <640px)", layer: "component", row: 27 },
   { id: "c/Markdown", label: "Markdown", sub: "memoised renderer\n(chat + thought tones)", layer: "component", row: 3 },
   { id: "c/ThoughtBlock", label: "ThoughtBlock", sub: "reasoning passes,\nseam-split", layer: "component", row: 16, pipeline: "live" },

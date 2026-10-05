@@ -9,6 +9,13 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **Phone redesign** (§23). The home is a cross-project inbox (needs you / failed / new / running /
+  idle; seen state lives on the server). Any chat opens in one tap, and `/?open=<sid>` does the same.
+  The chat bar's swipe walks recent chats across topics. The N5 unfolded gets list-detail. The controls
+  fold into a chip, a bottom sheet and a separate pause. The live feed gains need/ended/mode/hold plus a
+  `liveEvents` emitter. Designed by a three-designer review. *Asked for by user: "play as a UX designer…
+  pitch your ideas via questions" and "work with multiple projects at once, since the hierarchy force me
+  to use many tap to switch".*
 - **`/glance`, the cover-screen view** (§23, `app/glance/`, `lib/use-cover.ts`). Built for the Flip 7
   Flex Window (360×400). It shows counts, up to three needs-you lines with their wait, or the running
   chats, and one Pause all / Resume all button that uses the hold brake. There is no transcript,
