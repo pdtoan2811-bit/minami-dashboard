@@ -71,6 +71,28 @@ installs a standalone app, with no URL bar and its own task-switcher entry. Inst
 origin. On the author's box that is the tailnet-only `tailscale serve` URL; plain
 `http://<lan-ip>:3000` still works, but only as a tab.
 
+### Localhost links, opened from the phone — `lib/open-local.ts`, `/api/tailnet/expose`
+
+Replies name `http://localhost:<port>` because that is true on the box, and the preview chips and
+Markdown links used it as the href. Tapped on the phone, it opened the phone's own localhost: a dead tab.
+Reported 2026-10-05 on the ecvision topic, whose chips all pointed at `localhost:3021`.
+
+When the page is **not** on loopback, a tap on a localhost link opens a blank tab synchronously, then
+asks the server for that port's tailnet address and redirects the tab there. The tab has to open
+before the `await`, because a `window.open` after one is no longer inside the user gesture, and mobile
+Chrome drops that popup with no message. On the box itself, nothing changes.
+
+The server (`lib/tailnet.ts`) reads `tailscale serve status --json` and matches on the **proxy
+target**, not on the listening port. The dashboard is `:443 → 127.0.0.1:3000`, so `localhost:3000` has
+to come back as the bare host. If no entry exists and something answers on the port, it adds
+`tailscale serve --bg --https=<port> http://127.0.0.1:<port>`. That entry persists until `serve
+--https=<port> off`. It never creates an entry for a port with nothing on it, and it refuses ports below
+1024, so a stray request cannot replace the dashboard's own :443. It uses serve and never funnel: serve
+is tailnet-only, and anyone on the tailnet can already drive the dashboard, so it exposes nothing new.
+
+Not covered: bare URLs in prose, which the Markdown renderer doesn't turn into links at all. The §21
+comment pop-out, which iframes the localhost URL, is also not covered.
+
 ### How to re-audit
 
 There is no checked-in harness. The audit was two throwaway Playwright scripts (route × viewport

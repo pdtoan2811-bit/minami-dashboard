@@ -37,6 +37,7 @@ import type { TaskProgress } from "@/lib/task-progress";
 import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
 import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block";
+import { openLocalUrl } from "@/lib/open-local";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
@@ -1770,7 +1771,7 @@ const PreviewChips = memo(function PreviewChips({ previews, onOpenFile, onCommen
         const tint = local ? "var(--sakura)" : p.kind === "url" ? "#7ab8e0" : p.kind === "file" ? "#1f8a5c" : "#b98cff";
         const Icon = p.kind === "url" ? Globe : p.kind === "file" ? FileText : SquareTerminal;
         const act = p.kind === "url"
-          ? () => window.open(p.target, "_blank", "noopener")
+          ? () => { if (!openLocalUrl(p.target)) window.open(p.target, "_blank", "noopener"); }
           : p.kind === "file"
             ? () => onOpenFile(p.target)
             : () => { navigator.clipboard?.writeText(p.target).then(() => { setCopied(p.target); setTimeout(() => setCopied(null), 1500); }); };

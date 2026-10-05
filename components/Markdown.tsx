@@ -6,6 +6,7 @@
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
 import { memo, useMemo, useState, type ReactNode } from "react";
+import { openLocalUrl } from "@/lib/open-local";
 
 /* ---------------- tone ----------------
    Reasoning is a second voice, not a second-class one: it gets the SAME parser as the answer — so a
@@ -40,7 +41,7 @@ function inline(text: string, keyBase = "", tone: Tone = "chat"): ReactNode[] {
     if (tok.startsWith("`")) nodes.push(<code key={key} className={`chip-wrap rounded px-1 py-[1px] font-mono text-[0.88em] ${T.code}`}>{tok.slice(1, -1)}</code>);
     else if (tok.startsWith("[")) {
       const mm = tok.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/)!;
-      nodes.push(<a key={key} href={mm[2]} target="_blank" rel="noreferrer" className="text-[var(--sakura)] underline decoration-[var(--sakura)]/40 underline-offset-2 hover:decoration-[var(--sakura)]">{mm[1]}</a>);
+      nodes.push(<a key={key} href={mm[2]} target="_blank" rel="noreferrer" onClick={(e) => { if (openLocalUrl(mm[2])) e.preventDefault(); }} className="text-[var(--sakura)] underline decoration-[var(--sakura)]/40 underline-offset-2 hover:decoration-[var(--sakura)]">{mm[1]}</a>);
     } else if (tok.startsWith("**") || tok.startsWith("__")) nodes.push(<strong key={key} className={`font-semibold ${T.strong}`}>{inline(tok.slice(2, -2), key, tone)}</strong>);
     else if (tok.startsWith("~~")) nodes.push(<span key={key} className="text-neutral-500 line-through">{tok.slice(2, -2)}</span>);
     else nodes.push(<em key={key} className={`italic ${T.em}`}>{tok.slice(1, -1)}</em>);
