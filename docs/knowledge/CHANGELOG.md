@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **Phone navigation docks at the bottom** (§23). The chat bar sits under the composer, Safari-style,
+  and hides while the keyboard is up. Home's search and nav row moved to the bottom too. *Asked for
+  by user: "in phone view, the UX to navigate should be on the bottom of the screen".*
 - **Localhost previews open inside the app on a phone** (§23, `components/PreviewOverlay.tsx`). Back
   walks the preview's pages, then returns to the chat, instead of leaving the app. *Reported by user:
   "when i back, im out of the app on mobile phone".*

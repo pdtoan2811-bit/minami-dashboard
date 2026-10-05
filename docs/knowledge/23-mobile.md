@@ -87,6 +87,18 @@ current pane through the same `switchGen` remount as the desktop ⌄ switcher, r
 The pane's own ⌄ and ✕ are hidden at this width, because the bar and the sheet own switching and
 closing.
 
+**Bottom-docked (second revision, same evening).** Asked for: "the UX to navigate should be on the
+bottom of the screen, place it well so chat panel and input still intuitive". The bar first shipped at
+the *top*, which is the hard-to-reach zone on a 6.9" phone. It now follows Safari's bottom tab bar
+(iOS 15+). The bar docks under the composer and you swipe it to switch tabs, so the transcript,
+the input and navigation all sit in one band at the bottom of the screen. The top chrome is
+gone on a phone. Material 3 allows the keyboard to cover the navigation bar temporarily, so the bar is
+**hidden while the keyboard is up** and the composer sits directly on the keyboard. "Keyboard up"
+means an editable field has focus *and* the viewport has shrunk below 80% of the tallest it has been.
+Focus alone is not enough: Android's Back dismisses the keyboard and leaves the textarea focused, which
+would strand the bar hidden (verified both ways). On the home screen, search plus Bento/Metrics/Settings
+dock to the bottom too. That bar is `fixed`, so it rides up on the keyboard while you search.
+
 Also in this pass:
 
 - **Edge to edge.** Below 640px a focused pane loses its frame (padding, border, radius).
