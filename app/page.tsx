@@ -44,6 +44,7 @@ import { Inbox, type InboxLive } from "@/components/Inbox";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { useCoverScreen } from "@/lib/use-cover";
+import { usePushPresence, usePushRegistration } from "@/lib/push-client";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
@@ -868,6 +869,11 @@ export default function BentoHome() {
     mruCursor.current = null;
     mru.current = [currentSid, ...mru.current.filter((x) => x !== currentSid)].slice(0, 12);
   }, [currentSid]);
+  // Web push (§24): re-send this device's subscription (never prompts — the toggle in Settings does),
+  // open the chat a notification was tapped for, and report which chat is on screen so the server
+  // doesn't notify you about the conversation you're already reading.
+  usePushRegistration({ onOpen: openChat });
+  usePushPresence(currentSid || null);
   // `/?open=<sessionId>` — where a notification, the cover-screen glance or a link lands. Honoured once,
   // as soon as the sessions it names have loaded, then removed so a reload doesn't re-open it.
   const openParam = useRef<string | null>(typeof window !== "undefined" ? new URLSearchParams(location.search).get("open") : null);
