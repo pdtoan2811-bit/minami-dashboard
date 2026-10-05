@@ -63,6 +63,23 @@ can be widened by dragging the divider. On a phone, the narrow pane is all the r
 - **Desk-only chrome.** The `⌥1–4` shortcut labels are hidden below `md` (there is no ⌥ on a phone),
   `esc ✕` becomes `✕`, and the send/stop/attach buttons grow under `pointer-coarse:`.
 
+### Which screens get the phone shell — `compact:` / `useCompact()`
+
+> 🐛 **The unfolded Find N5 got the desktop.** Reported: "On find n5, the screen go as if it's a
+> desktop". The phone shell (bottom bar, sheet, edge-to-edge pane, bottom home nav) was keyed to
+> `max-width: 639px`, and an unfolded N5 is ~750px. So it got the tab strip, the top chrome, the
+> framed pane and the mouse-sized controls. Width alone can't tell a foldable from a small laptop
+> window; the input device can. **Fix:** one definition, used in both places. In CSS it is the
+> `compact:` variant in `app/globals.css`; in JS it is `COMPACT_QUERY` / `useCompact()` in
+> `lib/use-media.ts`. The rule is narrow (<640px) **or** touch-only (`hover: none` + `pointer: coarse`)
+> up to 1199px. Compact also forces tabs view, keeps the bento column off while a topic is open, drops
+> the divider, and stacks the side slot like a phone. Verified with touch at 750×826 and 856×945, both
+> in the shell. With a mouse at 750×826 the desktop layout is unchanged.
+>
+> The variant has to be written in **block form** (two `@slot`s). The one-line shorthand with a
+> comma-separated query compiled to the first query only and silently dropped the touch half: the JS
+> side switched over and the CSS side didn't, so the bar appeared under a framed desktop pane.
+
 ### The chat bar and sheet, below 640px — `components/ChatSheet.tsx`
 
 A second pass on the same day, after using it, not auditing it ("layout awful, switching chats

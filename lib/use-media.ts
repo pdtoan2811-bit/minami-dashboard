@@ -27,3 +27,8 @@ export function useMediaQuery(query: string): boolean {
 /** Below Tailwind's `md` — the breakpoint the shell already uses to drop the bento beside the chat. */
 export const PHONE_QUERY = "(max-width: 767px)";
 export const usePhone = () => useMediaQuery(PHONE_QUERY);
+
+/** The phone shell (§23) — narrow, or touch-only up to tablet width. Identical to the `compact:` variant
+ *  in app/globals.css, so the CSS half and the JS half of the shell can never disagree. */
+export const COMPACT_QUERY = "(max-width: 639px), (hover: none) and (pointer: coarse) and (max-width: 1199px)";
+export const useCompact = () => useMediaQuery(COMPACT_QUERY);

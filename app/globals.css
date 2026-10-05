@@ -12,6 +12,18 @@
  * is the only version of this that survives leaving the developer's laptop. */
 @import url("https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap");
 
+/* `compact:` — the phone shell (§23): bottom chat bar, sheet, edge-to-edge panes. Narrow screens, AND
+   any touch-only screen up to 1199px — an unfolded Find N5 (~750px) or a tablet is wide enough for the
+   desktop layout's breakpoints and was getting it: tab strip, top chrome, side-by-side columns, all
+   sized for a mouse. Width alone can't tell a foldable from a small laptop window; the input can.
+   The SAME query is COMPACT_QUERY in lib/use-media.ts — keep the two identical. */
+/* Block form, two @slots: the one-line shorthand with a comma-separated query compiled to the FIRST
+   query only — `(max-width:639px)` — and silently dropped the touch-tablet half. */
+@custom-variant compact {
+  @media (max-width: 639px) { @slot; }
+  @media (hover: none) and (pointer: coarse) and (max-width: 1199px) { @slot; }
+}
+
 /* ── Typography ──────────────────────────────────────────────────────────────
    A refined UI font stack (San Francisco on Apple, Segoe/Inter/Roboto elsewhere)
    plus emoji fallbacks so 🌸 & co. render. Set as Tailwind's --font-sans so every
