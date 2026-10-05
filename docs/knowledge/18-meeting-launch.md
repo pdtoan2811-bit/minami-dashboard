@@ -93,6 +93,15 @@ The chain: meeting app on **:3011** (never :3010, the dashboard) → `server/rec
 > it. **Fix:** all three live in `bin/tunnel-lib.sh` now, sourced by both, so the two cannot drift
 > again. A launcher is exactly the code nobody reads until it fails at the worst possible moment.
 
+> 🐛 **Another project on :3011 was reused as the meeting app.** 2026-10-01: `~/qikifyStoreLeadsKnowledge`
+> hardcodes `next dev -p 3011`. Its dev server was up, its `/` answered 200, so step 1 printed
+> "already up on :3011 — reusing it". Step 1's check proved that something on the port was healthy,
+> not that it was Minami. The first visible failure was the next line,
+> `ingest returned 000 — expected 401`, which points at the ingest token when the real problem was
+> a different app on the port (000 = no answer within 5s while it dev-compiled; 404 afterwards).
+> **Fix:** before any HTTP probe, the launcher reads the listener's cwd from `lsof` and refuses
+> unless it is this repo, naming the owning folder and pid.
+
 ### Not built / not verified
 
 - No automated test drives a real cold start; the probe functions are verified by hand against a live

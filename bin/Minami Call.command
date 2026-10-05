@@ -144,6 +144,19 @@ b "  1/4  meeting app"
 #   bound + healthy -> reuse it, and do NOT record APP_PID (cleanup must not kill what we did not start)
 #   bound + sick    -> STOP. Never try to start a second server on a taken port.
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  # ⚠️ "BOUND + HEALTHY" IS NOT "BOUND + OURS". On 2026-10-01 ~/qikifyStoreLeadsKnowledge — whose
+  # package.json hardcodes `next dev -p 3011` — was on this port. Its `/` answered 200, so it was
+  # reused as the meeting app, and the only symptom was "ingest returned 000" one step later, which
+  # points at the token rather than at a stranger on the port. Ask the kernel whose process it is
+  # (its cwd) before asking it anything over HTTP.
+  OWNER_PID=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)
+  OWNER_CWD=$(lsof -a -p "$OWNER_PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+  if [ -n "$OWNER_CWD" ] && [ "$OWNER_CWD" != "$PWD" ]; then
+    no "another app holds :${PORT} — ${OWNER_CWD} (pid ${OWNER_PID})"
+    dim "  :${PORT} is reserved for the meeting app. Stop that app, or move its port, then run this again:"
+    dim "    kill ${OWNER_PID}"
+    read -r -p "  enter to close "; exit 1
+  fi
   # Generous timeout: this is a health check, and a busy-but-working app must not be condemned for
   # being busy. That confusion is the entire bug above.
   if curl -fsS -o /dev/null -m 25 "http://127.0.0.1:${PORT}/"; then

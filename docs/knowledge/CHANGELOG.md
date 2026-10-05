@@ -18,6 +18,12 @@ this to do a piece of work; read the subsystem's own doc.
   installable. *Asked for by user: "enhanced on responsiveness to be able to display and work with on
   mobile phone (my zflip 7 and my oppo find n5)".*
 
+### 2026-10-01
+- **On Call refuses a foreign app on :3011** (§18) — the launcher reused `~/qikifyStoreLeadsKnowledge`'s
+  dev server (it hardcodes port 3011) as the meeting app, then failed at the ingest check with 000.
+  It now checks the listener's cwd via `lsof` first and names the owner.
+  *Reported by user: "ingest returned 000 — expected 401".*
+
 ### 2026-09-29
 - **`ask_team` cards carry the why, and a recommendation** (§3, `03-live-sessions.md`) — team-ask
   branch `feat/card-context-recommendation`: option descriptions shown in full (Slack cut them at
