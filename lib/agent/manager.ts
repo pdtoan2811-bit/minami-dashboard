@@ -404,7 +404,9 @@ export type AgentEvent =
 
 type Decision = { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string };
 // `timer` is only set for a HELD call (see setHold) — the auto-release backstop described there.
-type Pending = { resolve: (d: Decision) => void; toolName: string; input: unknown; timer?: ReturnType<typeof setTimeout>; expiresAt?: number };
+// `since` is when the call started waiting. /glance (§23) shows a need's age ("6m"), and nothing else
+// records it: expiresAt exists only for held steps, and phaseSince moves on every touch().
+type Pending = { resolve: (d: Decision) => void; toolName: string; input: unknown; timer?: ReturnType<typeof setTimeout>; expiresAt?: number; since?: number };
 type Sub = (ev: AgentEvent) => void;
 
 // How long a held tool call may sit at the gate before it releases itself. A parked canUseTool promise
@@ -900,7 +902,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     // After the entry is stored (microtask), so a listener reading liveActivity() sees it.
     queueMicrotask(() => { if (s.sessionId && s.pending.has(id)) liveEvents.emit("need", { sessionId: s.sessionId, cwd: s.cwd, need: needOf(id, toolName, input, held, expiresAt) }); });
     const p = new Promise<Decision>((resolve) => {
-      const entry: Pending = { resolve, toolName, input, expiresAt };
+      const entry: Pending = { resolve, toolName, input, expiresAt, since: Date.now() };
       if (held) {
         entry.timer = setTimeout(() => {
           // Identity-checked: by now this id may have been resolved and the map entry replaced.
@@ -2131,8 +2133,11 @@ export function liveModels(): { key: string; cwd: string; model: string; premium
  *  Under bypassPermissions (this box's default) ordinary tool approvals almost never happen: the
  *  realistic needs are Claude's question, a plan to review (ExitPlanMode), and steps parked by the
  *  hold brake, which auto-DENY at `expiresAt`. `permission` covers a session set to ask/auto-edits. */
-export type Need = { id: string; kind: "question" | "plan" | "held" | "permission"; tool: string; summary: string; options?: string[]; expiresAt?: number };
-export function needOf(id: string, toolName: string, input: unknown, held: boolean, expiresAt?: number): Need {
+export type Need = { id: string; kind: "question" | "plan" | "held" | "permission"; tool: string; summary: string; options?: string[]; expiresAt?: number; since?: number };
+export function needOf(id: string, toolName: string, input: unknown, held: boolean, expiresAt?: number, since?: number): Need {
+  return { ...needBody(id, toolName, input, held, expiresAt), ...(since ? { since } : {}) };
+}
+function needBody(id: string, toolName: string, input: unknown, held: boolean, expiresAt?: number): Need {
   const i = (input || {}) as Record<string, any>;
   if (toolName === "AskUserQuestion") {
     const q = Array.isArray(i.questions) ? i.questions[0] : null;
@@ -2167,7 +2172,7 @@ export function liveActivity(): Record<string, LiveTile> {
     // `need` / `ended` are as stable between polls as the fields above: they change only when a
     // pending entry is added or settled, or a turn ends — so the grid's change-detection still holds.
     const first = s.pending.entries().next().value as [string, Pending] | undefined;
-    const need = first ? needOf(first[0], first[1].toolName, first[1].input, !!first[1].timer, first[1].expiresAt) : undefined;
+    const need = first ? needOf(first[0], first[1].toolName, first[1].input, !!first[1].timer, first[1].expiresAt, first[1].since) : undefined;
     out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd, turnStartedAt: s.turnStartedAt, ...(s.busy && a.progress ? { progress: a.progress } : {}),
       ...(need ? { need, needs: s.pending.size } : {}), ...(s.ended ? { ended: s.ended } : {}), mode: s.mode, ...(s.hold ? { hold: true } : {}) };
   }
