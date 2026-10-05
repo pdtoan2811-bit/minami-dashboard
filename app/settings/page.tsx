@@ -5,6 +5,7 @@ import { Segmented } from "@/components/ui/Segmented";
 import { useSetting } from "@/lib/use-settings";
 import AutopilotPanel from "@/components/AutopilotPanel";
 import PreferredAccountPanel from "@/components/PreferredAccountPanel";
+import { PushToggle } from "@/components/PushToggle";
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -105,13 +106,18 @@ export default function Settings() {
             </Row>
           </div>
         </section>
+
+        <section>
+          <h2 className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-neutral-500">Notifications</h2>
+          <PushToggle />
+        </section>
         <PreferredAccountPanel />
         <AutopilotPanel />
 
         <p className="px-1 text-[11px] text-neutral-600">
-          Settings are stored locally in this browser. Bento reads them live. Autopilot and the
-          preferred account are the exceptions — they live on the machine, because the things that
-          obey them run there.
+          Settings are stored locally in this browser. Bento reads them live. Autopilot, the
+          preferred account and notifications are the exceptions — they live on the machine, because
+          the things that obey them run there.
         </p>
       </main>
     </div>

@@ -28,8 +28,8 @@ export function Nav() {
         const active = it.href === "/" ? p === "/" : p.startsWith(it.href);
         return (
           <Link key={it.href} href={it.href} title={it.label}
-            className={`rounded-lg px-2 py-1 text-xs transition-colors ${active ? "bg-white/10 text-neutral-100" : "text-neutral-500 hover:text-neutral-200"}`}>
-            <span className="mr-1">{it.icon}</span><span className="hidden sm:inline">{it.label}</span>
+            className={`rounded-lg px-2 py-1 text-xs transition-colors compact:px-3 compact:py-2 compact:text-sm ${active ? "bg-white/10 text-neutral-100" : "text-neutral-500 hover:text-neutral-200"}`}>
+            <span className="mr-1 compact:mr-0">{it.icon}</span><span className="hidden sm:inline compact:hidden">{it.label}</span>
           </Link>
         );
       })}

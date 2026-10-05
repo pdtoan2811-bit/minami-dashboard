@@ -32,4 +32,14 @@ export async function register() {
   } catch (e) {
     console.error("[minami] autopilot failed to start (the app is fine without it):", e);
   }
+
+  // Web push (lib/push/server.ts, §24). Here rather than lazily because a need raised while no page
+  // is open — the phone in a pocket — is the entire point; nothing would ever visit a route first.
+  // It subscribes to liveEvents and does nothing else until a device has subscribed.
+  try {
+    const { startPush } = await import("@/lib/push/server");
+    await startPush();
+  } catch (e) {
+    console.error("[minami] web push failed to start (the app is fine without it):", e);
+  }
 }

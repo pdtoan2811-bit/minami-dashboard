@@ -62,6 +62,8 @@ export const NODES: ModuleNode[] = [
   { id: "c/BrowserLightbox", label: "BrowserLightbox", sub: "full-size viewer\n(portalled to body)", layer: "component", row: 15, pipeline: "live" },
   { id: "l/useback", label: "use-back.ts", sub: "Android Back → topmost layer\n(one history entry per layer)", layer: "core", row: 31 },
   { id: "c/PreviewOverlay", label: "PreviewOverlay", sub: "phone: localhost preview\nin-app, Back-aware", layer: "component", row: 28 },
+  { id: "c/Inbox", label: "Inbox", sub: "phone home: every chat by\nwhat it needs (§23)", layer: "component", row: 29 },
+  { id: "r/seen", label: "/api/agent/seen", sub: "server-side read marks\n(lib/seen.ts)", layer: "route", row: 19 },
   { id: "c/ChatSheet", label: "ChatSheet", sub: "phone chat switcher\n(bottom sheet, <640px)", layer: "component", row: 27 },
   { id: "c/Markdown", label: "Markdown", sub: "memoised renderer\n(chat + thought tones)", layer: "component", row: 3 },
   { id: "c/ThoughtBlock", label: "ThoughtBlock", sub: "reasoning passes,\nseam-split", layer: "component", row: 16, pipeline: "live" },
@@ -219,11 +221,26 @@ export const NODES: ModuleNode[] = [
   { id: "l/density", label: "density.ts", sub: "measured tiers + context\n(roomy · snug · tight · micro)", layer: "core", row: 20 },
   // The few decisions that are about the DEVICE, not the box: a phone forces tabs and stacks the slot (§23).
   { id: "l/use-media", label: "use-media.ts", sub: "useMediaQuery / usePhone\n(device, not box — §23)", layer: "core", row: 20 },
+  // The Flip 7 cover screen: counts, needs-you lines, one Pause-all button. Read-only bar the brake (§23).
+  { id: "app/glance", label: "/glance", sub: "cover-screen view (Flex Window)\nneeds · running · pause all", layer: "surface", row: 9, pipeline: "live" },
+  { id: "l/use-cover", label: "use-cover.ts", sub: "useCoverScreen()\nviewport AND screen ≤ 420×480", layer: "core", row: 21 },
   // Shared so "the browser matches the file preview" is a fact about the code, not a thing to re-check.
   { id: "c/PanelTabs", label: "PanelTabs", sub: "one tab row, worn by\nthe file AND browser panels", layer: "component", row: 23 },
 
   // ── Which topics the new-topic picker offers first (KNOWLEDGE.md §5d) ─────
   { id: "l/topic-rank", label: "topic-rank.ts", sub: "focus ranking: depth × recency\n+ did-you-come-back", layer: "core", row: 24 },
+  // Web push (§24). The server half hangs off liveEvents, started from instrumentation.ts — no page
+  // has to be open for a need to reach the phone, which is the point.
+  { id: "l/push-server", label: "push/server.ts", sub: "liveEvents → notifier, once per process\n· act() · presence", layer: "core", row: 32, pipeline: "live" },
+  { id: "l/push-notifier", label: "push/notifier.ts", sub: "the rules: heads-up · silent · summary\n· polled close · one-time nonces", layer: "core", row: 33, pipeline: "live" },
+  { id: "l/webpush", label: "push/webpush.ts", sub: "VAPID + aes128gcm on node:crypto\n(RFC 8291 vector-checked)", layer: "core", row: 34, pipeline: "live" },
+  { id: "l/push-store", label: "push/store.ts", sub: "VAPID keys · devices · prefs", layer: "core", row: 35 },
+  { id: "x/pushfile", label: "~/.minami/push.json", sub: "keys never rotate — every\nsubscription is bound to them", layer: "runtime", row: 32 },
+  { id: "r/push", label: "/api/push/*", sub: "key · subscribe · unsubscribe\n· act (nonce only) · presence", layer: "route", row: 32, pipeline: "live" },
+  { id: "p/sw", label: "public/sw.js", sub: "push → showNotification\nNO fetch handler (§23 refresh)", layer: "component", row: 32, pipeline: "live" },
+  { id: "l/push-client", label: "push-client.ts", sub: "enable/disable · usePushRegistration\n· usePushPresence", layer: "core", row: 36 },
+  { id: "c/PushToggle", label: "PushToggle", sub: "Settings → Notifications\n(the permission prompt needs a tap)", layer: "component", row: 33 },
+  { id: "x/fcm", label: "push service (FCM)", sub: "201 = accepted; 404/410 = forget the device", layer: "runtime", row: 33 },
 ];
 
 export const EDGES: ModuleEdge[] = [
@@ -494,4 +511,24 @@ export const EDGES: ModuleEdge[] = [
   { from: "r/inspectjs", to: "p/inspectcore", kind: "http", label: "concatenates at request" },
   { from: "p/inspectcore", to: "app/preview", kind: "http", label: "postMessage (hello · picked · errors)" },
   { from: "app/page", to: "app/preview", kind: "http", label: "window.open from a url chip" },
+  { from: "app/glance", to: "r/agent", kind: "http", label: "/live, 5s while visible" },
+  { from: "app/glance", to: "r/hold", kind: "http", label: "pause / resume all" },
+  { from: "app/glance", to: "r/sessions", kind: "http", label: "?ids= titles only" },
+  { from: "app/glance", to: "l/pagevisible", kind: "import" },
+  // Web push (§24).
+  { from: "l/push-server", to: "l/manager", kind: "import", label: "liveEvents · liveActivity · pendingFor" },
+  { from: "l/push-server", to: "l/sessions", kind: "import", label: "sessionTitle()" },
+  { from: "l/push-server", to: "l/push-notifier", kind: "import" },
+  { from: "l/push-server", to: "l/push-store", kind: "import" },
+  { from: "l/push-server", to: "l/webpush", kind: "import" },
+  { from: "l/push-store", to: "l/webpush", kind: "import", label: "generateVapidKeys" },
+  { from: "l/push-store", to: "x/pushfile", kind: "import" },
+  { from: "l/webpush", to: "x/fcm", kind: "http", label: "encrypted POST" },
+  { from: "x/fcm", to: "p/sw", kind: "http", label: "push event" },
+  { from: "p/sw", to: "r/push", kind: "http", label: "act (nonce) · resubscribe" },
+  { from: "r/push", to: "l/push-server", kind: "import" },
+  { from: "r/push", to: "l/push-store", kind: "import" },
+  { from: "app/settings", to: "c/PushToggle", kind: "import" },
+  { from: "c/PushToggle", to: "l/push-client", kind: "import" },
+  { from: "l/push-client", to: "r/push", kind: "http", label: "key · subscribe · presence" },
 ];

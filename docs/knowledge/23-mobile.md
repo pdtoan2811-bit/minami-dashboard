@@ -173,6 +173,49 @@ behaviour you'll get.
 > installed the app before this fix still needs closing once by hand (swipe it out of recents); every
 > deploy after that updates on its own.
 
+### The phone redesign: inbox, list-detail, chip — `components/Inbox.tsx`, `lib/seen.ts`
+
+Designed in a three-designer review (Material/foldables, messaging apps, developer tools), two rounds:
+proposals, then cross-critique and votes. The user chose list-detail for the unfolded N5, an inbox as
+home, the controls folded into a chip, push notifications and a cover-screen view. While it was being
+built they added: "work with multiple projects at once, the hierarchy forces many taps to switch".
+
+**What "needs you" means here.** Sessions run `bypassPermissions`, so the server's gate
+(`canUseTool`) allows everything except `AskUserQuestion`. Ordinary tool approvals are therefore rare.
+The real needs are **a question**, **a plan to review** (ExitPlanMode in Plan mode), **held steps**
+under the brake (which auto-*deny* at `expiresAt`), and **permission** prompts in a session set to
+ask/auto-edits. `needOf()` in the manager classifies them. `LiveTile` now carries `need`, `needs`,
+`ended` (how the last turn ended, with the opening of the reply), `mode` and `hold`. The same data
+feeds the inbox, the glance view and web push, through the `liveEvents` emitter.
+
+**Inbox (phone home).** Every chat across all topics, grouped Needs you → Failed → New → Running →
+Idle. Failures are their own group because, mixed into Needs you, they'd train the user to skim it.
+Status is shown by shape and motion as well as colour: a still ring means it's your turn, a spinning
+arc means working. Rows never re-sort while a finger is down. Nothing approves from the list; a row
+says what's needed and the decision happens in the chat, next to the transcript. "New" is unread
+since last *seen*. `lib/seen.ts` stores that on the server, so the Mac, the N5 and the Flip agree. It
+has a `__floor` (when tracking began), so the first day doesn't mark a month of chats new. A pane
+marks its chat seen once it has been visible, idle, for 1.2s. A swipe right on a New or Failed row
+marks it read.
+
+**One tap to any chat, in any project.** `openChat(sid)` restores or parks the topic through
+`openProject`, then focuses the chat, adds it as a pane, or swaps it into the current pane when all
+four are taken. `/?open=<sid>` uses the same path; notifications and the glance view land there. The
+bottom chat bar's swipe now walks the **most-recently-visited chats across topics** (right = back,
+left = forward), like Android's gesture-bar swipe between apps. The MRU list is not reordered during
+a swipe sequence (4s), or each swipe would bounce between the same two chats.
+
+**List-detail on the N5 unfolded** (`split` = compact and ≥700px): a 288px list (Inbox | Topics,
+icon-only nav) beside the chat. There is no nav rail, because at 750px a rail would leave the chat
+under 400px. With no chat selected, the right side says so. While the keyboard is up, the list
+collapses to a 72px icon strip.
+
+**Controls chip.** In the phone shell the control row is always folded. The chip shows only what you
+changed (the model when it isn't the default, plan/code, the approval level, held). Pause is its own
+36px button beside it, because it's needed fast and it's the safe direction. The chip opens a bottom
+sheet with thumb-sized rows. Switching *to* bypass asks first; every safer change is instant. Back
+closes the sheet.
+
 ### Installing it as an app
 
 `app/manifest.ts` + `public/app-icon-{192,512}.png` (the 🌸 on the ground gradient, full-bleed so one
@@ -180,6 +223,9 @@ file serves as both the `any` and the `maskable` icon). On Chrome for Android, *
 installs a standalone app, with no URL bar and its own task-switcher entry. Installation needs a secure
 origin. On the author's box that is the tailnet-only `tailscale serve` URL; plain
 `http://<lan-ip>:3000` still works, but only as a tab.
+
+Push notifications for the installed app live in their own doc: [§24](24-push.md). Its service worker
+has no fetch handler, so it doesn't affect the build-refresh above.
 
 ### Localhost links, opened from the phone — `lib/open-local.ts`, `/api/tailnet/expose`
 
@@ -223,6 +269,55 @@ Back → the chat. The ↗ button still opens a real tab, for pages that refuse 
 
 Not covered: bare URLs in prose, which the Markdown renderer doesn't turn into links at all. The §21
 comment pop-out, which iframes the localhost URL, is also not covered.
+
+### The cover screen — `/glance`, `lib/use-cover.ts`
+
+The Flip 7's Flex Window (~360×400 CSS px, read at arm's length) gave the full board a "micro" pane
+that showed nothing usable. `/glance` is a separate route built for that screen. It answers one
+question, "does anything need me, and how long has it waited?", and offers one action.
+
+- **Counts strip:** needs you / running / done. "Done" means the turn ended OK in the last 30 min. The
+  number is 20px and the word 16px.
+- **Up to three lines.** If anything needs you, the lines are the needs, sorted by soonest `expiresAt`
+  (a held step auto-denies then), then by longest wait. Otherwise they are the three most recently
+  started running chats with their live label. Each line shows the chat title (`task || title`, the
+  board's `titleOf`), the need's summary cut to six words, and its age. Tapping a line goes to
+  `/?open=<sessionId>`. Overflow is shown as "· +N more" on the label row, because a row of its own
+  under the list pushed the third line under the button.
+- **One button: Pause all / Resume all.** It uses the Flow brake (`/api/agent/hold`, key
+  `live:<sessionId>`) on every busy, un-held session. Pause has no confirm, because it only parks the
+  next tool call and nothing is lost. Resume lets work run unattended again, so it needs a second tap,
+  and that confirm lapses after 4s.
+- **Deliberately absent:** transcript, composer, approve/deny. 360px can't show enough of a command to
+  approve it safely.
+- **Status by shape and motion:** a still solid ring means needs you, a turning dashed ring means
+  running, two bars mean paused, ✓ means done. Under reduced motion the dashed ring stops turning, and
+  the dash still tells it apart from the solid ring.
+- **Polling:** `/api/agent/live` every 5s, only while the page is visible, and immediately on
+  `visibilitychange`. If a poll fails the board stays up, the header says "offline", and the label
+  says "Not updating" instead of "All quiet". Otherwise a dead poll and an idle box would look
+  identical.
+
+Two server additions came with it. `Need.since` (set when the pending call is created) records how
+long a need has waited. Nothing else did: `expiresAt` exists only for held steps, and `phaseSince`
+moves on every `touch()`. `/api/bento/sessions?ids=a,b` narrows the reply, because the unfiltered list
+was 54 KB on the author's box and the glance needs about three titles.
+
+**`useCoverScreen()`** (`lib/use-cover.ts`) is for the main page's redirect. It requires the viewport
+to be ≤420×480 **and** `screen` to be that small. Viewport alone would also match a laptop window
+dragged small, and a phone's main screen with the keyboard up (`resizes-content` shrinks the
+viewport). Redirecting someone mid-typing would lose the screen they were on. Checked in Playwright:
+cover 360×400 true; Flip main 412×960 false; 412×450 viewport on a 412×960 screen false; 400×450 window
+on a laptop screen false.
+
+**Getting it onto the Flex Window.** Samsung's own *Labs → Apps allowed on cover screen* is a short
+allowlist (Messages, WhatsApp, YouTube, Maps…), and Chrome isn't on it. The route that works is Good
+Lock → MultiStar → *I ♡ Galaxy Foldable* → **Launcher Widget**. Pick the apps, then add the Good Lock
+Launcher widget under Settings → Cover screen → Widgets. That picker lists every installed app, and an
+installed PWA (WebAPK) is its own app, so it should appear there. Press reports confirm Chrome works
+this way; nobody has confirmed a WebAPK specifically. Not yet tried on the device. The installed app
+opens at `start_url` (`/`), so either the main page redirects via `useCoverScreen()`, or you install a
+second shortcut to `/glance`.
 
 ### How to re-audit
 
