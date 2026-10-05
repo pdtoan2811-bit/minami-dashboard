@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **The installed app updates itself after a deploy** (§23, `lib/use-build-refresh.ts`, `/api/build`).
+  It reloads on foreground when the server's build id differs, and `/` is now `no-cache`. *Reported by
+  user: "on the web installed version to android, the back and all intuitive UX didnt work".*
 - **Android Back closes the topmost layer** (§23, `lib/use-back.ts`): sheet → side slot → lightbox →
   flow → topic → home, instead of leaving the app. On touch-only devices Enter in the composer is a
   newline and ↵ sends. *Asked for by user: "nâng cấp cả các thao tác android như back vv nữa".*

@@ -130,6 +130,20 @@ On a touch-only device (`(hover: none) and (pointer: coarse)`) Enter is a newlin
 lists the way Shift+Enter does, and ↵ sends. `enterKeyHint` makes the keyboard's action key say which
 behaviour you'll get.
 
+> 🐛 **The installed app kept running the old build.** Reported the evening it shipped: "on the web
+> installed version to android, the back and all intuitive UX didnt work". Android keeps an installed
+> web app's page alive in the background, so after a deploy it went on running the JavaScript it had
+> loaded earlier: the tab strip, no Back handling. Fresh tabs were fine. Nothing in the app ever asked
+> whether it was current. The prerendered `/` also went out with only `s-maxage`, a CDN directive
+> that leaves the browser free to reuse the HTML shell.
+> **Fix:** `next.config.mjs` stamps a build id (`env.MINAMI_BUILD`), which is inlined into the client
+> bundle and into `/api/build` alike. `lib/use-build-refresh.ts` asks for the server's id whenever the
+> page comes back to the foreground (`visibilitychange`, `pageshow`) and reloads if it differs. It
+> checks on foreground, not on a timer, so a reload never lands mid-read. Drafts and the open topic
+> already survive a reload (verified). `/` is now served `Cache-Control: no-cache`. A phone that
+> installed the app before this fix still needs closing once by hand (swipe it out of recents); every
+> deploy after that updates on its own.
+
 ### Installing it as an app
 
 `app/manifest.ts` + `public/app-icon-{192,512}.png` (the 🌸 on the ground gradient, full-bleed so one
