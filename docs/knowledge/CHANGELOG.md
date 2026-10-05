@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **Android Back closes the topmost layer** (§23, `lib/use-back.ts`): sheet → side slot → lightbox →
+  flow → topic → home, instead of leaving the app. On touch-only devices Enter in the composer is a
+  newline and ↵ sends. *Asked for by user: "nâng cấp cả các thao tác android như back vv nữa".*
 - **Phone chat bar + sheet** (§23, `components/ChatSheet.tsx`). Below 640px the tab strip is replaced
   by back / current chat / ＋. Switching and closing move to a bottom sheet with 56px rows and 44px
   close buttons, and you can swipe the bar to step between chats. The pane goes edge to edge, touch

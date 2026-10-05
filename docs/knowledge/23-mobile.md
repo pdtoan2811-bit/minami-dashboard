@@ -98,6 +98,38 @@ Also in this pass:
 - **The isolated-worktree banner** drops its explanation clause on a phone. Before, it ran off the
   edge and took the *merge back* button with it.
 
+### Android Back and the soft keyboard — `lib/use-back.ts`, `components/Composer.tsx`
+
+**Back.** The dashboard is one URL, so Back (button or edge swipe) from anywhere left the page, or
+closed the installed app: from inside a topic, with the chat sheet up, in a lightbox. Each open layer
+now owns one `history` entry, registered with `useBackLayer(open, close)`, and Back closes the
+topmost one. The layers are the topic, the chat sheet, the flow, the folder pickers, the ＋ menu, the
+pane's chat menu, the screenshot lightbox, and the phone side slot (only the *visible* pane's slot,
+because a tab you switched away from keeps its slot open underneath). The order is the order of
+opening, so the sheet closes before the topic.
+
+The hard case is a layer closed by the UI. Its history entry is still there, and the next Back would
+land on it and appear to do nothing. A UI close therefore marks its layer dead, and `flush` rewinds
+over every dead entry at the top in **one** `history.go(-n)`. Leaving a topic closes its sheet in the
+same render, and several separate async traversals would race. The layers being rewound are removed
+**by identity**, because a `pushState` lands synchronously while the traversal does not, and removing
+by count from the top would splice off the newly opened layer. Entries left over from before a reload
+are skipped. URLs never change: a URL that named a sheet would have to restore it on reload.
+
+Verified on a production build with touch emulation:
+
+| Sequence | Result |
+|---|---|
+| sheet open, Back | sheet closes, still in the topic |
+| pick a chat in the sheet, Back | home |
+| side slot open, Back | slot closes; Back again goes home |
+| ‹ in the UI, then Back | leaves the page (no dead entry) |
+
+**Enter.** A phone keyboard has no Shift, so Enter-sends meant you could never write a second line.
+On a touch-only device (`(hover: none) and (pointer: coarse)`) Enter is a newline that continues
+lists the way Shift+Enter does, and ↵ sends. `enterKeyHint` makes the keyboard's action key say which
+behaviour you'll get.
+
 ### Installing it as an app
 
 `app/manifest.ts` + `public/app-icon-{192,512}.png` (the 🌸 on the ground gradient, full-bleed so one

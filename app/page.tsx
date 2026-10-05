@@ -39,6 +39,7 @@ import { buildJourney } from "@/lib/flow-model";
 import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block";
 import { openLocalUrl } from "@/lib/open-local";
 import { ChatSheet } from "@/components/ChatSheet";
+import { useBackLayer } from "@/lib/use-back";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
@@ -1066,6 +1067,14 @@ export default function BentoHome() {
   // The rail is only a state the bento can be *in* while a chat is open; with no panel it would just
   // be a worse grid. Every collapse path checks this, so there's one definition of "railed".
   const railed = !!proj && rail;
+  // Android Back closes the topmost layer instead of leaving the app (lib/use-back.ts, §23). Order of
+  // registration is order of opening, so whatever opened last closes first: sheet before topic, a
+  // flow opened from inside a topic before the topic itself.
+  useBackLayer(!!proj, closePanel);
+  useBackLayer(chatSheet, () => setChatSheet(false));
+  useBackLayer(!!flowFor, () => setFlowFor(null));
+  useBackLayer(picker, () => setPicker(false));
+  useBackLayer(addMenu, () => setAddMenu(false));
   // ⌘B / Ctrl+B toggles the bento between grid and rail — the shortcut every editor with a sidebar
   // already trained everyone to reach for. Both buttons name it in their tooltip, which is the only
   // reason a shortcut ever gets discovered.
@@ -2753,6 +2762,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   const compact = useMediaQuery("(max-width: 639px)");
   const [phoneSlotOpen, setPhoneSlotOpen] = useState(false);
   const slotClosed = phone ? !phoneSlotOpen : browserPanelHidden;
+  // Only the visible pane's slot is a layer: a tab you've switched away from keeps its slot open
+  // underneath, and Back must not close something you can't see.
+  useBackLayer(phone && phoneSlotOpen && !collapsed, () => setPhoneSlotOpen(false));
   const showSlot = useCallback(() => (phone ? setPhoneSlotOpen(true) : setBrowserPanelHidden(false)), [phone, setBrowserPanelHidden]);
   const hideSlot = useCallback(() => (phone ? setPhoneSlotOpen(false) : setBrowserPanelHidden(true)), [phone, setBrowserPanelHidden]);
   // Layout is a per-user preference, not per-pane state: 300px side-by-side (the old hardcoded width)
@@ -2802,6 +2814,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   }, [browserDrag]);
   // null = closed. Index into browser.shots.
   const [lightbox, setLightbox] = useState<number | null>(null);
+  useBackLayer(lightbox !== null, () => setLightbox(null));
+  useBackLayer(attachOpen, () => setAttachOpen(false));
+  useBackLayer(menu, () => setMenu(false));
 
   // ---- the side slot: browser OR file, never both -----------------------------------------------
   // Both panels want the same place (beside the chat, drag-resizable) and a pane is already as narrow
