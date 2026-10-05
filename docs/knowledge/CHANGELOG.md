@@ -9,6 +9,11 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **Phone chat bar + sheet** (§23, `components/ChatSheet.tsx`). Below 640px the tab strip is replaced
+  by back / current chat / ＋. Switching and closing move to a bottom sheet with 56px rows and 44px
+  close buttons, and you can swipe the bar to step between chats. The pane goes edge to edge, touch
+  targets are ≥40px, and the featured 2×2 tile is gone on phones. *Asked for by user: "switching to view
+  chat few awful … close chat also feel awful … small screen need better button sizes and layout".*
 - **Localhost links open from the phone** (§23). Preview chips and Markdown links to
   `localhost:<port>` used to open the phone's own localhost. Read remotely, they now go to that port's
   tailnet-only `tailscale serve` address, which `/api/tailnet/expose` finds or creates.
