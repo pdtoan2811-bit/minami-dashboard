@@ -6,6 +6,15 @@ const nextConfig = {
   // Let a second instance use its own build dir so `next dev` (iteration) and `next start` (the stable
   // prod server) can run at the same time without fighting over `.next`. Defaults to `.next`.
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  // A per-build id, inlined into the client bundle and /api/build alike, so a page can tell it has been
+  // left behind by a deploy (lib/use-build-refresh.ts). Evaluated when `next build` reads this file.
+  env: { MINAMI_BUILD: String(Date.now()) },
+  // The HTML must be revalidated on every load. Next sends a prerendered page with only `s-maxage`,
+  // which is a CDN directive; it leaves the browser — and an installed app's launch — free to reuse a
+  // shell whose chunk hashes no longer exist after a deploy.
+  async headers() {
+    return [{ source: "/", headers: [{ key: "Cache-Control", value: "no-cache" }] }];
+  },
   // The knowledge base is plain static HTML in public/kb/, not an app route. Next strips the
   // trailing slash from /kb/ and then has no route to match, so the bare /kb 404s even though
   // /kb/index.html serves fine. Rewrite it so the short, linkable URL works.

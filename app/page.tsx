@@ -40,6 +40,7 @@ import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block
 import { openLocalUrl } from "@/lib/open-local";
 import { ChatSheet } from "@/components/ChatSheet";
 import { useBackLayer } from "@/lib/use-back";
+import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
 import { atLeast, looser, useDensity, DensityContext, type Density } from "@/lib/density";
@@ -1070,6 +1071,7 @@ export default function BentoHome() {
   // Android Back closes the topmost layer instead of leaving the app (lib/use-back.ts, §23). Order of
   // registration is order of opening, so whatever opened last closes first: sheet before topic, a
   // flow opened from inside a topic before the topic itself.
+  useBuildRefresh();
   useBackLayer(!!proj, closePanel);
   useBackLayer(chatSheet, () => setChatSheet(false));
   useBackLayer(!!flowFor, () => setFlowFor(null));
