@@ -512,6 +512,28 @@ export default function BentoHome() {
   // is room for a readable tab strip, and below it there is room for neither.
   const compact = !gridFits;
   const [chatSheet, setChatSheet] = useState(false);
+  // "The keyboard is up", for hiding the bottom chat bar. Focus alone is the wrong signal: Android's
+  // Back dismisses the keyboard and LEAVES the textarea focused, which would strand the bar hidden. So:
+  // an editable field has focus AND the viewport has shrunk well below the tallest it has been (with
+  // `interactive-widget=resizes-content` the layout viewport shrinks with the keyboard).
+  const [keyboardUp, setKeyboardUp] = useState(false);
+  useEffect(() => {
+    if (!compact) { setKeyboardUp(false); return; }
+    let tallest = window.innerHeight;
+    const check = () => {
+      const h = window.visualViewport?.height ?? window.innerHeight;
+      tallest = Math.max(tallest, h);
+      const el = document.activeElement;
+      const editable = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit"].includes(el.type));
+      setKeyboardUp(editable && h < tallest * 0.8);
+    };
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", check); window.addEventListener("resize", check);
+    // focusout lands before the next focusin when focus moves between fields; let it settle.
+    const later = () => setTimeout(check, 50);
+    document.addEventListener("focusin", check); document.addEventListener("focusout", later);
+    return () => { vv?.removeEventListener("resize", check); window.removeEventListener("resize", check); document.removeEventListener("focusin", check); document.removeEventListener("focusout", later); };
+  }, [compact]);
   // A localhost preview opened from a phone (lib/open-local.ts → components/PreviewOverlay.tsx).
   const [preview, setPreview] = useState<string | null>(null);
   useEffect(() => {
@@ -1174,7 +1196,11 @@ export default function BentoHome() {
           <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">Minami Bento</h1>
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
-          <div className="ml-auto flex items-center gap-2 max-sm:ml-0 max-sm:w-full">
+          {/* On a phone the search + Bento/Metrics/Settings row docks at the bottom, in the thumb's zone —
+                same band as the chat bar inside a topic, so navigation is always found in one place.
+                Fixed, so with `interactive-widget=resizes-content` it rides up on the keyboard while
+                you search, the way Safari's bottom address bar does. */}
+            <div className="ml-auto flex items-center gap-2 max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:z-40 max-sm:ml-0 max-sm:border-t max-sm:border-white/10 max-sm:bg-neutral-950/95 max-sm:px-3 max-sm:pt-2 max-sm:pb-[max(0.5rem,env(safe-area-inset-bottom))]">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 max-sm:min-w-0 max-sm:flex-1 max-sm:py-2 max-sm:text-sm rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
             <Segmented className="hidden @min-[700px]:flex" value={winDays} onChange={setWinDays}
               options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
@@ -1191,7 +1217,7 @@ export default function BentoHome() {
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 max-sm:px-3 max-sm:pb-24">
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? (
             <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">
@@ -1425,7 +1451,7 @@ export default function BentoHome() {
                 operate, so they get the fixed position; chrome that is merely nice to have expands
                 downward into space that nothing is anchored to.
                 Still one `group`, so reaching anywhere in the chrome reveals the header. */}
-            <div className="group/chrome relative shrink-0 border-b border-white/10">
+            <div className={`group/chrome relative shrink-0 border-b border-white/10 ${compact ? "hidden" : ""}`}>
               {/* The permanent row: every pane as a tab, then the view switch and the panel controls.
                   The tabs render in BOTH views — in grid view none is lit, and clicking one is how you
                   drop back into reading that pane. One row that never moves beats two that swap. */}
@@ -1433,65 +1459,6 @@ export default function BentoHome() {
                   the padding box, so those 6px are the only place the selected tab's tail can hang
                   without being cut off — and keeping it symmetric means `items-center` still aligns the
                   tabs with the ＋/esc controls beside them. Total row height is unchanged. */}
-              {compact && (() => {
-                const i = focusPane ?? 0;
-                const pn = panes[i];
-                const s = pn?.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
-                const la = pn?.sid ? liveAct[pn.sid] : undefined;
-                const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : pn ? paneAct[pn.key] : undefined;
-                const tint = PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking;
-                // A horizontal swipe on the bar steps through the open chats, the way a phone's own
-                // tab switcher does. Only on the bar — the transcript below scrolls code blocks
-                // sideways, and a swipe there that changed chats would be a trap.
-                const swipe = (e: TouchEvent<HTMLDivElement>) => {
-                  const t0 = (e.currentTarget as HTMLElement).dataset;
-                  if (e.type === "touchstart") { t0.x = String(e.touches[0].clientX); t0.y = String(e.touches[0].clientY); return; }
-                  const dx = e.changedTouches[0].clientX - Number(t0.x), dy = e.changedTouches[0].clientY - Number(t0.y);
-                  if (Math.abs(dx) < 60 || Math.abs(dy) > 40 || panes.length < 2) return;
-                  setActivePane((i + (dx < 0 ? 1 : -1) + panes.length) % panes.length);
-                };
-                return (
-                  <div className="flex items-center gap-1.5 py-1.5 pl-1.5 pr-14" onTouchStart={swipe} onTouchEnd={swipe}>
-                    <button onClick={closePanel} aria-label="Back to all topics"
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-neutral-300 active:bg-white/10"><ChevronLeft className="h-5 w-5" /></button>
-                    <button onClick={() => setChatSheet(true)} aria-label="Switch or close chats"
-                      className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-left active:bg-white/10">
-                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tint, opacity: act?.busy ? 1 : 0.35 }} />
-                      <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{s ? titleOf(s) : "New chat"}</span>
-                      {panes.length > 1 && <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[11px] tabular-nums text-neutral-300">{i + 1}/{panes.length}</span>}
-                      <ChevronDown className="h-4 w-4 shrink-0 text-neutral-500" />
-                    </button>
-                    <button onClick={() => addPane()} disabled={panes.length >= MAX_PANES} aria-label="New chat"
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--sakura)]/40 text-[var(--sakura)] active:bg-[var(--sakura)]/10 disabled:opacity-40"><Plus className="h-5 w-5" /></button>
-                  </div>
-                );
-              })()}
-              {compact && chatSheet && (
-                <ChatSheet
-                  open={panes.map((pn, j) => {
-                    const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
-                    const la = pn.sid ? liveAct[pn.sid] : undefined;
-                    const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : paneAct[pn.key];
-                    return { key: pn.key, title: s ? titleOf(s) : "New chat", sub: act?.busy ? act.label || act.phase : s ? `${goalOf(s)} · ${ago(s.lastActivity)}` : proj.name,
-                      tint: PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking, busy: !!act?.busy, on: j === (focusPane ?? 0) };
-                  })}
-                  others={[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id))
-                    .map((s) => ({ id: s.id, cwd: s.cwd, title: titleOf(s), sub: `${goalOf(s)} · ${ago(s.lastActivity)}`, dot: s.active ? "#4ade80" : TIER_TINT[s.tier] }))}
-                  full={panes.length >= MAX_PANES}
-                  onSelect={(j) => { setActivePane(j); setChatSheet(false); }}
-                  // Closing the last open chat takes the panel with it (closePane's own rule), and
-                  // with it this sheet — there is nothing left to choose between.
-                  onClosePane={(j) => { if (panes.length === 1) setChatSheet(false); closePane(j); }}
-                  onOpen={(o) => {
-                    setChatSheet(false);
-                    // Full: swap it into the chat you're looking at — the same remount path as the
-                    // desktop pane's ⌄ switcher (switchGen), rather than a dead "close one first".
-                    if (panes.length >= MAX_PANES) { const j = focusPane ?? 0; setPanes((p) => p.map((x, k) => (k === j ? { ...x, sid: o.id, switchGen: (x.switchGen || 0) + 1 } : x))); }
-                    else addPane(o.id, o.cwd);
-                  }}
-                  onNew={() => { setChatSheet(false); addPane(); }}
-                  onDismiss={() => setChatSheet(false)} />
-              )}
               <div className={`items-center gap-1 pl-2 pr-14 ${compact ? "hidden" : "flex"}`}>
                 <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {panes.map((pn, i) => {
@@ -1741,6 +1708,70 @@ export default function BentoHome() {
                 );
               })}
             </div>
+            {compact && (() => {
+              const i = focusPane ?? 0;
+              const pn = panes[i];
+              const s = pn?.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
+              const la = pn?.sid ? liveAct[pn.sid] : undefined;
+              const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : pn ? paneAct[pn.key] : undefined;
+              const tint = PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking;
+              // A horizontal swipe on the bar steps through the open chats, the way a phone's own
+              // tab switcher does. Only on the bar — the transcript below scrolls code blocks
+              // sideways, and a swipe there that changed chats would be a trap.
+              const swipe = (e: TouchEvent<HTMLDivElement>) => {
+                const t0 = (e.currentTarget as HTMLElement).dataset;
+                if (e.type === "touchstart") { t0.x = String(e.touches[0].clientX); t0.y = String(e.touches[0].clientY); return; }
+                const dx = e.changedTouches[0].clientX - Number(t0.x), dy = e.changedTouches[0].clientY - Number(t0.y);
+                if (Math.abs(dx) < 60 || Math.abs(dy) > 40 || panes.length < 2) return;
+                setActivePane((i + (dx < 0 ? 1 : -1) + panes.length) % panes.length);
+              };
+              return (
+                // Bottom-docked, Safari-style: the thumb's natural zone, directly under the composer,
+                // so reading, typing and switching all happen in one band at the bottom of the screen.
+                // Off while the keyboard is up — the keyboard owns that band then, and the composer
+                // should sit on it with nothing in between (Material: the nav bar may be covered
+                // by the keyboard, never permanently). Same swipe as before: left/right steps chats.
+                <div className={`flex items-center gap-1.5 border-t border-white/10 bg-neutral-950/80 pb-[max(0.375rem,env(safe-area-inset-bottom))] pl-1.5 pr-1.5 pt-1.5 ${keyboardUp ? "hidden" : ""}`} onTouchStart={swipe} onTouchEnd={swipe}>
+                  <button onClick={closePanel} aria-label="Back to all topics"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-neutral-300 active:bg-white/10"><ChevronLeft className="h-5 w-5" /></button>
+                  <button onClick={() => setChatSheet(true)} aria-label="Switch or close chats"
+                    className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-left active:bg-white/10">
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tint, opacity: act?.busy ? 1 : 0.35 }} />
+                    <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{s ? titleOf(s) : "New chat"}</span>
+                    {panes.length > 1 && <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[11px] tabular-nums text-neutral-300">{i + 1}/{panes.length}</span>}
+                    <ChevronDown className="h-4 w-4 shrink-0 text-neutral-500" />
+                  </button>
+                  <button onClick={() => addPane()} disabled={panes.length >= MAX_PANES} aria-label="New chat"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--sakura)]/40 text-[var(--sakura)] active:bg-[var(--sakura)]/10 disabled:opacity-40"><Plus className="h-5 w-5" /></button>
+                </div>
+              );
+            })()}
+            {compact && chatSheet && (
+              <ChatSheet
+                open={panes.map((pn, j) => {
+                  const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
+                  const la = pn.sid ? liveAct[pn.sid] : undefined;
+                  const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : paneAct[pn.key];
+                  return { key: pn.key, title: s ? titleOf(s) : "New chat", sub: act?.busy ? act.label || act.phase : s ? `${goalOf(s)} · ${ago(s.lastActivity)}` : proj.name,
+                    tint: PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking, busy: !!act?.busy, on: j === (focusPane ?? 0) };
+                })}
+                others={[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id))
+                  .map((s) => ({ id: s.id, cwd: s.cwd, title: titleOf(s), sub: `${goalOf(s)} · ${ago(s.lastActivity)}`, dot: s.active ? "#4ade80" : TIER_TINT[s.tier] }))}
+                full={panes.length >= MAX_PANES}
+                onSelect={(j) => { setActivePane(j); setChatSheet(false); }}
+                // Closing the last open chat takes the panel with it (closePane's own rule), and
+                // with it this sheet — there is nothing left to choose between.
+                onClosePane={(j) => { if (panes.length === 1) setChatSheet(false); closePane(j); }}
+                onOpen={(o) => {
+                  setChatSheet(false);
+                  // Full: swap it into the chat you're looking at — the same remount path as the
+                  // desktop pane's ⌄ switcher (switchGen), rather than a dead "close one first".
+                  if (panes.length >= MAX_PANES) { const j = focusPane ?? 0; setPanes((p) => p.map((x, k) => (k === j ? { ...x, sid: o.id, switchGen: (x.switchGen || 0) + 1 } : x))); }
+                  else addPane(o.id, o.cwd);
+                }}
+                onNew={() => { setChatSheet(false); addPane(); }}
+                onDismiss={() => setChatSheet(false)} />
+            )}
           </>
         )}
       </div>
