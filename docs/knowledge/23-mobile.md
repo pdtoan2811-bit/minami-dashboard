@@ -90,6 +90,18 @@ to come back as the bare host. If no entry exists and something answers on the p
 1024, so a stray request cannot replace the dashboard's own :443. It uses serve and never funnel: serve
 is tailnet-only, and anyone on the tailnet can already drive the dashboard, so it exposes nothing new.
 
+> 🐛 **The first version still couldn't open the ecvision pitch bench.** Reported the same evening:
+> its chips point at `localhost:3120`, a Vite server started with `host: "localhost"`, and on this Mac
+> that binds **`[::1]` only**. Three things were wrong at once. The probe tried only `127.0.0.1`, so it
+> answered "nothing is running". Proxying to `[::1]` doesn't work either: serve stores it as
+> `http://::1:3120` and answers every request with `unknown proxy destination`. Behind both of those,
+> Vite's DNS-rebinding guard 403s every Host it wasn't told about, and serve passes the `.ts.net`
+> Host through unchanged.
+> **Fix:** the probe tries both families. An IPv6-only server is proxied by the *name* `localhost`,
+> which resolves to both. The bench's `vite.config.mjs` got `allowedHosts: [".ts.net"]`. Any other
+> Vite app opened this way needs the same line. A Next dev server loads without it, but its HMR
+> socket is refused until `allowedDevOrigins` lists the host.
+
 Not covered: bare URLs in prose, which the Markdown renderer doesn't turn into links at all. The §21
 comment pop-out, which iframes the localhost URL, is also not covered.
 
