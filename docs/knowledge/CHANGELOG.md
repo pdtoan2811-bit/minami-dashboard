@@ -9,6 +9,13 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **Web push** (§24, `lib/push/*`, `public/sw.js`, `/api/push/*`, Settings → Notifications). A chat
+  blocked on a question, a plan or a held step sends a heads-up to every subscribed device. Long turns
+  that finish send a silent notice. Single-select questions can be answered from the notification, and
+  held steps can be denied; nothing can be approved from one. Every button is a one-time nonce bound
+  to the device and the prompt. VAPID/aes128gcm is hand-rolled on node:crypto and checked against the
+  RFC 8291 vector. Verified end to end through real FCM on desktop Chrome. *Asked for by user, spec
+  agreed with three designers.*
 - **The phone shell covers touch tablets and unfolded foldables** (§23). It now uses a `compact:`
   variant / `useCompact()`: narrow, or touch-only up to 1199px. *Reported by user: "On find n5, the
   screen go as if it's a desktop".*

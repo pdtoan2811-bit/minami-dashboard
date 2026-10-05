@@ -55,6 +55,7 @@ recycle one.
 | [`21-preview-comments.md`](knowledge/21-preview-comments.md) | §21 | ~3,200 | Pointing at the running app instead of describing it: a pop-out that wraps the localhost app, a one-line dev script that reports element · component chain · crop · errors over postMessage, numbered pins sent as one structured turn, the twenty decisions behind that shape — and the two-way handshake race that the first build lost. |
 | [`22-client-performance.md`](knowledge/22-client-performance.md) | §22 | ~2,600 | Where this app is actually slow (the browser, never the server — measured). Tiles you just left stay mounted (`parked`) and why it must be one flat keyed array; one transcript request at a time with a per-caller freshness floor; polls that stop for a hidden tab; the blur-plus-pulse GPU trap; how to measure it so the numbers mean something. |
 | [`23-mobile.md`](knowledge/23-mobile.md) | §23 | ~1,500 | The phone view: what the Flip 7 / Find N5 audit found, why a few decisions are about the device rather than the box (`lib/use-media.ts`), the stacked phone-local side slot, taps that triggered focus behaviour, `dvh` + `interactive-widget`, installing it as an app, and opening localhost links from the phone through `tailscale serve`. |
+| [`24-push.md`](knowledge/24-push.md) | §24 | ~2,600 | Web push: liveEvents → rules → hand-rolled VAPID/aes128gcm → service worker. The heads-up/silent/summary rules, why "settled" is polled, the one-time nonce behind every notification button (and why there is no approve button), why the worker has no fetch handler, and what was verified against real FCM. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~24,000 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -135,6 +136,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Team CLI | `bin/team.mjs` | **shipped** | what the repo's CLAUDE.md team block names — see §15.3 |
 | Meeting canvas | `lib/mimo.ts` + `lib/audio.ts` + `app/api/canvas/live` | **partial** | works off a hardcoded mp3. Still no audio-capture leg, so nothing "joins" a call yet — see §17 |
 | Canvas A/B harness | `lib/canvas-modes.ts` + `?mode=` + the panel scorecard | **shipped** | 3 arms, one variable each, `report` event per run. Verified end-to-end 2026-08-10: control produced nothing in 175s, real-ASR arm got first transcript in 1.4s — see §17 |
+| Web push | `lib/push/*` + `public/sw.js` + `lib/push-client.ts` + `/api/push/*` | **partial** | server, worker, Settings toggle shipped; verified through real FCM on desktop Chrome 2026-10-05. Not yet wired: `?open=`, `onOpen`, presence in `app/page.tsx`; not yet tried on an Android device — see §24 |
 | Meeting launch | `bin/Minami Call.command` + `bin/meet-now.sh` + `bin/tunnel-lib.sh` | **shipped** | app :3011 → receiver :8787 → quick tunnel → Recall. Shared probe verified against a live tunnel 2026-08-24 (detects in ~1s; the poisoned-cache path detected never) — see §18 |
 
 ---

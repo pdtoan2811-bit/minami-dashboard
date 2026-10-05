@@ -181,6 +181,9 @@ installs a standalone app, with no URL bar and its own task-switcher entry. Inst
 origin. On the author's box that is the tailnet-only `tailscale serve` URL; plain
 `http://<lan-ip>:3000` still works, but only as a tab.
 
+Push notifications for the installed app live in their own doc: [§24](24-push.md). Its service worker
+has no fetch handler, so it doesn't affect the build-refresh above.
+
 ### Localhost links, opened from the phone — `lib/open-local.ts`, `/api/tailnet/expose`
 
 Replies name `http://localhost:<port>` because that is true on the box, and the preview chips and
