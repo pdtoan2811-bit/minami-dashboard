@@ -803,6 +803,19 @@ export function resolveSessionFile(id: string): string {
   return found;
 }
 
+/** One chat's title and project, for a caller that names a single session — the push notifier (§24).
+ *  summarize() is incremental, so after the first call this is a stat, not a parse. Null if the
+ *  transcript isn't on disk yet (the CLI writes it a beat after the session starts). */
+export function sessionTitle(id: string): { title: string; project: string } | null {
+  loadDiskCache();
+  const file = resolveSessionFile(id);
+  if (!file) return null;
+  try {
+    const m = summarize(file, id);
+    return { title: m.title, project: m.project };
+  } catch { return null; }
+}
+
 export function getSession(id: string, opts?: { before?: number }): SessionPage {
   const empty: SessionPage = { meta: null, turns: [], start: 0, hasMore: false };
   loadDiskCache();

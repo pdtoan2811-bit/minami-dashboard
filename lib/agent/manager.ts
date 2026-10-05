@@ -2152,6 +2152,18 @@ function needBody(id: string, toolName: string, input: unknown, held: boolean, e
  *  (lib/push). "need": a chat became blocked on the user. "ended": a turn finished or failed. */
 export const liveEvents: EventEmitter = ((globalThis as any).__minamiLiveEvents ??= new EventEmitter());
 
+/** A pending prompt looked up by SESSION id, for a caller with no pane key — a notification action
+ *  (§24). Returns the store key decide()/answer() take, so it resolves through exactly the same path
+ *  as the pane's buttons, plus the full question texts: answer() is keyed by the literal question,
+ *  and Need.summary is truncated, so it can't stand in for it. Null once the prompt is settled. */
+export function pendingFor(sessionId: string, id: string): { key: string; toolName: string; questions: string[] } | null {
+  const s = store.get(SID_KEY + sessionId);
+  const p = s?.pending.get(id);
+  if (!s || !p || s.closed) return null;
+  const qs = (p.input as { questions?: { question?: string }[] })?.questions;
+  return { key: SID_KEY + sessionId, toolName: p.toolName, questions: Array.isArray(qs) ? qs.map((q) => String(q?.question ?? "")) : [] };
+}
+
 export type LiveTile = { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; progress?: TaskProgress; need?: Need; needs?: number; ended?: { at: number; ok: boolean; text?: string; error?: string; turnMs?: number }; mode?: string; hold?: boolean };
 export function liveActivity(): Record<string, LiveTile> {
   const out: Record<string, LiveTile> = {};

@@ -13,7 +13,12 @@ const nextConfig = {
   // which is a CDN directive; it leaves the browser — and an installed app's launch — free to reuse a
   // shell whose chunk hashes no longer exist after a deploy.
   async headers() {
-    return [{ source: "/", headers: [{ key: "Cache-Control", value: "no-cache" }] }];
+    return [
+      { source: "/", headers: [{ key: "Cache-Control", value: "no-cache" }] },
+      // The service worker (§24). A browser already caps a worker's HTTP cache at 24h, but a deploy
+      // that fixes the push handler should reach the phone on its next update check, not tomorrow.
+      { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache" }] },
+    ];
   },
   // The knowledge base is plain static HTML in public/kb/, not an app route. Next strips the
   // trailing slash from /kb/ and then has no route to match, so the bare /kb 404s even though
@@ -39,7 +44,8 @@ const nextConfig = {
         // `var` rather than `module`: the edge target is compiled as a script, and an external of type
         // `module` there fails with "The target environment doesn't support dynamic import() syntax".
         // The reference is never dereferenced on edge — the runtime guard returns first.
-        ({ request }, cb) => (request === "@/lib/autopilot/runner" ? cb(null, `var {}`) : cb()),
+        // lib/push/server is the same shape (node:crypto, the manager) behind the same guard.
+        ({ request }, cb) => (request === "@/lib/autopilot/runner" || request === "@/lib/push/server" ? cb(null, `var {}`) : cb()),
       ];
     }
     return config;
