@@ -46,11 +46,11 @@ export default function AgentDetail() {
     return () => clearInterval(h);
   }, [id]);
 
-  if (err) return <div className="bg-bento min-h-screen p-6 text-[13px] text-red-300">{err}</div>;
-  if (!agent) return <div className="bg-bento min-h-screen p-6 text-[13px] text-neutral-500">Loading…</div>;
+  if (err) return <div className="bg-bento min-h-dvh p-6 text-[13px] text-red-300">{err}</div>;
+  if (!agent) return <div className="bg-bento min-h-dvh p-6 text-[13px] text-neutral-500">Loading…</div>;
 
   return (
-    <div className="bg-bento flex h-screen flex-col text-neutral-100">
+    <div className="bg-bento flex h-dvh flex-col text-neutral-100">
       <header className="flex shrink-0 items-center gap-3 px-6 py-4">
         <Link href="/agents" className="text-neutral-600 hover:text-neutral-300">←</Link>
         <span className="text-xl">{agent.icon}</span>

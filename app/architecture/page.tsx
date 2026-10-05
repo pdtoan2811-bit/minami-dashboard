@@ -9,7 +9,7 @@ export const metadata = {
 
 export default function ArchitecturePage() {
   return (
-    <main className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
+    <main className="flex h-dvh flex-col bg-neutral-950 text-neutral-100">
       <header className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-3">
         <div className="min-w-0">
           <h1 className="text-sm font-semibold">Architecture</h1>

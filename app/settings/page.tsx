@@ -23,8 +23,11 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 
 function Row({ title, desc, children }: { title: string; desc: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
-      <div><p className="text-sm font-medium">{title}</p><p className="text-xs text-neutral-500">{desc}</p></div>
+    // Wraps instead of squeezing. Side by side on a phone, a five-option segmented control left the
+    // description a 130px column of one-word lines (measured at 412px). The text's 14rem floor decides
+    // it: a toggle still fits beside the text and stays there, a wide control drops to its own line.
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+      <div className="min-w-[14rem] flex-1"><p className="text-sm font-medium">{title}</p><p className="text-xs text-neutral-500">{desc}</p></div>
       {children}
     </div>
   );
@@ -45,7 +48,7 @@ export default function Settings() {
   const [agentMode, setAgentMode] = useSetting<boolean>("agentMode", false);
 
   return (
-    <div className="bg-bento min-h-screen text-neutral-100">
+    <div className="bg-bento min-h-dvh text-neutral-100">
       <header className="flex items-center gap-3 px-6 py-5">
         <span className="text-xl">⚙</span>
         <h1 className="text-base font-semibold tracking-tight">Settings</h1>

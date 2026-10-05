@@ -8,6 +8,16 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-05
+- **Phone view audited and fixed** (§23, new `23-mobile.md`). The Z Flip 7 and Find N5 were checked
+  on all four screens. The side slot (browser/files/tasks) can now be opened from a phone at all: it
+  stacks and is opt-in per pane. Below 640px the panel always uses tabs. Tapping no longer unfurls the
+  header peek, and invisible ✕ targets on touch are gone. Layout uses `h-dvh` +
+  `interactive-widget=resizes-content`, so the keyboard no longer covers the composer. Tables,
+  /settings rows and the routing chips no longer crush. The web-app manifest and icons make it
+  installable. *Asked for by user: "enhanced on responsiveness to be able to display and work with on
+  mobile phone (my zflip 7 and my oppo find n5)".*
+
 ### 2026-09-29
 - **`ask_team` cards carry the why, and a recommendation** (§3, `03-live-sessions.md`) — team-ask
   branch `feat/card-context-recommendation`: option descriptions shown in full (Slack cut them at

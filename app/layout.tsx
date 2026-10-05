@@ -11,6 +11,12 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: "#e8859b",
+  // Android Chrome's default (`resizes-visual`) lays the keyboard OVER the page: the layout viewport
+  // keeps its height, so the app shell — a fixed `h-dvh` column with the composer pinned to its
+  // bottom — keeps the composer exactly where the keyboard now is. `resizes-content` shrinks the
+  // layout viewport instead, so `dvh` follows the keyboard and the composer rides up above it. That is
+  // the phone view working rather than merely rendering (both target phones run Chrome on Android).
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -21,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     // one click away rendered dark, and Nav (hardcoded `border-white/10`) was nearly invisible on it.
     // Committing to one theme is what lets the `dark:` branches below and in the panels go away.
     <html lang="en" className="dark">
-      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">
+      <body className="min-h-dvh bg-neutral-950 text-neutral-100 antialiased">
         {/* Global, not per-page: falling off the preferred account matters wherever you happen to
             be in the app (Bento, /dashboard, /settings), so it lives in the root layout. Renders
             nothing while healthy — it only appears when you're on a fallback account (card, then a

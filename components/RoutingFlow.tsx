@@ -130,7 +130,10 @@ export function RoutingFlow() {
       {/* grid-cols-5, because MODELS has five entries. At four, Fable 5 wrapped alone onto a second
           row a quarter of the card wide, which read as a rendering fault rather than a fifth model.
           Tied to MODELS.length so adding a tier can't silently reintroduce the orphan. */}
-      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${MODELS.length}, minmax(0, 1fr))` }}>
+      {/* The 4.25rem floor plus overflow-x-auto is the phone case: seven columns on a 380px card were
+          ~44px each and "449.4k tok" broke across two lines. Past the floor the row scrolls sideways
+          instead of wrapping, which keeps the one-row-per-model reading intact. */}
+      <div className="grid gap-2 overflow-x-auto [scrollbar-width:none]" style={{ gridTemplateColumns: `repeat(${MODELS.length}, minmax(4.25rem, 1fr))` }}>
         {MODELS.map((m) => {
           const b = st.byTier[m.tier];
           return (

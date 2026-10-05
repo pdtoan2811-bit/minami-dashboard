@@ -48,7 +48,7 @@ export default function AgentsPage() {
   const rest = agents?.filter((a) => !a.hq) || [];
 
   return (
-    <div className="bg-bento min-h-screen text-neutral-100">
+    <div className="bg-bento min-h-dvh text-neutral-100">
       <header className="flex items-center gap-3 px-6 py-5">
         <span className="text-xl">🜂</span>
         <h1 className="text-base font-semibold tracking-tight">Agents</h1>
