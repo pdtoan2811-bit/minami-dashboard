@@ -9,6 +9,10 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-05
+- **Localhost links open from the phone** (§23). Preview chips and Markdown links to
+  `localhost:<port>` used to open the phone's own localhost. Read remotely, they now go to that port's
+  tailnet-only `tailscale serve` address, which `/api/tailnet/expose` finds or creates.
+  *Reported by user: "check the ecvision topic - cant open those link on my monile phone".*
 - **Phone view audited and fixed** (§23, new `23-mobile.md`). The Z Flip 7 and Find N5 were checked
   on all four screens. The side slot (browser/files/tasks) can now be opened from a phone at all: it
   stacks and is opt-in per pane. Below 640px the panel always uses tabs. Tapping no longer unfurls the
