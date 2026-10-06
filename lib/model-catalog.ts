@@ -16,7 +16,10 @@ export const SELECTABLE_MODELS: {
 }[] = [
   { id: "claude-opus-5-5", label: "Opus 5.5", note: "Top tier, and cheaper than Opus 5 ($4/$20). Judgement, ambiguity, code that has to be right.", minCli: "2.1.280" },
   { id: "claude-opus-5", label: "Opus 5", note: "Previous Opus. Legacy as of 2026-09-22, still selectable and still $5/$25." },
-  { id: "claude-sonnet-5", label: "Sonnet 5", note: "Fast and capable. The right default for high-volume work." },
+  // minCli 2.1.284: the release that added it. Below that the runtime 400s mid-turn, so the picker
+  // greys the row out instead (see meetsMinCli and the Opus 5.5 row).
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "Fast and capable, same $2/$10 as Sonnet 5. The right default for high-volume work.", minCli: "2.1.284" },
+  { id: "claude-sonnet-5", label: "Sonnet 5", note: "Previous Sonnet. Same price; keep only if 5.5 misbehaves." },
   { id: "claude-fable-5-1", label: "Fable 5.1", note: "Frontier. Long-horizon agents; when Opus falls short. 2× Opus price.", premium: true, minCli: "2.1.251" },
   // The previous Fable, kept selectable rather than retired. Not nostalgia: the runtime this app
   // actually spawns is the binary BUNDLED WITH the Agent SDK, not the `claude` on your PATH, and that

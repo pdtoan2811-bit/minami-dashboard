@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-06
+- **Sonnet 5.5 selectable** (§3, `lib/model-catalog.ts`, `lib/routing.ts`, `package.json`). Agent SDK 0.3.280 → 0.3.291 (CLI 2.1.291); `claude-sonnet-5-5` added with `minCli 2.1.284`, priced and tiered ahead of Sonnet 5; routing rule for drafting now names Sonnet 5.5.
 - **Token audit: the window, not the prefix** (§16). Re-measured a month of usage: compaction now fires (130/month), the 85% of reads sit in 200k–600k calls, subagents ~⅓ of tokens and mostly Opus. Applied: `skillOverrides` (editorial-glass off, 8 unused skills name-only) and an output-hygiene block in `~/.claude/CLAUDE.md`. Pending Thomas: compact threshold, subagent default model. Retracted §16's "auto-compaction is inert".
 - **Transcript poll: slim + delta** (§1, `lib/transcript-slim.ts`, `lib/session-fetch.ts`,
   `/api/bento/session/[id]` + `/image`). Screenshots travel by URL, and idle polls answer "unchanged"
