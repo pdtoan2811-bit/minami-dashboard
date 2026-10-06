@@ -8,6 +8,13 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-06
+- **Phone access switch in the chat panel** (§23, `components/PhoneAccess.tsx`, `/api/tailnet/phone`).
+  It shows whether Tailscale is up, whether the dashboard is on the tailnet, and which phones are
+  online. It switches the dashboard's serve entry on and off, and offers an IP fallback for Android
+  Private DNS. *Asked for by user: "making the connection to tailscale from this dashboard a switch
+  somewhere in the chat panel - I am currently cant connect to my phone".*
+
 ### 2026-10-05
 - **Phone redesign** (§23). The home is a cross-project inbox (needs you / failed / new / running /
   idle; seen state lives on the server). Any chat opens in one tap, and `/?open=<sid>` does the same.
