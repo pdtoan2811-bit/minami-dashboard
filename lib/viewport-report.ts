@@ -5,7 +5,7 @@
 export function reportViewport(page: string) {
   try {
     const body = {
-      page, w: innerWidth, h: innerHeight, sw: screen.width, sh: screen.height, dpr: devicePixelRatio,
+      page, w: innerWidth, h: innerHeight, vvw: visualViewport?.width, vvh: visualViewport?.height, vvtop: visualViewport?.offsetTop, sw: screen.width, sh: screen.height, dpr: devicePixelRatio,
       coarse: matchMedia("(pointer: coarse)").matches, standalone: matchMedia("(display-mode: standalone)").matches,
       ua: navigator.userAgent.slice(0, 160),
     };

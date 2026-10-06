@@ -94,18 +94,27 @@ function gist(s: string, words = 8): string {
 /** The cover's scale-down, undone. Samsung lays a cover app out in a window wider than the screen
  *  (541 CSS px on the Flip 7's 362) and shrinks it to fit; `innerWidth / screen.width` is that factor.
  *  1 everywhere else, including a desktop browser opening /glance on purpose. */
-function useCoverZoom(): number {
-  const [k, setK] = useState(1);
+function useCoverZoom(): { k: number; w: number; h: number; top: number } {
+  // Sized to the VISUAL viewport — the part actually on the glass — not the layout window. On the real
+  // Flip the field at the bottom sat off-screen "like I scrolled to the bottom": the window is taller
+  // than what the cover shows (and the keyboard shrinks the visual viewport, not always the window), so
+  // a page sized to 100dvh put its last row out of sight. Pinned with position:fixed at the visual
+  // viewport's own offset, so the page itself can never be scrolled away either.
+  const [v, setV] = useState({ k: 1, w: 0, h: 0, top: 0 });
   useEffect(() => {
+    const vv = window.visualViewport;
     const on = () => {
       const r = window.innerWidth / Math.max(1, window.screen.width);
-      setK(window.screen.width <= 480 && r > 1.1 ? Math.round(r * 1000) / 1000 : 1);
+      const k = window.screen.width <= 480 && r > 1.1 ? Math.round(r * 1000) / 1000 : 1;
+      setV({ k, w: vv?.width ?? window.innerWidth, h: vv?.height ?? window.innerHeight, top: vv?.offsetTop ?? 0 });
     };
     on();
     window.addEventListener("resize", on);
-    return () => window.removeEventListener("resize", on);
+    vv?.addEventListener("resize", on);
+    vv?.addEventListener("scroll", on);
+    return () => { window.removeEventListener("resize", on); vv?.removeEventListener("resize", on); vv?.removeEventListener("scroll", on); };
   }, []);
-  return k;
+  return v;
 }
 
 /** What a chat is doing, in words a glance can take. The plan step wins (it's the model's own
@@ -155,6 +164,14 @@ export function Glance() {
   // board. Opened on purpose, it stays.
   const cover = useCoverScreen();
   useEffect(() => { reportViewport("/glance"); }, []);
+  // The cover never scrolls as a page — only the thread inside it does. A scrollable document is what
+  // let the field slide off the bottom of the glass.
+  useEffect(() => {
+    const els = [document.documentElement, document.body];
+    const prev = els.map((e) => e.style.overflow);
+    els.forEach((e) => { e.style.overflow = "hidden"; });
+    return () => els.forEach((e, i) => { e.style.overflow = prev[i]; });
+  }, []);
   // Asks matchMedia itself rather than trusting `cover`: during hydration the hook returns its SERVER
   // value (false), and acting on that bounced every cover visit straight back to / — a redirect loop.
   useEffect(() => {
@@ -346,14 +363,17 @@ export function Glance() {
   );
   const openHref = (id: string) => `/?open=${encodeURIComponent(id)}`;
 
-  const k = useCoverZoom();
-  // Lay out in true cover px; zoom scales it back up to fill the window (useCoverZoom).
-  const frame = { zoom: k, width: `calc(100vw / ${k})`, height: `calc(100dvh / ${k})` } as const;
+  const { k, w: vw, h: vh, top: vtop } = useCoverZoom();
+  // Lay out in true cover px; zoom scales it back up to fill the VISIBLE viewport (useCoverZoom).
+  // Before the first measurement (vh 0) fall back to the old dvh sizing for one frame.
+  const frame = vh
+    ? ({ zoom: k, position: "fixed", left: 0, top: vtop / k, width: vw / k, height: vh / k } as const)
+    : ({ zoom: k, width: `calc(100vw / ${k})`, height: `calc(100dvh / ${k})` } as const);
 
   // The conversation for the chat on screen: its latest reply in full and what you last said
   // (/api/glance/last). Re-fetched when the chat changes or a new turn ends — not on every poll.
   const threadKey = cur ? `${cur.id}:${cur.t.ended?.at ?? 0}:${need?.id ?? ""}` : "";
-  const threadEnd = useRef<HTMLDivElement>(null);
+  const threadBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!cur) return;
     let live = true;
@@ -365,7 +385,9 @@ export function Glance() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadKey]);
   // Newest at the bottom, like every messenger: land on the end of the conversation.
-  useEffect(() => { threadEnd.current?.scrollIntoView({ block: "end" }); }, [thread?.key, typing]);
+  // Scroll the THREAD to its end — never scrollIntoView, which also scrolls every ancestor up to the
+  // page and was what pushed the field off the bottom of the cover.
+  useEffect(() => { const b = threadBox.current; if (b) b.scrollTop = b.scrollHeight; }, [thread?.key, typing, vh]);
 
   if (view === "list") {
     return (
@@ -442,7 +464,7 @@ export function Glance() {
       </p>
 
       {/* THE THREAD — newest at the bottom, scrolls like any messenger. */}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-2 pt-1.5">
+      <div ref={threadBox} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-2 pt-1.5">
         <div className="flex min-h-full flex-col justify-end gap-2">
           {cur && fresh?.you && bubble(plain(fresh.you.replace(/<[^>]+>/g, " ")).slice(0, 160), "you", "you")}
           {cur && isQuestion ? (
@@ -472,7 +494,7 @@ export function Glance() {
           ) : cur ? (
             paras.length ? paras.map((t, i) => bubble(t, `p${i}`)) : bubble("Done, waiting for your reply", "d")
           ) : null}
-          <div ref={threadEnd} />
+
         </div>
       </div>
 

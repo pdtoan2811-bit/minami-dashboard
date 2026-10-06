@@ -326,6 +326,13 @@ comment pop-out, which iframes the localhost URL, is also not covered.
 >   screen ›". The reason below still holds: 360px can't show enough of a command to approve it safely.
 > - Pause/Resume all moved into the list frame as a quiet text button.
 
+> 🐛 **2026-10-06 — the cover's answer field was off-screen "like I scrolled to the bottom".** Two
+> causes. The thread kept its newest bubble in view with `scrollIntoView`, which also scrolls every
+> ancestor up to the document. And the page was sized to `100dvh` of a window taller than what the
+> cover shows. Fix: the thread sets its own `scrollTop`. The page is sized to the visual viewport
+> (`visualViewport.height/offsetTop`, ÷ the zoom), `position: fixed`, and the document's overflow is
+> hidden on /glance. The size beacon now records `vvw/vvh/vvtop` too.
+
 > **2026-10-06, round 12: the thread** (his pick, V2 of the cover-reading pitch, "with keyboard
 > input"). The cover is now a watch-style messenger. Chats are faces across the top (project icon +
 > state mark, current one ringed; ☰ / +N opens the list). The chat is bubbles: your last message small
