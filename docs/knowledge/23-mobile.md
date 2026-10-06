@@ -326,6 +326,18 @@ comment pop-out, which iframes the localhost URL, is also not covered.
 >   screen ›". The reason below still holds: 360px can't show enough of a command to approve it safely.
 > - Pause/Resume all moved into the list frame as a quiet text button.
 
+> 🐛 **2026-10-06 — on the real Flip the cover was unreadable, with a bottom row you had to scroll
+> to** ("confusing, can't read what's happening, progress and switch chat"). Measured on the device
+> (`~/.minami/viewports.jsonl`): the cover gives the app a **541×473 CSS window on a 362×400 screen**
+> (dpr 2.625). Samsung runs cover apps in a bigger virtual window and scales it down about 0.67×,
+> into the area *above* the lenses (541×473 has the aspect of 362×316). So every size rendered at
+> two-thirds, and the 96px lens band was reserved twice. Fix (round 10, `app/glance/Glance.tsx`):
+> `useCoverZoom` lays the page out in true cover px and uses CSS `zoom` (= innerWidth / screen.width)
+> to fill the window. The lens band is gone. The screen answers, in order: which chat (title + state
+> in words), what it's doing (the plan step, or the activity with terminal text turned into words), and
+> how far (step n of m + segments + "about Nm left"). Switching is two 44px ‹ › buttons with "n of m"
+> between them; tap the middle for the list. Checked at 541×473/2.625 against the live feed.
+
 > 🐛 **2026-10-06 — the cover never showed `/glance` on the real Flip ("look nothing like you
 > pitched").** `useCoverScreen()` also required `window.screen` to be ≤420×480. On the device, inside
 > Good Lock's launcher, it apparently isn't, so the redirect never fired and the cover got the phone
