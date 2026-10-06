@@ -21,7 +21,7 @@ import pathMod from "node:path";
 import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { activityLabel, inputFromPartial, isAskTeamTool, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
 import { findSubagentFile, subagentModel } from "../claude-sessions";
-import { BLACKSMITH_WORKER_MODEL, DASHBOARD_MODEL } from "../model-pins";
+import { BLACKSMITH_WORKER_MODEL, DASHBOARD_MODEL, FANOUT_WORKER_MODEL } from "../model-pins";
 import { teamBriefing } from "../team-roster";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
@@ -954,7 +954,9 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
         // session's model — the Opus pin — and a `general-purpose` coder runs at the frontier tier
         // while the gate records "mid" (nine of them did, 2026-09-14). A default, not an override:
         // measured, the role templates' own `model:` still wins. See BLACKSMITH_WORKER_MODEL.
-        ...(pre ? { CLAUDE_CODE_SUBAGENT_MODEL: BLACKSMITH_WORKER_MODEL } : {}),
+        // Fan-out gets the same default: the pill's whole job is to multiply undeclared agents. Set at
+        // creation only, which holds because changeFanout respawns the session like changeModel does.
+        ...(pre ? { CLAUDE_CODE_SUBAGENT_MODEL: BLACKSMITH_WORKER_MODEL } : s.fanout ? { CLAUDE_CODE_SUBAGENT_MODEL: FANOUT_WORKER_MODEL } : {}),
       },
       // The whole reason Blacksmith mode works from a folder that isn't the clone. MEASURED (a
       // prompt-less probe against this SDK build): `additionalDirectories: [clone]` loads the clone's

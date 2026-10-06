@@ -375,7 +375,10 @@ append at all. Now the append is unconditional and only its pieces are gated:
   subagents for divisible work and proceed — the user pre-approved by enabling the mode." The default
   is **free**: no instruction, so Claude spawns agents only when it judges the work divisible. It was
   on by default from 2026-09-02; reverted because the standing "fan out, don't ask" turned small serial
-  jobs into fleets. The pill's ON state is now the marked (amber) one. Fallback for panes that never
+  jobs into fleets. With the pill on, the subprocess also gets `CLAUDE_CODE_SUBAGENT_MODEL =
+  FANOUT_WORKER_MODEL` (default Sonnet 5.5, 2026-10-06) — before that every fanned-out
+  `general-purpose` agent inherited the Opus pin. A default, not an override: an agent type or call
+  that names a model keeps it. Blacksmith's own worker model wins when both apply. The pill's ON state is now the marked (amber) one. Fallback for panes that never
   chose: `MINAMI_DASHBOARD_FANOUT` (unset = free, 1 = on). The browser's global default moved to a new
   key, `chatFanoutDefault`, because the old `chatFanout` was stored on click and a stored `true` would
   have outlived the change. The fuller procedure lives in the user-level `fanout`
