@@ -63,7 +63,9 @@
   function isLoopbackOrigin(origin) {
     try {
       var host = new URL(origin).hostname;
-      return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+      // Or the page's own host on another port: read from the phone, the dashboard and the app are
+      // both this box's tailnet name (§21, §23). Whoever can serve that host already owns the box.
+      return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === location.hostname;
     } catch (e) { return false; }
   }
 

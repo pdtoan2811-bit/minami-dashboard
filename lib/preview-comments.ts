@@ -217,9 +217,11 @@ export function installSnippet(dashboardOrigin: string, framework: "next" | "htm
   return `<script src="${src}"></script>`;
 }
 
+/** A page on this box: loopback, or — read from the phone — the dashboard's own tailnet host (§23). */
 export function isPreviewUrl(u: string): boolean {
   try {
     const url = new URL(u);
-    return (url.protocol === "http:" || url.protocol === "https:") && /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(url.hostname);
+    const self = typeof window !== "undefined" && url.hostname === window.location.hostname;
+    return (url.protocol === "http:" || url.protocol === "https:") && (self || /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(url.hostname));
   } catch { return false; }
 }
