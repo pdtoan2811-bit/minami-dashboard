@@ -9,6 +9,10 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-06
+- **Cover screen round 10** (§23 🐛, `app/glance/Glance.tsx`). It now undoes the Flip's ~0.67×
+  virtual-window scale-down (`zoom`), drops the lens band, says what each chat is doing and how far
+  along in words, and switches with ‹ n of m ›. *Reported by user: "the UX on small zflip 7 screen
+  confusing, cant read what happening, progress and switch chat … have to scroll to see the button".*
 - **Fix: the Flip cover never opened `/glance`** (§23 🐛, `lib/use-cover.ts`). The screen-size
   condition never held on the device. Detection is now by shape, the `?auto` round-trip returns to the
   board on unfold, and each device's real sizes are logged to `~/.minami/viewports.jsonl`.

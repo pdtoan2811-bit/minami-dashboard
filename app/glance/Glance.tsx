@@ -1,12 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { onPageVisible, pageHidden } from "@/lib/page-visible";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { COVER_QUERY, useCoverScreen } from "@/lib/use-cover";
 import { reportViewport } from "@/lib/viewport-report";
 
 // /glance — the Galaxy Z Flip 7 Flex Window (~360×400 CSS px, read at arm's length). §23.
+//
+// Round 10 (2026-10-06, after using it on the real Flip: "confusing, can't read what's happening,
+// progress and switch chat … I have to scroll to see the button in the left down corner"). Measured on
+// the device (~/.minami/viewports.jsonl): the cover gives the app a 541×473 CSS window on a 362×400
+// screen — Samsung runs cover apps in a bigger virtual window and SCALES IT DOWN ~0.67×, into the
+// area above the lenses (541×473 has the aspect of 362×316). So every size here rendered at two-thirds,
+// and the lens band below was reserved twice (the OS had already kept the app out of it).
+// - `useCoverZoom` undoes the scale-down: the page lays out in true cover px and CSS `zoom` scales it
+//   back up to fill the window. 15px here is 15px on the glass.
+// - No lens band: the OS owns that; the bottom row is ours, full width.
+// - The screen answers three things, in order: WHICH chat (title + its state in words), WHAT it's doing
+//   now (the plan step or the activity, in words — never "run: cat > …"), HOW FAR (step n of m and the
+//   bar). Switching is ‹ › at the bottom with the count between them; tap the count for the list.
+// The round-9 notes below still hold except where they mention the lens band or "no progress bars".
 //
 // Round 9 ("Cover · around the lenses", pitch V2). Three rules shape everything below:
 //
@@ -28,8 +42,9 @@ import { reportViewport } from "@/lib/viewport-report";
 // options are Claude's, not a command), replying to a chat that's waiting on you, and pause.
 
 type Need = { id: string; kind: "question" | "plan" | "held" | "permission"; tool: string; summary: string; options?: string[]; expiresAt?: number; since?: number };
+type Progress = { done: number; total: number; now?: string; etaAt?: number; lastDoneAt?: number };
 type Tile = {
-  phase: string; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; mode?: string;
+  phase: string; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; mode?: string; progress?: Progress;
   need?: Need; needs?: number; ended?: { at: number; ok: boolean; text?: string; error?: string }; hold?: boolean;
 };
 type Activity = Record<string, Tile>;
@@ -40,10 +55,7 @@ type Draft = { pick: number | null; text: string };
 const POLL_MS = 5000;
 const DONE_WINDOW_MS = 30 * 60_000; // finished (ok or not) within the last half hour still counts as focus
 const RESUME_CONFIRM_MS = 4000;
-const LENS_BAND = 96; // height of the bottom band the lenses sit in
-const LENS_W = 170; // width of its right-hand part that belongs to the lenses
 const MAX_OPTIONS = 3; // what fits between the question and the field at 15/21 without scrolling
-const MARKS = 5;
 const SWIPE_PX = 28;
 
 /** "6m", "1h", "now" — the wait, at a size and precision you can take in at a glance. */
@@ -61,6 +73,38 @@ function gist(s: string, words = 8): string {
   const w = s.replace(/\s+/g, " ").trim().split(" ");
   return w.length <= words ? w.join(" ") : w.slice(0, words).join(" ") + "…";
 }
+
+/** The cover's scale-down, undone. Samsung lays a cover app out in a window wider than the screen
+ *  (541 CSS px on the Flip 7's 362) and shrinks it to fit; `innerWidth / screen.width` is that factor.
+ *  1 everywhere else, including a desktop browser opening /glance on purpose. */
+function useCoverZoom(): number {
+  const [k, setK] = useState(1);
+  useEffect(() => {
+    const on = () => {
+      const r = window.innerWidth / Math.max(1, window.screen.width);
+      setK(window.screen.width <= 480 && r > 1.1 ? Math.round(r * 1000) / 1000 : 1);
+    };
+    on();
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return k;
+}
+
+/** What a chat is doing, in words a glance can take. The plan step wins (it's the model's own
+ *  sentence for the work); otherwise the live activity, minus anything that reads like a terminal. */
+function nowLine(t: Tile): string {
+  if (t.progress?.now) return t.progress.now;
+  const l = (t.label || t.phase || "").trim();
+  if (/^run: /.test(l)) return "Running a command";
+  if (/^subagent: /.test(l)) return "A helper agent is " + l.slice(10);
+  if (!l || l === "thinking" || l === "idle") return "Thinking";
+  return l.charAt(0).toUpperCase() + l.slice(1);
+}
+/** A reply's opening, as prose: the cover has no markdown renderer, and "**It's merged**" in raw
+ *  asterisks is noise on a 362px screen. */
+const plain = (t: string) => t.replace(/```[\s\S]*?```/g, " ").replace(/[*_`#>]+/g, "").replace(/^\s*[-•]\s+/gm, "").replace(/\s+/g, " ").trim();
+const STATE_WORD: Record<State, string> = { you: "Needs you", work: "Working", held: "Paused", fail: "Failed", done: "Done" };
 
 const folderOf = (cwd: string) => cwd.split("/").filter(Boolean).pop() || cwd;
 // A task worktree's folder is "chat-4", which says nothing; the project is the repo it hangs off.
@@ -109,7 +153,6 @@ export function Glance() {
   const [typing, setTyping] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
-  const [kbUp, setKbUp] = useState(false);
   // A need predating the `since` field (a server older than this page) has no age of its own; fall
   // back to when this page first saw it, which is a lower bound rather than a fabrication.
   const firstSeen = useRef<Map<string, number>>(new Map());
@@ -171,19 +214,6 @@ export function Glance() {
     return () => clearTimeout(t);
   }, [confirmResume]);
 
-  // Is the keyboard actually covering the bottom of the screen? The root layout sets
-  // interactive-widget=resizes-content, so dvh already shrinks with it; this only decides whether the
-  // field still has to keep clear of the lens band (keyboard down / not yet up) or can sit right on top
-  // of the keyboard (which then covers the band anyway). Baseline = the tallest viewport seen.
-  useEffect(() => {
-    const vv = typeof window !== "undefined" ? window.visualViewport : null;
-    if (!vv) return;
-    let tallest = vv.height;
-    const on = () => { tallest = Math.max(tallest, vv.height); setKbUp(vv.height < tallest - 80); };
-    vv.addEventListener("resize", on);
-    return () => vv.removeEventListener("resize", on);
-  }, []);
-
   const entries = Object.entries(act || {});
   for (const [, t] of entries) if (t.need && !firstSeen.current.has(t.need.id)) firstSeen.current.set(t.need.id, now);
   const waitedSince = (n: Need) => n.since ?? firstSeen.current.get(n.id) ?? now;
@@ -229,17 +259,6 @@ export function Glance() {
 
   const goTo = (c: Chat | undefined) => { if (!c) return; setCurId(c.id); setSendErr(null); };
   const step = (dir: 1 | -1) => { if (focus.length > 1) goTo(focus[(curIdx + dir + focus.length) % focus.length]); };
-
-  // The pill takes both gestures: a horizontal swipe steps through the focus chats, anything else is a
-  // tap that opens the list. touch-action: pan-y on it so the browser hands us the horizontal moves.
-  const onPillDown = (e: RPointerEvent) => { swipe.current = { x: e.clientX, y: e.clientY }; };
-  const onPillUp = (e: RPointerEvent) => {
-    const s = swipe.current; swipe.current = null;
-    if (!s) return;
-    const dx = e.clientX - s.x, dy = e.clientY - s.y;
-    if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1);
-    else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) setView("list");
-  };
 
   const send = async () => {
     if (!cur || sending) return;
@@ -306,131 +325,134 @@ export function Glance() {
   );
   const openHref = (id: string) => `/?open=${encodeURIComponent(id)}`;
 
-  // The lens band: the right LENS_W px are the cameras' — an inert spacer, so nothing can be drawn or
-  // tapped there — and the left is whatever the frame puts in it.
-  const band = (left: ReactNode) => (
-    <div className="flex shrink-0 items-center" style={{ height: LENS_BAND }}>
-      <div className="flex min-w-0 flex-1 items-center">{left}</div>
-      <div aria-hidden className="pointer-events-none shrink-0" style={{ width: LENS_W - 16 }} />
-    </div>
-  );
+  const k = useCoverZoom();
+  // Lay out in true cover px; zoom scales it back up to fill the window (useCoverZoom).
+  const frame = { zoom: k, width: `calc(100vw / ${k})`, height: `calc(100dvh / ${k})` } as const;
 
   if (view === "list") {
     return (
-      <main className="flex h-dvh flex-col overflow-hidden bg-neutral-950 px-4 pt-[max(12px,env(safe-area-inset-top))] text-neutral-100">
-        <p className="flex shrink-0 items-center gap-2 text-[12px] text-neutral-500" aria-live="polite">
-          Focus · {focus.length}{offline}
-          <button type="button" onClick={() => setView("cover")} className={`${stale ? "" : "ml-auto"} -my-2 px-2 py-2 text-[13px] text-neutral-400`}>Close</button>
-        </p>
-        <ul className="mt-1 min-h-0 flex-1 overflow-y-auto">
+      <main style={frame} className="flex flex-col overflow-hidden bg-neutral-950 px-4 pb-2 pt-3 text-neutral-100">
+        <div className="flex shrink-0 items-center gap-2" aria-live="polite">
+          <button type="button" onClick={() => setView("cover")} className="-ml-2 flex h-10 items-center px-2 text-[15px] text-neutral-300">‹ Back</button>
+          <span className="text-[13px] text-neutral-500">{focus.length} chats</span>{offline}
+        </div>
+        <ul className="min-h-0 flex-1 overflow-y-auto">
           {focus.map((c) => {
             const line = c.state === "you" ? gist(c.t.need!.summary)
               : c.state === "fail" ? (c.t.ended?.error ? gist(c.t.ended.error) : "failed")
               : c.state === "done" ? `done · ${age(now - c.since)}`
-              : `${c.t.label || c.t.phase} · ${age(now - c.since)}`;
+              : c.t.progress ? `${gist(nowLine(c.t), 6)} · ${Math.min(c.t.progress.done + 1, c.t.progress.total)}/${c.t.progress.total}`
+              : gist(nowLine(c.t), 6);
             return (
               <li key={c.id} className="flex items-center border-t border-white/10">
-                <button type="button" onClick={() => { goTo(c); setView("cover"); }} className="flex min-h-[52px] min-w-0 flex-1 items-center gap-3 py-2 text-left">
+                <button type="button" onClick={() => { goTo(c); setView("cover"); }} className="flex min-h-[48px] min-w-0 flex-1 items-center gap-3 py-1.5 text-left">
                   <span className="flex w-3 justify-center"><Mark s={c.state} /></span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2">
-                      <span className={`truncate text-[15px] leading-[21px] ${c.state === "done" ? "text-neutral-400" : ""}`}>{c.title}</span>
-                      {c.id === cur?.id && <span aria-label="on the cover" className="h-1.5 w-3 shrink-0 rounded-full bg-[var(--sakura)]" />}
-                    </span>
-                    <span className={`block truncate text-[12px] ${c.state === "fail" ? "text-rose-400" : "text-neutral-500"}`}>{line}</span>
+                    <span className={`block truncate text-[15px] leading-[20px] ${c.id === cur?.id ? "font-semibold" : ""} ${c.state === "done" ? "text-neutral-400" : ""}`}>{c.title}</span>
+                    <span className={`block truncate text-[13px] leading-[18px] ${c.state === "fail" ? "text-rose-400" : "text-neutral-500"}`}>{line}</span>
                   </span>
                 </button>
-                {/* Its own 44px target: the row itself puts the chat on the cover; this opens it on the
-                    main screen, where the full question / command can actually be judged. */}
-                <a href={openHref(c.id)} aria-label="Open on main screen" className="flex h-11 w-9 shrink-0 items-center justify-end text-[15px] text-neutral-500">›</a>
+                {/* The row puts the chat on the cover; this opens it on the main screen, where the full
+                    question or command can actually be judged. */}
+                <a href={openHref(c.id)} aria-label="Open on main screen" className="flex h-11 w-9 shrink-0 items-center justify-end text-[16px] text-neutral-500">›</a>
               </li>
             );
           })}
           {/* Never "All quiet" while stale: an empty list from a dead poll would read as a clean bill. */}
           {!focus.length && <li className="border-t border-white/10 py-3 text-[15px] text-neutral-500">{stale ? "Not updating" : act ? "All quiet" : "Loading…"}</li>}
-          <li className="border-t border-white/10 pt-1">
-            <button type="button" onClick={onPause} disabled={busyAction || (!anyHeld && !busyIds.length)} className="py-2 text-[13px] text-neutral-400 disabled:opacity-40">
-              {pauseLabel}
-            </button>
-          </li>
         </ul>
-        {band(<a href="/" className="rounded-full bg-white/[0.07] px-4 py-2.5 text-[13px] text-neutral-300">All chats · {entries.length} ›</a>)}
+        <div className="flex shrink-0 items-center justify-between border-t border-white/10 pt-1.5">
+          <button type="button" onClick={onPause} disabled={busyAction || (!anyHeld && !busyIds.length)} className="py-2 text-[13px] text-neutral-400 disabled:opacity-40">{pauseLabel}</button>
+          <a href="/" className="py-2 text-[13px] text-neutral-400">Full app ›</a>
+        </div>
       </main>
     );
   }
 
-  // Up to MARKS chats in the pill, in a window that always contains the current one.
-  const winStart = Math.max(0, Math.min(curIdx - Math.floor(MARKS / 2), focus.length - MARKS));
-  const marks = focus.slice(winStart, winStart + MARKS);
-  const showField = !!cur && !toolStep;
-
-  const headline = !cur ? (stale ? "Not updating" : act ? "Nothing needs you" : "Loading…")
-    : isQuestion ? need!.summary
-    : need?.kind === "plan" ? "A plan is ready for review"
-    : need?.kind === "held" ? "A step is held for review"
-    : need?.kind === "permission" ? "A step is waiting for approval"
-    : need ? need.summary
-    : cur.title;
+  const showField = !!cur && (isQuestion || cur.state === "done" || cur.state === "fail");
+  const pg = cur?.state === "work" || cur?.state === "held" ? cur.t.progress : undefined;
+  const left = pg?.etaAt ? Math.max(1, Math.round((pg.etaAt - now) / 60000)) : null;
 
   return (
-    <main className="flex h-dvh flex-col overflow-hidden bg-neutral-950 px-4 pt-[max(12px,env(safe-area-inset-top))] text-neutral-100">
-      {/* Keyboard up drops the meta line, the options and the band: what's left is the question, the
-          pick and the field. Every block stays in the same child slot either way, so React keeps the
-          <input> mounted and the keyboard doesn't drop as the frame changes around it. */}
+    <main style={frame} className="flex flex-col overflow-hidden bg-neutral-950 px-4 pb-2 pt-3 text-neutral-100">
+      {/* Keyboard up drops the state line, the body and the switcher: what's left is the title and the
+          field. Every block keeps its child slot, so React keeps the <input> mounted and the keyboard
+          doesn't drop as the frame changes around it. */}
       {!typing && (
-        <p className="flex shrink-0 items-center gap-2 text-[12px] text-neutral-500" aria-live="polite">
-          {cur ? <><Mark s={cur.state} />{cur.project} · {age(now - cur.since)}</> : <span>{focus.length ? "" : "Minami"}</span>}
+        <p className="flex shrink-0 items-center gap-2 text-[13px] text-neutral-400" aria-live="polite">
+          {cur ? <><Mark s={cur.state} /><span className={cur.state === "fail" ? "text-rose-400" : cur.state === "you" ? "text-neutral-100" : ""}>{STATE_WORD[cur.state]}</span><span className="truncate text-neutral-500">· {cur.project} · {age(now - cur.since)}</span></> : <span>Minami</span>}
           {offline}
         </p>
       )}
-      <p className={typing ? "shrink-0 truncate text-[14px] font-semibold" : `mt-2 shrink-0 line-clamp-3 text-[19px] font-semibold leading-[25px] ${cur ? "" : "text-neutral-500"}`}>
-        {headline}
+      {/* WHICH chat. The question itself goes in the body, so the title always names the chat. */}
+      <p className={typing ? "shrink-0 truncate text-[14px] font-semibold" : `mt-1 shrink-0 line-clamp-2 text-[18px] font-semibold leading-[23px] ${cur ? "" : "text-neutral-500"}`}>
+        {cur ? cur.title : stale ? "Not updating" : act ? "Nothing needs you" : "Loading…"}
       </p>
       {typing && draft.pick && (
-        // Tapping the pick drops the keyboard, back to the options, to change it.
         <button type="button" onClick={() => inputRef.current?.blur()} className="mt-1 shrink-0 truncate text-left text-[13px] text-neutral-300">
           <span className="text-[var(--sakura)]">{draft.pick}</span> · {opts[draft.pick - 1]} <span className="text-neutral-500">▾</span>
         </button>
       )}
       {!typing && cur && (
-        <div className="mt-3 min-h-0 shrink overflow-hidden">
+        <div className="mt-2 min-h-0 flex-1 overflow-hidden">
           {isQuestion ? (
             <>
-              {opts.slice(0, MAX_OPTIONS).map((o, i) => {
-                const n = i + 1, on = draft.pick === n;
-                return (
-                  <button key={n} type="button" onClick={() => setDraft({ pick: on ? null : n })}
-                    className={`flex min-h-[40px] w-full items-center gap-3 border-t border-white/10 py-2 text-left text-[15px] leading-[21px] ${on ? "text-neutral-100" : "text-neutral-300"}`}>
-                    <span className={`w-3 text-[13px] tabular-nums ${on ? "text-[var(--sakura)]" : "text-neutral-500"}`}>{n}</span>
-                    <span className="min-w-0 flex-1 truncate">{o}</span>
-                    {on && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--sakura)]" />}
-                  </button>
-                );
-              })}
-              {opts.length > MAX_OPTIONS && <a href={openHref(cur.id)} className="block border-t border-white/10 pt-2 text-[12px] text-neutral-500">+{opts.length - MAX_OPTIONS} more on the main screen ›</a>}
+              <p className="line-clamp-2 text-[15px] leading-[20px] text-neutral-200">{need!.summary}</p>
+              <div className="mt-1.5">
+                {opts.slice(0, MAX_OPTIONS).map((o, i) => {
+                  const n = i + 1, on = draft.pick === n;
+                  return (
+                    <button key={n} type="button" onClick={() => setDraft({ pick: on ? null : n })}
+                      className={`flex min-h-[38px] w-full items-center gap-3 border-t border-white/10 py-1.5 text-left text-[15px] leading-[20px] ${on ? "text-neutral-100" : "text-neutral-300"}`}>
+                      <span className={`w-3 text-[13px] tabular-nums ${on ? "text-[var(--sakura)]" : "text-neutral-500"}`}>{n}</span>
+                      <span className="min-w-0 flex-1 truncate">{o}</span>
+                      {on && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--sakura)]" />}
+                    </button>
+                  );
+                })}
+                {opts.length > MAX_OPTIONS && <a href={openHref(cur.id)} className="block border-t border-white/10 pt-1.5 text-[13px] text-neutral-500">+{opts.length - MAX_OPTIONS} more on the main screen ›</a>}
+              </div>
             </>
           ) : toolStep ? (
             <>
-              {need!.kind !== "question" && <p className="line-clamp-2 break-all text-[13px] text-neutral-400">{need!.summary}</p>}
-              {need!.expiresAt && <p className="mt-1 text-[12px] text-neutral-500">auto-denies in {age(Math.max(0, need!.expiresAt - now))}</p>}
-              <a href={openHref(cur.id)} className="mt-3 inline-block text-[15px] leading-[21px] text-neutral-100">Open on main screen ›</a>
+              <p className="text-[15px] leading-[20px] text-neutral-200">{need!.kind === "plan" ? "A plan is ready for review" : need!.kind === "held" ? "A step is held for review" : need!.kind === "permission" ? "A step is waiting for approval" : "Claude asked something"}</p>
+              <p className="mt-1 line-clamp-2 break-all text-[13px] leading-[18px] text-neutral-500">{need!.summary}</p>
+              {need!.expiresAt && <p className="mt-1 text-[13px] text-neutral-500">auto-denies in {age(Math.max(0, need!.expiresAt - now))}</p>}
+              <a href={openHref(cur.id)} className="mt-2 inline-block text-[15px] text-neutral-100">Open on main screen ›</a>
             </>
           ) : cur.state === "fail" ? (
-            <p className="line-clamp-4 text-[15px] leading-[21px] text-rose-400">{cur.t.ended?.error || "The last turn failed"}</p>
+            <p className="line-clamp-3 text-[15px] leading-[20px] text-rose-400">{cur.t.ended?.error || "The last turn failed"}</p>
           ) : cur.state === "done" ? (
-            <p className="line-clamp-4 text-[15px] leading-[21px] text-neutral-400">{cur.t.ended?.text || "Done — waiting for your reply"}</p>
+            <p className="line-clamp-4 text-[15px] leading-[20px] text-neutral-300">{cur.t.ended?.text ? plain(cur.t.ended.text) : "Done, waiting for your reply"}</p>
           ) : (
-            <p className="truncate text-[15px] leading-[21px] text-neutral-400">{cur.t.label || cur.t.phase}</p>
+            // WHAT it's doing and HOW FAR — the two things the round-9 screen didn't say.
+            <>
+              <p className="text-[13px] text-neutral-500">Now</p>
+              <p className="line-clamp-2 text-[16px] leading-[21px] text-neutral-100">{nowLine(cur.t)}</p>
+              {pg && pg.total > 0 && (
+                <div className="mt-2.5">
+                  <div className="flex gap-[3px]">
+                    {Array.from({ length: Math.min(pg.total, 12) }).map((_, i) => (
+                      <span key={i} className={`h-[5px] flex-1 rounded-full ${i < pg.done ? "bg-neutral-200" : i === pg.done ? "bg-neutral-500" : "bg-white/10"}`} />
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[13px] tabular-nums text-neutral-400">
+                    Step {Math.min(pg.done + 1, pg.total)} of {pg.total}{left ? ` · about ${left}m left` : ""}
+                  </p>
+                </div>
+              )}
+              {!pg && <p className="mt-1.5 text-[13px] text-neutral-500">for {age(now - cur.since)}</p>}
+            </>
           )}
         </div>
       )}
-      <div className="min-h-2 flex-1" />
-      {sendErr && <p className="mb-1 shrink-0 text-[12px] text-rose-400">{sendErr}</p>}
+      {(!cur || typing) && <div className="min-h-2 flex-1" />}
+      {sendErr && <p className="mb-1 shrink-0 text-[13px] text-rose-400">{sendErr}</p>}
       {showField && (
-        <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex shrink-0 items-center gap-2 rounded-full bg-white/[0.07] py-1.5 pl-4 pr-1.5">
-          {/* The pick shows as "2 —" at the head of the field, in the accent, because it IS the start of
-              your answer: send with nothing typed and the option's label goes on its own. Backspace in
-              an empty field takes the pick back off. */}
+        <form onSubmit={(e) => { e.preventDefault(); send(); }} className="mt-1.5 flex shrink-0 items-center gap-2 rounded-full bg-white/[0.07] py-1 pl-4 pr-1">
+          {/* The pick shows as "2 —" at the head of the field, because it IS the start of your answer:
+              send with nothing typed and the option's label goes on its own. Backspace in an empty field
+              takes the pick back off. */}
           {draft.pick && <span className="shrink-0 text-[15px] text-[var(--sakura)]">{draft.pick} —</span>}
           <input
             ref={inputRef}
@@ -442,35 +464,36 @@ export function Glance() {
             enterKeyHint="send"
             placeholder={isQuestion ? (draft.pick ? "add a note, or send" : "pick one, or answer") : "Reply"}
             aria-label={isQuestion ? "Your answer" : "Your reply"}
-            className="min-w-0 flex-1 bg-transparent text-[15px] leading-[21px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
+            className="min-w-0 flex-1 bg-transparent py-1.5 text-[15px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
           />
           {/* preventDefault on pointer-down keeps the input focused through the tap, so the keyboard
               doesn't drop (and the frame doesn't re-flow) before the click lands. */}
           <button type="submit" aria-label="Send" disabled={sending || (!draft.text.trim() && !draft.pick)} onPointerDown={(e) => e.preventDefault()}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] text-[14px] text-white disabled:opacity-40">
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] text-[15px] text-white disabled:opacity-40">
             {sending ? "…" : "↑"}
           </button>
         </form>
       )}
-      {typing ? (
-        // Keyboard up: it covers the lens band, so the field sits right on it. Not up (yet): keep clear.
-        <div className="shrink-0" style={{ height: kbUp ? 8 : LENS_BAND }} />
-      ) : band(
-        <button type="button" onPointerDown={onPillDown} onPointerUp={onPillUp} onPointerCancel={() => { swipe.current = null; }}
-          // detail 0 = a keyboard "click" (Enter/Space), which never produces the pointer pair above.
-          onClick={(e) => { if (e.detail === 0) setView("list"); }}
-          aria-label={focus.length > 1 ? "Switch chat (swipe) or show the list (tap)" : "Show the list"}
-          className="flex min-w-0 max-w-full touch-pan-y select-none items-center gap-2.5 rounded-full bg-white/[0.07] px-3.5 py-2.5">
-          <span className="min-w-0 max-w-[88px] truncate text-[13px]">{cur ? cur.title : "Chats"}</span>
-          {marks.length > 0 && (
+      {!typing && (
+        // Switching, said plainly: ‹ and › step through the chats (44px each, both thumbs reach them),
+        // the middle says where you are and opens the list. A swipe anywhere on the row also steps.
+        <div className="mt-2 flex shrink-0 touch-pan-y select-none items-center gap-1.5"
+          onPointerDown={(e) => { swipe.current = { x: e.clientX, y: e.clientY }; }}
+          onPointerUp={(e) => { const sw = swipe.current; swipe.current = null; if (sw && Math.abs(e.clientX - sw.x) > SWIPE_PX && Math.abs(e.clientX - sw.x) > Math.abs(e.clientY - sw.y)) step(e.clientX < sw.x ? 1 : -1); }}>
+          <button type="button" onClick={() => step(-1)} disabled={focus.length < 2} aria-label="Previous chat"
+            className="flex h-11 w-12 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-[20px] text-neutral-200 disabled:opacity-30">‹</button>
+          <button type="button" onClick={() => setView("list")} aria-label="All chats"
+            className="flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl bg-white/[0.04] px-2">
             <span className="flex shrink-0 items-center gap-1.5">
-              {marks.map((c) => c.id === cur?.id
-                ? <span key={c.id} aria-label="this chat" className="h-1.5 w-4 rounded-full bg-[var(--sakura)]" />
+              {focus.slice(0, 7).map((c) => c.id === cur?.id
+                ? <span key={c.id} className="h-1.5 w-4 rounded-full bg-[var(--sakura)]" />
                 : <Mark key={c.id} s={c.state} />)}
             </span>
-          )}
-          <span className="shrink-0 text-[13px] text-neutral-500">›</span>
-        </button>
+            <span className="shrink-0 text-[13px] tabular-nums text-neutral-400">{focus.length ? `${curIdx + 1} of ${focus.length}` : "Chats"}</span>
+          </button>
+          <button type="button" onClick={() => step(1)} disabled={focus.length < 2} aria-label="Next chat"
+            className="flex h-11 w-12 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-[20px] text-neutral-200 disabled:opacity-30">›</button>
+        </div>
       )}
     </main>
   );
