@@ -216,6 +216,28 @@ changed (the model when it isn't the default, plan/code, the approval level, hel
 sheet with thumb-sized rows. Switching *to* bypass asks first; every safer change is instant. Back
 closes the sheet.
 
+### Phone access switch — `components/PhoneAccess.tsx`, `/api/tailnet/phone`
+
+A 📱 button in the chat panel's tab bar, with a dot: green means on and a phone is online, amber means
+on but no phone is online, red means off or Tailscale is down. Its panel reports the three separate
+facts behind "the phone can't connect". Is Tailscale running on the Mac? Does the dashboard's serve
+entry exist (`:443 → 127.0.0.1:3000`)? Which phones are online? From the phone, all three failures
+look the same: a page that never loads. The switch adds or removes **only** the dashboard's entry;
+dev-server entries stay. It is tailnet-only either way and never touches funnel. Switching it off
+from a phone asks first, because it cuts off the screen you'd need to switch it back on.
+
+The panel also gives `http://<tailscale-ip>:3000`. The first report (2026-10-06) had both phones
+Online in Tailscale and the N5 answering a direct ping, so the network was fine. The likeliest
+cause was Android's **Private DNS** overriding MagicDNS, which stops the `.ts.net` name resolving on
+the phone. The IP needs no DNS. It works as a browser tab; installing the app needs the https name.
+
+> 🐛 **A verify copy pointed the phone's address at itself.** The first version used
+> `process.env.PORT` as the dashboard's port, and `next start -p 3017` sets it. Switching on from the
+> test instance rewrote `:443 → 127.0.0.1:3017`, so for under a minute the phone reached a throwaway
+> server instead of the dashboard (restored by hand). **Fix:** the switch names the dashboard's port
+> explicitly, `MINAMI_DASHBOARD_PORT` (default 3000), because it is about *the* dashboard, not
+> whichever instance is answering.
+
 ### Installing it as an app
 
 `app/manifest.ts` + `public/app-icon-{192,512}.png` (the 🌸 on the ground gradient, full-bleed so one

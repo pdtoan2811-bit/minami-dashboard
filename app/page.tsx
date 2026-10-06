@@ -40,6 +40,7 @@ import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block
 import { openLocalUrl, PREVIEW_EVENT } from "@/lib/open-local";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { ChatSheet } from "@/components/ChatSheet";
+import { PhoneAccess } from "@/components/PhoneAccess";
 import { Inbox, type InboxLive } from "@/components/Inbox";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
@@ -1669,6 +1670,8 @@ export default function BentoHome() {
                     ))}
                   </div>
                 )}
+                {/* Can the phone reach this dashboard — and the switch for it (§23). */}
+                <PhoneAccess />
                 {/* Add a chat to the mix: a blank one, or any of the topic's other sessions. */}
                 <div className="relative shrink-0">
                   {/* The only place ⌥⇧T is named: reopen lives next to add because "put it back" and

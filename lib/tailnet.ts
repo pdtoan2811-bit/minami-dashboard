@@ -81,3 +81,54 @@ export async function exposePort(port: number): Promise<ExposeResult> {
   const made = find(await status(), port);
   return made ? { ok: true, base: made, created: true } : { ok: false, status: 502, error: "tailscale serve reported success but lists no entry" };
 }
+
+// ── Phone access: the switch in the chat panel (§23) ─────────────────────────────────────────────
+// "Can my phone reach the dashboard?" is three separate facts, and when the answer was no there was no
+// way to tell which one had failed without a terminal: the Tailscale daemon is up, the dashboard's
+// own serve entry exists (`:443 → 127.0.0.1:<port>`), and a phone is online on the tailnet. This
+// reports all three and flips the middle one. Flipping it off removes ONLY the dashboard's entry —
+// dev-server entries stay — and never touches funnel: it is tailnet-only either way.
+
+// NOT `process.env.PORT`: that is whichever instance is answering, and `next start -p 3017` sets it. A
+// dev or verify copy flipping the switch then pointed the phone's address at ITSELF — the live
+// dashboard vanished from the phone until the entry was put back (found while testing this, 2026-10-06).
+// The switch is about THE dashboard, so it names its port explicitly.
+const DASH_PORT = Number(process.env.MINAMI_DASHBOARD_PORT || 3000);
+
+export type PhoneAccess = {
+  running: boolean; backend: string; serving: boolean; url: string | null; error?: string;
+  /** `http://<tailscale-ip>:<port>` — needs no DNS. Android's Private DNS setting overrides MagicDNS,
+   *  and then the `.ts.net` name simply doesn't resolve on the phone while everything else is fine. */
+  ipUrl: string | null;
+  devices: { name: string; os: string; online: boolean; lastSeen: string | null }[];
+};
+
+export async function phoneAccess(): Promise<PhoneAccess> {
+  try {
+    const { stdout } = await exec(cli(), ["status", "--json"], { timeout: 8000 });
+    const d = JSON.parse(stdout);
+    const host = String(d?.Self?.DNSName || "").replace(/\.$/, "");
+    const s = await status().catch(() => ({} as ServeStatus));
+    const url = find(s, DASH_PORT);
+    const devices = Object.values((d?.Peer || {}) as Record<string, any>)
+      .filter((p) => /android|ios/i.test(String(p.OS || "")))
+      .map((p) => ({ name: String(p.HostName || p.DNSName || "device"), os: String(p.OS || ""), online: !!p.Online, lastSeen: p.LastSeen && !String(p.LastSeen).startsWith("0001") ? String(p.LastSeen) : null }));
+    const ip = (d?.Self?.TailscaleIPs || []).find((x: string) => /^\d+\.\d+\.\d+\.\d+$/.test(x));
+    return { running: d?.BackendState === "Running", backend: String(d?.BackendState || "unknown"), serving: !!url, url: url || (host ? `https://${host}` : null), ipUrl: ip ? `http://${ip}:${DASH_PORT}` : null, devices };
+  } catch (e) {
+    return { running: false, backend: "unavailable", serving: false, url: null, ipUrl: null, devices: [], error: (e as Error).message.split("\n")[0] };
+  }
+}
+
+export async function setPhoneAccess(on: boolean): Promise<PhoneAccess> {
+  if (on) {
+    const now = await phoneAccess();
+    // `up` with no flags only (re)connects; it doesn't rewrite settings. Skipped when already running
+    // because on the macOS app it can bring the window forward for nothing.
+    if (!now.running) await exec(cli(), ["up"], { timeout: 20000 }).catch(() => {});
+    await exec(cli(), ["serve", "--bg", `http://127.0.0.1:${DASH_PORT}`], { timeout: 15000 });
+  } else {
+    await exec(cli(), ["serve", "--https=443", "off"], { timeout: 15000 });
+  }
+  return phoneAccess();
+}
