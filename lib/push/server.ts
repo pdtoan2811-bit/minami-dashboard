@@ -60,6 +60,7 @@ export async function startPush() {
   const safe = <A extends unknown[]>(f: (...a: A) => void) => (...a: A) => { try { f(...a); } catch (e) { console.warn("[push]", e); } };
   liveEvents.on("need", safe((e: any) => { n.onNeed(e.sessionId, e.cwd, e.need); ensureTicking(); }));
   liveEvents.on("ended", safe((e: any) => n.onEnded(e.sessionId, e.cwd, e.ended)));
+  liveEvents.on("previewReady", safe((e: any) => n.onPreviewReady(e.sessionId, e.cwd, e.block)));
 }
 
 /** The reconcile loop only runs while something is on a phone's screen (or deferred) — an idle box

@@ -111,4 +111,47 @@ export async function run(jiti, root, check) {
   const dn = out[0].payload.nonces.deny;
   now += 11_000;
   check("nonce: expires with the need", n.consume(dn, out[0].dev) === null);
+  settle("e"); n.tick(); take();
+
+  // 10. preview ready, mid-turn: once per block, heads-up, the url in the body, tap opens the chat.
+  now += 20 * 60_000;
+  const blk = (target, label = "the pitch") => ({ key: JSON.stringify([{ kind: "url", target, label }]), previews: [{ kind: "url", target, label }] });
+  const filesFirst = { key: "k-files", previews: [{ kind: "file", target: "/tmp/a.md", label: "draft" }, { kind: "url", target: "http://localhost:3120", label: "pitch v2" }] };
+  n.onPreviewReady("r", "/x/r", filesFirst);
+  out = take();
+  check("ready: one push per device, heads-up", out.length === 2 && out.every((x) => x.payload.t === "show" && x.payload.silent === false && x.opts.urgency === "high"));
+  check("ready: titled with the first url's label", out[0].payload.title === "Preview ready — pitch v2" && out[0].payload.body.includes("http://localhost:3120"));
+  check("ready: tag = sessionId, tap opens the chat", out[0].payload.tag === "r" && out[0].payload.url === "/?open=r" && !out[0].payload.actions.length);
+  n.onPreviewReady("r", "/x/r", filesFirst); // the same block, re-scanned on the next backtick delta
+  check("ready: same block never fires twice", take().length === 0);
+  n.onPreviewReady("r", "/x/r", { key: "k-files", previews: filesFirst.previews });
+  check("ready: same content, fresh object → still deduped", take().length === 0);
+  // A second, different block inside the heads-up gap: shown, but silent.
+  now += 60_000;
+  n.onPreviewReady("r", "/x/r", blk("http://localhost:3120/v3", "pitch v3"));
+  out = take();
+  check("ready: a new block in the gap is silent", out.length === 2 && out.every((x) => x.payload.silent === true && x.payload.title === "Preview ready — pitch v3"));
+
+  // 11. presence: a chat being watched never buzzes, and the block stays spent after they leave.
+  now += 10 * 60_000;
+  n.markPresence("rp");
+  n.onPreviewReady("rp", "/x/rp", blk("http://localhost:4000"));
+  check("ready: nothing while the chat is on screen", take().length === 0);
+  n.markPresence("rp", true); n.tick();
+  n.onPreviewReady("rp", "/x/rp", blk("http://localhost:4000"));
+  check("ready: a block seen while watched does not buzz later", take().length === 0);
+
+  // 12. a need on the phone for this chat wins: the ready notice must not overwrite its buttons.
+  raise("rn", need("rn1", "held"));
+  take();
+  n.onPreviewReady("rn", "/x/rn", blk("http://localhost:5000"));
+  check("ready: suppressed while a need is on screen", take().length === 0);
+  settle("rn"); n.tick(); take();
+
+  // 13. a ready burst collapses: past BURST_MAX chats inside the window, the rest arrive silent.
+  now += 10 * 60_000;
+  for (const s of ["rb1", "rb2", "rb3", "rb4"]) { n.onPreviewReady(s, "/x/" + s, blk("http://localhost:6000/" + s)); now += 1000; }
+  out = take();
+  const loudTags = new Set(out.filter((x) => !x.payload.silent).map((x) => x.payload.tag));
+  check("ready: burst — first three heads-up, fourth silent", loudTags.size === 3 && !loudTags.has("rb4") && out.some((x) => x.payload.tag === "rb4"));
 }

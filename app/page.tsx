@@ -36,7 +36,7 @@ import { TaskProgressBar } from "@/components/TaskProgressBar";
 import type { TaskProgress } from "@/lib/task-progress";
 import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
-import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block";
+import { splitPreviewSegments, isLocalUrl, type Preview } from "@/lib/preview-block";
 import { openLocalUrl, PREVIEW_EVENT } from "@/lib/open-local";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { FocusDock, FocusSheet } from "@/components/Focus";
@@ -1992,12 +1992,21 @@ const FileChips = memo(function FileChips({ tools, onOpen }: { tools: AgentToolC
  *  url opens a real tab (a localhost preview deserves a full window, and the in-app browser panel
  *  belongs to the SESSION'S browsing, not ours); file reuses the same panel slot as FileChips; cmd
  *  copies, because running model-suggested shell text on click is an auto-approve nobody armed. */
-const PreviewChips = memo(function PreviewChips({ previews, onOpenFile, onComment }: { previews: Preview[]; onOpenFile: (p: string) => void; onComment?: (url: string) => void }) {
+const PreviewChips = memo(function PreviewChips({ previews, onOpenFile, onComment, ready }: { previews: Preview[]; onOpenFile: (p: string) => void; onComment?: (url: string) => void;
+  /** A mid-message ```minami-preview-ready row (§5c): same chips, but the label says "you can look
+   *  now" — the turn is still working, and the row is the reason the phone just buzzed. */
+  ready?: boolean }) {
   const [copied, setCopied] = useState<string | null>(null);
   if (!previews.length) return null;
   return (
-    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">Preview</span>
+    <div className={`flex flex-wrap items-center gap-1.5 ${ready ? "my-2.5" : "mt-2.5"}`}>
+      {ready ? (
+        <span title="Viewable now — the turn is still working" className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.09em] text-[var(--sakura)]">
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--sakura)]" />Ready · look now
+        </span>
+      ) : (
+        <span className="text-[10px] font-semibold uppercase tracking-[0.09em] text-neutral-500">Preview</span>
+      )}
       {previews.map((p, i) => {
         // Localhost is the #1 case by decree: a running app beats a file diff, so its chip is the
         // one PRIMARY action — accent-tinted, host:port spelled out — and everything else stays a
@@ -2345,10 +2354,13 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
   /** Non-null only for the one row that is currently streaming. */
   live: LiveBits | null;
 }) {
-  // The ending contract: an assistant reply may close with a ```minami-preview block, which renders
-  // as chips instead of JSON. Cheap (one lastIndexOf on the common no-block path) — this runs per
-  // streamed token on the live row. User turns never carry the block, so skip even that.
-  const previewSplit = t.role === "assistant" && t.text ? splitPreviewBlock(t.text) : { body: t.text, previews: [] };
+  // The ending contract: an assistant reply may close with a ```minami-preview block, and drop
+  // ```minami-preview-ready blocks mid-message — both render as chips instead of JSON, the ready ones
+  // in place. Cheap (a lastIndexOf + an indexOf on the common no-block path) — this runs per streamed
+  // token on the live row. User turns never carry either block, so skip even that.
+  const previewSplit = t.role === "assistant" && t.text
+    ? splitPreviewSegments(t.text)
+    : { segments: t.text ? [{ kind: "text" as const, text: t.text }] : [], previews: [] };
   const notes = t.role === "user" ? taskNotesOf(t.text) : null;
   if (notes) return <TaskNoteRows notes={notes} />;
   return (
@@ -2369,7 +2381,9 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
               ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[15px] leading-[1.65] text-neutral-100 [overflow-wrap:anywhere]"
               : "msg-a w-full text-[15px] leading-[1.75] text-neutral-100/95 [overflow-wrap:anywhere]"}>
               {t.role === "assistant" && t.thinking && <ThoughtBlock text={t.thinking} live={!!t.streaming && !t.text} />}
-              {t.text && <Markdown text={previewSplit.body} />}
+              {t.text && previewSplit.segments.map((seg, i) => seg.kind === "text"
+                ? <Markdown key={i} text={seg.text} />
+                : <PreviewChips key={i} ready previews={seg.previews} onOpenFile={onOpenFile} onComment={onComment} />)}
               {/* Images the turn REFERS TO, rendered from their paths. Deliberately derived from the
                   text rather than from message content: `claude-sessions.ts` keeps only text blocks
                   when it rebuilds a user turn from disk, so an inline image block would render live
@@ -3016,13 +3030,15 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     window.open(`/preview/${sessionId || "new"}?${q}`, `preview-${sessionId || "new"}`, "width=1280,height=900");
   }, [sessionId, cwd]);
   // Whether a localhost preview has appeared in this conversation — the header button only earns
-  // its place once there is a page to comment on. Tail-only: chips live at the end of a reply, and
-  // the last few replies are the ones with a live server behind them.
+  // its place once there is a page to comment on. Last 30 turns only: those are the ones with a live
+  // server behind them. Ready rows count — a page announced mid-turn is a page to comment on.
   const hasLocalPreview = useMemo(() => {
     const tail = agent.turns.slice(-30);
     for (let i = tail.length - 1; i >= 0; i--) {
       const t = tail[i];
-      if (t.role === "assistant" && t.text && splitPreviewBlock(t.text).previews.some(isLocalUrl)) return true;
+      if (t.role !== "assistant" || !t.text) continue;
+      const sp = splitPreviewSegments(t.text);
+      if (sp.previews.some(isLocalUrl) || sp.segments.some((g) => g.kind === "ready" && g.previews.some(isLocalUrl))) return true;
     }
     return false;
   }, [agent.turns]);
