@@ -68,6 +68,15 @@ parks a promise in `s.pending` and blocks.
 > with a mouse) with an explicit per-option toggle that overrides in both directions, so several
 > previews can be compared side by side without committing to any of them.
 
+> 🐛 **The card ate the conversation it was asking about (fixed 2026-10-06).** `min-h-0` let the card
+> shrink, but nothing stopped it *growing*: it sits under the transcript with `flex-basis:auto`, the
+> transcript has `flex-basis:0`, so a four-option question took every pixel and left the log at zero
+> height — no way to scroll back to the context the question came from. Now the card is capped at
+> `max-h-[60%]` of the pane, its header has **▾ read the chat**, which folds it to one line (the question
+> and **Answer ▴**; picks are kept because the fold is state inside AskCard, not a remount), and the pane
+> re-pins the transcript to its bottom on resize (a `ResizeObserver` in `app/page.tsx`), since the card
+> mounting changes the log's height without changing any of the stick-to-bottom effect's deps.
+
 **Permission modes are enforced here, in `canUseTool` — not by the SDK.** Each session carries its own
 `s.mode`, and the hook decides before it ever prompts: `bypassPermissions` allows everything,
 `acceptEdits` allows the edit tools (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`), everything else asks.

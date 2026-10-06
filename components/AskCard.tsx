@@ -80,6 +80,10 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   const [fwd, setFwd] = useState<Record<number, TeamMember>>({});
   const [team, setTeam] = useState<TeamMember[]>([]);
   const otherRef = useRef<HTMLInputElement>(null);
+  // Folded to one line so the transcript gets the pane back. A question is only answerable with the
+  // conversation that produced it in view, and the expanded card can't always leave room for that.
+  // Lives here, not at the call site, so folding never remounts the card and loses half-made picks.
+  const [folded, setFolded] = useState(false);
 
   // team-ask's roster. A machine without it gets [] and no forward row — same card as before.
   useEffect(() => {
@@ -187,6 +191,18 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   const count = answerFor(qi);
   const nPicked = Array.isArray(count) ? count.length : count ? 1 : 0;
 
+  if (folded) return (
+    <div className="mx-4 mb-2 flex shrink-0 items-center gap-2 rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2">
+      <span className={`shrink-0 ${sc.eyebrow} font-medium uppercase tracking-wider text-[var(--sakura)]`}>✻ Asking</span>
+      <span className={`min-w-0 flex-1 truncate ${sc.hint} text-neutral-300`} title={q.question}>{q.question}</span>
+      {n > 1 && <span className={`shrink-0 ${sc.hint} tabular-nums text-neutral-500`}>{qi + 1}/{n}</span>}
+      <button onClick={() => setFolded(false)}
+        className={`shrink-0 rounded-lg bg-[var(--sakura)] px-3 py-1 ${sc.button} font-medium text-white transition-opacity hover:opacity-90`}>
+        Answer ▴
+      </button>
+    </div>
+  );
+
   return (
     // ── Why this is a flex column that can shrink ──────────────────────────────────────────────────
     // This card renders OUTSIDE the transcript's scroll area, as a sibling of the composer, inside a
@@ -202,11 +218,16 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     // `min-h-0` lets the card shrink to whatever the pane can spare; only the OPTIONS scroll, while the
     // question and the action row stay pinned. The two things you must always be able to see are what
     // is being asked and the button that answers it.
-    <div className="mx-4 mb-2 flex min-h-0 flex-col rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
+    //
+    // `max-h-[60%]` is the other half: shrinking alone let the card take every pixel it wanted, and
+    // the transcript (flex-basis 0) gave them all up — a four-option question left the log at zero
+    // height, so the context the question was about was exactly what you couldn't scroll back to.
+    // The cap keeps 40% of the pane for the conversation; the fold button gives it all of it.
+    <div className="mx-4 mb-2 flex max-h-[60%] min-h-0 flex-col rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
       <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2">
         <p className={`flex items-center gap-1.5 ${sc.eyebrow} font-medium uppercase tracking-wider text-[var(--sakura)]`}><span>✻</span> Claude is asking</p>
         {n > 1 && (
-          <div className="flex items-center gap-1" title={`Question ${qi + 1} of ${n}`}>
+          <div className="ml-auto flex items-center gap-1" title={`Question ${qi + 1} of ${n}`}>
             {questions.map((_, i) => (
               <button key={i} onClick={() => setQi(i)}
                 className="h-1.5 w-1.5 rounded-full transition-all"
@@ -217,6 +238,11 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
             ))}
           </div>
         )}
+        {/* After the dots and set off by a rule: beside them it read as a label for the step dots. */}
+        <button onClick={() => setFolded(true)} title="Fold this card to read the conversation above it — your picks are kept"
+          className={`${n > 1 ? "" : "ml-auto "}border-l border-white/10 pl-2.5 ${sc.hint} text-neutral-500 transition-colors hover:text-neutral-200`}>
+          ▾ read the chat
+        </button>
       </div>
 
       {/* Question + the select-one/all hint: pinned. Scrolling the thing being asked out of view while
