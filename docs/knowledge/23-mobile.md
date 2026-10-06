@@ -326,6 +326,15 @@ comment pop-out, which iframes the localhost URL, is also not covered.
 >   screen ›". The reason below still holds: 360px can't show enough of a command to approve it safely.
 > - Pause/Resume all moved into the list frame as a quiet text button.
 
+> **2026-10-06, round 12: the thread** (his pick, V2 of the cover-reading pitch, "with keyboard
+> input"). The cover is now a watch-style messenger. Chats are faces across the top (project icon +
+> state mark, current one ringed; ☰ / +N opens the list). The chat is bubbles: your last message small
+> on the right, Claude's latest reply in full as one 16/23 bubble per paragraph, newest at the bottom,
+> scrollable (from `/api/glance/last`, re-fetched only when the chat or its last turn changes). Work is
+> one live bubble with the step and progress. Claude's options are reply chips. A text field is always
+> at the bottom: reply, answer, or queue a follow-up to a running chat. With the keyboard up, the faces
+> and chips step aside. This replaces round 11's status card + "Read all" reader.
+
 > **2026-10-06, round 11: the reader** ("I can't read full"). Research (watchOS/Wear OS reading
 > guidance, Samsung's One UI cover direction, and a Pinterest board in
 > `~/ecvision/pitches/minami-phone/refs/picks`) agreed on two rules. The first screen must answer which

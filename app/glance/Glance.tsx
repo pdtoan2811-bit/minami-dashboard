@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { onPageVisible, pageHidden } from "@/lib/page-visible";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { COVER_QUERY, useCoverScreen } from "@/lib/use-cover";
 import { reportViewport } from "@/lib/viewport-report";
+import { ProjectIcon } from "@/components/ProjectIcon";
 
 // /glance — the Galaxy Z Flip 7 Flex Window (~360×400 CSS px, read at arm's length). §23.
 //
@@ -27,7 +28,18 @@ import { reportViewport } from "@/lib/viewport-report";
 // the FIRST screen must answer which / what / how far with no scroll (it does), and LONG TEXT GETS ITS
 // OWN SCROLLING VIEW one tap away, never a line-clamp. Tap the card (or "Read all ›") → the reader: the
 // full reply (or the full question — the feed cuts it at 200 chars) at 16/24, ~40 chars a line, with what
-// you last said above it and Reply below. Body text is 16px everywhere (watch-reading floor).
+// You last said above it and Reply below. Body text is 16px everywhere (watch-reading floor).
+//
+// Round 12 — THE THREAD (his pick from the cover-reading pitch, "V2 with keyboard input"). The cover is
+// a watch-style messenger, because a conversation is the one reading pattern everyone already knows:
+// - chats are FACES across the top (project icon + state mark, current one ringed); tap one to switch.
+// - the chat is BUBBLES: your last message small on the right, Claude's reply in full as one 16/23
+//   bubble per paragraph, scrollable, newest at the bottom. No status card, no "Read all" — reading IS
+//   the screen.
+// - work is ONE live bubble: the step in words, the segments, "Step n of m · about Nm left".
+// - Claude's options become reply chips; an approval shows as a bubble with "Open on main screen".
+// - a text field is always at the bottom (keyboard input on the cover). Keyboard up: the faces and chips
+//   step aside, the thread keeps the last bubble in view above the field.
 //
 // Round 9 ("Cover · around the lenses", pitch V2). Three rules shape everything below:
 //
@@ -62,8 +74,6 @@ type Draft = { pick: number | null; text: string };
 const POLL_MS = 5000;
 const DONE_WINDOW_MS = 30 * 60_000; // finished (ok or not) within the last half hour still counts as focus
 const RESUME_CONFIRM_MS = 4000;
-const MAX_OPTIONS = 3; // what fits between the question and the field at 15/21 without scrolling
-const SWIPE_PX = 28;
 
 /** "6m", "1h", "now" — the wait, at a size and precision you can take in at a glance. */
 function age(ms: number): string {
@@ -104,7 +114,7 @@ function nowLine(t: Tile): string {
   if (t.progress?.now) return t.progress.now;
   const l = (t.label || t.phase || "").trim();
   if (/^run: /.test(l)) return "Running a command";
-  if (/^subagent: /.test(l)) return "A helper agent is " + l.slice(10);
+  if (/^subagent: /.test(l)) return "Helper agent: " + l.slice(10).replace(/\s+\S{1,7}$/, "…");
   if (!l || l === "thinking" || l === "idle") return "Thinking";
   return l.charAt(0).toUpperCase() + l.slice(1);
 }
@@ -157,8 +167,8 @@ export function Glance() {
   const [failed, setFailed] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const [confirmResume, setConfirmResume] = useState(false);
-  const [view, setView] = useState<"cover" | "list" | "read">("cover");
-  const [full, setFull] = useState<{ id: string; text: string; you: string; question?: string; loading: boolean } | null>(null);
+  const [view, setView] = useState<"cover" | "list">("cover");
+  const [thread, setThread] = useState<{ key: string; text: string; you: string; question?: string } | null>(null);
   // null = "follow the chat that needs you most". Set only by a deliberate swipe or list tap, so a new
   // need arriving doesn't yank the screen out from under a half-typed answer.
   const [curId, setCurId] = useState<string | null>(null);
@@ -171,7 +181,6 @@ export function Glance() {
   const firstSeen = useRef<Map<string, number>>(new Map());
   const asked = useRef<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
-  const swipe = useRef<{ x: number; y: number } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -271,7 +280,6 @@ export function Glance() {
   const setDraft = (d: Partial<Draft>) => setDrafts((p) => ({ ...p, [draftKey]: { ...draft, ...d } }));
 
   const goTo = (c: Chat | undefined) => { if (!c) return; setCurId(c.id); setSendErr(null); };
-  const step = (dir: 1 | -1) => { if (focus.length > 1) goTo(focus[(curIdx + dir + focus.length) % focus.length]); };
 
   const send = async () => {
     if (!cur || sending) return;
@@ -342,54 +350,22 @@ export function Glance() {
   // Lay out in true cover px; zoom scales it back up to fill the window (useCoverZoom).
   const frame = { zoom: k, width: `calc(100vw / ${k})`, height: `calc(100dvh / ${k})` } as const;
 
-  const openReader = () => {
+  // The conversation for the chat on screen: its latest reply in full and what you last said
+  // (/api/glance/last). Re-fetched when the chat changes or a new turn ends — not on every poll.
+  const threadKey = cur ? `${cur.id}:${cur.t.ended?.at ?? 0}:${need?.id ?? ""}` : "";
+  const threadEnd = useRef<HTMLDivElement>(null);
+  useEffect(() => {
     if (!cur) return;
-    const id = cur.id;
-    setFull({ id, text: cur.t.ended?.text || "", you: "", loading: true });
-    setView("read");
-    fetch(`/api/glance/last?id=${encodeURIComponent(id)}${need ? `&need=${encodeURIComponent(need.id)}` : ""}`, { cache: "no-store" })
+    let live = true;
+    fetch(`/api/glance/last?id=${encodeURIComponent(cur.id)}${need ? `&need=${encodeURIComponent(need.id)}` : ""}`, { cache: "no-store" })
       .then((r) => r.json())
-      .then((d) => setFull((f) => (f && f.id === id ? { id, text: d.text || f.text, you: d.you || "", question: d.question, loading: false } : f)))
-      .catch(() => setFull((f) => (f && f.id === id ? { ...f, loading: false } : f)));
-  };
-
-  if (view === "read" && cur && full) {
-    const paras = (full.question ? [] : (full.text || "").split(/\n{2,}/)).map(readable).filter(Boolean);
-    const canReply = isQuestion || cur.state === "done" || cur.state === "fail";
-    return (
-      <main style={frame} className="flex flex-col overflow-hidden bg-neutral-950 text-neutral-100">
-        <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
-          <button type="button" onClick={() => setView("cover")} className="flex h-10 items-center px-2 text-[15px] text-neutral-300">‹</button>
-          <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{cur.title}</span>
-        </div>
-        {/* The one place on the cover that scrolls — a reader, the way a watch reads a long message. */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-3">
-          {full.you && <p className="mb-2 line-clamp-3 border-l-2 border-white/15 pl-2.5 text-[13px] leading-[18px] text-neutral-500">You: {plain(full.you.replace(/<[^>]+>/g, " "))}</p>}
-          {full.question ? (
-            <>
-              <p className="whitespace-pre-line text-[16px] leading-[24px]">{full.question}</p>
-              {opts.map((o, i) => (
-                <button key={i} type="button" onClick={() => { setDraft({ pick: i + 1 }); setView("cover"); }}
-                  className="mt-2 flex w-full items-start gap-3 border-t border-white/10 pt-2 text-left text-[16px] leading-[22px] text-neutral-200">
-                  <span className="w-3 pt-px text-[13px] tabular-nums text-neutral-500">{i + 1}</span><span className="min-w-0 flex-1">{o}</span>
-                </button>
-              ))}
-            </>
-          ) : paras.length ? (
-            paras.map((t, i) => <p key={i} className="mb-3 whitespace-pre-line text-[16px] leading-[24px] text-neutral-100">{t}</p>)
-          ) : (
-            <p className="text-[16px] text-neutral-500">{full.loading ? "Loading…" : "Nothing to read yet."}</p>
-          )}
-        </div>
-        {canReply && (
-          <div className="shrink-0 border-t border-white/10 px-4 py-2">
-            <button type="button" onClick={() => { setView("cover"); setTimeout(() => inputRef.current?.focus(), 50); }}
-              className="h-10 w-full rounded-full bg-white/[0.08] text-[15px] text-neutral-100">{isQuestion ? "Answer" : "Reply"}</button>
-          </div>
-        )}
-      </main>
-    );
-  }
+      .then((d) => { if (live) setThread({ key: threadKey, text: d.text || "", you: d.you || "", question: d.question }); })
+      .catch(() => {});
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadKey]);
+  // Newest at the bottom, like every messenger: land on the end of the conversation.
+  useEffect(() => { threadEnd.current?.scrollIntoView({ block: "end" }); }, [thread?.key, typing]);
 
   if (view === "list") {
     return (
@@ -414,13 +390,10 @@ export function Glance() {
                     <span className={`block truncate text-[13px] leading-[18px] ${c.state === "fail" ? "text-rose-400" : "text-neutral-500"}`}>{line}</span>
                   </span>
                 </button>
-                {/* The row puts the chat on the cover; this opens it on the main screen, where the full
-                    question or command can actually be judged. */}
                 <a href={openHref(c.id)} aria-label="Open on main screen" className="flex h-11 w-9 shrink-0 items-center justify-end text-[16px] text-neutral-500">›</a>
               </li>
             );
           })}
-          {/* Never "All quiet" while stale: an empty list from a dead poll would read as a clean bill. */}
           {!focus.length && <li className="border-t border-white/10 py-3 text-[15px] text-neutral-500">{stale ? "Not updating" : act ? "All quiet" : "Loading…"}</li>}
         </ul>
         <div className="flex shrink-0 items-center justify-between border-t border-white/10 pt-1.5">
@@ -431,97 +404,97 @@ export function Glance() {
     );
   }
 
-  const showField = !!cur && (isQuestion || cur.state === "done" || cur.state === "fail");
   const pg = cur?.state === "work" || cur?.state === "held" ? cur.t.progress : undefined;
   const left = pg?.etaAt ? Math.max(1, Math.round((pg.etaAt - now) / 60000)) : null;
+  const fresh = thread && thread.key === threadKey ? thread : null;
+  const paras = (fresh?.text || cur?.t.ended?.text || "").split(/\n{2,}/).map(readable).filter(Boolean);
+  const FACES = 6;
+
+  const bubble = (t: ReactNode, key: string | number, tone?: "you" | "fail") => (
+    <div key={key} className={`flex ${tone === "you" ? "justify-end" : ""}`}>
+      <p className={`max-w-[88%] whitespace-pre-line rounded-2xl px-3 py-2 ${tone === "you" ? "bg-white/[0.08] text-[13px] leading-[18px] text-neutral-400" : `bg-white/[0.045] text-[16px] leading-[23px] ${tone === "fail" ? "text-rose-300" : "text-neutral-100"}`}`}>{t}</p>
+    </div>
+  );
 
   return (
-    <main style={frame} className="flex flex-col overflow-hidden bg-neutral-950 px-4 pb-2 pt-3 text-neutral-100">
-      {/* Keyboard up drops the state line, the body and the switcher: what's left is the title and the
-          field. Every block keeps its child slot, so React keeps the <input> mounted and the keyboard
-          doesn't drop as the frame changes around it. */}
+    <main style={frame} className="flex flex-col overflow-hidden bg-neutral-950 text-neutral-100">
+      {/* FACES — the chats. Tap to switch; the list (and Pause all) is behind the last button. Hidden
+          with the keyboard up: you can't switch mid-sentence, and the thread needs the room. */}
       {!typing && (
-        <p className="flex shrink-0 items-center gap-2 text-[13px] text-neutral-400" aria-live="polite">
-          {cur ? <><Mark s={cur.state} /><span className={cur.state === "fail" ? "text-rose-400" : cur.state === "you" ? "text-neutral-100" : ""}>{STATE_WORD[cur.state]}</span><span className="truncate text-neutral-500">· {cur.project} · {age(now - cur.since)}</span></> : <span>Minami</span>}
-          {offline}
-        </p>
-      )}
-      {/* WHICH chat. The question itself goes in the body, so the title always names the chat. */}
-      <p className={typing ? "shrink-0 truncate text-[14px] font-semibold" : `mt-1 shrink-0 line-clamp-2 text-[18px] font-semibold leading-[23px] ${cur ? "" : "text-neutral-500"}`}>
-        {cur ? cur.title : stale ? "Not updating" : act ? "Nothing needs you" : "Loading…"}
-      </p>
-      {typing && draft.pick && (
-        <button type="button" onClick={() => inputRef.current?.blur()} className="mt-1 shrink-0 truncate text-left text-[13px] text-neutral-300">
-          <span className="text-[var(--sakura)]">{draft.pick}</span> · {opts[draft.pick - 1]} <span className="text-neutral-500">▾</span>
-        </button>
-      )}
-      {!typing && cur && (
-        <div className="mt-2 min-h-0 flex-1 overflow-hidden">
-          {isQuestion ? (
-            <>
-              <button type="button" onClick={openReader} className="block w-full text-left">
-                <span className="line-clamp-2 text-[16px] leading-[21px] text-neutral-100">{need!.summary}</span>
-                <span className="text-[13px] text-neutral-500">Read all ›</span>
-              </button>
-              <div className="mt-1.5">
-                {opts.slice(0, MAX_OPTIONS).map((o, i) => {
-                  const n = i + 1, on = draft.pick === n;
-                  return (
-                    <button key={n} type="button" onClick={() => setDraft({ pick: on ? null : n })}
-                      className={`flex min-h-[38px] w-full items-center gap-3 border-t border-white/10 py-1.5 text-left text-[15px] leading-[20px] ${on ? "text-neutral-100" : "text-neutral-300"}`}>
-                      <span className={`w-3 text-[13px] tabular-nums ${on ? "text-[var(--sakura)]" : "text-neutral-500"}`}>{n}</span>
-                      <span className="min-w-0 flex-1 truncate">{o}</span>
-                      {on && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--sakura)]" />}
-                    </button>
-                  );
-                })}
-                {opts.length > MAX_OPTIONS && <a href={openHref(cur.id)} className="block border-t border-white/10 pt-1.5 text-[13px] text-neutral-500">+{opts.length - MAX_OPTIONS} more on the main screen ›</a>}
-              </div>
-            </>
-          ) : toolStep ? (
-            <>
-              <p className="text-[15px] leading-[20px] text-neutral-200">{need!.kind === "plan" ? "A plan is ready for review" : need!.kind === "held" ? "A step is held for review" : need!.kind === "permission" ? "A step is waiting for approval" : "Claude asked something"}</p>
-              <p className="mt-1 line-clamp-2 break-all text-[13px] leading-[18px] text-neutral-500">{need!.summary}</p>
-              {need!.expiresAt && <p className="mt-1 text-[13px] text-neutral-500">auto-denies in {age(Math.max(0, need!.expiresAt - now))}</p>}
-              <a href={openHref(cur.id)} className="mt-2 inline-block text-[15px] text-neutral-100">Open on main screen ›</a>
-            </>
-          ) : cur.state === "fail" ? (
-            <p className="line-clamp-3 text-[16px] leading-[22px] text-rose-400">{cur.t.ended?.error || "The last turn failed"}</p>
-          ) : cur.state === "done" ? (
-            // Tap anywhere on the reply to read all of it (round 11).
-            <button type="button" onClick={openReader} className="block w-full text-left">
-              <span className="line-clamp-3 text-[16px] leading-[22px] text-neutral-200">{cur.t.ended?.text ? plain(cur.t.ended.text) : "Done, waiting for your reply"}</span>
-              <span className="mt-0.5 block text-[13px] text-neutral-500">Read all ›</span>
+        <div className="flex shrink-0 items-center gap-2 overflow-x-auto px-3 pb-1 pt-2.5" aria-live="polite">
+          {focus.slice(0, FACES).map((c) => (
+            <button key={c.id} type="button" onClick={() => goTo(c)} aria-label={`${c.title} — ${STATE_WORD[c.state]}`}
+              className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${c.id === cur?.id ? "bg-[var(--sakura)]/15 ring-2 ring-[var(--sakura)]" : "bg-white/[0.06]"}`}>
+              <ProjectIcon name={c.project} size={24} />
+              <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-neutral-950"><Mark s={c.state} /></span>
             </button>
-          ) : (
-            // WHAT it's doing and HOW FAR — the two things the round-9 screen didn't say.
-            <>
-              <p className="text-[13px] text-neutral-500">Now</p>
-              <p className="line-clamp-2 text-[16px] leading-[21px] text-neutral-100">{nowLine(cur.t)}</p>
-              {pg && pg.total > 0 && (
-                <div className="mt-2.5">
-                  <div className="flex gap-[3px]">
-                    {Array.from({ length: Math.min(pg.total, 12) }).map((_, i) => (
-                      <span key={i} className={`h-[5px] flex-1 rounded-full ${i < pg.done ? "bg-neutral-200" : i === pg.done ? "bg-neutral-500" : "bg-white/10"}`} />
-                    ))}
-                  </div>
-                  <p className="mt-1.5 text-[13px] tabular-nums text-neutral-400">
-                    Step {Math.min(pg.done + 1, pg.total)} of {pg.total}{left ? ` · about ${left}m left` : ""}
-                  </p>
-                </div>
-              )}
-              {!pg && <p className="mt-1.5 text-[13px] text-neutral-500">for {age(now - cur.since)}</p>}
-            </>
-          )}
+          ))}
+          <button type="button" onClick={() => setView("list")} aria-label="All chats"
+            className="flex h-10 min-w-10 shrink-0 items-center justify-center rounded-full bg-white/[0.04] px-2.5 text-[13px] tabular-nums text-neutral-400">
+            {focus.length > FACES ? `+${focus.length - FACES}` : "☰"}
+          </button>
+          {offline}
         </div>
       )}
-      {(!cur || typing) && <div className="min-h-2 flex-1" />}
-      {sendErr && <p className="mb-1 shrink-0 text-[13px] text-rose-400">{sendErr}</p>}
-      {showField && (
-        <form onSubmit={(e) => { e.preventDefault(); send(); }} className="mt-1.5 flex shrink-0 items-center gap-2 rounded-full bg-white/[0.07] py-1 pl-4 pr-1">
-          {/* The pick shows as "2 —" at the head of the field, because it IS the start of your answer:
-              send with nothing typed and the option's label goes on its own. Backspace in an empty field
-              takes the pick back off. */}
+      {/* The chat's name, one quiet line: the faces say WHICH project, this says which chat in it. */}
+      <p className="shrink-0 truncate px-4 pt-1 text-[13px] text-neutral-500">
+        {cur ? <><span className={cur.state === "fail" ? "text-rose-400" : cur.state === "you" ? "text-neutral-200" : ""}>{STATE_WORD[cur.state]}</span> · {cur.title}</> : stale ? "Not updating" : act ? "Nothing needs you" : "Loading…"}
+      </p>
+
+      {/* THE THREAD — newest at the bottom, scrolls like any messenger. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-2 pt-1.5">
+        <div className="flex min-h-full flex-col justify-end gap-2">
+          {cur && fresh?.you && bubble(plain(fresh.you.replace(/<[^>]+>/g, " ")).slice(0, 160), "you", "you")}
+          {cur && isQuestion ? (
+            bubble(fresh?.question || need!.summary, "q")
+          ) : cur && toolStep ? (
+            <div className="rounded-2xl bg-white/[0.045] px-3 py-2.5">
+              <p className="text-[16px] leading-[22px]">{need!.kind === "plan" ? "A plan is ready for review" : need!.kind === "held" ? "A step is held for review" : need!.kind === "permission" ? "A step is waiting for approval" : "Claude asked something"}</p>
+              <p className="mt-1 line-clamp-2 break-all text-[13px] leading-[18px] text-neutral-500">{need!.summary}</p>
+              <a href={openHref(cur.id)} className="mt-2 inline-block text-[15px] text-[var(--sakura)]">Open on main screen ›</a>
+            </div>
+          ) : cur && (cur.state === "work" || cur.state === "held") ? (
+            <>
+              {paras.slice(-2).map((t, i) => bubble(t, `p${i}`))}
+              {/* work = ONE live bubble: what, how far */}
+              <div className="rounded-2xl border border-white/10 px-3 py-2.5">
+                <p className="flex items-center gap-2 text-[16px] leading-[22px]"><Mark s={cur.state} /><span className="min-w-0 flex-1">{nowLine(cur.t)}</span></p>
+                {pg && pg.total > 0 ? (
+                  <>
+                    <div className="mt-2 flex gap-[3px]">{Array.from({ length: Math.min(pg.total, 12) }).map((_, i) => <span key={i} className={`h-[5px] flex-1 rounded-full ${i < pg.done ? "bg-neutral-200" : i === pg.done ? "bg-neutral-500" : "bg-white/10"}`} />)}</div>
+                    <p className="mt-1.5 text-[13px] tabular-nums text-neutral-400">Step {Math.min(pg.done + 1, pg.total)} of {pg.total}{left ? ` · about ${left}m left` : ""}</p>
+                  </>
+                ) : <p className="mt-1 text-[13px] text-neutral-500">for {age(now - cur.since)}</p>}
+              </div>
+            </>
+          ) : cur && cur.state === "fail" ? (
+            <>{paras.slice(-2).map((t, i) => bubble(t, `p${i}`))}{bubble(cur.t.ended?.error || "The last turn failed", "err", "fail")}</>
+          ) : cur ? (
+            paras.length ? paras.map((t, i) => bubble(t, `p${i}`)) : bubble("Done, waiting for your reply", "d")
+          ) : null}
+          <div ref={threadEnd} />
+        </div>
+      </div>
+
+      {/* Claude's options as reply chips — tap one to make it the start of your answer. */}
+      {!typing && isQuestion && (
+        <div className="flex shrink-0 gap-1.5 overflow-x-auto px-3 pb-1.5">
+          {opts.map((o, i) => {
+            const n = i + 1, on = draft.pick === n;
+            return (
+              <button key={n} type="button" onClick={() => setDraft({ pick: on ? null : n })}
+                className={`flex h-10 max-w-[78%] shrink-0 items-center gap-2 rounded-full px-3.5 text-[14px] ${on ? "bg-[var(--sakura)]/20 text-neutral-50 ring-1 ring-[var(--sakura)]" : "bg-white/[0.08] text-neutral-200"}`}>
+                <span className={`text-[12px] tabular-nums ${on ? "text-[var(--sakura)]" : "text-neutral-500"}`}>{n}</span><span className="truncate">{o}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {sendErr && <p className="shrink-0 px-4 pb-1 text-[13px] text-rose-400">{sendErr}</p>}
+      {/* KEYBOARD INPUT — always here. Typing into a working chat queues a follow-up (the same as the
+          main screen's composer while busy). */}
+      {cur && !toolStep && (
+        <form onSubmit={(e) => { e.preventDefault(); send(); }} className="mx-3 mb-2 flex shrink-0 items-center gap-2 rounded-full bg-white/[0.08] py-1 pl-4 pr-1">
           {draft.pick && <span className="shrink-0 text-[15px] text-[var(--sakura)]">{draft.pick} —</span>}
           <input
             ref={inputRef}
@@ -531,38 +504,15 @@ export function Glance() {
             onFocus={() => setTyping(true)}
             onBlur={() => setTyping(false)}
             enterKeyHint="send"
-            placeholder={isQuestion ? (draft.pick ? "add a note, or send" : "pick one, or answer") : "Reply"}
+            placeholder={isQuestion ? (draft.pick ? "add a note, or send" : "pick one, or type") : cur.state === "work" ? "Queue a follow-up" : "Reply"}
             aria-label={isQuestion ? "Your answer" : "Your reply"}
-            className="min-w-0 flex-1 bg-transparent py-1.5 text-[15px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
+            className="min-w-0 flex-1 bg-transparent py-1.5 text-[16px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
           />
-          {/* preventDefault on pointer-down keeps the input focused through the tap, so the keyboard
-              doesn't drop (and the frame doesn't re-flow) before the click lands. */}
           <button type="submit" aria-label="Send" disabled={sending || (!draft.text.trim() && !draft.pick)} onPointerDown={(e) => e.preventDefault()}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] text-[15px] text-white disabled:opacity-40">
             {sending ? "…" : "↑"}
           </button>
         </form>
-      )}
-      {!typing && (
-        // Switching, said plainly: ‹ and › step through the chats (44px each, both thumbs reach them),
-        // the middle says where you are and opens the list. A swipe anywhere on the row also steps.
-        <div className="mt-2 flex shrink-0 touch-pan-y select-none items-center gap-1.5"
-          onPointerDown={(e) => { swipe.current = { x: e.clientX, y: e.clientY }; }}
-          onPointerUp={(e) => { const sw = swipe.current; swipe.current = null; if (sw && Math.abs(e.clientX - sw.x) > SWIPE_PX && Math.abs(e.clientX - sw.x) > Math.abs(e.clientY - sw.y)) step(e.clientX < sw.x ? 1 : -1); }}>
-          <button type="button" onClick={() => step(-1)} disabled={focus.length < 2} aria-label="Previous chat"
-            className="flex h-11 w-12 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-[20px] text-neutral-200 disabled:opacity-30">‹</button>
-          <button type="button" onClick={() => setView("list")} aria-label="All chats"
-            className="flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl bg-white/[0.04] px-2">
-            <span className="flex shrink-0 items-center gap-1.5">
-              {focus.slice(0, 7).map((c) => c.id === cur?.id
-                ? <span key={c.id} className="h-1.5 w-4 rounded-full bg-[var(--sakura)]" />
-                : <Mark key={c.id} s={c.state} />)}
-            </span>
-            <span className="shrink-0 text-[13px] tabular-nums text-neutral-400">{focus.length ? `${curIdx + 1} of ${focus.length}` : "Chats"}</span>
-          </button>
-          <button type="button" onClick={() => step(1)} disabled={focus.length < 2} aria-label="Next chat"
-            className="flex h-11 w-12 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-[20px] text-neutral-200 disabled:opacity-30">›</button>
-        </div>
       )}
     </main>
   );
