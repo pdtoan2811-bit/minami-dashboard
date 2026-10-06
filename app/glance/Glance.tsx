@@ -22,6 +22,13 @@ import { reportViewport } from "@/lib/viewport-report";
 //   bar). Switching is ‹ › at the bottom with the count between them; tap the count for the list.
 // The round-9 notes below still hold except where they mention the lens band or "no progress bars".
 //
+// Round 11 ("I can't read full"): researched against watchOS/Wear OS reading guidance, Samsung's One
+// UI cover direction and a Pinterest board (~/ecvision/pitches/minami-phone/refs/picks). Two rules:
+// the FIRST screen must answer which / what / how far with no scroll (it does), and LONG TEXT GETS ITS
+// OWN SCROLLING VIEW one tap away, never a line-clamp. Tap the card (or "Read all ›") → the reader: the
+// full reply (or the full question — the feed cuts it at 200 chars) at 16/24, ~40 chars a line, with what
+// you last said above it and Reply below. Body text is 16px everywhere (watch-reading floor).
+//
 // Round 9 ("Cover · around the lenses", pitch V2). Three rules shape everything below:
 //
 // 1. The screen is drawn AROUND its two camera lenses. They sit in the bottom-right corner, so a
@@ -104,6 +111,11 @@ function nowLine(t: Tile): string {
 /** A reply's opening, as prose: the cover has no markdown renderer, and "**It's merged**" in raw
  *  asterisks is noise on a 362px screen. */
 const plain = (t: string) => t.replace(/```[\s\S]*?```/g, " ").replace(/[*_`#>]+/g, "").replace(/^\s*[-•]\s+/gm, "").replace(/\s+/g, " ").trim();
+/** The reader's version: markdown marks off, but line breaks and list bullets kept, since a list read
+ *  as one run-on line is the thing the reader exists to fix. Code blocks become a marker; reading code on
+ *  a 362px screen is the main screen's job. */
+const readable = (t: string) => t.replace(/```[\s\S]*?```/g, "[code — open on the main screen]").replace(/\*\*|__|`/g, "")
+  .replace(/^#+\s*/gm, "").replace(/^\s*[-*]\s+/gm, "• ").replace(/[ \t]+/g, " ").trim();
 const STATE_WORD: Record<State, string> = { you: "Needs you", work: "Working", held: "Paused", fail: "Failed", done: "Done" };
 
 const folderOf = (cwd: string) => cwd.split("/").filter(Boolean).pop() || cwd;
@@ -145,7 +157,8 @@ export function Glance() {
   const [failed, setFailed] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const [confirmResume, setConfirmResume] = useState(false);
-  const [view, setView] = useState<"cover" | "list">("cover");
+  const [view, setView] = useState<"cover" | "list" | "read">("cover");
+  const [full, setFull] = useState<{ id: string; text: string; you: string; question?: string; loading: boolean } | null>(null);
   // null = "follow the chat that needs you most". Set only by a deliberate swipe or list tap, so a new
   // need arriving doesn't yank the screen out from under a half-typed answer.
   const [curId, setCurId] = useState<string | null>(null);
@@ -329,6 +342,55 @@ export function Glance() {
   // Lay out in true cover px; zoom scales it back up to fill the window (useCoverZoom).
   const frame = { zoom: k, width: `calc(100vw / ${k})`, height: `calc(100dvh / ${k})` } as const;
 
+  const openReader = () => {
+    if (!cur) return;
+    const id = cur.id;
+    setFull({ id, text: cur.t.ended?.text || "", you: "", loading: true });
+    setView("read");
+    fetch(`/api/glance/last?id=${encodeURIComponent(id)}${need ? `&need=${encodeURIComponent(need.id)}` : ""}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => setFull((f) => (f && f.id === id ? { id, text: d.text || f.text, you: d.you || "", question: d.question, loading: false } : f)))
+      .catch(() => setFull((f) => (f && f.id === id ? { ...f, loading: false } : f)));
+  };
+
+  if (view === "read" && cur && full) {
+    const paras = (full.question ? [] : (full.text || "").split(/\n{2,}/)).map(readable).filter(Boolean);
+    const canReply = isQuestion || cur.state === "done" || cur.state === "fail";
+    return (
+      <main style={frame} className="flex flex-col overflow-hidden bg-neutral-950 text-neutral-100">
+        <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
+          <button type="button" onClick={() => setView("cover")} className="flex h-10 items-center px-2 text-[15px] text-neutral-300">‹</button>
+          <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{cur.title}</span>
+        </div>
+        {/* The one place on the cover that scrolls — a reader, the way a watch reads a long message. */}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-3">
+          {full.you && <p className="mb-2 line-clamp-3 border-l-2 border-white/15 pl-2.5 text-[13px] leading-[18px] text-neutral-500">You: {plain(full.you.replace(/<[^>]+>/g, " "))}</p>}
+          {full.question ? (
+            <>
+              <p className="whitespace-pre-line text-[16px] leading-[24px]">{full.question}</p>
+              {opts.map((o, i) => (
+                <button key={i} type="button" onClick={() => { setDraft({ pick: i + 1 }); setView("cover"); }}
+                  className="mt-2 flex w-full items-start gap-3 border-t border-white/10 pt-2 text-left text-[16px] leading-[22px] text-neutral-200">
+                  <span className="w-3 pt-px text-[13px] tabular-nums text-neutral-500">{i + 1}</span><span className="min-w-0 flex-1">{o}</span>
+                </button>
+              ))}
+            </>
+          ) : paras.length ? (
+            paras.map((t, i) => <p key={i} className="mb-3 whitespace-pre-line text-[16px] leading-[24px] text-neutral-100">{t}</p>)
+          ) : (
+            <p className="text-[16px] text-neutral-500">{full.loading ? "Loading…" : "Nothing to read yet."}</p>
+          )}
+        </div>
+        {canReply && (
+          <div className="shrink-0 border-t border-white/10 px-4 py-2">
+            <button type="button" onClick={() => { setView("cover"); setTimeout(() => inputRef.current?.focus(), 50); }}
+              className="h-10 w-full rounded-full bg-white/[0.08] text-[15px] text-neutral-100">{isQuestion ? "Answer" : "Reply"}</button>
+          </div>
+        )}
+      </main>
+    );
+  }
+
   if (view === "list") {
     return (
       <main style={frame} className="flex flex-col overflow-hidden bg-neutral-950 px-4 pb-2 pt-3 text-neutral-100">
@@ -397,7 +459,10 @@ export function Glance() {
         <div className="mt-2 min-h-0 flex-1 overflow-hidden">
           {isQuestion ? (
             <>
-              <p className="line-clamp-2 text-[15px] leading-[20px] text-neutral-200">{need!.summary}</p>
+              <button type="button" onClick={openReader} className="block w-full text-left">
+                <span className="line-clamp-2 text-[16px] leading-[21px] text-neutral-100">{need!.summary}</span>
+                <span className="text-[13px] text-neutral-500">Read all ›</span>
+              </button>
               <div className="mt-1.5">
                 {opts.slice(0, MAX_OPTIONS).map((o, i) => {
                   const n = i + 1, on = draft.pick === n;
@@ -421,9 +486,13 @@ export function Glance() {
               <a href={openHref(cur.id)} className="mt-2 inline-block text-[15px] text-neutral-100">Open on main screen ›</a>
             </>
           ) : cur.state === "fail" ? (
-            <p className="line-clamp-3 text-[15px] leading-[20px] text-rose-400">{cur.t.ended?.error || "The last turn failed"}</p>
+            <p className="line-clamp-3 text-[16px] leading-[22px] text-rose-400">{cur.t.ended?.error || "The last turn failed"}</p>
           ) : cur.state === "done" ? (
-            <p className="line-clamp-4 text-[15px] leading-[20px] text-neutral-300">{cur.t.ended?.text ? plain(cur.t.ended.text) : "Done, waiting for your reply"}</p>
+            // Tap anywhere on the reply to read all of it (round 11).
+            <button type="button" onClick={openReader} className="block w-full text-left">
+              <span className="line-clamp-3 text-[16px] leading-[22px] text-neutral-200">{cur.t.ended?.text ? plain(cur.t.ended.text) : "Done, waiting for your reply"}</span>
+              <span className="mt-0.5 block text-[13px] text-neutral-500">Read all ›</span>
+            </button>
           ) : (
             // WHAT it's doing and HOW FAR — the two things the round-9 screen didn't say.
             <>

@@ -9,6 +9,10 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-06
+- **Cover screen reader** (§23, `app/glance/Glance.tsx`, `/api/glance/last`). Tap a reply or question
+  to read all of it in a scrolling view at 16/24; body text is 16px everywhere. Built from research into
+  watch and cover-screen reading. *Asked for by user: "I cant read full tho, and research on pinterest
+  and other sources to know how to design for that screen".*
 - **Cover screen round 10** (§23 🐛, `app/glance/Glance.tsx`). It now undoes the Flip's ~0.67×
   virtual-window scale-down (`zoom`), drops the lens band, says what each chat is doing and how far
   along in words, and switches with ‹ n of m ›. *Reported by user: "the UX on small zflip 7 screen
