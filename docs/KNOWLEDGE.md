@@ -32,7 +32,7 @@ recycle one.
 | [`01-transcripts.md`](knowledge/01-transcripts.md) | §1 §2 | ~2,200 | Reading `~/.claude/projects/*.jsonl` — the incremental parser, windowed history paging, the three caches, and `bin/transcript.mjs`. |
 | [`03-live-sessions.md`](knowledge/03-live-sessions.md) | §3 §4 §5 | ~8,700 | `manager.ts`: the session registry, the SDK `query()` loop, `canUseTool` as the permission gate, `resolveModel()` as the model choke point (both gates — catalog id *and* whether the SDK's bundled Claude Code can run it), the system-prompt append, subprocess lifetime, restart safety. Activity labels and the client SSE hook. Past the length the split exists to fix — split it before adding another section. |
 | [`05b-browser.md`](knowledge/05b-browser.md) | §5b | ~2,900 | The headless browser's window: state derived from tool results, the header/tabs/content layout, the console-badge post-mortem. |
-| [`05c-message-render.md`](knowledge/05c-message-render.md) | §5c | ~800 | `Markdown.tsx` and `ThoughtBlock.tsx` — one parser, two tones, and the reasoning-pass seam. |
+| [`05c-message-render.md`](knowledge/05c-message-render.md) | §5c | ~800 | `Markdown.tsx` and `ThoughtBlock.tsx` — one parser, two tones, the reasoning-pass seam, and link cards. |
 | [`05d-topics.md`](knowledge/05d-topics.md) | §5d | ~1,800 | Creating a topic: the folder picker's Recent/Browse tabs, the focus ranking behind Recent, `cwd` validation, `isTrivial`. |
 | [`05e-shell.md`](knowledge/05e-shell.md) | §5e | ~10,300 | The biggest one, and past the length this split was meant to fix — split it before adding another section. Density tiers, Embody, tab-first panes, closing tabs, the hiding panel header, the bento rail, project icons, the ask card, motion/scroll cost, `--continue` parity, the composer. |
 | [`05f-flow.md`](knowledge/05f-flow.md) | §5f §5f-bis | ~7,300 | The session journey — asks, semantic acts, evidence, open loops, the last-3-calls preview and the stack row — five revisions of what it got wrong, the `canUseTool` brake, and mid-turn message queueing. |
@@ -113,7 +113,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Browser panel | `lib/browser-view.ts` + `components/BrowserPanel.tsx` | **shipped** | derived from tool results; observer-only — see §5b |
 | Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | Recent/Browse tabs; opens on the ranked list; cwd validated — see §5d |
 | Topic ranking | `lib/topic-rank.ts` | **shipped** | depth × recency + did-you-come-back; floors out scratch folders, `/tmp` and `$HOME` — see §5d |
-| Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` | **shipped** | one parser, two tones — see §5c |
+| Message rendering | `components/Markdown.tsx` + `components/ThoughtBlock.tsx` + `components/LinkCard.tsx` | **shipped** | one parser, two tones; a link-only line becomes a card — see §5c |
 | Shell (bento · rail · composer) | `app/page.tsx` + `components/BentoRail.tsx` | **shipped** | grid collapses to a rail — see §5e |
 | Density tiers | `lib/density.ts` | **shipped** | measured roomy/snug/tight/micro; chrome folds, ⌥1–4 — see §5e |
 | Side-slot tabs | `components/PanelTabs.tsx` | **shipped** | one tab row worn by the file preview AND the browser — see §5b, §5g |

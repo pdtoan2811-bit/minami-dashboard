@@ -7,6 +7,7 @@ import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
 import { memo, useMemo, useState, type ReactNode } from "react";
 import { openLocalUrl } from "@/lib/open-local";
+import LinkCard from "./LinkCard";
 
 /* ---------------- tone ----------------
    Reasoning is a second voice, not a second-class one: it gets the SAME parser as the answer — so a
@@ -32,14 +33,23 @@ const TONE = {
 function inline(text: string, keyBase = "", tone: Tone = "chat"): ReactNode[] {
   const T = TONE[tone];
   const nodes: ReactNode[] = [];
-  const re = /(`[^`]+`|\[[^\]]+\]\([^)\s]+\)|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/g;
+  // A bare url is a link too: a pasted address used to render as inert text you had to select and
+  // copy. After code and [text](url), so neither has its url re-matched from the inside.
+  const re = /(`[^`]+`|\[[^\]]+\]\([^)\s]+\)|https?:\/\/[^\s<>"'`]+|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/g;
   let last = 0, k = 0, m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     if (m.index > last) nodes.push(text.slice(last, m.index));
     const tok = m[0];
     const key = `${keyBase}i${k++}`;
     if (tok.startsWith("`")) nodes.push(<code key={key} className={`chip-wrap rounded px-1 py-[1px] font-mono text-[0.88em] ${T.code}`}>{tok.slice(1, -1)}</code>);
-    else if (tok.startsWith("[")) {
+    else if (/^https?:\/\//.test(tok)) {
+      // Sentence punctuation after a url belongs to the sentence ("see http://x/."), and a closing
+      // paren only belongs to the url if it opened one.
+      let href = tok.replace(/[.,;:!?'"*_]+$/, "");
+      if (href.endsWith(")") && !href.includes("(")) href = href.slice(0, -1);
+      nodes.push(<a key={key} href={href} target="_blank" rel="noreferrer" onClick={(e) => { if (openLocalUrl(href)) e.preventDefault(); }} className="text-[var(--sakura)] underline decoration-[var(--sakura)]/40 underline-offset-2 [overflow-wrap:anywhere] hover:decoration-[var(--sakura)]">{href}</a>);
+      if (href.length < tok.length) nodes.push(tok.slice(href.length));
+    } else if (tok.startsWith("[")) {
       const mm = tok.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/)!;
       nodes.push(<a key={key} href={mm[2]} target="_blank" rel="noreferrer" onClick={(e) => { if (openLocalUrl(mm[2])) e.preventDefault(); }} className="text-[var(--sakura)] underline decoration-[var(--sakura)]/40 underline-offset-2 hover:decoration-[var(--sakura)]">{mm[1]}</a>);
     } else if (tok.startsWith("**") || tok.startsWith("__")) nodes.push(<strong key={key} className={`font-semibold ${T.strong}`}>{inline(tok.slice(2, -2), key, tone)}</strong>);
@@ -295,12 +305,33 @@ function renderProse(src: string, keyBase: string, tone: Tone = "chat", caret = 
       if (/^\s*\|?.+\|.+/.test(n) && /^\s*\|?[\s:-]*-[-\s:|]*\|?\s*$/.test(lines[j + 1] || "")) break;
       buf.push(n.replace(/\s+$/, ""));
     }
-    out.push(
-      <p key={`${keyBase}p${out.length}`} className={`${T.lead} [overflow-wrap:anywhere]`}>
-        {inlineLines(buf.join("\n"), `${keyBase}p${out.length}`, tone)}
-        {caret && lastIdx >= i && lastIdx < j && <Caret />}
-      </p>,
-    );
+    // A LINE that is nothing but a link becomes a card (components/LinkCard.tsx), and the paragraph
+    // around it splits there. Per line rather than per paragraph because that is how links get
+    // pasted — "here's the pitch:⏎<url>⏎and the other one" — and single newlines don't end a paragraph
+    // here (see inlineLines). Not while this block is still streaming: a half-typed url would fetch
+    // and frame every prefix of itself.
+    const streaming = caret && lastIdx >= i && lastIdx < j;
+    const soloOf = (l: string) => (tone === "chat" && !streaming
+      ? l.trim().match(/^(?:\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|<?(https?:\/\/[^\s<>]+?)>?)$/) : null);
+    let run: string[] = [];
+    const flush = (last: boolean) => {
+      if (!run.length) return;
+      const k = `${keyBase}p${out.length}`;
+      out.push(
+        <p key={k} className={`${T.lead} [overflow-wrap:anywhere]`}>
+          {inlineLines(run.join("\n"), k, tone)}
+          {last && streaming && <Caret />}
+        </p>,
+      );
+      run = [];
+    };
+    buf.forEach((l) => {
+      const solo = soloOf(l);
+      if (!solo) { run.push(l); return; }
+      flush(false);
+      out.push(<LinkCard key={`${keyBase}lk${out.length}`} url={solo[2] || solo[3]} label={solo[1]} />);
+    });
+    flush(true);
     i = j - 1;
   }
   return <div className={T.gap}>{out}</div>;

@@ -132,3 +132,48 @@ export async function setPhoneAccess(on: boolean): Promise<PhoneAccess> {
   }
   return phoneAccess();
 }
+
+// ── Is this url on THIS machine? (link cards, §5c) ────────────────────────────────────────────────
+// A link a session hands back is usually to something running here, but spelled one of two ways:
+// `localhost:3120` from the desktop, or `https://<this-mac>.ts.net:3120` once it has been exposed for
+// the phone. Both are the same page, and both are the only urls the link-meta route will fetch — the
+// answer is what keeps that route from being a general-purpose fetcher for whatever a transcript says.
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
+let serveCache: { at: number; s: ServeStatus } | null = null;
+async function cachedStatus(): Promise<ServeStatus> {
+  // 30s: a card asks once per render of a message, and a long transcript can hold a dozen of them.
+  if (serveCache && Date.now() - serveCache.at < 30_000) return serveCache.s;
+  const s = await status().catch(() => ({} as ServeStatus));
+  serveCache = { at: Date.now(), s };
+  return s;
+}
+
+export type OwnUrl = {
+  /** Where the server reads it from: loopback always, so the fetch never hairpins through tailscale.
+   *  Both families, in order — the pitch bench on :3120 answers on [::1] only, and a v4-only probe
+   *  reported it down while it served the page fine (same trap answeringHost() exists for). */
+  fetchUrls: string[];
+  /** The https tailnet address of the same page, if one is served — what a phone has to load. */
+  remoteUrl: string | null;
+};
+
+export async function ownUrl(href: string): Promise<OwnUrl | null> {
+  let u: URL;
+  try { u = new URL(href); } catch { return null; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  const rest = u.pathname + u.search;
+  if (LOOPBACK_HOSTS.has(u.hostname)) {
+    const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
+    const base = find(await cachedStatus(), port);
+    return { fetchUrls: [`http://127.0.0.1:${port}${rest}`, `http://[::1]:${port}${rest}`], remoteUrl: base ? base + rest : null };
+  }
+  if (!u.hostname.endsWith(".ts.net")) return null;
+  // A tailnet name is ours exactly when tailscale serve has an entry for it — the Web map is keyed
+  // `<our-dns-name>:<port>`, so another machine's name can never match, and no status --json needed.
+  const s = await cachedStatus();
+  const key = `${u.hostname}:${u.port || "443"}`;
+  const proxy = s.Web?.[key]?.Handlers?.["/"]?.Proxy?.replace(/\/+$/, "");
+  const pm = proxy?.match(/^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)$/);
+  if (!pm) return null;
+  return { fetchUrls: [`http://127.0.0.1:${pm[1]}${rest}`, `http://[::1]:${pm[1]}${rest}`], remoteUrl: `https://${u.host}${rest}` };
+}

@@ -117,4 +117,32 @@ Decisions that will look odd without their reasons:
 > no separator at all. *Reported by user: "thought process print also need proper typography and
 > divider of some sort to have better readability".*
 
+### Links: bare urls, and link cards (2026-10-07)
+
+**Bare urls are links.** The inline tokenizer used to know only `[text](url)`, so a pasted address
+rendered as inert text. It now matches `https?://…` after code spans and markdown links (so neither
+has its url re-matched from inside), trims trailing sentence punctuation, and keeps a `)` only if the
+url opened one.
+
+**A line that is only a link becomes a card** (`components/LinkCard.tsx`). Per line, not per
+paragraph: links get pasted as "here's the pitch:⏎url⏎and…", and single newlines don't end a paragraph
+in this renderer, so the paragraph splits around the card. Chat tone only. Never on the block that is
+still streaming, where a half-typed url would fetch and frame every prefix of itself.
+
+- **Pages on this machine** get the full card: the page's `<title>` / `og:*` from `/api/link-meta`,
+  an up/down dot, and a live thumbnail, which is the page itself in a 1280×800 iframe scaled to the card's
+  width. It is not a screenshot, so it is never stale and nothing runs a browser. The iframe mounts only near
+  the viewport, is `pointer-events:none`, and is sandboxed without `allow-top-navigation`.
+- **"This machine"** is `lib/tailnet.ts` `ownUrl()`: a loopback host, or a `*.ts.net` host that
+  `tailscale serve` has an entry for. That entry also gives the loopback port to read from. Everything else
+  answers `own:false` **without a request leaving the box**. That check keeps the route from becoming
+  a fetcher for whatever url a transcript contains.
+- On a phone a loopback url's thumbnail loads its tailnet address (`remote`); an unexposed port gets
+  no thumbnail. A tap on an own-machine card opens the in-app preview (§23), not a Chrome tab.
+- Other urls get a compact host + path card and no fetch.
+
+> 🐛 **Down when it was up.** The first `ownUrl()` read only `127.0.0.1:<port>`; the pitch bench on
+> :3120 listens on `[::1]` alone, so its card said "not responding" while the page served fine. It
+> now tries both families, the same trap `answeringHost()` exists for.
+
 ---
