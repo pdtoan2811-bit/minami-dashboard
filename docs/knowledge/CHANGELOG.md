@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-06
+- **Cover screen is a thread** (§23, `app/glance/Glance.tsx`). Faces to switch chats, the conversation
+  as bubbles with the full reply, a live progress bubble, options as reply chips, and a text field that
+  is always there. *Asked for by user: "V2 with keyboard input" (cover-reading pitch, round 12).*
 - **Cover screen reader** (§23, `app/glance/Glance.tsx`, `/api/glance/last`). Tap a reply or question
   to read all of it in a scrolling view at 16/24; body text is 16px everywhere. Built from research into
   watch and cover-screen reading. *Asked for by user: "I cant read full tho, and research on pinterest
