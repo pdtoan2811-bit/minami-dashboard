@@ -44,7 +44,13 @@ export const CHEAP_MODEL = process.env.MINAMI_CHEAP_MODEL || "claude-haiku-4-5";
 // DEFAULT, not an override (measured: with it set to sonnet, `scribe` still ran on its declared
 // haiku) — so declared roles keep their tier and only the undeclared fall here instead of to the pin.
 // Off the pin on purpose, like CHEAP_MODEL, and excluded from the drift check for the same reason.
-export const BLACKSMITH_WORKER_MODEL = process.env.MINAMI_BLACKSMITH_WORKER_MODEL || "claude-sonnet-5";
+export const BLACKSMITH_WORKER_MODEL = process.env.MINAMI_BLACKSMITH_WORKER_MODEL || "claude-sonnet-5-5";
+
+// The same default for a pane with the fan-out pill on. FANOUT_PROMPT tells the session to spawn
+// parallel agents without asking, and every one it spawns as `general-purpose` inherited the Opus pin —
+// the October audit (§16) measured subagents at ~⅓ of all tokens, mostly Opus. Falls through to the
+// Blacksmith worker so the two "undeclared subagent" tiers move together unless split on purpose.
+export const FANOUT_WORKER_MODEL = process.env.MINAMI_FANOUT_WORKER_MODEL || BLACKSMITH_WORKER_MODEL;
 
 // The picker menu. Defined in lib/model-catalog.ts and re-exported here so this file stays the one
 // place code looks for "which models exist" — the catalog is a separate module only because THIS one

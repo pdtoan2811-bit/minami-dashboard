@@ -8,7 +8,12 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-07
+- **Link cards** (§5c, `components/LinkCard.tsx`, `app/api/link-meta`, `lib/tailnet.ts` `ownUrl`). Bare urls are now links. A line that is only a url renders as a card. Pages on this machine (loopback or our `*.ts.net`) show their title, an up/down dot and a live iframe thumbnail. Other urls get a compact card and no fetch.
+
 ### 2026-10-06
+- **Ask card leaves room for the chat** (§3, `components/AskCard.tsx`, `app/page.tsx`). Capped at 60% of the pane; "▾ read the chat" folds it to a one-line bar with picks kept; the transcript re-pins to its bottom on resize.
+- **Subagents on Sonnet 5.5 in fan-out and Blacksmith** (§3, §20, `lib/model-pins.ts`, `lib/agent/manager.ts`). `BLACKSMITH_WORKER_MODEL` → `claude-sonnet-5-5`; new `FANOUT_WORKER_MODEL` (env `MINAMI_FANOUT_WORKER_MODEL`, falls through to the Blacksmith one) set as `CLAUDE_CODE_SUBAGENT_MODEL` when the fan-out pill is on. Fan-out agents previously inherited Opus.
 - **Sonnet 5.5 selectable** (§3, `lib/model-catalog.ts`, `lib/routing.ts`, `package.json`). Agent SDK 0.3.280 → 0.3.291 (CLI 2.1.291); `claude-sonnet-5-5` added with `minCli 2.1.284`, priced and tiered ahead of Sonnet 5; routing rule for drafting now names Sonnet 5.5.
 - **Token audit: the window, not the prefix** (§16). Re-measured a month of usage: compaction now fires (130/month), the 85% of reads sit in 200k–600k calls, subagents ~⅓ of tokens and mostly Opus. Applied: `skillOverrides` (editorial-glass off, 8 unused skills name-only) and an output-hygiene block in `~/.claude/CLAUDE.md`. Pending Thomas: compact threshold, subagent default model. Retracted §16's "auto-compaction is inert".
 - **Transcript poll: slim + delta** (§1, `lib/transcript-slim.ts`, `lib/session-fetch.ts`,

@@ -255,7 +255,7 @@ dashboard that is the Opus pin. The model chose the tier by hand, and every time
 dashboard's default answered.
 
 Three fixes. **(1)** `BLACKSMITH_WORKER_MODEL` (`lib/model-pins.ts`, env `MINAMI_BLACKSMITH_WORKER_
-MODEL`, default `claude-sonnet-5`) is handed to Blacksmith sessions as `CLAUDE_CODE_SUBAGENT_MODEL`.
+MODEL`, default `claude-sonnet-5-5` since 2026-10-06, was `claude-sonnet-5`) is handed to Blacksmith sessions as `CLAUDE_CODE_SUBAGENT_MODEL`.
 MEASURED to be a *default, not an override*: with it set to sonnet, `general-purpose` ran on sonnet
 and `scribe` still ran on its declared haiku — so `planner: opus` keeps its tier. (`_FORCE` is the
 separate bool that would clobber.) **(2)** The dispatch contract now says the mechanics: `Agent(

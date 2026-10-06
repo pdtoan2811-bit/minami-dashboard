@@ -68,6 +68,15 @@ parks a promise in `s.pending` and blocks.
 > with a mouse) with an explicit per-option toggle that overrides in both directions, so several
 > previews can be compared side by side without committing to any of them.
 
+> 🐛 **The card ate the conversation it was asking about (fixed 2026-10-06).** `min-h-0` let the card
+> shrink, but nothing stopped it *growing*: it sits under the transcript with `flex-basis:auto`, the
+> transcript has `flex-basis:0`, so a four-option question took every pixel and left the log at zero
+> height — no way to scroll back to the context the question came from. Now the card is capped at
+> `max-h-[60%]` of the pane, its header has **▾ read the chat**, which folds it to one line (the question
+> and **Answer ▴**; picks are kept because the fold is state inside AskCard, not a remount), and the pane
+> re-pins the transcript to its bottom on resize (a `ResizeObserver` in `app/page.tsx`), since the card
+> mounting changes the log's height without changing any of the stick-to-bottom effect's deps.
+
 **Permission modes are enforced here, in `canUseTool` — not by the SDK.** Each session carries its own
 `s.mode`, and the hook decides before it ever prompts: `bypassPermissions` allows everything,
 `acceptEdits` allows the edit tools (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`), everything else asks.
@@ -375,7 +384,10 @@ append at all. Now the append is unconditional and only its pieces are gated:
   subagents for divisible work and proceed — the user pre-approved by enabling the mode." The default
   is **free**: no instruction, so Claude spawns agents only when it judges the work divisible. It was
   on by default from 2026-09-02; reverted because the standing "fan out, don't ask" turned small serial
-  jobs into fleets. The pill's ON state is now the marked (amber) one. Fallback for panes that never
+  jobs into fleets. With the pill on, the subprocess also gets `CLAUDE_CODE_SUBAGENT_MODEL =
+  FANOUT_WORKER_MODEL` (default Sonnet 5.5, 2026-10-06) — before that every fanned-out
+  `general-purpose` agent inherited the Opus pin. A default, not an override: an agent type or call
+  that names a model keeps it. Blacksmith's own worker model wins when both apply. The pill's ON state is now the marked (amber) one. Fallback for panes that never
   chose: `MINAMI_DASHBOARD_FANOUT` (unset = free, 1 = on). The browser's global default moved to a new
   key, `chatFanoutDefault`, because the old `chatFanout` was stored on click and a stored `true` would
   have outlived the change. The fuller procedure lives in the user-level `fanout`

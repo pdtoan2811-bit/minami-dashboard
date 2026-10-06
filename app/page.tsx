@@ -2884,6 +2884,17 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     // the scroll height without changing any of the other four — queue a message while pinned to the
     // bottom and it would otherwise land just below the fold, which reads as it not having sent.
   }, [visible.length, source[source.length - 1]?.text.length, agent.pending, agent.busy, agent.queued.length]);
+  // The transcript also changes height without changing content: the AskUserQuestion card mounting,
+  // folding or unfolding, the composer growing a line. None of those are in the deps above, so a pane
+  // following the reply was left looking at whatever sat above the new bottom edge — usually the very
+  // message the question was about. Re-pin on resize; a reader who scrolled up is left where they are.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => { if (pinnedRef.current) el.scrollTop = el.scrollHeight; });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   // Focus mode hides the other panes with `display:none` rather than unmounting them (so their streams
   // survive) — but a display:none box has no layout, and the browser does NOT restore its scrollTop
   // when it comes back. Left alone, every trip into a focused pane and out again would dump the other
