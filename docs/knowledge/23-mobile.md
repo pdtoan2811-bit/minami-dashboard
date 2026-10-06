@@ -326,6 +326,19 @@ comment pop-out, which iframes the localhost URL, is also not covered.
 >   screen ›". The reason below still holds: 360px can't show enough of a command to approve it safely.
 > - Pause/Resume all moved into the list frame as a quiet text button.
 
+> 🐛 **2026-10-06 — the cover never showed `/glance` on the real Flip ("look nothing like you
+> pitched").** `useCoverScreen()` also required `window.screen` to be ≤420×480. On the device, inside
+> Good Lock's launcher, it apparently isn't, so the redirect never fired and the cover got the phone
+> layout. Now the test is shape only (`pointer: coarse`, ≤560×600, aspect 4:5–5:4). The Flip main
+> screen with the keyboard up is still a ≥1.35 portrait strip, and a laptop window isn't coarse. Checked
+> in Playwright: cover 360×400 with `screen` = main → /glance; 474×524 → /glance; Flip main, Flip main
+> + keyboard (412×560), N5 unfolded and a 400×450 laptop window → stay on /. The redirect now adds
+> `?auto=1`, so `/glance` goes back to `/` when you unfold, but not when you opened it on purpose.
+> A first try of that check caused a redirect LOOP: during hydration `useSyncExternalStore` returns its
+> server value (false), so `/glance` bounced to `/` at once. It now asks `matchMedia` directly.
+> `lib/viewport-report.ts` → `/api/viewport` → `~/.minami/viewports.jsonl` records each device's real
+> sizes, so the next tuning reads numbers instead of spec sheets.
+
 **The first version (2026-10-05), for the record:**
 
 The Flip 7's Flex Window (~360×400 CSS px, read at arm's length) gave the full board a "micro" pane

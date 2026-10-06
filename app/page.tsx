@@ -46,6 +46,7 @@ import { Inbox, type InboxLive } from "@/components/Inbox";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { useCoverScreen } from "@/lib/use-cover";
+import { reportViewport } from "@/lib/viewport-report";
 import { usePushPresence, usePushRegistration } from "@/lib/push-client";
 import { deriveBrowserState, isBrowserTool, browserArg, browserVerb, hostOf, type BrowserState } from "@/lib/browser-view";
 import { loadTechIcons } from "@/lib/tech-icons";
@@ -1188,7 +1189,10 @@ export default function BentoHome() {
   // On the Flip's cover screen (Flex Window) the app opens as the glance view: counts, what needs you,
   // Pause all — a transcript at 360×400 held at arm's length is not readable (app/glance, §23).
   const cover = useCoverScreen();
-  useEffect(() => { if (cover) location.replace("/glance"); }, [cover]);
+  // `?auto` marks the trip as ours, so /glance sends you back when the phone is unfolded — and only then:
+  // a /glance opened on purpose (a bookmark, a test on the Mac) stays put.
+  useEffect(() => { if (cover) location.replace("/glance?auto=1"); }, [cover]);
+  useEffect(() => { reportViewport("/"); }, []);
   useBackLayer(!!proj, closePanel);
   useBackLayer(chatSheet, () => setChatSheet(false));
   useBackLayer(!!flowFor, () => setFlowFor(null));

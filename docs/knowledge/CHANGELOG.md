@@ -9,6 +9,10 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-06
+- **Fix: the Flip cover never opened `/glance`** (§23 🐛, `lib/use-cover.ts`). The screen-size
+  condition never held on the device. Detection is now by shape, the `?auto` round-trip returns to the
+  board on unfold, and each device's real sizes are logged to `~/.minami/viewports.jsonl`.
+  *Reported by user: "im on zflip 7 small screen - look nothing like you pitched".*
 - **Fix: Metrics/Settings bounced back to the board** whenever a chat panel was open (§23 🐛,
   `lib/use-back.ts`). Back-layer cleanup rewound history during the page change. *Reported by user:
   "when i click on them, it flashes but show nothing new, still stay in bento".*
