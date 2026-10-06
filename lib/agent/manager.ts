@@ -28,6 +28,7 @@ import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
 import { contextWindowFor, isSelectableModel, isPremiumModel, meetsMinCli, SELECTABLE_MODELS } from "../model-catalog";
 import { sdkClaudeVersion } from "../runtime-version";
 import { cachedRepoState, repoBriefing, repoNotice } from "../repo-state";
+import { closedReadyBlocks } from "../preview-block";
 import { progressOf, type PlanStatus, type PlanStep, type TaskProgress } from "../task-progress";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
@@ -91,7 +92,9 @@ const PREVIEW_PROMPT = `End every reply whose work produced something viewable �
 [{"kind":"url","target":"http://localhost:3000","label":"the dashboard"},{"kind":"file","target":"/absolute/path/to/file.md","label":"the note"},{"kind":"cmd","target":"npm run kb","label":"open the KB"}]
 \`\`\`
 
-kind "url" = reachable from THIS machine's browser right now (verify the server is actually up before claiming it); "file" = absolute path to a file worth opening; "cmd" = a command the user runs to see it. 1-4 entries, labels under 5 words. A running localhost URL is the preview that matters most: whenever the work can be seen in a local server — a page changed, an app running, a dev server started — put that url FIRST, even if files were also written. Omit the block entirely when the turn produced nothing viewable (a question answered, a config change with nothing to look at) — an empty or speculative block is worse than none.`;
+kind "url" = reachable from THIS machine's browser right now (verify the server is actually up before claiming it); "file" = absolute path to a file worth opening; "cmd" = a command the user runs to see it. 1-4 entries, labels under 5 words. A running localhost URL is the preview that matters most: whenever the work can be seen in a local server — a page changed, an app running, a dev server started — put that url FIRST, even if files were also written. Omit the block entirely when the turn produced nothing viewable (a question answered, a config change with nothing to look at) — an empty or speculative block is worse than none.
+
+When something becomes viewable BEFORE the turn's work is finished — a page renders, a draft is proposed, pitch versions are on screen — write a fenced \`minami-preview-ready\` block right then, on its own lines, with the same JSON array, and carry on working; the user is notified that they can look now. Use it as many times as there are such moments. The final \`minami-preview\` block still ends the turn.`;
 
 // Fan-out: propose parallel subagents for divisible work, and default to PROCEEDING — the whole
 // reason this is a mode is that "shall I fan out?" as a question costs a round-trip to a user who
@@ -1114,6 +1117,14 @@ function handleMessage(s: Session, m: any) {
         s.partial += ev.delta.text;
         if (s.phase !== "responding") touch(s, "responding");
         broadcast(s, { t: "delta", text: ev.delta.text });
+        // "Preview ready, mid-turn" (§24): a ```minami-preview-ready block just CLOSED → tell the
+        // notifier. Only a delta carrying a backtick can close a fence, so the re-scan of `partial`
+        // runs a handful of times per message, not per token. Every closed block is handed over each
+        // time; the notifier dedupes by content hash, which also covers a block split across messages
+        // never being re-announced. Top-level only — a subagent's prose is not the reply.
+        if (!m.parent_tool_use_id && s.sessionId && ev.delta.text.includes("`")) {
+          for (const block of closedReadyBlocks(s.partial)) liveEvents.emit("previewReady", { sessionId: s.sessionId, cwd: s.cwd, block });
+        }
       }
       // EARLIEST possible tool signal: the block opens with the tool's id and name, seconds before
       // the enclosing `assistant` message completes. Register it now (arguments haven't streamed yet,

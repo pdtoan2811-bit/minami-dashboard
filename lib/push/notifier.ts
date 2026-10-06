@@ -4,6 +4,7 @@
 // lib/push/server.ts wires it to the real ones.
 import crypto from "node:crypto";
 import type { Need } from "@/lib/agent/manager";
+import type { Preview } from "@/lib/preview-block";
 
 /** What the service worker receives (public/sw.js is the reader — keep the two in step). */
 export type PushPayload =
@@ -33,6 +34,7 @@ export const PRESENCE_MS = 45_000;         // client pings every 30s while visib
 export const FINISHED_MIN_MS = 60_000;     // a turn shorter than this was watched, or not worth a buzz
 export const NONCE_MAX_MS = 15 * 60_000;
 export const SUMMARY_TAG = "minami-summary";
+export const READY_SEEN_MAX = 64;          // per chat: ready-block keys remembered for "already announced"
 
 export function createNotifier(d: Deps) {
   const headsUpAt = new Map<string, number>();
@@ -43,6 +45,9 @@ export function createNotifier(d: Deps) {
   const nonces = new Map<string, Binding>();
   let burst: { sid: string; at: number }[] = [];
   let summary: Set<string> | null = null;
+  const readySeen = new Map<string, Set<string>>(); // sessionId → hashes of ready-blocks already announced
+  const readyHeadsUpAt = new Map<string, number>();
+  let readyBurst: { sid: string; at: number }[] = [];
 
   const present = (sid: string) => d.now() - (presence.get(sid) ?? 0) < PRESENCE_MS;
 
@@ -126,6 +131,43 @@ export function createNotifier(d: Deps) {
     if (devs.length === d.devices().length) { notified.delete(sid); dropNonces(sid); }
   }
 
+  /** A ```minami-preview-ready block closed mid-turn (§24, §5c): the work is viewable NOW, minutes
+   *  before the turn ends. Measured before this existed: across 150 preview turns, nothing reached the
+   *  phone until the turn finished (median 13-15 min), though the page was often up long before.
+   *
+   *  Once per block, by content hash: the manager re-scans the streaming message on every delta that
+   *  could close a fence and hands over every closed block it sees, so dedupe lives HERE, where it can
+   *  be tested, rather than in a counter there that every partial-reset path would have to keep right.
+   *  Remembered even when nothing is sent (present, or a need on screen) — a block seen while watched
+   *  was seen, and must not buzz later when the same message streams on. */
+  function onPreviewReady(sid: string, cwd: string, block: { key: string; previews: Preview[] }) {
+    if (!block.previews.length) return;
+    const h = crypto.createHash("sha1").update(block.key).digest("base64url");
+    let seen = readySeen.get(sid);
+    if (!seen) readySeen.set(sid, (seen = new Set()));
+    if (seen.has(h)) return;
+    seen.add(h);
+    if (seen.size > READY_SEEN_MAX) seen.delete(seen.values().next().value as string); // oldest first
+    if (!d.devices().length || present(sid)) return; // being watched: the chips are on screen already
+    // A need for this chat is on the phone. It is the louder truth (the turn is BLOCKED), and the tag
+    // is shared, so a ready notice would overwrite its answer buttons. Opening the chat shows the chips.
+    if (notified.has(sid) || deferred.has(sid)) return;
+    const now = d.now();
+    const p = block.previews.find((x) => x.kind === "url") ?? block.previews[0];
+    // Heads-up at most once per HEADS_UP_GAP_MS per chat, counting a need's heads-up too; quiet while
+    // a need burst is collapsed into the summary, and a ready burst of its own collapses the same way.
+    readyBurst = readyBurst.filter((b) => now - b.at < BURST_WINDOW_MS && b.sid !== sid);
+    readyBurst.push({ sid, at: now });
+    const last = Math.max(headsUpAt.get(sid) ?? -Infinity, readyHeadsUpAt.get(sid) ?? -Infinity);
+    const needBurst = burst.filter((b) => now - b.at < BURST_WINDOW_MS).length > BURST_MAX;
+    const loud = now - last >= HEADS_UP_GAP_MS && !summary && !needBurst && readyBurst.length <= BURST_MAX;
+    if (loud) readyHeadsUpAt.set(sid, now);
+    // Tag = sessionId, like every per-chat notice: the "finished" one replaces this when the turn ends,
+    // so one chat never stacks two cards. Tap opens the chat, where the ready row sits in the reply.
+    for (const dev of d.devices()) d.send(dev, { t: "show", tag: sid, title: `Preview ready — ${p.label}`.slice(0, 80), body: `${d.label(sid, cwd)}\n${p.target}`,
+      silent: !loud, url: `/?open=${encodeURIComponent(sid)}`, sessionId: sid, actions: [], nonces: {}, ts: now }, { urgency: loud ? "high" : "normal", ttl: 1800, topic: sid });
+  }
+
   /** Reconcile against the live feed. Polling rather than a "resolved" event from the manager because
    *  a pending prompt is settled in six places there (pane answer, pane decision, hold timeout, Stop,
    *  session end, close), and missing one would strand a notification with live-looking buttons. */
@@ -150,7 +192,7 @@ export function createNotifier(d: Deps) {
   }
 
   return {
-    onNeed, onEnded, tick,
+    onNeed, onEnded, onPreviewReady, tick,
     busy: () => notified.size > 0 || deferred.size > 0 || !!summary,
     markPresence(sid: string, gone?: boolean) {
       if (gone) presence.delete(sid); else presence.set(sid, d.now());
