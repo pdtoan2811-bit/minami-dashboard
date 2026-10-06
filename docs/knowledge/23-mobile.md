@@ -326,6 +326,16 @@ comment pop-out, which iframes the localhost URL, is also not covered.
 >   screen ›". The reason below still holds: 360px can't show enough of a command to approve it safely.
 > - Pause/Resume all moved into the list frame as a quiet text button.
 
+> **2026-10-06, round 11: the reader** ("I can't read full"). Research (watchOS/Wear OS reading
+> guidance, Samsung's One UI cover direction, and a Pinterest board in
+> `~/ecvision/pitches/minami-phone/refs/picks`) agreed on two rules. The first screen must answer which
+> / what / how far with no scroll. Long text gets its OWN scrolling view one tap away and is never
+> line-clamped. Tapping the reply or question (or "Read all ›") opens the reader: the full latest reply
+> from `/api/glance/last` (the feed only carries 400 chars, and the transcript route would ship ~160 KB
+> to read one message), or the question's full wording (`pendingFor`, since `need.summary` is cut at
+> 200), at 16/24, about 40 characters a line, with your last message above it and Reply/Answer below.
+> Body text on the cover is 16px everywhere, the watch-reading floor.
+
 > 🐛 **2026-10-06 — on the real Flip the cover was unreadable, with a bottom row you had to scroll
 > to** ("confusing, can't read what's happening, progress and switch chat"). Measured on the device
 > (`~/.minami/viewports.jsonl`): the cover gives the app a **541×473 CSS window on a 362×400 screen**
