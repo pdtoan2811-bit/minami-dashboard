@@ -20,6 +20,7 @@ import {
   TAG, INTENTS, composeMessage, composeErrorsOnly, circled, installSnippet, isPreviewUrl,
   type Pin, type Intent, type ScriptMsg, type WrapperMsg, type AppError, type ElementInfo,
 } from "@/lib/preview-comments";
+import { isLoopbackUrl, tailnetUrl, viewedRemotely } from "@/lib/open-local";
 
 type Tool = "pin" | "rect" | "move" | "page" | null;
 type LiveSession = { phase: string; label: string; busy: boolean; cwd: string };
@@ -50,6 +51,24 @@ export default function PreviewPopOut() {
   });
   const [srcDraft, setSrcDraft] = useState(src);
   const [appUrl, setAppUrl] = useState(src);
+  // Read from the phone, `localhost:3120` is the phone's own localhost: swap in this box's tailnet
+  // address for that port (§23) before framing it. The src itself is swapped, not just the frame's —
+  // the probe posts to src's origin, and a stale targetOrigin fails silently.
+  const [tailnetErr, setTailnetErr] = useState<string | null>(null);
+  // After mount only: the server can't know which device reads the page, and a hydration mismatch
+  // would cost more than one frame of the old src.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const remoteLoopback = mounted && !!src && viewedRemotely() && isLoopbackUrl(src);
+  useEffect(() => {
+    if (!remoteLoopback) return;
+    let live = true;
+    setTailnetErr(null);
+    tailnetUrl(src)
+      .then((u) => { if (live) { setSrc(u); setSrcDraft(u); setAppUrl(u); setIframeKey((k) => k + 1); } })
+      .catch((e: Error) => live && setTailnetErr(e.message));
+    return () => { live = false; };
+  }, [src, remoteLoopback]);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -593,7 +612,9 @@ export default function PreviewPopOut() {
   return (
     <main className="flex h-dvh flex-col overflow-hidden bg-neutral-950 text-neutral-100">
       {/* ── toolbar ── */}
-      <div className="flex h-11 shrink-0 items-center gap-1 border-b border-white/10 bg-neutral-900/80 px-2 text-[12px]">
+      {/* Scrolls sideways on a phone rather than crushing the address bar to nothing. */}
+      <div className="flex h-11 shrink-0 items-center gap-1 overflow-x-auto border-b border-white/10 bg-neutral-900/80 px-2 text-[12px] [&>*]:shrink-0 [&>form]:min-w-[180px] [&>form]:shrink">
+
         <IconBtn title={histState.back ? "Back" : "Nothing to go back to yet"} disabled={!histState.back} onClick={() => nav(-1)}><ArrowLeft size={14} /></IconBtn>
         <IconBtn title={histState.fwd ? "Forward" : "Nothing forward"} disabled={!histState.fwd} onClick={() => nav(1)}><ArrowRight size={14} /></IconBtn>
         <IconBtn title="Reload this page" onClick={() => nav(0)}><RotateCw size={14} /></IconBtn>
@@ -638,7 +659,11 @@ export default function PreviewPopOut() {
 
       {/* ── stage ── */}
       <div ref={stageRef} className="relative min-h-0 flex-1 bg-neutral-900">
-        {src ? (
+        {remoteLoopback ? (
+          <div className="flex h-full items-center justify-center p-6 text-center text-[13px] text-neutral-500">
+            {tailnetErr ? `Couldn't open ${src} from this device — ${tailnetErr}` : `Finding ${src.replace(/^https?:\/\//, "")} on the tailnet…`}
+          </div>
+        ) : src ? (
           <iframe
             key={iframeKey} ref={iframeRef} src={src} title="preview"
             className="h-full w-full border-0 bg-white"
@@ -719,6 +744,10 @@ export default function PreviewPopOut() {
         </span>
         {agent.queued.length > 0 && <span className="text-neutral-500">{agent.queued.length} queued</span>}
         <button type="button" onClick={() => { if (window.opener && !window.opener.closed) window.opener.focus(); else window.open("/", "_blank"); }} className="text-neutral-500 hover:text-neutral-200">open pane →</button>
+        {/* On a phone the toolbar's Send is a sideways swipe away; the thumb's copy lives here. */}
+        <button type="button" onClick={sendAll} disabled={!open.length || sending}
+          className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-[var(--sakura)] px-2.5 font-medium text-black disabled:opacity-40 md:hidden"
+        >{sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Send {open.length ? open.length : ""}</button>
 
         {switcher && (
           <>

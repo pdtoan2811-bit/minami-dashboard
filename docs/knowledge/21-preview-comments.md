@@ -62,6 +62,15 @@ and no HTML rewriting: Next.js dev servers with HMR websockets do not survive be
 the apps being previewed are Thomas's own, so one line in a root layout is cheaper than a proxy
 that is wrong on Tuesdays.
 
+**From the phone (2026-10-06).** Read over the tailnet, every check above said "loopback" and the
+phone has none: the pop-out framed `localhost:3120` (the phone's own), the script refused a
+`connect` from `https://<mac>.ts.net`, and an `http://localhost:3000/inspect.js` tag cannot load
+into an https page at all. Now the pop-out swaps a loopback src for its tailnet address via §23's
+`tailnetUrl` *before* framing (the src itself, because the probe targets src's origin), the URL
+gate and the script both also accept the page's own host, and the toolbar scrolls sideways. Apps
+that want phone comments should load the script same-origin (the pitch bench proxies
+`/inspect.js` to :3000) — a hard-coded `localhost:3000` src still works on the box only.
+
 **The script is a broadcaster, not a UI.** It draws nothing but the hover highlight and the pin
 markers the wrapper asks for; all toolbar/state lives in the wrapper so an app reload (HMR,
 navigation, Claude's fix landing) cannot wipe it. It announces itself (`hello` with URL, title,
