@@ -1,0 +1,112 @@
+{
+  "label": "baseline (live :3000, before)",
+  "at": "2026-10-06T15:36:23.890Z",
+  "base": "http://localhost:3000",
+  "rows": [
+    {
+      "id": "44c2d454",
+      "title": "Deploy minami-dashboard V2 cover",
+      "turns": 37,
+      "fullBytes": 70860,
+      "fullMs": 3.3,
+      "slimBytes": 70860,
+      "idlePollBytes": 70860,
+      "idlePollMs": 26.9
+    },
+    {
+      "id": "d1bbf98e",
+      "title": "Build and ship touchpoint CMS",
+      "turns": 400,
+      "fullBytes": 4834184,
+      "fullMs": 18.4,
+      "slimBytes": 4834184,
+      "idlePollBytes": 4834184,
+      "idlePollMs": 16.8
+    },
+    {
+      "id": "2f7e2eb4",
+      "title": "Polish day-three card styling",
+      "turns": 107,
+      "fullBytes": 188265,
+      "fullMs": 5,
+      "slimBytes": 188265,
+      "idlePollBytes": 188265,
+      "idlePollMs": 1.6
+    },
+    {
+      "id": "dacca857",
+      "title": "Process bench run setup instruction",
+      "turns": 40,
+      "fullBytes": 57971,
+      "fullMs": 0.9,
+      "slimBytes": 57971,
+      "idlePollBytes": 57971,
+      "idlePollMs": 0.9
+    },
+    {
+      "id": "218cf72d",
+      "title": "Process bench run setup instruction",
+      "turns": 32,
+      "fullBytes": 227864,
+      "fullMs": 1.2,
+      "slimBytes": 227864,
+      "idlePollBytes": 227864,
+      "idlePollMs": 1.1
+    },
+    {
+      "id": "00b023e2",
+      "title": "Setup isolated test environment",
+      "turns": 21,
+      "fullBytes": 235372,
+      "fullMs": 1.2,
+      "slimBytes": 235372,
+      "idlePollBytes": 235372,
+      "idlePollMs": 1.2
+    },
+    {
+      "id": "b24fb2f2",
+      "title": "Add CSS spacing to title element",
+      "turns": 54,
+      "fullBytes": 862712,
+      "fullMs": 2.9,
+      "slimBytes": 862712,
+      "idlePollBytes": 862712,
+      "idlePollMs": 2.7
+    },
+    {
+      "id": "47c6eb1c",
+      "title": "Show live touchpoint fix preview",
+      "turns": 72,
+      "fullBytes": 1738559,
+      "fullMs": 5.3,
+      "slimBytes": 1738559,
+      "idlePollBytes": 1738559,
+      "idlePollMs": 5.3
+    },
+    {
+      "id": "dae0d31e",
+      "title": "Preview offer.receipt touchpoint studio",
+      "turns": 54,
+      "fullBytes": 1068070,
+      "fullMs": 19.9,
+      "slimBytes": 1068070,
+      "idlePollBytes": 1068070,
+      "idlePollMs": 4.2
+    },
+    {
+      "id": "02696070",
+      "title": "Provide brief acknowledgment response",
+      "turns": 2,
+      "fullBytes": 665,
+      "fullMs": 2.1,
+      "slimBytes": 665,
+      "idlePollBytes": 665,
+      "idlePollMs": 0.6
+    }
+  ],
+  "totals": {
+    "fullBytes": 9284522,
+    "slimBytes": 9284522,
+    "idlePollBytes": 9284522
+  }
+}

@@ -14,7 +14,7 @@ import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Maximize2, Minus, Plus, X } from "lucide-react";
 import type { Shot } from "@/lib/browser-view";
 
-export type LightboxShot = Pick<Shot, "mediaType" | "data" | "file" | "url" | "title" | "action"> & { at?: number };
+export type LightboxShot = Pick<Shot, "mediaType" | "data" | "src" | "file" | "url" | "title" | "action"> & { at?: number };
 
 export const fileSrc = (file: string, cwd: string) =>
   `/api/agent/browser/file?cwd=${encodeURIComponent(cwd)}&file=${encodeURIComponent(file)}`;
@@ -35,7 +35,8 @@ export const fileSrc = (file: string, cwd: string) =>
  */
 export function shotSrc(shot: LightboxShot, cwd?: string, preferFile = true): string | null {
   const file = shot.file && cwd ? fileSrc(shot.file, cwd) : null;
-  const inline = shot.data ? `data:${shot.mediaType};base64,${shot.data}` : null;
+  // `src` = a slim transcript's on-demand URL for the same bytes (lib/transcript-slim.ts).
+  const inline = shot.data ? `data:${shot.mediaType};base64,${shot.data}` : shot.src || null;
   return preferFile ? file || inline : inline || file;
 }
 
@@ -84,7 +85,7 @@ export default function BrowserLightbox({ shots, index, cwd, onIndex, onClose }:
   }, [step, onClose]);
 
   if (!shot || !mounted) return null;
-  const src = fileFailed && shot.data ? `data:${shot.mediaType};base64,${shot.data}` : shotSrc(shot, cwd);
+  const src = fileFailed && (shot.data || shot.src) ? (shot.data ? `data:${shot.mediaType};base64,${shot.data}` : shot.src!) : shotSrc(shot, cwd);
   const scale = ZOOMS[zoom];
   const zoomed = zoom > 0;
 

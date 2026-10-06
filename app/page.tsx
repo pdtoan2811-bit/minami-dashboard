@@ -40,6 +40,7 @@ import { splitPreviewSegments, isLocalUrl, type Preview } from "@/lib/preview-bl
 import { openLocalUrl, PREVIEW_EVENT } from "@/lib/open-local";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { FocusDock, FocusSheet } from "@/components/Focus";
+import { imageSrc } from "@/lib/agent/labels";
 import { useFocus } from "@/lib/use-focus";
 import { PhoneAccess } from "@/components/PhoneAccess";
 import { Inbox, type InboxLive } from "@/components/Inbox";
@@ -2452,7 +2453,7 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
                             <button key={k} onClick={() => onOpenShot(at >= 0 ? at : shots.length - 1)}
                               disabled={!shots.length} title="Open full size">
                               {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={`data:${img.mediaType};base64,${img.data}`} alt="" className="h-24 rounded border border-white/10 object-cover transition-opacity hover:opacity-80" />
+                              <img src={imageSrc(img) || undefined} loading="lazy" alt="" className="h-24 rounded border border-white/10 object-cover transition-opacity hover:opacity-80" />
                             </button>
                           );
                         })}
@@ -2724,7 +2725,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   const loadOlder = () => {
     if (loadingOlder) return;
     setLoadingOlder(true);
-    fetch(`/api/bento/session/${sessionId}?before=${earliestStart}`)
+    fetch(`/api/bento/session/${sessionId}?slim=1&before=${earliestStart}`)
       .then((r) => r.json())
       .then((d: Detail) => {
         const got: Turn[] = d?.turns || [];

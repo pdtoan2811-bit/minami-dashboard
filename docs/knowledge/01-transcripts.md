@@ -77,6 +77,33 @@ resets `start` to `turns[0].off` so a trimmed window is still a valid page and `
 > showed a **title from the head of the file** (meta comes from `listSessions`' full read) above
 > **turns from the tail** — 39 of 421 transcripts on disk exceed the old cap.
 
+### The poll: slim + delta (2026-10-06)
+
+Measured first, and kept as the benchmark (`node bin/bench-transcripts.mjs`, results in
+`docs/knowledge/bench/`). Every visible pane re-downloaded its whole live window every 2.5s, unchanged
+or not: **8.85 MB per round across the ten most recent chats**, 4.6 MB for one of them. 96–99% of each
+response was tool data, and in the worst chat 4.0 of its 4.7 MB was 18 screenshots in base64. Nothing
+was compressed.
+
+- **Slim** (`?slim=1`, `lib/transcript-slim.ts`): an image's base64 becomes a URL,
+  `/api/bento/session/<id>/image?tool=<toolUseId>&i=<k>[&before=<off>]`. It is fetched only when
+  something draws it (thumbnail, browser panel, lightbox) and is cacheable for good, since a tool result
+  never changes. Text outputs (already capped at 4,000 chars) and inputs stay inline; the file panel and
+  flow view read them. Render images through `imageSrc()` (labels.ts), never by building a `data:` URI.
+- **Delta** (`&size=<n>&since=<off>`): the client echoes the file size its copy was built from, plus its
+  last turn's `off`. Same size → `{ unchanged }` (32 bytes). Grown, and that turn is still in the window
+  → `{ delta, turns }` from that turn on (it is re-sent, since it may still be growing). Anything else
+  (shrunk/rewritten file, turn out of the window, no params) → the full window, as before, so a tab
+  from before a deploy keeps working.
+- **The merge lives in `lib/session-fetch.ts`**, so every caller still receives a complete transcript.
+  An unchanged answer resolves to the same object, which keeps the pane's own "did anything change"
+  check free. Capped at the server's 400-turn window.
+
+Results, same turns (`transcripts-same-turns-2026-10-06.json`): first load **8.88 → 1.32 MB**, the
+heaviest chats 85–95% smaller. Idle poll **8.85 MB → 0.3 KB** per round. Checked: a delta merged on a
+growing transcript equals a fresh full fetch, turn for turn; a screenshot thumbnail loads via its URL;
+an idle pane's polls are 32 bytes.
+
 ### Gotchas
 - **The head fingerprint is not optional.** A truncate-and-rewrite to a coincidentally equal-or-larger
   size is indistinguishable from an append under `(mtime, size)` alone — the parser would fold

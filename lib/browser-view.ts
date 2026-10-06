@@ -56,6 +56,8 @@ export type Shot = {
   mediaType: string;
   /** Inline base64 — instant, but stripped from sessionStorage by trimOutput, so lost on reload. */
   data?: string;
+  /** A slim transcript's URL for the same bytes (lib/transcript-slim.ts) — used when `data` is empty. */
+  src?: string;
   /** Filename inside the session's MCP --output-dir. Full resolution, survives a reload. */
   file?: string;
   url?: string;
@@ -391,6 +393,7 @@ export function deriveBrowserState(turns: BrowserTurnLike[]): BrowserState {
           id: `${id}:${k}`,
           mediaType: img.mediaType,
           data: img.data,
+          src: img.src,
           file: parsed.files && parsed.files.length === images.length ? parsed.files[k] : parsed.files?.[0],
           url: parsed.url ?? state.url,
           title: parsed.title ?? state.title,

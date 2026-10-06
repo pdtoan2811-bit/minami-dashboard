@@ -550,7 +550,10 @@ export type ToolCallRecord = { name: string; input: any; id?: string; output?: T
 // user rows, and absent on assistant rows parsed before this field was added — a turns-cache entry
 // written by an older build keeps its shape, so callers must treat missing as "unknown", not zero.
 export type Turn = { role: "user" | "assistant"; text: string; tools: ToolCallRecord[]; ts: number; model?: string; off?: number; cost?: number };
-export type SessionPage = { meta: SessionMeta | null; turns: Turn[]; start: number; hasMore: boolean };
+// `size` is the transcript file's byte size when the live tail was read — the client echoes it back as a
+// cheap "anything new?" check (the delta protocol in app/api/bento/session/[id]/route.ts). Absent on
+// history pages: those are immutable and never polled.
+export type SessionPage = { meta: SessionMeta | null; turns: Turn[]; start: number; hasMore: boolean; size?: number };
 
 // WHY WINDOWS AND NOT A TAIL
 // The old code read a fixed 1.5MB tail and then `slice(-120)`, which made everything before that
@@ -858,7 +861,7 @@ export function getSession(id: string, opts?: { before?: number }): SessionPage 
   // would just trade one kind of thrashing for another.
   if (tc && tc.mtime === mtime && tc.size === size) {
     touchTurnsLRU(found, tc);
-    return { meta, turns: tc.turns, start: tc.start, hasMore: tc.start > 0 };
+    return { meta, turns: tc.turns, start: tc.start, hasMore: tc.start > 0, size };
   }
 
   // INCREMENTAL by design, for the same reason summarize() is: an actively streaming session's mtime
@@ -902,7 +905,7 @@ export function getSession(id: string, opts?: { before?: number }): SessionPage 
   touchTurnsLRU(found, entry);
   turnsCacheDirty = true;
   scheduleTurnsDiskSave(); // throttled — never on the hot path
-  return { meta, turns: entry.turns, start: entry.start, hasMore: entry.start > 0 };
+  return { meta, turns: entry.turns, start: entry.start, hasMore: entry.start > 0, size };
 }
 
 // Full history, streamed line by line — never bounded, never cached, never on a request path. This is

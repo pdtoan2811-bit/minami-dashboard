@@ -1,0 +1,69 @@
+{
+  "label": "slim applied to the live server's own windows (same turns)",
+  "rows": [
+    {
+      "id": "44c2d454",
+      "turns": 49,
+      "fullBytes": 95696,
+      "slimBytes": 96209
+    },
+    {
+      "id": "d1bbf98e",
+      "turns": 400,
+      "fullBytes": 4834184,
+      "slimBytes": 747799
+    },
+    {
+      "id": "2f7e2eb4",
+      "turns": 107,
+      "fullBytes": 188265,
+      "slimBytes": 152136
+    },
+    {
+      "id": "dacca857",
+      "turns": 40,
+      "fullBytes": 57971,
+      "slimBytes": 58399
+    },
+    {
+      "id": "218cf72d",
+      "turns": 32,
+      "fullBytes": 227864,
+      "slimBytes": 56096
+    },
+    {
+      "id": "00b023e2",
+      "turns": 21,
+      "fullBytes": 235372,
+      "slimBytes": 36652
+    },
+    {
+      "id": "b24fb2f2",
+      "turns": 54,
+      "fullBytes": 862712,
+      "slimBytes": 67267
+    },
+    {
+      "id": "47c6eb1c",
+      "turns": 72,
+      "fullBytes": 1738559,
+      "slimBytes": 108250
+    },
+    {
+      "id": "dae0d31e",
+      "turns": 54,
+      "fullBytes": 1068070,
+      "slimBytes": 61323
+    },
+    {
+      "id": "02696070",
+      "turns": 2,
+      "fullBytes": 665,
+      "slimBytes": 665
+    }
+  ],
+  "totals": {
+    "fullBytes": 9309358,
+    "slimBytes": 1384796
+  }
+}
