@@ -296,6 +296,15 @@ dependency and redeploy.
 >
 > Consequence for the catalog: `claude-fable-5-1` carries `minCli: "2.1.251"`, so it was unselectable
 > in the dashboard and selectable in Desktop. Both can now run it.
+>
+> **Upgraded 2026-10-06: 0.3.280 → 0.3.291 / CLI 2.1.291, for Sonnet 5.5** (`claude-sonnet-5-5`,
+> added in 2.1.284 as the API's default Sonnet, same $2/$10 as Sonnet 5). Reported as "Sonnet 5.5
+> cannot be selected": it was in neither the catalog nor the runtime. Same order as the Opus 5.5 pin —
+> run the new binary with `-p --model claude-sonnet-5-5` first (answered), PATH CLI to 2.1.291, then the
+> catalog row with `minCli: "2.1.284"` and a `MODELS` row in `lib/routing.ts` placed BEFORE Sonnet 5
+> (substring match). The old-wrapper/new-CLI window was checked first: 2.1.291's
+> `testedWrapperVersions` is `0.3.251 … 0.3.285`, which includes 0.3.280. `server/metrics-server.js`
+> needed no row — its substring match already prices `…sonnet-5-5` at Sonnet 5's identical rate.
 
 - **`lib/runtime-version.ts`** (new) reads that manifest, 60s cache — a dependency bump needs a redeploy
   anyway, so the TTL is churn control, not freshness. **The null contract is the load-bearing part:**
