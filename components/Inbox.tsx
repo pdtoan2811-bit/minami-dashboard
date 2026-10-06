@@ -23,7 +23,7 @@ export type InboxLive = {
   need?: { kind: string; summary: string; expiresAt?: number }; needs?: number;
   ended?: { at: number; ok: boolean; text?: string; error?: string };
 };
-type Group = "need" | "failed" | "new" | "running" | "idle";
+export type Group = "need" | "failed" | "new" | "running" | "idle";
 const GROUPS: { key: Group; label: string }[] = [
   { key: "need", label: "Needs you" }, { key: "failed", label: "Failed" }, { key: "new", label: "New" },
   { key: "running", label: "Running" }, { key: "idle", label: "Idle" },
@@ -38,7 +38,7 @@ function ago(ms: number) {
   return `${Math.floor(s / 86400)}d`;
 }
 
-function groupOf(s: InboxSession, l: InboxLive | undefined, seenAt: number, floor: number): Group {
+export function groupOf(s: InboxSession, l: InboxLive | undefined, seenAt: number, floor: number): Group {
   if (l?.need) return "need";
   if (l?.busy) return "running";
   const endedAt = l?.ended?.at ?? (s.lastRole === "assistant" ? s.lastActivity : 0);
@@ -122,7 +122,7 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
 
 /** Still ring = your turn; spinning arc = working; dot = unread; nothing = idle. Shape and motion carry
  *  it, so it reads at arm's length and for anyone who can't separate the hues. */
-function Ring({ g }: { g: Group }) {
+export function Ring({ g }: { g: Group }) {
   if (g === "idle") return null;
   if (g === "running") return <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f0a868] border-t-transparent bg-neutral-950" />;
   const c = g === "need" ? "#4ade80" : g === "failed" ? "#ef7c7c" : "var(--sakura)";

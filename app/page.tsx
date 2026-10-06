@@ -39,7 +39,8 @@ import { buildJourney } from "@/lib/flow-model";
 import { splitPreviewBlock, isLocalUrl, type Preview } from "@/lib/preview-block";
 import { openLocalUrl, PREVIEW_EVENT } from "@/lib/open-local";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
-import { ChatSheet } from "@/components/ChatSheet";
+import { FocusDock, FocusSheet } from "@/components/Focus";
+import { useFocus } from "@/lib/use-focus";
 import { PhoneAccess } from "@/components/PhoneAccess";
 import { Inbox, type InboxLive } from "@/components/Inbox";
 import { useBackLayer } from "@/lib/use-back";
@@ -655,6 +656,8 @@ export default function BentoHome() {
     t(); const iv = setInterval(() => { if (!pageHidden()) t(); }, 15000);
     return () => { a = false; clearInterval(iv); window.removeEventListener("minami:seen", onSeen); };
   }, []);
+  // The phone dock's focus set (lib/focus.ts) — server-side so the Flip and the N5 share one dock.
+  const focusSet = useFocus();
   const markRead = useCallback((id: string) => {
     window.dispatchEvent(new CustomEvent("minami:seen", { detail: id }));
     fetch("/api/agent/seen", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: id }) }).catch(() => {});
@@ -1238,6 +1241,8 @@ export default function BentoHome() {
     () => assignIcons(projects.map((p) => p.name), Object.fromEntries(Object.entries(attachMap).map(([k, v]) => [k, v.icon]))),
     [projects, attachMap],
   );
+  const focusCtx = useMemo(() => ({ sessions: inboxSessions, live: liveAct, seen: seen.seen, floor: seen.floor, icons: topicIcons, focus: focusSet.focus }),
+    [inboxSessions, liveAct, seen, topicIcons, focusSet.focus]);
   // The picker's Recent tab. Derived from `allProjects` — the UNFILTERED grouping — on purpose: the
   // search box and the date-window chip are view state for the BOARD, and letting either decide what
   // "where do I work" offers would mean a 24h window hid the project you opened the picker to reach.
@@ -1273,7 +1278,7 @@ export default function BentoHome() {
       // `@container`: the header's controls have to thin out by the BENTO COLUMN's width, not the
       // window's. At a 60% chat panel this column is ~500px on a wide display — plenty of window,
       // nowhere near enough column, and the old `md:` breakpoints happily overflowed it.
-      <div className={`@container flex min-w-0 flex-col ${split ? `shrink-0 border-r border-white/10 ${keyboardUp && proj ? "w-[72px]" : "w-[288px]"}` : `w-full ${compact ? "" : "md:w-[var(--lw)]"} ${proj ? (compact ? "hidden" : "hidden md:flex") : ""}`} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      <div className={`@container flex min-w-0 flex-col ${split ? (proj ? "hidden" : "shrink-0 border-r border-white/10 w-[288px]") : `w-full ${compact ? "" : "md:w-[var(--lw)]"} ${proj ? (compact ? "hidden" : "hidden md:flex") : ""}`} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {/* Only the full-width (no project open) case needs the bell's gutter: with a panel open the
             bento is a left column whose right edge is nowhere near the viewport corner. */}
         {/* Split (N5 unfolded) with the keyboard up: the list is an icon strip, no header at all. */}
@@ -1543,8 +1548,32 @@ export default function BentoHome() {
           surface in the app, and it hosts the think-dots and activity shimmer of every open pane — so
           a single bouncing dot invalidated ~614k pixels of blur every frame. It sits BESIDE the grid as
           a flex sibling, never over it, so there was never anything behind it but the page gradient. */}
-      <div className={`min-h-0 bg-neutral-900/50 ${split ? "min-w-0 flex-1" : `w-full ${compact ? "" : railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"}`} ${proj ? "flex flex-col" : split ? "flex items-center justify-center" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      <div className={`min-h-0 bg-neutral-900/50 ${split ? "desk min-w-0 flex-1" : `w-full ${compact ? "" : railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"}`} ${proj ? "flex flex-col" : split ? "flex items-center justify-center" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {!proj && split && <p className="px-8 text-center text-sm text-neutral-500">Pick a chat on the left — or ＋ to start one.</p>}
+        {proj && split && (() => {
+          // N5 unfolded = a READING desk (phone pitch round 9). Switching topics isn't this screen's job,
+          // so it left the bottom of the screen (no dock, no 288px list beside the reply) for this pill:
+          // tap it and the focus drawer slides in from the left; Back closes it. Failures and waiting
+          // chats still show, as one grey line, so reading never hides an alarm.
+          const s = currentSid ? proj.sessions.find((x) => x.id === currentSid) : undefined;
+          const others = inboxSessions.filter((x) => x.id !== currentSid);
+          const failed = others.filter((x) => liveAct[x.id]?.ended && !liveAct[x.id]?.ended?.ok && !liveAct[x.id]?.busy && (liveAct[x.id]?.ended?.at || 0) > (seen.seen[x.id] || seen.floor)).length;
+          const waiting = others.filter((x) => liveAct[x.id]?.need).length;
+          return (
+            // pr-16: the app-wide bell is pinned top-right over this row (see the NotificationBell note).
+            <div className="flex shrink-0 items-center gap-3 border-b border-white/10 py-2.5 pl-6 pr-16">
+              <button onClick={() => setChatSheet(true)} className="flex min-w-0 max-w-[60%] items-center gap-2 rounded-full bg-white/[0.06] px-3.5 py-1.5 text-[13px] active:bg-white/10">
+                <span className="min-w-0 truncate">{s ? titleOf(s) : "New chat"}</span><ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
+              </button>
+              <span className="truncate text-[12px] text-neutral-500">{proj.name}</span>
+              <span className="ml-auto flex shrink-0 items-center gap-2 text-[12px] text-neutral-500">
+                {failed > 0 && <><span className="h-2 w-2 rounded-full bg-[#ef7c7c]" />{failed} failed</>}
+                {failed > 0 && waiting > 0 && " · "}
+                {waiting > 0 && <><span className="h-2 w-2 rounded-full bg-neutral-200" />{waiting} waiting</>}
+              </span>
+            </div>
+          );
+        })()}
         {proj && (
           <>
             {/* ── Panel chrome: a tab row that never moves, details that reveal BENEATH it ─────────
@@ -1817,13 +1846,10 @@ export default function BentoHome() {
                 );
               })}
             </div>
-            {compact && (() => {
+            {compact && !split && (() => {
               const i = focusPane ?? 0;
               const pn = panes[i];
               const s = pn?.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
-              const la = pn?.sid ? liveAct[pn.sid] : undefined;
-              const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : pn ? paneAct[pn.key] : undefined;
-              const tint = PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking;
               // A horizontal swipe on the bar steps through the chats you've RECENTLY VISITED, in any
               // topic — Android's gesture-bar swipe between recent apps, applied to chats. Right = back to the
               // previous one, left = forward again. Across projects on purpose: hopping between two projects
@@ -1842,50 +1868,20 @@ export default function BentoHome() {
                 openChat(list[next]);
               };
               return (
-                // Bottom-docked, Safari-style: the thumb's natural zone, directly under the composer,
-                // so reading, typing and switching all happen in one band at the bottom of the screen.
-                // Off while the keyboard is up — the keyboard owns that band then, and the composer
-                // should sit on it with nothing in between (Material: the nav bar may be covered
-                // by the keyboard, never permanently). Same swipe as before: left/right steps chats.
-                <div className={`flex items-center gap-1.5 border-t border-white/10 bg-neutral-950/80 pb-[max(0.375rem,env(safe-area-inset-bottom))] pl-1.5 pr-1.5 pt-1.5 ${keyboardUp ? "hidden" : ""}`} onTouchStart={swipe} onTouchEnd={swipe}>
-                  <button onClick={closePanel} aria-label="Back to all topics"
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-neutral-300 active:bg-white/10"><ChevronLeft className="h-5 w-5" /></button>
-                  <button onClick={() => setChatSheet(true)} aria-label="Switch or close chats"
-                    className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-left active:bg-white/10">
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tint, opacity: act?.busy ? 1 : 0.35 }} />
-                    <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{s ? titleOf(s) : "New chat"}</span>
-                    {panes.length > 1 && <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[11px] tabular-nums text-neutral-300">{i + 1}/{panes.length}</span>}
-                    <ChevronDown className="h-4 w-4 shrink-0 text-neutral-500" />
-                  </button>
-                  <button onClick={() => addPane()} disabled={panes.length >= MAX_PANES} aria-label="New chat"
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--sakura)]/40 text-[var(--sakura)] active:bg-[var(--sakura)]/10 disabled:opacity-40"><Plus className="h-5 w-5" /></button>
-                </div>
+                // Bottom-docked, the thumb's natural zone, directly under the composer. Off while the
+                // keyboard is up — the keyboard owns that band then (Material: the nav bar may be covered
+                // by the keyboard, never permanently). Its contents are the FOCUS set: components/Focus.tsx
+                // carries the reasoning for every rule in it.
+                <FocusDock ctx={focusCtx} current={{ id: pn?.sid || null, title: s ? titleOf(s) : "New chat" }} recent={mru.current}
+                  hidden={keyboardUp} onOpen={openChat} onSheet={() => setChatSheet(true)} onSwipe={swipe} />
               );
             })()}
             {compact && chatSheet && (
-              <ChatSheet
-                open={panes.map((pn, j) => {
-                  const s = pn.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
-                  const la = pn.sid ? liveAct[pn.sid] : undefined;
-                  const act = la ? { busy: la.busy, phase: la.phase as ActivityPhase, label: la.label } : paneAct[pn.key];
-                  return { key: pn.key, title: s ? titleOf(s) : "New chat", sub: act?.busy ? act.label || act.phase : s ? `${goalOf(s)} · ${ago(s.lastActivity)}` : proj.name,
-                    tint: PHASE_TINT[act?.phase || "idle"] || PHASE_TINT.thinking, busy: !!act?.busy, on: j === (focusPane ?? 0) };
-                })}
-                others={[...proj.sessions].sort((a, b) => b.lastActivity - a.lastActivity).filter((s) => !panes.some((pn) => pn.sid === s.id))
-                  .map((s) => ({ id: s.id, cwd: s.cwd, title: titleOf(s), sub: `${goalOf(s)} · ${ago(s.lastActivity)}`, dot: s.active ? "#4ade80" : TIER_TINT[s.tier] }))}
-                full={panes.length >= MAX_PANES}
-                onSelect={(j) => { setActivePane(j); setChatSheet(false); }}
-                // Closing the last open chat takes the panel with it (closePane's own rule), and
-                // with it this sheet — there is nothing left to choose between.
-                onClosePane={(j) => { if (panes.length === 1) setChatSheet(false); closePane(j); }}
-                onOpen={(o) => {
-                  setChatSheet(false);
-                  // Full: swap it into the chat you're looking at — the same remount path as the
-                  // desktop pane's ⌄ switcher (switchGen), rather than a dead "close one first".
-                  if (panes.length >= MAX_PANES) { const j = focusPane ?? 0; setPanes((p) => p.map((x, k) => (k === j ? { ...x, sid: o.id, switchGen: (x.switchGen || 0) + 1 } : x))); }
-                  else addPane(o.id, o.cwd);
-                }}
+              <FocusSheet side={split} ctx={focusCtx} currentId={currentSid || null} pin={focusSet.pin} unpin={focusSet.unpin}
+                onOpen={(id) => { setChatSheet(false); openChat(id); }}
                 onNew={() => { setChatSheet(false); addPane(); }}
+                onClose={panes.length ? () => { setChatSheet(false); closePane(focusPane ?? 0); } : undefined}
+                onInbox={() => { setChatSheet(false); closePanel(); }}
                 onDismiss={() => setChatSheet(false)} />
             )}
           </>
@@ -2367,7 +2363,7 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
             )}
             <div className={t.role === "user"
               ? "max-w-[85%] rounded-2xl border border-white/15 px-4 py-3 text-[15px] leading-[1.65] text-neutral-100 [overflow-wrap:anywhere]"
-              : "w-full text-[15px] leading-[1.75] text-neutral-100/95 [overflow-wrap:anywhere]"}>
+              : "msg-a w-full text-[15px] leading-[1.75] text-neutral-100/95 [overflow-wrap:anywhere]"}>
               {t.role === "assistant" && t.thinking && <ThoughtBlock text={t.thinking} live={!!t.streaming && !t.text} />}
               {t.text && <Markdown text={previewSplit.body} />}
               {/* Images the turn REFERS TO, rendered from their paths. Deliberately derived from the

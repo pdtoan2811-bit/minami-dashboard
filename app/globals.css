@@ -949,3 +949,10 @@ body {
   0%, 100% { opacity: 0.28; transform: translateY(0); }
   50%      { opacity: 0.85; transform: translateY(-3px); }
 }
+
+/* N5 unfolded = a reading desk (§23, phone pitch round 9). `.desk` is the chat column in split view; the
+   reply gets a book measure and a size you read for minutes at arm's length, not the 15px a four-pane
+   desktop grid needs. Scoped to Claude's prose (`.msg-a`) so code blocks, tool rows and your own
+   bubbles keep their density. */
+.desk .msg-a { font-size: 17px; max-width: 62ch; }
+.desk .msg-a p, .desk .msg-a li { line-height: 1.78; }
