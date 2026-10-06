@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-06
+- **Fix: Metrics/Settings bounced back to the board** whenever a chat panel was open (§23 🐛,
+  `lib/use-back.ts`). Back-layer cleanup rewound history during the page change. *Reported by user:
+  "when i click on them, it flashes but show nothing new, still stay in bento".*
 - **Focus dock, progress sheet, N5 reading desk, cover screen rebuilt** (§23). Built from the
   minami-phone pitch after three rounds of designer-agent debate. Pinned focus set ≤5 on the server
   (`lib/focus.ts`). The phone dock shows focus plus one failed/needs-you visitor, and its sheet sorts
