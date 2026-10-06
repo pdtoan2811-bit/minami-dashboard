@@ -9,6 +9,11 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-06
+- **Transcript poll: slim + delta** (§1, `lib/transcript-slim.ts`, `lib/session-fetch.ts`,
+  `/api/bento/session/[id]` + `/image`). Screenshots travel by URL, and idle polls answer "unchanged"
+  or only the new turns. Benchmark kept in `docs/knowledge/bench/`: first load 8.88 → 1.32 MB, idle poll
+  8.85 MB → 0.3 KB per round across ten chats. *Asked for by user: "robust approaches to enhance
+  transcript loading - like it loads a huge chunk but I just want to see the latest updates".*
 - **Cover screen is a thread** (§23, `app/glance/Glance.tsx`). Faces to switch chats, the conversation
   as bubbles with the full reply, a live progress bubble, options as reply chips, and a text field that
   is always there. *Asked for by user: "V2 with keyboard input" (cover-reading pitch, round 12).*

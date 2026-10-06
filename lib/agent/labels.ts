@@ -78,7 +78,11 @@ export type TodoItem = { content: string; status: "pending" | "in_progress" | "c
 /** A single block of a tool's RESULT (as opposed to its input, which is all the UI showed before).
  *  Text is length-capped; images carry their base64 payload so screenshots (browser tool, etc.) can
  *  render inline. Kept intentionally small/serializable — this rides over SSE and into localStorage. */
-export type ToolOutputBlock = { type: "text"; text: string } | { type: "image"; mediaType: string; data: string };
+// An image's `data` is the base64; in a SLIM transcript (lib/transcript-slim.ts) it is "" and `src` is a
+// URL that serves the same bytes on demand. Render through imageSrc(), never by building a data: URI.
+export type ToolOutputBlock = { type: "text"; text: string } | { type: "image"; mediaType: string; data: string; src?: string };
+export const imageSrc = (b: { mediaType: string; data: string; src?: string }): string | null =>
+  b.data ? `data:${b.mediaType};base64,${b.data}` : b.src || null;
 export type ToolOutput = { blocks: ToolOutputBlock[]; truncated?: boolean };
 
 const OUTPUT_MAX_TEXT = 4000;
