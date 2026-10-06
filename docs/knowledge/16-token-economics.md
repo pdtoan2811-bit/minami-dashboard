@@ -51,12 +51,11 @@ Priced at the table above, that is roughly **reads $7.4k · writes $3.1–5.0k �
 runs 25–30:1 with a median of ~5.5k written per turn — healthy. Nothing is thrashing *inside* a
 session. The waste is at the session boundary.
 
-> 🐛 **Auto-compaction is inert here, and tuning it saves nothing.** `AUTOCOMPACT_PCT` defaults to 60
-> (`lib/agent/manager.ts`), which looks aggressive — compacting with 40% of the window still free,
-> paying a full-window summarisation and throwing away the prompt cache each time. A raw scan for
-> every compaction marker across all 445 transcripts found **7 events, ever** — 6 automatic, 1 manual.
-> Sessions on this box end long before they reach 60% of the window. The hypothesis was reasonable and
-> the data killed it; recorded so nobody re-derives it and starts tuning the knob.
+> 🐛 **~~Auto-compaction is inert here, and tuning it saves nothing.~~ — no longer true, see the
+> 2026-10-06 audit below.** In August a scan of all 445 transcripts found **7 compactions, ever**:
+> sessions ended long before 60% of the window. By October they don't — the same scan over one month
+> found 130, with the longest sessions parked at ~590k for thousands of calls. A finding about usage
+> has a shelf life; re-measure before quoting this section.
 
 ### The actual lever: cold resumes, driven by deploys
 
@@ -83,6 +82,46 @@ payoffs — which is the argument for actually doing it.
 deploys a day a session idle long enough for the reaper is usually killed by a deploy first, so the
 saving is speculative while the cost — idle `claude` subprocesses holding hundreds of MB each — is
 not. Revisit if the daemon split lands and deploys stop ending sessions.
+
+### 2026-10-06 audit — the window, not the prefix
+
+300 most recent transcripts (2026-09-08 → 10-06), main threads plus 740 subagent files:
+
+```
+main thread   reads 18.7B ($3.7k) · writes 0.31B ($1.6–2.5k) · output 64M ($1.3k)
+subagents     ~9B tokens, ~6.4B of them on Opus (no CLAUDE_CODE_SUBAGENT_MODEL outside Blacksmith)
+first call    median 28k context (p90 48k) — the startup prefix
+per call      85% of read tokens are in calls already carrying 200k–600k
+```
+
+So the startup prefix (~30k: base prompt, ~6k of skill descriptions, CLAUDE.md, hooks, the
+dashboard's appends) is ~10% of an average call. What costs is the conversation re-read every call.
+By content mass: Bash output 24%, inline Bash scripts 16%, images ~20% (Read of PNGs 15%, browser
+screenshots 4%), thinking 9%.
+
+Levers, ranked:
+
+1. **Compact earlier** (`MINAMI_DASHBOARD_AUTOCOMPACT_PCT` / `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`,
+   today 60%). 44% of read tokens sit in calls at 400–600k. Estimated $1–1.5k/month at 25–30%.
+   *Not applied* — Thomas's call, pending.
+2. **Subagent default model** (`CLAUDE_CODE_SUBAGENT_MODEL=sonnet` in global settings `env`; the
+   per-call `model` param and agent frontmatter still win). *Not applied* — pending.
+3. **Tool-output hygiene** — applied as a short rule block in `~/.claude/CLAUDE.md` (cap output,
+   scripts in files, css-scale viewport screenshots, visual sweeps in a subagent).
+4. **Deploy cold-resumes** — unchanged from above; the daemon split is still the fix.
+5. **Skills** — applied via `skillOverrides` in `~/.claude/settings.json` (backup
+   `settings.json.bak-2026-10-06`): `editorial-glass` off, eight skills unused for 30+ days set to
+   `name-only` (still invocable by name, description gone). Worth ~$40/month; the point is a shorter,
+   less noisy listing. Verified with a `claude -p` probe; the SDK's CLI is the same build (2.1.280).
+
+> 🐛 **Don't move a skill into `~/ecvision/.claude/skills` to make it project-only.** Measured: a
+> session whose cwd is a nested git repo (every `.minami-worktrees/chat-N`) does NOT see the parent's
+> `.claude/skills`. Project-only means committed into the repo, or `skillOverrides` per project.
+
+Considered and rejected: a lower default effort / `MAX_THINKING_TOKENS` (thinking is 9% and the
+loss is quality everywhere); `excludeDynamicSections` (only helps cache sharing across machines).
+Sources: code.claude.com/docs — skills, memory, hooks, model-config, agent-sdk/tool-search,
+agent-sdk/modifying-system-prompts; anthropic.com/engineering/effective-context-engineering-for-ai-agents.
 
 ### Not measured
 
