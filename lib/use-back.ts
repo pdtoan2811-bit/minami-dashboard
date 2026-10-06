@@ -17,7 +17,7 @@ import { useEffect, useRef } from "react";
 // No URL changes: the entries carry state only. Deep links are a different feature, and a URL that
 // named a layer would have to be restorable on reload, which a live sheet or lightbox is not.
 
-type Layer = { id: number; onBack: () => void; dead: boolean };
+type Layer = { id: number; onBack: () => void; dead: boolean; path: string };
 
 const stack: Layer[] = [];
 let seq = 0;
@@ -26,9 +26,28 @@ let seq = 0;
 // otherwise be the one spliced off.
 let rewinding: Layer[] | null = null;
 let wired = false;
+// When the user clicked a link to ANOTHER page. Leaving the board unmounts every open layer at once,
+// and treating those as "closed by the UI" rewound history over their entries — `history.go(-n)` ran
+// right after Next had pushed /dashboard, so clicking Metrics or Settings with a chat open flashed the
+// new page and landed back on the board (2026-10-06). Layers torn down by a page change are simply
+// dropped; their stale entries are stepped past by onPop's leftover branch if Back ever reaches them.
+let leavingAt = 0;
+const leaving = () => Date.now() - leavingAt < 3000;
+function onClick(e: MouseEvent) {
+  const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+  if (!a || a.target === "_blank") return;
+  const u = new URL(a.href, location.href);
+  if (u.origin === location.origin && u.pathname !== location.pathname) leavingAt = Date.now();
+}
 
 function flush() {
   if (rewinding) return;
+  // Belt and braces for a navigation that didn't come through a link click (router.push, a form):
+  // a layer pushed on another path belongs to a page that is gone — drop it, never rewind over it.
+  if (leaving() || stack.some((l) => l.dead && l.path !== location.pathname)) {
+    for (let i = stack.length - 1; i >= 0; i--) if (stack[i].dead) stack.splice(i, 1);
+    return;
+  }
   let n = 0;
   while (n < stack.length && stack[stack.length - 1 - n].dead) n++;
   if (!n) return;
@@ -58,8 +77,8 @@ export function useBackLayer(open: boolean, onBack: () => void) {
   cb.current = onBack;
   useEffect(() => {
     if (!open) return;
-    if (!wired) { wired = true; window.addEventListener("popstate", onPop); }
-    const layer: Layer = { id: ++seq, onBack: () => cb.current(), dead: false };
+    if (!wired) { wired = true; window.addEventListener("popstate", onPop); document.addEventListener("click", onClick, true); }
+    const layer: Layer = { id: ++seq, onBack: () => cb.current(), dead: false, path: location.pathname };
     stack.push(layer);
     history.pushState({ minamiLayer: layer.id }, "");
     return () => {

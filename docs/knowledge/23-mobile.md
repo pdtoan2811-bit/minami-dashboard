@@ -177,6 +177,16 @@ behaviour you'll get.
 > installed the app before this fix still needs closing once by hand (swipe it out of recents); every
 > deploy after that updates on its own.
 
+> 🐛 **2026-10-06 — Metrics and Settings "flashed, then stayed on the bento" on desktop.** With any
+> layer open (a chat panel is one), clicking a link to another page unmounted the board, and every
+> layer's cleanup marked itself closed by the UI. `flush()` then ran `history.go(-n)` to rewind over their
+> entries, which happened just after Next had pushed `/dashboard`, so it went straight back to `/`.
+> Desktop only looked different because that's where the links are. Fix (`lib/use-back.ts`): a
+> capture-phase click listener notes a link to another path, and each layer records the path it was
+> pushed on. Layers torn down by a page change are dropped without rewinding. Their stale entries are
+> skipped by `onPop`'s leftover branch if Back ever reaches them. Checked: with a chat open, Metrics and
+> Settings stay put, and Back returns to the board.
+
 ### The phone redesign: inbox, list-detail, chip — `components/Inbox.tsx`, `lib/seen.ts`
 
 Designed in a three-designer review (Material/foldables, messaging apps, developer tools), two rounds:
