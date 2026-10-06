@@ -9,6 +9,14 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-06
+- **Focus dock, progress sheet, N5 reading desk, cover screen rebuilt** (§23). Built from the
+  minami-phone pitch after three rounds of designer-agent debate. Pinned focus set ≤5 on the server
+  (`lib/focus.ts`). The phone dock shows focus plus one failed/needs-you visitor, and its sheet sorts
+  by urgency, with the step named. Pinning is a visible ＋, unpinning a swipe with Undo, and a done pin
+  makes room. The N5 unfolded loses the list and dock for a header pill and drawer, and gets 17px/62ch
+  prose. `/glance` is drawn around the Flip's two lenses (bottom-right): question, options, one-line
+  answer (`/api/glance/answer`, questions only), and a switcher pill. `ChatSheet.tsx` was removed.
+  *Asked for by user: "approve. go" on the pitch.*
 - **Phone access switch in the chat panel** (§23, `components/PhoneAccess.tsx`, `/api/tailnet/phone`).
   It shows whether Tailscale is up, whether the dashboard is on the tailnet, and which phones are
   online. It switches the dashboard's serve entry on and off, and offers an IP fallback for Android

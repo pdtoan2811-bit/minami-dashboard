@@ -80,7 +80,11 @@ can be widened by dragging the divider. On a phone, the narrow pane is all the r
 > comma-separated query compiled to the first query only and silently dropped the touch half: the JS
 > side switched over and the CSS side didn't, so the bar appeared under a framed desktop pane.
 
-### The chat bar and sheet, below 640px — `components/ChatSheet.tsx`
+### The chat bar and sheet, below 640px — `components/ChatSheet.tsx` (replaced)
+
+> Replaced on 2026-10-06 by the focus dock and sheet (`components/Focus.tsx`; see "Focus" below).
+> `ChatSheet.tsx` is deleted. The measurements and the rules below (thumb-sized rows, one close
+> meaning one thing, the sheet at the bottom) carried over into its replacement.
 
 A second pass on the same day, after using it, not auditing it ("layout awful, switching chats
 awful, closing chats awful, buttons too small"). Measured at 412×915 with touch emulation, the
@@ -294,6 +298,26 @@ comment pop-out, which iframes the localhost URL, is also not covered.
 
 ### The cover screen — `/glance`, `lib/use-cover.ts`
 
+> **Rebuilt 2026-10-06 (phone pitch round 9, `~/ecvision/pitches/minami-phone`, V2).** The first
+> version below was a status board with one button. He uses the cover to *answer*, so it now shows the
+> question, its options as plain numbered rows, a one-line answer field, and a switcher pill. Where the
+> list below disagrees, this note wins.
+> - **Two camera lenses sit in the bottom-RIGHT corner** of the Flex Window. That ~170×96 is an empty
+>   spacer: nothing drawn, nothing tappable. The switcher pill sits bottom-LEFT beside it, and the field
+>   sits just above it. (The first draft of the pitch put the lenses on the left. He corrected it.)
+> - **Lean.** Three type sizes (question 19/25, options/answer 15/21, meta 12–13 grey) and ONE accent,
+>   sakura, meaning "you". State marks are neutral shapes, and red is used only for a failure. Round 8
+>   had green, amber, red and pink on one 360px screen, and he called it too much.
+> - **Answering:** a question is answered through `/api/glance/answer`. It looks up the full question
+>   text on the server with `pendingFor()`, because `Need.summary` is cut at 200 chars and an answer
+>   keyed to a truncated question lands on nothing. It accepts single questions only. A reply to an idle
+>   chat goes through `/api/agent/send` with the chat's own `mode`, because a send without one resets it.
+> - **Still never approves.** Permission, plan and held steps show their summary and "Open on main
+>   screen ›". The reason below still holds: 360px can't show enough of a command to approve it safely.
+> - Pause/Resume all moved into the list frame as a quiet text button.
+
+**The first version (2026-10-05), for the record:**
+
 The Flip 7's Flex Window (~360×400 CSS px, read at arm's length) gave the full board a "micro" pane
 that showed nothing usable. `/glance` is a separate route built for that screen. It answers one
 question, "does anything need me, and how long has it waited?", and offers one action.
@@ -340,6 +364,34 @@ installed PWA (WebAPK) is its own app, so it should appear there. Press reports 
 this way; nobody has confirmed a WebAPK specifically. Not yet tried on the device. The installed app
 opens at `start_url` (`/`), so either the main page redirects via `useCoverScreen()`, or you install a
 second shortcut to `/glance`.
+
+### Focus: the dock, the progress sheet, the N5 drawer — `components/Focus.tsx`, `lib/focus.ts`
+
+Shipped 2026-10-06. It came from a pitch (`~/ecvision/pitches/minami-phone`, rounds 5–9) that three
+designer agents (Android/foldables, messaging, agent-ops) critiqued and argued over for three rounds.
+He asked for it: "go back and forth across chats to see progress", then "add and remove certain chats
+out of the focus".
+
+- **Focus is a pinned set of at most 5 session ids**, stored on the server (`~/.minami/focus.json`,
+  `/api/agent/focus`) so the Flip, the N5 and the Mac share one dock. Before any pin exists, the dock
+  falls back to recently visited chats, so it is never empty.
+- **The dock (vertical phone)** replaces the old chat bar. It holds the current chat, one **visitor**
+  (the most urgent chat *outside* focus that failed or needs you, dashed), two pins, "+N" and ☰. It
+  never grows wider: each new mechanic wanted its own chip. The dock only switches chats; there is no
+  long-press drag on it, because One UI's launcher owns that gesture at the bottom edge. Its sheet
+  opens from the handle *above* the bar, so swiping up never triggers Android's home gesture.
+- **The sheet** sorts by urgency, never by recency: failed, then needs you, running, new, idle. A
+  running chat shows its plan step by name, as segments with an ETA that admits its age (a range
+  once it is 30s stale). Pin is a visible ＋ because it is safe. Unpin is a swipe left because it is
+  destructive, and a resting tap target gets hit by scroll flicks. Undo is offered on *remove*.
+- **Full at 5:** a done pin steps out by itself, with Undo. The "Dock is full, swap out:" question
+  appears only when all five pins are still active. A running or waiting chat is never evicted for you.
+- **N5 unfolded (`split`) is a reading desk.** No dock and no 288px list next to the reply. A pill in
+  the chat header opens the same sheet as a drawer from the left, and Back closes it. Claude's prose
+  gets 17px at a 62ch measure (`.desk .msg-a` in `globals.css`). The pitch also put the composer in a
+  side pane beside the reply; **not built yet**, because it means restructuring `ChatColumn`'s footer.
+- **Not built yet from the pitch:** the keyboard-up quote strip (the picked option shown as two lines
+  with "swap ▾"). It needs option-picking in the composer first.
 
 ### How to re-audit
 

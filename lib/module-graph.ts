@@ -65,7 +65,9 @@ export const NODES: ModuleNode[] = [
   { id: "c/Inbox", label: "Inbox", sub: "phone home: every chat by\nwhat it needs (§23)", layer: "component", row: 29 },
   { id: "r/seen", label: "/api/agent/seen", sub: "server-side read marks\n(lib/seen.ts)", layer: "route", row: 19 },
   { id: "c/PhoneAccess", label: "PhoneAccess", sub: "📱 switch: dashboard on the\ntailnet + phones online", layer: "component", row: 30 },
-  { id: "c/ChatSheet", label: "ChatSheet", sub: "phone chat switcher\n(bottom sheet, <640px)", layer: "component", row: 27 },
+  { id: "c/Focus", label: "Focus", sub: "phone dock = focus set +\nprogress sheet / N5 drawer", layer: "component", row: 27 },
+  { id: "r/focus", label: "/api/agent/focus", sub: "the pinned focus set, ≤5\n(lib/focus.ts, all devices)", layer: "route", row: 20 },
+  { id: "r/glanceanswer", label: "/api/glance/answer", sub: "cover screen answers ONE\nquestion; never approves", layer: "route", row: 21 },
   { id: "c/Markdown", label: "Markdown", sub: "memoised renderer\n(chat + thought tones)", layer: "component", row: 3 },
   { id: "c/ThoughtBlock", label: "ThoughtBlock", sub: "reasoning passes,\nseam-split", layer: "component", row: 16, pipeline: "live" },
   { id: "c/AutopilotTile", label: "AutopilotTile", sub: "what got automated,\nin the grid", layer: "component", row: 19 },
@@ -223,7 +225,7 @@ export const NODES: ModuleNode[] = [
   // The few decisions that are about the DEVICE, not the box: a phone forces tabs and stacks the slot (§23).
   { id: "l/use-media", label: "use-media.ts", sub: "useMediaQuery / usePhone\n(device, not box — §23)", layer: "core", row: 20 },
   // The Flip 7 cover screen: counts, needs-you lines, one Pause-all button. Read-only bar the brake (§23).
-  { id: "app/glance", label: "/glance", sub: "cover-screen view (Flex Window)\nneeds · running · pause all", layer: "surface", row: 9, pipeline: "live" },
+  { id: "app/glance", label: "/glance", sub: "cover screen around its lenses\nask · answer · switch", layer: "surface", row: 9, pipeline: "live" },
   { id: "l/use-cover", label: "use-cover.ts", sub: "useCoverScreen()\nviewport AND screen ≤ 420×480", layer: "core", row: 21 },
   // Shared so "the browser matches the file preview" is a fact about the code, not a thing to re-check.
   { id: "c/PanelTabs", label: "PanelTabs", sub: "one tab row, worn by\nthe file AND browser panels", layer: "component", row: 23 },
@@ -512,10 +514,15 @@ export const EDGES: ModuleEdge[] = [
   { from: "r/inspectjs", to: "p/inspectcore", kind: "http", label: "concatenates at request" },
   { from: "p/inspectcore", to: "app/preview", kind: "http", label: "postMessage (hello · picked · errors)" },
   { from: "app/page", to: "app/preview", kind: "http", label: "window.open from a url chip" },
-  { from: "app/glance", to: "r/agent", kind: "http", label: "/live, 5s while visible" },
+  { from: "app/glance", to: "r/agent", kind: "http", label: "/live 5s while visible · /send a reply" },
   { from: "app/glance", to: "r/hold", kind: "http", label: "pause / resume all" },
   { from: "app/glance", to: "r/sessions", kind: "http", label: "?ids= titles only" },
   { from: "app/glance", to: "l/pagevisible", kind: "import" },
+  { from: "app/glance", to: "r/glanceanswer", kind: "http", label: "answer a question" },
+  { from: "r/glanceanswer", to: "l/manager", kind: "import" },
+  { from: "app/page", to: "c/Focus", kind: "import" },
+  { from: "c/Focus", to: "c/Inbox", kind: "import" },
+  { from: "app/page", to: "r/focus", kind: "http", label: "pin / unpin, 30s poll" },
   // Web push (§24).
   { from: "l/push-server", to: "l/manager", kind: "import", label: "liveEvents · liveActivity · pendingFor" },
   { from: "l/push-server", to: "l/sessions", kind: "import", label: "sessionTitle()" },
