@@ -744,6 +744,10 @@ export default function PreviewPopOut() {
         </span>
         {agent.queued.length > 0 && <span className="text-neutral-500">{agent.queued.length} queued</span>}
         <button type="button" onClick={() => { if (window.opener && !window.opener.closed) window.opener.focus(); else window.open("/", "_blank"); }} className="text-neutral-500 hover:text-neutral-200">open pane →</button>
+        {/* On a phone the toolbar's Send is a sideways swipe away; the thumb's copy lives here. */}
+        <button type="button" onClick={sendAll} disabled={!open.length || sending}
+          className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-[var(--sakura)] px-2.5 font-medium text-black disabled:opacity-40 md:hidden"
+        >{sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Send {open.length ? open.length : ""}</button>
 
         {switcher && (
           <>
