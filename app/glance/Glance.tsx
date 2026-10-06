@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from "react";
 import { onPageVisible, pageHidden } from "@/lib/page-visible";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
+import { COVER_QUERY, useCoverScreen } from "@/lib/use-cover";
+import { reportViewport } from "@/lib/viewport-report";
 
 // /glance — the Galaxy Z Flip 7 Flex Window (~360×400 CSS px, read at arm's length). §23.
 //
@@ -83,6 +85,15 @@ function Mark({ s }: { s: State }) {
 
 export function Glance() {
   useBuildRefresh();
+  // Came here by the main page's cover redirect (`?auto=1`)? Then unfolding the phone goes back to the
+  // board. Opened on purpose, it stays.
+  const cover = useCoverScreen();
+  useEffect(() => { reportViewport("/glance"); }, []);
+  // Asks matchMedia itself rather than trusting `cover`: during hydration the hook returns its SERVER
+  // value (false), and acting on that bounced every cover visit straight back to / — a redirect loop.
+  useEffect(() => {
+    if (!cover && !window.matchMedia(COVER_QUERY).matches && new URLSearchParams(location.search).has("auto")) location.replace("/");
+  }, [cover]);
   const [act, setAct] = useState<Activity | null>(null);
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [now, setNow] = useState(() => Date.now());
