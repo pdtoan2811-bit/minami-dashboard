@@ -446,6 +446,13 @@ costs nothing: a paused animation schedules no frames, which is the only measure
 
 ### The ask card — one question at a time, and one visible answer
 
+**Sending is visible (2026-10-07).** Send used to fire `answerAsk` and show nothing until the server
+replied, with failures going to the pane's error line, far from the card. A stalled request
+(see §3, the stream budget) looked like a dead button. Now the button reads **Sending…** and
+locks; after 5 s the card says the server is slow and not to click again; a failure (or the 45 s
+timeout on the request) is said **on the card**, with "Tap Send again". `answerAsk` resolves to `null`
+on success or the reason it failed.
+
 `AskUserQuestion` arrives through the same `canUseTool` hook as a permission prompt (§3) and renders as
 a wizard. Four rules, each of them a bug that was reported:
 
