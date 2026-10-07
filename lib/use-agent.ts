@@ -49,6 +49,21 @@ const AWAIT_HEAL_MS = 4000;
 // drifts the first time this is tuned.
 export const LINK_STALE_MS = 26_000;
 
+// ── The stream budget (2026-10-07) ─────────────────────────────────────────────────────────────────
+// Every pane holds one EventSource, and the dashboard is served over plain HTTP/1.1 on localhost, where
+// Chrome allows SIX connections per host. Measured: with six streams open, an ordinary fetch to the
+// same server did not complete in 8 s; with them closed, 2 ms. So six mounted panes (hidden ones
+// included — focus mode and tabs keep them mounted) froze the board, and a click on Send queued
+// silently until some stream closed: "clicked Send, nothing happened, then it sent much later". Worse,
+// the unpin logic below re-attached EVERY released pane on ANY click, so the click itself refilled the
+// six. Now at most STREAM_BUDGET streams are open per page, leaving two connections for everything
+// else. `need` (send, attach, resync) evicts the least-recently-used idle pane if the budget is full;
+// `want` (a background re-attach) waits for a free slot instead of evicting anyone. A pane mid-turn or
+// over an unanswered prompt is never evicted — its parked prompt must keep a client (§3, the reaper).
+const STREAM_BUDGET = 4;
+type StreamHolder = { releasable: () => boolean; lastUse: () => number; release: () => void };
+const openStreams = new Map<string, StreamHolder>();
+
 export function useAgent(paneKey: string) {
   const [turns, setTurns] = useState<AgentTurn[]>([]);
   const [live, setLive] = useState(false); // has this pane started driving a session?
@@ -126,8 +141,15 @@ export function useAgent(paneKey: string) {
   // EventSource silently dropped and reconnected — see the snapshot resync logic below.
   const lastDeltaAtRef = useRef(0);
 
-  const closeStream = useCallback(() => { esRef.current?.close(); esRef.current = null; }, []);
-  useEffect(() => closeStream, [closeStream]);
+  // The key the open stream was REGISTERED under — a pane's key can change while it is open (a blank
+  // chat adopting its session id), and deleting by the current key would leak a budget slot for good.
+  const streamKeyRef = useRef<string | null>(null);
+  const closeStream = useCallback(() => {
+    esRef.current?.close(); esRef.current = null;
+    if (streamKeyRef.current) { openStreams.delete(streamKeyRef.current); streamKeyRef.current = null; }
+  }, []);
+  // Close on unmount AND when the pane key changes — the stream belongs to the key it was opened for.
+  useEffect(() => closeStream, [closeStream, paneKey]);
 
   // Adopt a server activity state. The phase clock only restarts when the phase/label actually
   // changes, so a burst of text deltas doesn't reset the visible "12s" counter.
@@ -193,8 +215,21 @@ export function useAgent(paneKey: string) {
 
   // `attaching` marks a reconnect (page refresh) rather than a fresh send, so the server knows a
   // missing session is worth reporting as `detached` instead of a race with the send that's coming.
-  const ensureStream = useCallback((attaching?: boolean) => {
+  const ensureStream = useCallback((attaching?: boolean, mode: "need" | "want" = "need") => {
     if (esRef.current) return;
+    if (openStreams.size >= STREAM_BUDGET) {
+      const victim = [...openStreams.entries()]
+        .filter(([k, h]) => k !== paneKey && h.releasable())
+        .sort((a, b) => a[1].lastUse() - b[1].lastUse())[0];
+      if (mode === "want") { releasedRef.current = true; return; } // no room: stay released, a later tick retries
+      victim?.[1].release();
+    }
+    streamKeyRef.current = paneKey;
+    openStreams.set(paneKey, {
+      releasable: () => releasableRef.current,
+      lastUse: () => Math.max(lastActiveRef.current, lastDeltaAtRef.current),
+      release: () => { closeStream(); releasedRef.current = true; },
+    });
     const es = new EventSource(`/api/agent/stream?key=${encodeURIComponent(paneKey)}${attaching ? "&attach=1" : ""}`);
     // EventSource silently auto-reconnects at the transport level on a network blip (mobile switching
     // networks, laptop sleep/wake, a proxy idle-killing the connection) — `onopen` fires again each time
@@ -548,7 +583,8 @@ export function useAgent(paneKey: string) {
       releasedRef.current = false;
       if (esRef.current) return; // a send() already reopened it — don't flag a resync over a live stream
       attachingRef.current = true; // full resync, same path a manual refresh takes
-      ensureStream(true);
+      // `want`: a click anywhere fires this for EVERY released pane — it must not evict others.
+      ensureStream(true, "want");
     };
     // Any real interaction means this pane is in use again — re-attach before the user can notice it
     // was ever detached, and restart its idle clock.
@@ -557,6 +593,8 @@ export function useAgent(paneKey: string) {
       if (document.visibilityState === "visible") reattach();
     };
     const check = () => {
+      // Released for lack of room (the stream budget) — take a slot back once one is free.
+      if (!esRef.current && releasedRef.current && document.visibilityState === "visible" && openStreams.size < STREAM_BUDGET) { reattach(); return; }
       if (!esRef.current || !liveRef.current || detachedRef.current) return; // nothing pinned to give back
       // Never release mid-turn or over an unanswered prompt: a parked permission/AskUserQuestion promise
       // is auto-denied once the server reaps the session, so releasing would answer for the user, and
@@ -741,15 +779,24 @@ export function useAgent(paneKey: string) {
     } catch (e) { setError(`Couldn't send that decision — try again (${String((e as Error)?.message || e)})`); }
   }, [pending, paneKey]);
 
-  const answerAsk = useCallback(async (answers: Record<string, string | string[]>) => {
-    const a = ask; if (!a) return;
+  // Resolves to null when the answer landed, or to the reason it didn't — AskCard shows that reason on
+  // the card itself. It used to resolve to nothing and report failures through the pane's error line,
+  // so a slow server made Send look dead: no spinner, no message, and the answer arriving much later
+  // (2026-10-07). A 45 s cap so a wedged request ends in "try again" instead of an endless wait.
+  const answerAsk = useCallback(async (answers: Record<string, string | string[]>): Promise<string | null> => {
+    const a = ask; if (!a) return null;
     // Same reasoning as respond() above — don't clear the prompt until the server confirms it landed.
     try {
-      const r = await fetch("/api/agent/answer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: a.id, answers }) });
+      const r = await fetch("/api/agent/answer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: a.id, answers }), signal: AbortSignal.timeout(45_000) });
       const d = await r.json().catch(() => null);
-      if (!d?.ok) throw new Error("the server didn't confirm this answer");
+      if (!d?.ok) throw new Error(d?.error || "the server didn't confirm this answer");
       setAsk(null);
-    } catch (e) { setError(`Couldn't send that answer — try again (${String((e as Error)?.message || e)})`); }
+      return null;
+    } catch (e) {
+      const msg = (e as Error)?.name === "TimeoutError" ? "the server didn't answer in 45 s" : String((e as Error)?.message || e);
+      setError(`Couldn't send that answer — try again (${msg})`);
+      return msg;
+    }
   }, [ask, paneKey]);
 
   // Point this pane at a different model. Returns whether it applied, so the composer's picker can

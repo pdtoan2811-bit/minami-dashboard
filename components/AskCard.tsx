@@ -62,7 +62,7 @@ type Scale = (typeof SCALE)[keyof typeof SCALE];
 // unreviewable. Identical string at runtime, plain text on disk.
 const OTHER = "\u0000other";
 
-export default function AskCard({ questions, onAnswer }: { questions: AgentQuestion[]; onAnswer: (answers: Record<string, string | string[]>) => void }) {
+export default function AskCard({ questions, onAnswer }: { questions: AgentQuestion[]; onAnswer: (answers: Record<string, string | string[]>) => Promise<string | null> | void }) {
   const d = useDensityTier();
   const sc: Scale = atLeast(d, "snug") ? SCALE.reading : SCALE.compact;
   const [qi, setQi] = useState(0);
@@ -84,6 +84,26 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   // conversation that produced it in view, and the expanded card can't always leave room for that.
   // Lives here, not at the call site, so folding never remounts the card and loses half-made picks.
   const [folded, setFolded] = useState(false);
+  // Sending: a click that hasn't been confirmed yet must LOOK different from a dead button. Reported
+  // 2026-10-07: Send clicked, nothing happened, no warning, and the answer went through minutes later.
+  // So: the button says "Sending…" and locks (a second click can't double-send), after SLOW_MS it says
+  // the server is slow, and a failure is said here on the card, where the eyes are.
+  const [sending, setSending] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const [sendErr, setSendErr] = useState<string | null>(null);
+  const deliver = async (answers: Record<string, string | string[]>) => {
+    if (sending) return;
+    setSending(true); setSlow(false); setSendErr(null);
+    const t = setTimeout(() => setSlow(true), 5000);
+    try {
+      const err = await onAnswer(answers);
+      // On success the pane drops the ask and this card unmounts; nothing else to do.
+      if (err) setSendErr(err);
+    } finally {
+      clearTimeout(t);
+      setSending(false); setSlow(false);
+    }
+  };
 
   // team-ask's roster. A machine without it gets [] and no forward row — same card as before.
   useEffect(() => {
@@ -172,7 +192,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     return answers;
   };
 
-  const finish = () => onAnswer(buildAnswers());
+  const finish = () => deliver(buildAnswers());
   const next = () => (isLast ? finish() : setQi((i) => i + 1));
   const back = () => setQi((i) => Math.max(0, i - 1));
   // Skip just this question. Build answers with qi explicitly excluded rather than waiting on the
@@ -183,10 +203,10 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     setSel((p) => ({ ...p, [qi]: [] }));
     setOther((p) => ({ ...p, [qi]: "" }));
     setFwd((p) => ({ ...p, [qi]: undefined as unknown as TeamMember }));
-    if (isLast) onAnswer(buildAnswers(qi));
+    if (isLast) deliver(buildAnswers(qi));
     else setQi((i) => i + 1);
   };
-  const skipAll = () => onAnswer({});
+  const skipAll = () => deliver({});
 
   const count = answerFor(qi);
   const nPicked = Array.isArray(count) ? count.length : count ? 1 : 0;
@@ -320,11 +340,11 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
       {/* Pinned. This row is the exit from `phase=awaiting`; it may never be the thing that overflows. */}
       <div className="mt-2.5 flex shrink-0 flex-wrap items-center gap-2">
         {qi > 0 && <button onClick={back} className={`rounded-lg border border-white/15 px-3 py-1.5 ${sc.button} text-neutral-300 transition-colors hover:bg-white/10`}>← Back</button>}
-        <button onClick={next} disabled={!answered}
-          className={`rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 ${sc.button} font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40`}>
-          {isLast ? "Send answer" : "Next →"}
+        <button onClick={next} disabled={!answered || sending}
+          className={`rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 ${sc.button} font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40 ${sending ? "animate-pulse" : ""}`}>
+          {sending ? "Sending…" : isLast ? "Send answer" : "Next →"}
         </button>
-        <button onClick={skipOne} className={`${sc.skip} text-neutral-500 transition-colors hover:text-neutral-300 hover:underline`}>
+        <button onClick={skipOne} disabled={sending} className={`${sc.skip} text-neutral-500 transition-colors hover:text-neutral-300 hover:underline disabled:opacity-40`}>
           Skip{isLast && n > 1 ? " & send" : ""}
         </button>
         {/* What will actually be sent, in the words that will be sent. The old hint described the
@@ -337,7 +357,12 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
               : "nothing selected yet"}
         </span>
       </div>
-      {n > 1 && <button onClick={skipAll} className={`mt-1.5 ${sc.skip} text-neutral-600 transition-colors hover:text-neutral-400`}>Skip all {n} questions</button>}
+      {(slow || sendErr) && (
+        <p role="status" className={`mt-1.5 shrink-0 ${sc.hint} ${sendErr ? "text-[#ef7c7c]" : "text-[#f0a868]"}`}>
+          {sendErr ? `Didn't go through — ${sendErr}. Tap Send again.` : "Still sending — the server is slow right now. Your answer is on its way; no need to click again."}
+        </p>
+      )}
+      {n > 1 && <button onClick={skipAll} disabled={sending} className={`mt-1.5 ${sc.skip} text-neutral-600 transition-colors hover:text-neutral-400 disabled:opacity-40`}>Skip all {n} questions</button>}
     </div>
   );
 }

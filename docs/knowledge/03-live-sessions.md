@@ -576,6 +576,32 @@ indistinguishable from a logic error until you instrument it.
 > idle. Harness gotcha: the Bash tool refuses a foreground `sleep N`, so use `python3 -c
 > "import time; time.sleep(N)"` for the long command.
 
+### The stream budget — Chrome's six connections (2026-10-07)
+
+> 🐛 **"I click Send and nothing happens — no warning — then it sends much later."** Every pane holds
+> one `EventSource` (`/api/agent/stream`), and the dashboard is served over **plain HTTP/1.1** on
+> localhost, where Chrome allows **six connections per host, shared by every tab**. Measured in a real
+> browser: with six streams open, a plain `fetch('/api/agent/live')` did not complete in 8 s; with them
+> closed, 2 ms. Hidden panes count, because focus mode and tabs keep them mounted with `display:none`.
+> And the unpin logic made it worse: `onInteract` re-attached **every** released pane on **any**
+> pointerdown, so the click on Send itself refilled the six and its POST queued behind them. That
+> morning Thomas's Chrome held 5 of the 6.
+
+**`STREAM_BUDGET = 4` per page** (`lib/use-agent.ts`, `openStreams`), leaving two connections for
+everything else.
+- `ensureStream(attaching, "need")` is the default: send, attach-on-mount, resync, reconnect. If the
+  budget is full, it evicts the least-recently-used **releasable** pane (not mid-turn, no prompt
+  waiting; the 30 min reaper auto-denies a parked prompt with no client).
+- `"want"` is the background re-attach (after a click, on a 30 s tick). It never evicts: with no
+  room it stays released and retries when a slot frees.
+- `closeStream` frees the slot by the key the stream was registered under (`streamKeyRef`), because a
+  pane's key can change while it's open.
+
+**Not covered:** two dashboard **tabs** share the same six (4 + 4 > 6). Keep one tab, or use the
+tailnet URL: `tailscale serve` speaks **HTTP/2**, which multiplexes everything over one connection
+and has no six-per-host limit (`curl --http2` → `proto 2`). Proper fix if it recurs: one multiplexed
+stream per page instead of one per pane.
+
 ### Restart safety — the deploy kills every conversation
 
 Every live session's SDK subprocess is a **child of the Next server process**. `bin/serve.sh` kills
