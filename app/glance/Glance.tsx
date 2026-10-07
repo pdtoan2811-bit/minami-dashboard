@@ -61,7 +61,11 @@ import ChatName from "@/components/ChatName";
 // summary and a link to the main screen. What IS safe blind is answering Claude's own question (the
 // options are Claude's, not a command), replying to a chat that's waiting on you, and pause.
 
-type Need = { id: string; kind: "question" | "plan" | "held" | "permission"; tool: string; summary: string; options?: string[]; expiresAt?: number; since?: number };
+type Need = { id: string; kind: "question" | "plan" | "held" | "permission"; tool: string; summary: string; options?: string[]; expiresAt?: number; since?: number;
+  qs?: { q: string; header?: string; multi?: boolean; options: string[] }[] };
+/** A multi-question / multi-select ask, stepped through here: which question is up, and per question
+ *  the picked option indexes and any typed text. */
+type MqDraft = { qi: number; picks: number[][]; texts: string[] };
 type Progress = { done: number; total: number; now?: string; etaAt?: number; lastDoneAt?: number };
 type Tile = {
   phase: string; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; mode?: string; progress?: Progress;
@@ -192,6 +196,7 @@ export function Glance() {
   // need arriving doesn't yank the screen out from under a half-typed answer.
   const [curId, setCurId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [mqDrafts, setMqDrafts] = useState<Record<string, MqDraft>>({});
   const [typing, setTyping] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
@@ -298,7 +303,12 @@ export function Glance() {
   // attaches `options` to a single, single-select question, which is exactly what /api/glance/answer
   // accepts; anything else (multi-question, multi-select) goes to the main screen's full card.
   const isQuestion = need?.kind === "question" && !!need.options?.length;
-  const toolStep = !!need && !isQuestion; // permission / plan / held / a question too big for this screen
+  // A multi-question or multi-select ask. It used to be a "toolStep" with "Open on main screen ›" — but
+  // on the cover the main page redirects straight back here (useCoverScreen), so the link looped and
+  // the ask could not be answered on this screen at all (reported 2026-10-07: "can't answer
+  // questions, the board freezes"). Now it is stepped through here, one question at a time.
+  const mq = need?.kind === "question" && !isQuestion && need.qs?.length ? need.qs : null;
+  const toolStep = !!need && !isQuestion && !mq; // permission / plan / held — never approved from the cover
   const opts = isQuestion ? need!.options! : [];
   // Drafts are keyed by chat AND prompt, so answering one question doesn't leave its pick sitting on the next.
   const draftKey = cur ? `${cur.id}:${need?.id ?? ""}` : "";
@@ -306,6 +316,42 @@ export function Glance() {
   const setDraft = (d: Partial<Draft>) => setDrafts((p) => ({ ...p, [draftKey]: { ...draft, ...d } }));
 
   const goTo = (c: Chat | undefined) => { if (!c) return; setCurId(c.id); setSendErr(null); };
+
+  const mqd: MqDraft = mqDrafts[draftKey] ?? { qi: 0, picks: [], texts: [] };
+  const setMqd = (d: Partial<MqDraft>) => setMqDrafts((p) => ({ ...p, [draftKey]: { ...mqd, ...d } }));
+  const mqQ = mq ? mq[Math.min(mqd.qi, mq.length - 1)] : null;
+  const mqPick = (i: number) => {
+    if (!mq || !mqQ) return;
+    const cur_ = mqd.picks[mqd.qi] || [];
+    const next = mqQ.multi ? (cur_.includes(i) ? cur_.filter((x) => x !== i) : [...cur_, i]) : (cur_[0] === i ? [] : [i]);
+    const picks = [...mqd.picks]; picks[mqd.qi] = next;
+    setMqd({ picks });
+  };
+  const sendMq = async () => {
+    if (!cur || !mq || sending) return;
+    // Same shapes the main screen's AskCard sends: a list for multi-select, the label (with any typed
+    // words after it) for single, the typed words alone when nothing was picked. Unanswered questions
+    // are left out, as AskCard's Skip does.
+    const answers: Record<string, string | string[]> = {};
+    mq.forEach((q, k) => {
+      const labels = (mqd.picks[k] || []).map((i) => q.options[i]).filter(Boolean);
+      const t = (mqd.texts[k] || "").trim();
+      if (q.multi) { const a = [...labels, ...(t ? [t] : [])]; if (a.length) answers[q.q] = a; }
+      else { const v = labels[0] ? (t ? `${labels[0]} — ${t}` : labels[0]) : t; if (v) answers[q.q] = v; }
+    });
+    if (!Object.keys(answers).length) return;
+    setSending(true); setSendErr(null);
+    try {
+      const r = await fetch("/api/glance/answer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: cur.id, needId: need!.id, answers }) });
+      const d = await r.json().catch(() => null);
+      if (!d?.ok) throw new Error(d?.reason || d?.error || "not confirmed");
+      setMqDrafts((p) => { const n = { ...p }; delete n[draftKey]; return n; });
+      inputRef.current?.blur();
+      load();
+    } catch (e) {
+      setSendErr(String((e as Error)?.message || e) === "already settled" ? "Already answered elsewhere" : "Didn't send — try again");
+    } finally { setSending(false); }
+  };
 
   const send = async () => {
     if (!cur || sending) return;
@@ -505,7 +551,14 @@ export function Glance() {
       <div ref={threadBox} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-2 pt-1.5">
         <div className="flex min-h-full flex-col justify-end gap-2">
           {cur && fresh?.you && bubble(plain(fresh.you.replace(/<[^>]+>/g, " ")).slice(0, 160), "you", "you")}
-          {cur && isQuestion ? (
+          {cur && mq && mqQ ? (
+            <div className="flex">
+              <div className="max-w-[92%] rounded-2xl bg-white/[0.045] px-3 py-2">
+                <p className="text-[12px] tabular-nums text-neutral-500">{mqQ.header ? `${mqQ.header} · ` : ""}question {Math.min(mqd.qi, mq.length - 1) + 1} of {mq.length}{mqQ.multi ? " · pick any" : ""}</p>
+                <p className="mt-0.5 whitespace-pre-line text-[16px] leading-[23px] text-neutral-100">{mqQ.q}</p>
+              </div>
+            </div>
+          ) : cur && isQuestion ? (
             bubble(fresh?.question || need!.summary, "q")
           ) : cur && toolStep ? (
             <div className="rounded-2xl bg-white/[0.045] px-3 py-2.5">
@@ -549,10 +602,53 @@ export function Glance() {
           })}
         </div>
       )}
+      {!typing && mq && mqQ && (
+        <div className="flex shrink-0 gap-1.5 overflow-x-auto px-3 pb-1.5">
+          {mqd.qi > 0 && (
+            <button type="button" onClick={() => setMqd({ qi: mqd.qi - 1 })} className="flex h-10 shrink-0 items-center rounded-full px-3 text-[14px] text-neutral-400">‹</button>
+          )}
+          {mqQ.options.map((o, i) => {
+            const on = (mqd.picks[mqd.qi] || []).includes(i);
+            return (
+              <button key={i} type="button" onClick={() => mqPick(i)}
+                className={`flex h-10 max-w-[78%] shrink-0 items-center gap-2 rounded-full px-3.5 text-[14px] ${on ? "bg-[var(--sakura)]/20 text-neutral-50 ring-1 ring-[var(--sakura)]" : "bg-white/[0.08] text-neutral-200"}`}>
+                <span className={`text-[12px] ${on ? "text-[var(--sakura)]" : "text-neutral-500"}`}>{mqQ.multi ? (on ? "☑" : "☐") : i + 1}</span><span className="truncate">{o}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       {sendErr && <p className="shrink-0 px-4 pb-1 text-[13px] text-rose-400">{sendErr}</p>}
       {/* KEYBOARD INPUT — always here. Typing into a working chat queues a follow-up (the same as the
           main screen's composer while busy). */}
-      {cur && !toolStep && (
+      {cur && mq && mqQ && (() => {
+        const last = mqd.qi >= mq.length - 1;
+        const hasAny = mq.some((_, k) => (mqd.picks[k] || []).length || (mqd.texts[k] || "").trim());
+        return (
+          <form onSubmit={(e) => { e.preventDefault(); if (last) sendMq(); else setMqd({ qi: mqd.qi + 1 }); }} className="mx-3 mb-2 flex shrink-0 items-center gap-2 rounded-full bg-white/[0.08] py-1 pl-4 pr-1">
+            {/* The chips hide while typing, so the pick stays visible here — as the single-question form does. */}
+            {(mqd.picks[mqd.qi] || []).length > 0 && (
+              <span className="max-w-[40%] shrink-0 truncate text-[15px] text-[var(--sakura)]">{(mqd.picks[mqd.qi] || []).map((i) => mqQ.options[i]).join(", ")} —</span>
+            )}
+            <input
+              ref={inputRef}
+              value={mqd.texts[mqd.qi] || ""}
+              onChange={(e) => { const texts = [...mqd.texts]; texts[mqd.qi] = e.target.value; setMqd({ texts }); }}
+              onFocus={() => setTyping(true)}
+              onBlur={() => setTyping(false)}
+              enterKeyHint={last ? "send" : "next"}
+              placeholder={(mqd.picks[mqd.qi] || []).length ? "add a note, or go on" : "pick, or type"}
+              aria-label={`Answer to question ${mqd.qi + 1}`}
+              className="min-w-0 flex-1 bg-transparent py-1.5 text-[16px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
+            />
+            <button type="submit" aria-label={last ? "Send all answers" : "Next question"} disabled={sending || (last && !hasAny)} onPointerDown={(e) => e.preventDefault()}
+              className="flex h-9 min-w-9 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] px-2.5 text-[14px] text-white disabled:opacity-40">
+              {sending ? "…" : last ? "Send" : "›"}
+            </button>
+          </form>
+        );
+      })()}
+      {cur && !toolStep && !mq && (
         <form onSubmit={(e) => { e.preventDefault(); send(); }} className="mx-3 mb-2 flex shrink-0 items-center gap-2 rounded-full bg-white/[0.08] py-1 pl-4 pr-1">
           {draft.pick && <span className="shrink-0 text-[15px] text-[var(--sakura)]">{draft.pick} —</span>}
           <input

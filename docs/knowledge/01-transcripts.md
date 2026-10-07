@@ -35,6 +35,14 @@ Two passes. First a **stat-only** sweep over every project dir, sorted by mtime 
 > Cache thrash, indistinguishable from the original symptom. `CANDIDATE_WINDOW` is what actually
 > fixed it.
 
+> 🐛 **A temp-folder loop pushed every real project off the board (2026-10-07).** A chat in another
+> project ran `cd /tmp && claude -p "…"` in a loop, a benchmark writing one session per run. 130+ of
+> them in `/private/tmp` and `/private/var/folders/…/T` took most of the 150 candidate places and 56 of
+> the 60 listed, so ecvision vanished from the board. Scratch folders (`isScratchDir` on the projects
+> folder name, `isScratchCwd` on the cwd: `/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders`,
+> `os.tmpdir()`) are now capped: 10 candidates before the window, 5 of the 60 listed. The newest stay,
+> so a scratch chat you're actually in is still there.
+
 ### Turns: windows, not a tail
 
 `getSession()` returns a **page**, not a truncated tail: `{ meta, turns, start, hasMore }`, where

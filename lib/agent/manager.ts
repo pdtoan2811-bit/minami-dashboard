@@ -2149,7 +2149,10 @@ export function liveModels(): { key: string; cwd: string; model: string; premium
  *  Under bypassPermissions (this box's default) ordinary tool approvals almost never happen: the
  *  realistic needs are Claude's question, a plan to review (ExitPlanMode), and steps parked by the
  *  hold brake, which auto-DENY at `expiresAt`. `permission` covers a session set to ask/auto-edits. */
-export type Need = { id: string; kind: "question" | "plan" | "held" | "permission"; tool: string; summary: string; options?: string[]; expiresAt?: number; since?: number };
+export type Need = { id: string; kind: "question" | "plan" | "held" | "permission"; tool: string; summary: string; options?: string[]; expiresAt?: number; since?: number;
+  /** Every question of an AskUserQuestion, labels only — so the cover screen can step through a
+   *  multi-question or multi-select ask instead of sending you to a main screen it can't reach (§23). */
+  qs?: { q: string; header?: string; multi?: boolean; options: string[] }[] };
 export function needOf(id: string, toolName: string, input: unknown, held: boolean, expiresAt?: number, since?: number): Need {
   return { ...needBody(id, toolName, input, held, expiresAt), ...(since ? { since } : {}) };
 }
@@ -2158,7 +2161,11 @@ function needBody(id: string, toolName: string, input: unknown, held: boolean, e
   if (toolName === "AskUserQuestion") {
     const q = Array.isArray(i.questions) ? i.questions[0] : null;
     const opts = Array.isArray(q?.options) ? q.options.map((o: any) => String(o?.label ?? o)).slice(0, 4) : undefined;
-    return { id, kind: "question", tool: toolName, summary: String(q?.question || "Claude has a question").slice(0, 200), ...(opts?.length && (i.questions?.length ?? 1) === 1 && !q?.multiSelect ? { options: opts } : {}) };
+    const qs = Array.isArray(i.questions) ? i.questions.slice(0, 4).map((x: any) => ({
+      q: String(x?.question ?? ""), ...(x?.header ? { header: String(x.header).slice(0, 30) } : {}), ...(x?.multiSelect ? { multi: true } : {}),
+      options: Array.isArray(x?.options) ? x.options.map((o: any) => String(o?.label ?? o)).slice(0, 4) : [],
+    })) : undefined;
+    return { id, kind: "question", tool: toolName, summary: String(q?.question || "Claude has a question").slice(0, 200), ...(opts?.length && (i.questions?.length ?? 1) === 1 && !q?.multiSelect ? { options: opts } : {}), ...(qs?.length ? { qs } : {}) };
   }
   if (toolName === "ExitPlanMode") return { id, kind: "plan", tool: toolName, summary: "Plan ready for review", ...(expiresAt ? { expiresAt } : {}) };
   const target = i.command ?? i.file_path ?? i.notebook_path ?? i.url ?? i.pattern ?? i.path ?? "";

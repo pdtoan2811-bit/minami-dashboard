@@ -434,6 +434,18 @@ chats, and so does a sideways swipe on the header. The work bubble keeps its seg
 own "Step n of m" line, which now lives in the header. Titles are re-asked every 30 s
 (`TITLE_REFRESH_MS`), where before each id was asked once and never refreshed while the cover was open.
 
+> 🐛 **"Can't answer questions, the board freezes" (2026-10-07).** A question with several parts (or
+> pick-several) wasn't answerable on the cover. It showed "Claude asked something" and "Open on main
+> screen ›", and that link went to `/?open=<id>`, where `useCoverScreen` redirected straight back to
+> `/glance`. Tapping it flashed the board and bounced, which read as a freeze. Two fixes. **(1)** The
+> cover steps through such an ask itself: `Need.qs` carries every question's labels, the bubble says
+> "Metrics · question 1 of 2 · pick any", chips tick (☐/☑) or number, ‹ goes back, the field's button
+> reads › until the last question and then Send, and `/api/glance/answer` takes `answers` (question
+> text → string | string[], the shapes AskCard sends). Verified end to end on a test chat: the reply
+> repeated "Revenue and Growth … 5 rivals per category, top sellers only". **(2)** The main page no
+> longer redirects when the URL carries `open`: an explicit "Open on main screen" means the full app.
+> Plans and held steps still go that way. The cover never approves anything.
+
 ### Focus: the dock, the progress sheet, the N5 drawer — `components/Focus.tsx`, `lib/focus.ts`
 
 Shipped 2026-10-06. It came from a pitch (`~/ecvision/pitches/minami-phone`, rounds 5–9) that three
