@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-07
+- **Photos from the phone** (§5e, `components/Composer.tsx`, `app/page.tsx`). 📎 ▸ "Photo or camera…" opens the device chooser, and the image is shrunk to ≤2000px JPEG on the phone before upload. 📎 stays visible on touch screens, and the macOS-panel rows are hidden when remote.
 - **Link cards** (§5c, `components/LinkCard.tsx`, `app/api/link-meta`, `lib/tailnet.ts` `ownUrl`). Bare urls are now links. A line that is only a url renders as a card. Pages on this machine (loopback or our `*.ts.net`) show their title, an up/down dot and a live iframe thumbnail. Other urls get a compact card and no fetch.
 
 ### 2026-10-06
