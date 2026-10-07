@@ -18,6 +18,7 @@
 //   five are still active, so pinning is one tap almost every time. Nothing running is ever evicted.
 // - Sorted by urgency, never recency: failed → needs you → running → new → idle. Nothing expands or
 //   opens on its own; the sheet waits for the tap.
+import ChatName from "@/components/ChatName";
 import { memo, useMemo, useRef, useState, type TouchEvent } from "react";
 import { Plus, X } from "lucide-react";
 import { groupOf, Ring, type Group, type InboxLive, type InboxSession } from "@/components/Inbox";
@@ -79,7 +80,7 @@ function Segments({ p }: { p: TaskProgress }) {
 // ── the dock ──────────────────────────────────────────────────────────────────────────────────────
 export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden, onOpen, onSheet, onSwipe }: {
   ctx: Ctx;
-  current: { id: string | null; title: string };
+  current: { id: string | null; title: string; project?: string };
   /** Fallback while nothing is pinned yet: recently visited chats, so a new user's dock isn't empty. */
   recent: string[];
   hidden?: boolean;
@@ -114,7 +115,7 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
         className="flex w-full justify-center pb-1 pt-1.5"><span className="h-1 w-9 rounded-full bg-white/20" /></button>
       <div className="flex items-center gap-1.5 px-1.5" onTouchStart={onSwipe} onTouchEnd={onSwipe}>
         <button onClick={onSheet} className="flex h-10 min-w-0 max-w-[45%] shrink items-center gap-2 rounded-xl border border-[var(--sakura)]/50 bg-[var(--sakura)]/10 px-3 text-left">
-          <span className="min-w-0 truncate text-[14px] font-medium">{current.title}</span>
+          <span className="min-w-0 truncate text-[14px] font-medium">{current.project ? <ChatName project={current.project} title={current.title} /> : current.title}</span>
         </button>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {visitor && chip(visitor.id, groups[visitor.id], true)}
@@ -246,7 +247,7 @@ function Row({ s, l, g, icon, on, onOpen, onPin, onUnpin }: {
       <button onClick={() => (dx ? setDx(0) : onOpen(s.id))} className="flex min-w-0 flex-1 items-center gap-3 text-left">
         <span className="relative shrink-0"><ProjectIcon name={s.project} icon={icon} /><Ring g={g} /></span>
         <span className="min-w-0 flex-1">
-          <span className={`block truncate text-[15px] ${g === "idle" ? "text-neutral-300" : "font-medium text-neutral-50"}`}>{s.title}</span>
+          <span className={`block truncate text-[15px] ${g === "idle" ? "text-neutral-300" : "font-medium text-neutral-50"}`}><ChatName project={s.project} title={s.title} /></span>
           <span className={`block truncate text-[13px] ${g === "failed" ? "text-[#ef7c7c]" : g === "need" ? "text-[#4ade80]" : "text-neutral-500"} ${g === "running" && !l?.progress ? "italic" : ""}`}>{line}</span>
           {g === "running" && l?.progress && <span className="mt-1.5 block"><Segments p={l.progress} /></span>}
         </span>

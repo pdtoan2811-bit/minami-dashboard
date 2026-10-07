@@ -61,7 +61,7 @@ type SessionMeta = {
   id: string; project: string; cwd: string; gitBranch: string; title: string; lastPrompt: string;
   model: string; tier: string; tokensIn: number; tokensOut: number; cost: number;
   messages: number; tools: number; toolNames: string[]; lastActivity: number; active: boolean;
-  task?: string; goal?: string; lastRole?: string; tail?: string; review?: boolean;
+  task?: string; now?: string; goal?: string; lastRole?: string; tail?: string; review?: boolean;
 };
 // Reuses AgentToolCall (not a separate shape) so a disk-loaded tool call and a live-streamed one render
 // through the exact same code — `done`/`ms` just stay unset for disk data, `output` (incl. screenshots)
@@ -188,7 +188,9 @@ function isTrivial(s: SessionMeta) {
   return false;
 }
 const goalOf = (s: SessionMeta) => s.goal || "General";
-const titleOf = (s: SessionMeta) => s.task || s.title;
+// `now` first (§5h): the topic the chat is on NOW, re-derived every few asks. `task` is the label from
+// how it opened; `title` the raw seed. Each is the fallback for the one before.
+const titleOf = (s: SessionMeta) => s.now || s.task || s.title;
 
 type Project = { name: string; sessions: SessionMeta[]; cwd: string; reqs: number; tokens: number; last: number; active: boolean; review: boolean; goals: string[]; latest: string; weight: number };
 // Sessions → topics. A topic is not stored anywhere: it's `basename(cwd)`, grouped (see §5d). Pulled
@@ -1877,7 +1879,7 @@ export default function BentoHome() {
                 // keyboard is up — the keyboard owns that band then (Material: the nav bar may be covered
                 // by the keyboard, never permanently). Its contents are the FOCUS set: components/Focus.tsx
                 // carries the reasoning for every rule in it.
-                <FocusDock ctx={focusCtx} current={{ id: pn?.sid || null, title: s ? titleOf(s) : "New chat" }} recent={mru.current}
+                <FocusDock ctx={focusCtx} current={{ id: pn?.sid || null, title: s ? titleOf(s) : "New chat", project: s?.project }} recent={mru.current}
                   hidden={keyboardUp} onOpen={openChat} onSheet={() => setChatSheet(true)} onSwipe={swipe} />
               );
             })()}

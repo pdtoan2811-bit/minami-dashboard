@@ -5,6 +5,7 @@
 // variable, because Next evaluates this module separately in the instrumentation bundle and in every
 // route bundle that imports it — a module-level flag would subscribe to liveEvents twice and every
 // need would buzz the phone twice.
+import { chatTitle, projectLabel } from "../chat-title";
 import path from "node:path";
 import { createNotifier, type Notifier, type PushPayload } from "./notifier";
 import { devices, noteDelivery, removeDevice, vapidKeys } from "./store";
@@ -42,7 +43,8 @@ export async function notifier(): Promise<Notifier> {
       const t = sessionTitle(sid);
       const project = t?.project || topicOf(cwd).project || path.basename(cwd);
       const title = (t?.title || "").replace(/\s+/g, " ").trim();
-      return title ? `${project} · ${title.length > 60 ? title.slice(0, 59) + "…" : title}` : project;
+      // Same "Project: title" as every phone screen (§5h), so the notification and the chat it opens agree.
+      return title ? chatTitle(project, title.length > 60 ? title.slice(0, 59) + "…" : title) : projectLabel(project);
     },
   });
   G.__minamiPush = { n, timer: null };

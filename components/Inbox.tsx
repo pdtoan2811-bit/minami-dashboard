@@ -14,6 +14,7 @@
 //   reorders while you reach for it lands the tap on the wrong chat.
 // - Nothing approves from here. A row says what's needed; the decision is made in the chat, with
 //   the transcript beside it.
+import ChatName from "@/components/ChatName";
 import { memo, useMemo, useRef, useState } from "react";
 import { ProjectIcon } from "@/components/ProjectIcon";
 
@@ -152,11 +153,11 @@ const Row = memo(function Row({ s, l, group, icon, on, onOpen, onMarkRead }: {
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
-          <span className={`min-w-0 flex-1 truncate text-[15px] ${bold ? "font-semibold text-neutral-50" : "text-neutral-300"}`}>{s.title}</span>
+          <span className={`min-w-0 flex-1 truncate text-[15px] ${bold ? "font-semibold text-neutral-50" : "text-neutral-300"}`}><ChatName project={s.project} title={s.title} /></span>
           <span className={`shrink-0 text-[12px] tabular-nums ${group === "need" ? "text-[#f0a868]" : "text-neutral-500"}`}>{when}</span>
         </span>
         <span className={`block text-[13px] leading-snug ${group === "need" ? "line-clamp-2 text-neutral-200" : "truncate text-neutral-500"}`}>
-          <span className="text-neutral-500">{s.project} · </span>{group === "running" ? <i>{detail}</i> : detail}
+          {group === "running" ? <i>{detail}</i> : detail}
         </span>
       </span>
     </button>

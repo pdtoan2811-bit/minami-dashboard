@@ -6,6 +6,7 @@ import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { COVER_QUERY, useCoverScreen } from "@/lib/use-cover";
 import { reportViewport } from "@/lib/viewport-report";
 import { ProjectIcon } from "@/components/ProjectIcon";
+import ChatName from "@/components/ChatName";
 
 // /glance — the Galaxy Z Flip 7 Flex Window (~360×400 CSS px, read at arm's length). §23.
 //
@@ -72,6 +73,7 @@ type Chat = { id: string; t: Tile; state: State; title: string; project: string;
 type Draft = { pick: number | null; text: string };
 
 const POLL_MS = 5000;
+const TITLE_REFRESH_MS = 30_000;
 const DONE_WINDOW_MS = 30 * 60_000; // finished (ok or not) within the last half hour still counts as focus
 const RESUME_CONFIRM_MS = 4000;
 
@@ -197,6 +199,7 @@ export function Glance() {
   // back to when this page first saw it, which is a lower bound rather than a fabrication.
   const firstSeen = useRef<Map<string, number>>(new Map());
   const asked = useRef<Set<string>>(new Set());
+  const swipeX = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -228,17 +231,23 @@ export function Glance() {
 
   // Titles: only for ids we haven't asked about. `?ids=` keeps it to a few hundred bytes instead of
   // the whole board's session list (see the route).
+  // Asked once per id, titles never moved while the cover stayed open — and the title is the one
+  // thing on this screen saying which chat you're in. The rolling title (§5h) changes every few asks,
+  // so every id is re-asked each TITLE_REFRESH_MS; new ids are still asked at once.
+  const titlesAt = useRef(0);
   useEffect(() => {
     if (!act) return;
-    const missing = Object.keys(act).filter((id) => !asked.current.has(id));
+    const due = Date.now() - titlesAt.current > TITLE_REFRESH_MS;
+    const missing = due ? Object.keys(act) : Object.keys(act).filter((id) => !asked.current.has(id));
     if (!missing.length) return;
+    if (due) titlesAt.current = Date.now();
     missing.forEach((id) => asked.current.add(id));
     fetch(`/api/bento/sessions?ids=${missing.map(encodeURIComponent).join(",")}`, { cache: "no-store" })
       .then((r) => r.json())
-      .then((d: { sessions?: { id: string; title?: string; task?: string }[] }) => {
+      .then((d: { sessions?: { id: string; title?: string; task?: string; now?: string }[] }) => {
         const add: Record<string, string> = {};
-        // task || title — the same choice as the board's titleOf, so a chat reads the same on both screens.
-        for (const s of d.sessions || []) { const t = s.task || s.title; if (t) add[s.id] = t; }
+        // now || task || title — the board's titleOf, so a chat reads the same on both screens.
+        for (const s of d.sessions || []) { const t = s.now || s.task || s.title; if (t) add[s.id] = t; }
         if (Object.keys(add).length) setTitles((p) => ({ ...p, ...add }));
       })
       // Retry on a later poll rather than leaving the folder-name fallback up forever.
@@ -408,7 +417,7 @@ export function Glance() {
                 <button type="button" onClick={() => { goTo(c); setView("cover"); }} className="flex min-h-[48px] min-w-0 flex-1 items-center gap-3 py-1.5 text-left">
                   <span className="flex w-3 justify-center"><Mark s={c.state} /></span>
                   <span className="min-w-0 flex-1">
-                    <span className={`block truncate text-[15px] leading-[20px] ${c.id === cur?.id ? "font-semibold" : ""} ${c.state === "done" ? "text-neutral-400" : ""}`}>{c.title}</span>
+                    <span className={`block truncate text-[15px] leading-[20px] ${c.id === cur?.id ? "font-semibold" : ""} ${c.state === "done" ? "text-neutral-400" : ""}`}><ChatName project={c.project} title={c.title} /></span>
                     <span className={`block truncate text-[13px] leading-[18px] ${c.state === "fail" ? "text-rose-400" : "text-neutral-500"}`}>{line}</span>
                   </span>
                 </button>
@@ -427,7 +436,6 @@ export function Glance() {
   }
 
   const pg = cur?.state === "work" || cur?.state === "held" ? cur.t.progress : undefined;
-  const left = pg?.etaAt ? Math.max(1, Math.round((pg.etaAt - now) / 60000)) : null;
   const fresh = thread && thread.key === threadKey ? thread : null;
   const paras = (fresh?.text || cur?.t.ended?.text || "").split(/\n{2,}/).map(readable).filter(Boolean);
   const FACES = 6;
@@ -458,10 +466,40 @@ export function Glance() {
           {offline}
         </div>
       )}
-      {/* The chat's name, one quiet line: the faces say WHICH project, this says which chat in it. */}
-      <p className="shrink-0 truncate px-4 pt-1 text-[13px] text-neutral-500">
-        {cur ? <><span className={cur.state === "fail" ? "text-rose-400" : cur.state === "you" ? "text-neutral-200" : ""}>{STATE_WORD[cur.state]}</span> · {cur.title}</> : stale ? "Not updating" : act ? "Nothing needs you" : "Loading…"}
-      </p>
+      {/* WHERE YOU ARE — the header (§5h, 2026-10-07). It used to be one 13px grey line under faces
+          that only showed project icons, so two chats in one repo looked identical and "which chat is
+          this, how far along" took reading the bubbles. Now: "Project: title" at reading size, then
+          state · progress · n of m, with ‹ › (and a swipe on the header) to step through the chats. */}
+      {(() => {
+        const step = (d: number) => goTo(focus[(curIdx + d + focus.length) % focus.length]);
+        const pgH = cur && (cur.state === "work" || cur.state === "held") ? cur.t.progress : undefined;
+        const leftH = pgH?.etaAt ? Math.max(1, Math.round((pgH.etaAt - now) / 60000)) : null;
+        const status = !cur ? "" : cur.state === "work" || cur.state === "held"
+          ? (pgH && pgH.total > 0 ? `step ${Math.min(pgH.done + 1, pgH.total)} of ${pgH.total}${leftH ? ` · ~${leftH}m left` : ""}` : `for ${age(now - cur.since)}`)
+          // age() says "now" under a minute, which read as "now ago" / "waiting now" in this sentence.
+          : cur.state === "you" ? (age(now - cur.since) === "now" ? "just asked" : `waiting ${age(now - cur.since)}`)
+          : cur.state === "done" ? (age(now - cur.since) === "now" ? "just now" : `${age(now - cur.since)} ago`) : "";
+        return (
+          <div className="flex shrink-0 items-center gap-0.5 px-1 pt-1"
+            onTouchStart={(e) => { swipeX.current = e.touches[0].clientX; }}
+            onTouchEnd={(e) => { const x = swipeX.current; swipeX.current = null; if (x == null || focus.length < 2) return; const dx = e.changedTouches[0].clientX - x; if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1); }}>
+            {focus.length > 1 && <button type="button" aria-label="Previous chat" onClick={() => step(-1)} className="flex h-11 w-7 shrink-0 items-center justify-center text-[20px] text-neutral-500">‹</button>}
+            <div className="min-w-0 flex-1 px-1">
+              {cur ? (
+                <>
+                  <p className="line-clamp-2 text-[16px] font-semibold leading-[20px] text-neutral-50"><ChatName project={cur.project} title={cur.title} /></p>
+                  <p className="truncate text-[13px] leading-[18px] text-neutral-400">
+                    <span className={cur.state === "fail" ? "text-rose-400" : cur.state === "you" ? "text-[#f0a868]" : cur.state === "work" ? "text-neutral-200" : ""}>{STATE_WORD[cur.state]}</span>
+                    {status && ` · ${status}`}
+                    {focus.length > 1 && <span className="tabular-nums text-neutral-500"> · {curIdx + 1}/{focus.length}</span>}
+                  </p>
+                </>
+              ) : <p className="py-2 text-[15px] text-neutral-400">{stale ? "Not updating" : act ? "Nothing needs you" : "Loading…"}</p>}
+            </div>
+            {focus.length > 1 && <button type="button" aria-label="Next chat" onClick={() => step(1)} className="flex h-11 w-7 shrink-0 items-center justify-center text-[20px] text-neutral-500">›</button>}
+          </div>
+        );
+      })()}
 
       {/* THE THREAD — newest at the bottom, scrolls like any messenger. */}
       <div ref={threadBox} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-2 pt-1.5">
@@ -484,7 +522,6 @@ export function Glance() {
                 {pg && pg.total > 0 ? (
                   <>
                     <div className="mt-2 flex gap-[3px]">{Array.from({ length: Math.min(pg.total, 12) }).map((_, i) => <span key={i} className={`h-[5px] flex-1 rounded-full ${i < pg.done ? "bg-neutral-200" : i === pg.done ? "bg-neutral-500" : "bg-white/10"}`} />)}</div>
-                    <p className="mt-1.5 text-[13px] tabular-nums text-neutral-400">Step {Math.min(pg.done + 1, pg.total)} of {pg.total}{left ? ` · about ${left}m left` : ""}</p>
                   </>
                 ) : <p className="mt-1 text-[13px] text-neutral-500">for {age(now - cur.since)}</p>}
               </div>
