@@ -31,6 +31,11 @@ const FRAME_W = 1280, FRAME_H = 800;
 function LinkCard({ url, label }: { url: string; label?: string }) {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [copied, setCopied] = useState(false);
+  // The live thumbnail is OPT-IN, one tap on "Preview" (fixed 2026-10-07). It used to mount on its own
+  // as soon as the card neared the viewport, and every frame is a whole running page: a chat that
+  // listed a few dev servers mounted a few apps, an animation-heavy pitch page pinned the main
+  // thread, and a link to the dashboard itself framed the dashboard inside the dashboard, with every
+  // poller and SSE stream that brings. The board froze and a pending question couldn't be answered.
   const [visible, setVisible] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [scale, setScale] = useState(0.3);
@@ -38,22 +43,13 @@ function LinkCard({ url, label }: { url: string; label?: string }) {
 
   useEffect(() => { let alive = true; loadMeta(url).then((m) => { if (alive) setMeta(m); }); return () => { alive = false; }; }, [url]);
 
-  // Mount the frame only once the card is near the viewport: a long transcript can hold a dozen of
-  // these, and each frame is a whole running page.
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el || visible) return;
-    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); } }, { rootMargin: "200px" });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [visible, meta]);
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setScale(el.clientWidth / FRAME_W));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [meta]);
+  }, [meta, visible]);
 
   let u: URL | null = null;
   try { u = new URL(url); } catch { /* rendered as plain text by the caller's regex anyway */ }
@@ -62,8 +58,11 @@ function LinkCard({ url, label }: { url: string; label?: string }) {
   const remote = viewedRemotely();
   // What the frame loads: the url as written on the desktop; on a phone, a loopback url has to become
   // its tailnet address, and if it hasn't been exposed there is nothing the phone could load.
-  const frameSrc = !own || meta?.ok === false ? null : remote && isLoopbackUrl(url) ? meta?.remote || null : url;
   const port = u.port || (u.protocol === "https:" ? "443" : "80");
+  // Never frame the dashboard itself — same origin, or its loopback port seen from here.
+  const here = typeof window !== "undefined" ? window.location : null;
+  const isDashboard = !!here && (u.origin === here.origin || (isLoopbackUrl(url) && port === (here.port || (here.protocol === "https:" ? "443" : "80")) && !remote) || (isLoopbackUrl(url) && port === "3000"));
+  const frameSrc = !own || isDashboard || meta?.ok === false ? null : remote && isLoopbackUrl(url) ? meta?.remote || null : url;
   const host = own ? (isLoopbackUrl(url) ? `localhost:${port}` : `this mac :${port}`) : u.hostname.replace(/^www\./, "");
   const path = (u.pathname + u.search).replace(/\/$/, "") || "/";
   const title = meta?.title || (label && label !== url ? label : null) || (path !== "/" ? path.split("/").filter(Boolean).pop() : host);
@@ -88,10 +87,10 @@ function LinkCard({ url, label }: { url: string; label?: string }) {
     <div onClick={open} role="link" tabIndex={0} title={url}
       onKeyDown={(e) => { if (e.key === "Enter") open(); }}
       className="group/link my-1 w-full max-w-[460px] cursor-pointer overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] transition-colors hover:border-white/25 hover:bg-white/[0.05]">
-      {frameSrc && (
+      {frameSrc && visible && (
         <div ref={boxRef} className="relative w-full overflow-hidden border-b border-white/[0.06] bg-black/40" style={{ aspectRatio: `${FRAME_W} / ${FRAME_H}` }}>
           {!loaded && <div className="absolute inset-0 animate-pulse bg-white/[0.04]" />}
-          {visible && (
+          {(
             // pointer-events off and out of the tab order: it is a picture of the page, and the card's
             // click is the way in. sandbox without allow-top-navigation, so a page that redirects its
             // top window can't take the dashboard with it.
@@ -121,6 +120,12 @@ function LinkCard({ url, label }: { url: string; label?: string }) {
             {own && meta?.ok === false && <span className="shrink-0 font-sans text-[#e07a70]">· not responding</span>}
           </span>
         </span>
+        {frameSrc && (
+          <button onClick={(e) => { e.stopPropagation(); setVisible((v) => !v); setLoaded(false); }} title={visible ? "Hide the live preview" : "Load a live preview of the page"}
+            className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-neutral-400 transition hover:bg-white/10 hover:text-neutral-100">
+            {visible ? "Hide" : "Preview"}
+          </button>
+        )}
         <button onClick={copy} title="Copy link"
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-neutral-500 opacity-60 transition hover:bg-white/10 hover:text-neutral-200 group-hover/link:opacity-100">
           {copied ? <Check className="h-3.5 w-3.5 text-[#1f8a5c]" /> : <Copy className="h-3.5 w-3.5" />}

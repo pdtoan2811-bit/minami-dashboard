@@ -483,8 +483,9 @@ export function listSessions(): SessionMeta[] {
   // commit 6505ed2 fixed, reintroduced via cache thrash instead of a busted incremental parser. mtime is
   // a safe proxy for recency here (any activity, including an in-progress stream, touches it), so this
   // can't wrongly drop a genuinely active session outside the window.
-  const candidates: { file: string; id: string; mtime: number }[] = [];
+  const candidates: { file: string; id: string; mtime: number; scratch: boolean }[] = [];
   for (const d of dirs) {
+    const scratch = isScratchDir(d);
     const dir = path.join(PROJECTS, d);
     let files: string[];
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
@@ -492,11 +493,16 @@ export function listSessions(): SessionMeta[] {
       const file = path.join(dir, f);
       const id = f.replace(/\.jsonl$/, "");
       touchLRU(idIndex, id, file, ID_INDEX_MAX); // free id→path index for getSession()'s hot polling path
-      try { candidates.push({ file, id, mtime: fs.statSync(file).mtimeMs }); } catch { /* gone mid-scan */ }
+      try { candidates.push({ file, id, mtime: fs.statSync(file).mtimeMs, scratch }); } catch { /* gone mid-scan */ }
     }
   }
   candidates.sort((a, b) => b.mtime - a.mtime);
-  const windowed = candidates.length > CANDIDATE_WINDOW ? candidates.slice(0, CANDIDATE_WINDOW) : candidates;
+  // Scratch-folder transcripts are capped HERE too, before the window: a looping `cd /tmp && claude -p`
+  // wrote 130+ of them in a day and they took most of the 150 places, so real projects never even got
+  // parsed (2026-10-07). See SCRATCH_CAP.
+  let sc = 0;
+  const kept = candidates.filter((c) => !c.scratch || ++sc <= SCRATCH_CAP * 2);
+  const windowed = kept.length > CANDIDATE_WINDOW ? kept.slice(0, CANDIDATE_WINDOW) : kept;
 
   const out: SessionMeta[] = [];
   for (const { file, id } of windowed) {
@@ -511,7 +517,24 @@ export function listSessions(): SessionMeta[] {
   // Merge the semantic layer (meaningful task title + topic) from the enrichment cache.
   const enr = getEnrichment();
   for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; m.review = e.review; m.now = e.now; } }
-  return out.sort((a, b) => b.lastActivity - a.lastActivity).slice(0, 60);
+  // Scratch-folder chats get at most SCRATCH_CAP of the 60 places. A chat in another project that
+  // loops `cd /tmp && claude -p "…"` writes one session per run, and on 2026-10-07 a benchmark run
+  // filled 56 of the 60 with them, so ecvision and every other real project dropped off the board.
+  // The newest few stay visible, so a scratch chat you're actually in is still there.
+  const sorted = out.sort((a, b) => b.lastActivity - a.lastActivity);
+  let scratch = 0;
+  return sorted.filter((m) => !isScratchCwd(m.cwd) || ++scratch <= SCRATCH_CAP).slice(0, 60);
+}
+
+const SCRATCH_CAP = 5;
+// macOS reports the temp dirs both ways (/tmp vs /private/tmp, /var/folders vs /private/var/folders).
+const SCRATCH_DIRS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"].map((d) => d.replace(/\/+$/, ""));
+function isScratchCwd(cwd: string): boolean {
+  return SCRATCH_DIRS.some((d) => cwd === d || cwd.startsWith(d + "/"));
+}
+/** The same test on a ~/.claude/projects folder name (the cwd with every / and . turned into -). */
+function isScratchDir(encoded: string): boolean {
+  return SCRATCH_DIRS.some((d) => { const e = d.replace(/[/.]/g, "-"); return encoded === e || encoded.startsWith(e + "-"); });
 }
 
 /**

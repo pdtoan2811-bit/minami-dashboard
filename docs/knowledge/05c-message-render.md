@@ -129,6 +129,13 @@ paragraph: links get pasted as "here's the pitch:⏎url⏎and…", and single ne
 in this renderer, so the paragraph splits around the card. Chat tone only. Never on the block that is
 still streaming, where a half-typed url would fetch and frame every prefix of itself.
 
+> 🐛 **Thumbnails are opt-in now, behind a "Preview" button (2026-10-07).** They used to mount on
+> their own near the viewport, and every frame is a whole running page. A few dev-server links mounted
+> a few apps, an animated pitch page pinned the main thread, and a `localhost:3000` link would have
+> framed the dashboard inside itself, with all its pollers. The dashboard's own origin (and loopback
+> :3000) is never framed. Found while chasing a reported freeze. It wasn't that freeze's cause (see
+> §23, the cover loop), but it was one link away from being one.
+
 - **Pages on this machine** get the full card: the page's `<title>` / `og:*` from `/api/link-meta`,
   an up/down dot, and a live thumbnail, which is the page itself in a 1280×800 iframe scaled to the card's
   width. It is not a screenshot, so it is never stale and nothing runs a browser. The iframe mounts only near

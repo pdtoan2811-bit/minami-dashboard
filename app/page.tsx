@@ -1194,7 +1194,10 @@ export default function BentoHome() {
   const cover = useCoverScreen();
   // `?auto` marks the trip as ours, so /glance sends you back when the phone is unfolded — and only then:
   // a /glance opened on purpose (a bookmark, a test on the Mac) stays put.
-  useEffect(() => { if (cover) location.replace("/glance?auto=1"); }, [cover]);
+  // …unless the cover itself sent you here. Its "Open on main screen ›" links to /?open=<id> for what it
+  // can't do (a plan to review, a held step), and redirecting those straight back made the link a loop
+  // that read as a frozen board (2026-10-07). An explicit `open` means "I chose the full app".
+  useEffect(() => { if (cover && !new URLSearchParams(location.search).has("open")) location.replace("/glance?auto=1"); }, [cover]);
   useEffect(() => { reportViewport("/"); }, []);
   useBackLayer(!!proj, closePanel);
   useBackLayer(chatSheet, () => setChatSheet(false));
