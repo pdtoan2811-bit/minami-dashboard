@@ -16,8 +16,11 @@ export const ENRICH_MARKER = ".minami-bento"; // sessions spawned by the summari
 // Project > Goal > Task. `project` is deterministic (cwd); `goal` is a mid-level objective WITHIN
 // the project that groups related sessions; `task` is the specific session. Curate this file by hand
 // or via the `bento-taxonomy` skill — it's the source of truth and only auto-filled when missing.
-export type Entry = { messages: number; goal: string; task: string; review: boolean };
-export type Digest = { id: string; project: string; title: string; lastPrompt: string; toolNames: string[]; messages: number; lastRole: string; tail: string; active?: boolean };
+export type Entry = { messages: number; goal: string; task: string; review: boolean;
+  /** What the conversation is about NOW (§5h), and the ask count it was derived at. */
+  now?: string; nowAsks?: number };
+export type Digest = { id: string; project: string; title: string; lastPrompt: string; toolNames: string[]; messages: number; lastRole: string; tail: string; active?: boolean;
+  asks?: string[]; askCount?: number };
 
 // Run Haiku via the local `claude` CLI WITHOUT blocking the Node event loop. spawnSync used to freeze
 // the entire server (every request — including transcript loads) for the whole call; this returns a
@@ -116,6 +119,7 @@ export async function enrich(digests: Digest[]): Promise<Record<string, Entry>> 
         const d = todo.find((x) => x.id === it?.id);
         if (d && it?.task) {
           latest[it.id] = {
+            ...latest[it.id], // keeps the rolling `now` (§5h); the fields below are this call's to set
             messages: d.messages,
             goal: String(it.goal || latest[it.id]?.goal || "General").slice(0, 40),
             task: String(it.task).slice(0, 70),
@@ -128,4 +132,64 @@ export async function enrich(digests: Digest[]): Promise<Record<string, Entry>> 
     }
   } catch { /* summarizer unavailable — callers fall back to heuristic titles */ }
   return cache;
+}
+
+// ── The rolling title (§5h) ────────────────────────────────────────────────────────────────────────
+// `task` above is labelled once, from the OPENING ask, on purpose: a label that chased the last
+// message renamed a forty-turn chat "deploy the app". But a chat that genuinely moves on — model pins,
+// then the ask card, then link cards, then a deploy — kept its first name all day, and on the phone,
+// where the title is most of what you see, that read as "I don't know where I am" (reported
+// 2026-10-07). Claude Code's own `ai-title` rows don't help: measured on that very session, 67 rows,
+// one text, never revised.
+//
+// So a SECOND label, `now`, re-derived from the last three real asks every RETITLE_EVERY of them.
+// Three asks is the debounce: one message is noise ("ok do it"), three in a row about something is a
+// topic. Only at a turn's end (lastRole assistant), never mid-stream, and one Haiku call at a time —
+// the reason `needs()` refuses active sessions (a stall per live turn) doesn't apply to a call made
+// once per three asks, in the background, after the turn.
+export const RETITLE_EVERY = 3;
+let retitling = false;
+
+function needsNow(d: Digest, e: Entry | undefined): boolean {
+  const n = d.askCount || 0;
+  if (n < RETITLE_EVERY || d.lastRole !== "assistant" || !(d.asks || []).length) return false;
+  return n - (e?.nowAsks || 0) >= RETITLE_EVERY;
+}
+
+export async function retitle(digests: Digest[]): Promise<void> {
+  if (retitling) return;
+  const cache = readCache();
+  const todo = digests.filter((d) => needsNow(d, cache[d.id])).slice(0, 8);
+  if (!todo.length) return;
+  retitling = true;
+  try {
+    const lines = todo.map((d, i) => {
+      const asks = (d.asks || []).map((a) => `"${a.slice(0, 120).replace(/"/g, "'")}"`).join(" → ");
+      return `${i + 1}. id=${d.id} | project=${d.project} | opened="${(d.title || "").slice(0, 90)}" | recent asks (oldest→newest)=${asks} | last reply="${(d.tail || "").slice(0, 140)}"`;
+    }).join("\n");
+    const prompt =
+      `Each line is a Claude Code chat. Name what each chat is about NOW — judged from its recent asks, not from how it opened.\n` +
+      `Rules: 3-7 words, concrete (name the feature, screen, bug or decision), no project name, no quotes, no "and" lists of everything.\n` +
+      `Write it in the language of the recent asks. If the chat is still on its opening topic, name that topic.\n` +
+      `Return ONLY a JSON array: [{"id":"<id>","now":"<title>"}].\n\n${lines}`;
+    let text = await runHaiku(prompt);
+    try { text = JSON.parse(text).result || text; } catch { /* raw */ }
+    const m = text.match(/\[[\s\S]*\]/);
+    if (!m) return;
+    const arr = JSON.parse(m[0]) as any[];
+    const latest = readCache(); // re-read after the await — same reason as enrich()
+    for (const it of arr) {
+      const d = todo.find((x) => x.id === it?.id);
+      const now = String(it?.now || "").trim().replace(/^["']|["']$/g, "");
+      if (!d || !now) continue;
+      const prev = latest[d.id];
+      latest[d.id] = prev
+        ? { ...prev, now: now.slice(0, 70), nowAsks: d.askCount || 0 }
+        // Never labelled yet: goal left empty so needs() still sends it through enrich() for its real
+        // goal/task — which keeps `now` (it spreads the existing entry).
+        : { messages: 0, goal: "", task: "", review: false, now: now.slice(0, 70), nowAsks: d.askCount || 0 };
+    }
+    writeCache(latest);
+  } catch { /* summarizer unavailable — the opening title stays */ }
+  finally { retitling = false; }
 }

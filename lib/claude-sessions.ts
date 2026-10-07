@@ -99,6 +99,9 @@ export type SessionMeta = {
   lastActivity: number;
   active: boolean;
   task?: string;   // specific task (Project > Goal > Task)
+  now?: string;    // what the conversation is about NOW — rolling, re-derived every few asks (§5h)
+  asks: string[];  // the last few real asks, newest last
+  askCount: number;
   goal?: string;   // mid-level objective within the project, for grouping
   lastRole: string; // "user" | "assistant" — who spoke last (a cheap review signal)
   tail: string;      // short snippet of the last message (for the semantic review check)
@@ -131,6 +134,10 @@ type ParseAccum = {
   // known (`firstUser`) and closed, rather than letting whatever message arrives next claim it and
   // freeze the title on something from the middle of the conversation.
   titleSeed: string; seedClosed: boolean;
+  // Where the conversation IS, not where it started (§5h): the last few real asks, newest last, and how
+  // many there have been. The rolling title is re-derived from these every few asks. Optional because
+  // accumulators restored from an older cache don't have them; they start counting from here.
+  asks?: string[]; askCount?: number;
   tin: number; tout: number; cost: number; messages: number; tools: number;
   toolSet: string[];
   lastTs: number;
@@ -162,7 +169,9 @@ const META_DERIVATION_VERSION = 5;
 // v2: `attachment` rows carrying a `queued_command` are now folded in as user turns — without the bump
 // every transcript already parsed keeps its cached fold, so the messages this fix recovers would only
 // appear in sessions that happen to receive another message.
-const PARSE_VERSION = 2;
+// v3: `asks` / `askCount` (§5h, the rolling title). Without the bump every open chat would start
+// counting at zero and keep its opening title for three more messages — the exact complaint.
+const PARSE_VERSION = 3;
 
 // Fingerprint of a file's first `len` bytes — cheap (len is capped small) and used ONLY to tell "this
 // file was purely appended to" apart from "this file was truncated and rewritten, but happens to have
@@ -298,6 +307,13 @@ function foldLine(acc: ParseAccum, line: string): void {
       if (c && looksLikeATopic(c)) acc.titleSeed = c;
     }
     if (txt.trim()) { acc.lastText = txt.trim(); acc.lastRole = "user"; }
+    // A real ask, not a tool result (no text), a harness injection (`<task-notification>`, a
+    // `<system-reminder>`, a local-command echo — all open on a tag) or a one-word nudge.
+    const ask = txt.trim() && !/^\s*[<[]/.test(txt) ? cleanTitle(txt.trim()) : "";
+    if (ask && looksLikeATopic(ask)) {
+      acc.asks = [...(acc.asks || []), ask.slice(0, 160)].slice(-3);
+      acc.askCount = (acc.askCount || 0) + 1;
+    }
   } else if (r.type === "assistant") {
     acc.messages++;
     const m = r.message || {};
@@ -378,6 +394,7 @@ function buildMeta(id: string, file: string, acc: ParseAccum, mtime: number): Se
     tokensIn: acc.tin, tokensOut: acc.tout, cost: acc.cost, messages: acc.messages, tools: acc.tools,
     toolNames: acc.toolSet.slice(0, 8),
     lastRole: acc.lastRole, tail: acc.lastText.replace(/\s+/g, " ").slice(0, 200),
+    asks: acc.asks || [], askCount: acc.askCount || 0,
     lastActivity, active: Date.now() - lastActivity < 120000,
   };
 }
@@ -493,7 +510,7 @@ export function listSessions(): SessionMeta[] {
   saveDiskCache(); // persist any newly-parsed files so the next launch is warm
   // Merge the semantic layer (meaningful task title + topic) from the enrichment cache.
   const enr = getEnrichment();
-  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; m.review = e.review; } }
+  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; m.review = e.review; m.now = e.now; } }
   return out.sort((a, b) => b.lastActivity - a.lastActivity).slice(0, 60);
 }
 
@@ -537,7 +554,7 @@ export function listSessionsIn(cwds: string[], limit = 200): SessionMeta[] {
   }
   saveDiskCache();
   const enr = getEnrichment();
-  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; m.review = e.review; } }
+  for (const m of out) { const e = enr[m.id]; if (e) { m.task = e.task; m.goal = e.goal; m.review = e.review; m.now = e.now; } }
   return out.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
@@ -806,6 +823,14 @@ export function resolveSessionFile(id: string): string {
   return found;
 }
 
+/** One session's full summary, for a caller that names it — the rolling retitle on turn end (§5h). */
+export function sessionMeta(id: string): SessionMeta | null {
+  loadDiskCache();
+  const file = resolveSessionFile(id);
+  if (!file) return null;
+  try { return summarize(file, id); } catch { return null; }
+}
+
 /** One chat's title and project, for a caller that names a single session — the push notifier (§24).
  *  summarize() is incremental, so after the first call this is a stat, not a parse. Null if the
  *  transcript isn't on disk yet (the CLI writes it a beat after the session starts). */
@@ -815,7 +840,10 @@ export function sessionTitle(id: string): { title: string; project: string } | n
   if (!file) return null;
   try {
     const m = summarize(file, id);
-    return { title: m.title, project: m.project };
+    // The same choice as the board's titleOf (now || task || title), so a notification names the chat
+    // the way the screen you open it on does.
+    const e = getEnrichment()[id];
+    return { title: e?.now || e?.task || m.title, project: m.project };
   } catch { return null; }
 }
 

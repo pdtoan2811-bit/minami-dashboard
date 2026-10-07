@@ -22,6 +22,7 @@ import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agen
 import { activityLabel, inputFromPartial, isAskTeamTool, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
 import { findSubagentFile, subagentModel } from "../claude-sessions";
 import { BLACKSMITH_WORKER_MODEL, DASHBOARD_MODEL, FANOUT_WORKER_MODEL } from "../model-pins";
+import { retitleSoon } from "../retitle";
 import { teamBriefing } from "../team-roster";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
@@ -1259,6 +1260,8 @@ function handleMessage(s: Session, m: any) {
         s.smith.turnWork = 0;
       }
       broadcast(s, { t: "result", subtype: m.subtype, costUsd: m.total_cost_usd ?? m.cost_usd });
+      // Keep the chat's title on the topic it's on now (§5h) — a no-op until three new asks have landed.
+      retitleSoon(s.sessionId);
       {
         const ok = m.subtype === "success";
         s.ended = { at: Date.now(), ok, ...(s.lastText ? { text: s.lastText } : {}), ...(ok ? {} : { error: String(m.subtype) }), ...(s.turnStartedAt ? { turnMs: Date.now() - s.turnStartedAt } : {}) };

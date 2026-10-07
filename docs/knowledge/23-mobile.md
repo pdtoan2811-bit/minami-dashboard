@@ -426,6 +426,14 @@ this way; nobody has confirmed a WebAPK specifically. Not yet tried on the devic
 opens at `start_url` (`/`), so either the main page redirects via `useCoverScreen()`, or you install a
 second shortcut to `/glance`.
 
+**The header (2026-10-07).** "Couldn't tell where I am or how far along it is." The chat's name was one
+13px grey line, and the faces above it are project icons only, so two chats in one repo looked
+identical. The header is now two lines: "Project: title" (16px, up to two lines, §5h), then state ·
+progress (`step 3 of 5 · ~4m left`, `waiting 3m`, `5m ago`) · `n/m`. ‹ › on either side step through the
+chats, and so does a sideways swipe on the header. The work bubble keeps its segment bar but drops its
+own "Step n of m" line, which now lives in the header. Titles are re-asked every 30 s
+(`TITLE_REFRESH_MS`), where before each id was asked once and never refreshed while the cover was open.
+
 ### Focus: the dock, the progress sheet, the N5 drawer — `components/Focus.tsx`, `lib/focus.ts`
 
 Shipped 2026-10-06. It came from a pitch (`~/ecvision/pitches/minami-phone`, rounds 5–9) that three
