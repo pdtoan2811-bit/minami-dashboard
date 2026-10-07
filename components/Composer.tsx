@@ -204,12 +204,36 @@ function caretY(mirrorEl: HTMLElement, index: number): number | null {
 
 /* ---------------- component ---------------- */
 
-export default function Composer({ value, onChange, onSubmit, placeholder, disabled }: {
+// A phone photo is 3–12 MB at 4000px; the paste route takes 5 MB and the API downsizes past 1568px
+// anyway. So it is shrunk HERE, on the phone, before a byte crosses the tailnet: 2000px JPEG is a few
+// hundred KB and loses nothing Claude would have seen. Small files go as they are (a screenshot stays
+// a lossless PNG). If the browser can't decode it (HEIC on some builds) the original goes and the
+// route's own type check says why.
+const SHRINK_EDGE = 2000;
+async function shrinkPhoto(f: File): Promise<File> {
+  if (f.size <= 1.5 * 1024 * 1024 && /^image\/(png|jpeg|gif|webp)$/.test(f.type)) return f;
+  try {
+    const bmp = await createImageBitmap(f, { imageOrientation: "from-image" });
+    const k = Math.min(1, SHRINK_EDGE / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext("2d")!.drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close();
+    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/jpeg", 0.85));
+    return blob ? new File([blob], f.name.replace(/\.[^.]*$/, "") + ".jpg", { type: "image/jpeg" }) : f;
+  } catch { return f; }
+}
+
+export default function Composer({ value, onChange, onSubmit, placeholder, disabled, pickPhotoRef }: {
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Filled with a function that opens the device's photo picker (gallery / camera / files). The 📎
+   *  menu lives in the pane, but the upload and the caret insertion live here, so the menu borrows
+   *  this rather than a second copy of either. */
+  pickPhotoRef?: React.MutableRefObject<(() => void) | null>;
 }) {
   const touchOnly = useMediaQuery("(hover: none) and (pointer: coarse)");
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -377,6 +401,21 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
     for (const f of files) upload(f, f.type.startsWith("image/") ? "paste" : "drop");
   };
 
+  // The photo route — the only way to get an image off a phone (no drag, and paste depends on the
+  // keyboard). A real <input type=file>: on Android it opens the system chooser with Camera, Gallery
+  // and Files; there is no web API that reaches the gallery any other way.
+  const photoRef = useRef<HTMLInputElement>(null);
+  if (pickPhotoRef) pickPhotoRef.current = () => photoRef.current?.click();
+  const onPhotos = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ""; // so picking the same photo twice still fires a change
+    setPasteError(null);
+    for (const f of files) {
+      setPasting((n) => n + 1);
+      shrinkPhoto(f).then((s) => upload(s, "paste")).finally(() => setPasting((n) => n - 1));
+    }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const el = ref.current;
     if (!el) return;
@@ -453,6 +492,7 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
           <span key={i}>{tintLine(l, `l${i}`)}{i < lines.length - 1 ? "\n" : ""}</span>
         ))}
       </div>
+      <input ref={photoRef} type="file" accept="image/*" multiple hidden onChange={onPhotos} />
       <textarea
         ref={ref}
         value={value}

@@ -681,6 +681,18 @@ one-line operation — **put an absolute path in the textarea**. That is not tid
 composer's contract (the textarea is the single source of truth for what Claude receives), and it is
 what lets `lib/agent/images.ts` inline a dropped screenshot for free, with no code path of its own.
 
+**Fifth way in, from the phone (2026-10-07): 📎 ▸ Photo or camera…** Before it, a phone had no way to
+attach a picture: no drag, the native panels open on the Mac, "Browse here" browses the Mac's disk, and
+paste depends on the keyboard handing Chrome an image. The row clicks a hidden `<input type=file
+accept="image/*" multiple>` owned by `Composer` (borrowed through `pickPhotoRef`, so upload and caret
+insertion stay single-copy). On Android that opens the system chooser: Camera, Gallery and Files.
+Photos go through `/api/fs/paste` like a pasted screenshot, but are **shrunk on the phone first** (over
+1.5 MB → ≤2000px JPEG). A camera photo is 3–12 MB against the route's 5 MB cap, and the API downsizes
+past 1568px anyway. A 12 MB 4000×3000 test image arrived as 2000×1500, 1.5 MB. Undecodable (HEIC on
+some builds) → the original goes and the route's type check says why. On a touch screen 📎 shows
+even when density would fold it, and on a non-loopback host the two macOS-panel rows are hidden
+(they'd open a modal on a Mac nobody is at). A remote desktop gets "Image from this computer…" instead.
+
 **The constraint that shapes all of it: a browser will not tell you a local file's path.**
 `<input type="file">` and the File System Access API both hand back bytes and a bare `name`; the path
 is withheld from web content and no flag returns it. So any browser-native picker forces a *copy* —

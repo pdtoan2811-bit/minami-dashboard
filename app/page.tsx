@@ -2574,6 +2574,12 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   const [attachMenu, setAttachMenu] = useState(false); // 📎 → which picker?
   const [nativeBusy, setNativeBusy] = useState(false); // a macOS panel is open ON THE MAC
   const [attachErr, setAttachErr] = useState<string | null>(null);
+  // Opens the device's photo chooser via Composer, which owns the upload (see pickPhotoRef there).
+  const pickPhoto = useRef<(() => void) | null>(null);
+  // On a phone the 📎 is the ONLY way in for a picture, so it stays even when density folds it away
+  // on a desktop; and the macOS-panel rows go, because the panel opens on a Mac nobody is in front of.
+  const touch = useMediaQuery("(hover: none) and (pointer: coarse)");
+  const remote = typeof window !== "undefined" && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname);
   const [planning, setPlanning] = useState(false); // Plan vs Code — default Code
   // Approval level in Code mode; persisted so your last choice (incl. bypass) becomes the default.
   // PER SESSION, with the last choice as the seed for the next new chat. It used to be one global key
@@ -3632,7 +3638,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           // send/stop buttons beside it would collapse the controls mid-gesture and move the button out
           // from under the cursor — and with queueing there are now TWO buttons over there to reach.
           onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setComposing(false); }}>
-          {atLeast(dc, "tight") && (
+          {(atLeast(dc, "tight") || touch) && (
             <div className="relative shrink-0 self-end">
               <button onClick={() => setAttachMenu((v) => !v)} disabled={!cwd || nativeBusy}
                 title="Attach a file or folder (inserts its path for Claude to read) — or just drag one in"
@@ -3643,8 +3649,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
                   {/* Upward, like every other fold-out down here: this hangs off the composer at the
                       bottom of a pane whose root is `overflow-hidden`. */}
                   <div className="absolute bottom-full left-0 z-20 mb-1 w-64 overflow-hidden rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
-                    <MenuRow label="Choose files…" hint="The real macOS panel — ⌘⇧G, favourites, search" onClick={() => chooseNative("file")} />
-                    <MenuRow label="Choose folder…" hint="Same panel, folders only" onClick={() => chooseNative("folder")} />
+                    {/* First on a touch screen — it is the reason you opened the menu there. */}
+                    {touch && <MenuRow label="Photo or camera…" hint="From this device — gallery, camera or files" onClick={() => { setAttachMenu(false); pickPhoto.current?.(); }} />}
+                    {!remote && <MenuRow label="Choose files…" hint="The real macOS panel — ⌘⇧G, favourites, search" onClick={() => chooseNative("file")} />}
+                    {!remote && <MenuRow label="Choose folder…" hint="Same panel, folders only" onClick={() => chooseNative("folder")} />}
+                    {!touch && remote && <MenuRow label="Image from this computer…" hint="Uploads a copy — for a laptop that isn't the Mac" onClick={() => { setAttachMenu(false); pickPhoto.current?.(); }} />}
                     {/* Kept, and kept last: the native panel opens on the Mac, so this is the only one
                         that works from a pane open on the phone. */}
                     <MenuRow label="Browse here" hint="In-app browser — works from any device" onClick={() => { setAttachMenu(false); setAttachOpen(true); }} />
@@ -3655,7 +3664,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             </div>
           )}
           <Composer
-            value={input} onChange={setInput} onSubmit={submit}
+            value={input} onChange={setInput} onSubmit={submit} pickPhotoRef={pickPhoto}
             // "Message Claude in minami-dashboard…" wraps to three lines in a narrow pane, and the
             // composer's own comment (see Composer.tsx) records that the browser lays out the
             // placeholder for real — so a long one isn't just ugly, it's what the empty box is sized by.
