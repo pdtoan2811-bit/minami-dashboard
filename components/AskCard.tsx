@@ -375,7 +375,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
           of choosing an answer, not an action on the card, and it must never push Send off the pane. */}
       {team.length > 0 && (
         <div className={`mt-2 flex shrink-0 flex-wrap items-center gap-1.5 ${sc.chip}`}>
-          <span className="text-neutral-500">Not mine →</span>
+          <span className="text-neutral-400">Not mine — ask:</span>
           {team.map((m) => {
             const on = fwd[qi]?.key === m.key;
             return (
@@ -388,7 +388,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
               </button>
             );
           })}
-          {fwd[qi] && <span className="text-neutral-500">· Claude will ask them on Slack</span>}
+          {fwd[qi] && <span className="basis-full text-[var(--sakura)]">→ On send, Claude asks {fwd[qi].name} on Slack and waits; the wait shows here as a card.</span>}
         </div>
       )}
 

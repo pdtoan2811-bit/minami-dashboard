@@ -40,13 +40,14 @@ const ago = (t: number) => {
   return m < 1 ? "now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
 };
 
-/** Desktop entry, beside the bell. */
+/** Desktop entry, beside the bell. Always there once team-ask is set up — quiet when nothing waits —
+ *  because an entry that only exists while something waits gave no way back to what you'd sent. */
 export function TeamButton({ waiting, onOpen }: { waiting: number; onOpen: () => void }) {
   return (
-    <button onClick={onOpen} title={`${waiting} from the team`} aria-label="From the team"
-      className="relative rounded-lg border border-[var(--sakura)]/40 px-2 py-1 text-xs leading-none text-[var(--sakura)]">
+    <button onClick={onOpen} title={waiting ? `${waiting} from the team` : "From the team — nothing waiting"} aria-label="From the team"
+      className={`relative rounded-lg border px-2 py-1 text-xs leading-none ${waiting ? "border-[var(--sakura)]/40 text-[var(--sakura)]" : "border-white/10 text-neutral-500 hover:text-neutral-300"}`}>
       <Users className="h-3.5 w-3.5" />
-      <span className="absolute -right-1 -top-1 min-w-[15px] rounded-full bg-[var(--sakura)] px-1 text-[9px] font-semibold leading-[15px] text-white">{waiting > 9 ? "9+" : waiting}</span>
+      {waiting > 0 && <span className="absolute -right-1 -top-1 min-w-[15px] rounded-full bg-[var(--sakura)] px-1 text-[9px] font-semibold leading-[15px] text-white">{waiting > 9 ? "9+" : waiting}</span>}
     </button>
   );
 }
@@ -67,6 +68,9 @@ export function TeamRow({ inbox, waiting, onOpen }: { inbox: Inbox; waiting: num
   );
 }
 
+const EXPLAIN_KEY = "minami.team-explain.";
+const explainedChat = (ts: string): string | null => { try { return localStorage.getItem(EXPLAIN_KEY + ts); } catch { return null; } };
+
 type View = { kind: "list" } | { kind: "card"; ts: string } | { kind: "dm"; ts: string };
 
 export function TeamSheet({ inbox, reload, onClose, onExplained }: {
@@ -80,11 +84,15 @@ export function TeamSheet({ inbox, reload, onClose, onExplained }: {
   const dm = view.kind === "dm" ? inbox?.dms.find((d) => d.ts === view.ts) : undefined;
   const [explaining, setExplaining] = useState(false);
   const [explainErr, setExplainErr] = useState("");
-  const explain = async (ts: string, isDm: boolean) => {
+  const explain = async (ts: string, isDm: boolean, fresh = false) => {
+    // One explain chat per card: a second tap used to start a second chat, 15s later, with no sign the
+    // first one existed (audit 2026-10-08). The id is remembered here and reopened; "new" starts over.
+    const prev = !fresh && explainedChat(ts);
+    if (prev) { onExplained(prev); onClose(); return; }
     setExplaining(true); setExplainErr("");
     try {
       const d = await (await fetch("/api/team/explain", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ts, dm: isDm }) })).json();
-      if (d?.ok && d.sessionId) { onExplained(d.sessionId); onClose(); }
+      if (d?.ok && d.sessionId) { try { localStorage.setItem(EXPLAIN_KEY + ts, d.sessionId); } catch { /* private mode */ } onExplained(d.sessionId); onClose(); }
       else setExplainErr(d?.error || "Couldn't start the chat");
     } catch { setExplainErr("Couldn't start the chat"); }
     setExplaining(false);
@@ -106,8 +114,8 @@ export function TeamSheet({ inbox, reload, onClose, onExplained }: {
           {!inbox ? <p className="p-6 text-center text-sm text-neutral-500">Reading Slack…</p>
           : !inbox.ok ? <p className="p-6 text-sm text-neutral-400">{inbox.reason}</p>
           : view.kind === "list" ? <List inbox={inbox} onPick={setView} />
-          : card ? <CardView card={card} reload={reload} explaining={explaining} explainErr={explainErr} onExplain={() => explain(card.ts, false)} />
-          : dm ? <DmView dm={dm} gate={inbox.gates.files} reload={reload} explaining={explaining} explainErr={explainErr} onExplain={() => explain(dm.ts, true)} />
+          : card ? <CardView key={card.ts} card={card} reload={reload} explaining={explaining} explainErr={explainErr} onExplain={(fresh) => explain(card.ts, false, fresh)} />
+          : dm ? <DmView key={dm.ts} dm={dm} gate={inbox.gates.files} reload={reload} explaining={explaining} explainErr={explainErr} onExplain={(fresh) => explain(dm.ts, true, fresh)} />
           : <p className="p-6 text-sm text-neutral-500">That one is gone — withdrawn or answered elsewhere.</p>}
         </div>
       </div>
@@ -123,12 +131,14 @@ const STATE: Record<TeamCard["state"], { label: string; cls: string }> = {
 };
 
 function List({ inbox, onPick }: { inbox: Inbox; onPick: (v: View) => void }) {
-  const live = inbox.cards.filter((c) => c.state === "open" || c.state === "sent");
+  // Open before Sent: what needs you first, what's in flight after.
+  const live = inbox.cards.filter((c) => c.state === "open" || c.state === "sent").sort((a, b) => (a.state === "open" ? 0 : 1) - (b.state === "open" ? 0 : 1));
   const done = inbox.cards.filter((c) => c.state === "answered" || c.state === "expired").slice(0, 8);
   const Row = ({ c }: { c: TeamCard }) => (
     <button onClick={() => onPick({ kind: "card", ts: c.ts })} className="block w-full border-b border-white/[0.05] px-4 py-3 text-left hover:bg-white/[0.03]">
       <span className="flex items-baseline gap-2 text-[12px]">
         <span className={`font-semibold ${STATE[c.state].cls}`}>{STATE[c.state].label}</span>
+        <span className="rounded border border-white/10 px-1 text-[10.5px] text-neutral-400">{c.kind === "review" ? "Review" : "Decision"}</span>
         <span className="text-neutral-500">{c.asker}{c.repo ? ` · ${c.repo}` : ""} · {ago(c.at)}</span>
         {c.files.length > 0 && <Paperclip className="h-3 w-3 text-neutral-500" />}
       </span>
@@ -138,6 +148,7 @@ function List({ inbox, onPick }: { inbox: Inbox; onPick: (v: View) => void }) {
   );
   return (
     <>
+      {live.length > 0 && <h3 className="px-4 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.09em] text-[#4ade80]">{live.filter((c) => c.state === "open").length} need you</h3>}
       {live.length === 0 && inbox.dms.length === 0 && <p className="p-6 text-center text-sm text-neutral-500">Nothing waiting on you.</p>}
       {live.map((c) => <Row key={c.ts} c={c} />)}
       {inbox.dms.length > 0 && <h3 className="px-4 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.09em] text-neutral-500">Messages</h3>}
@@ -167,19 +178,20 @@ const Sec = ({ title, children }: { title: string; children: React.ReactNode }) 
   </section>
 );
 
-function ExplainButton({ onExplain, explaining, err }: { onExplain: () => void; explaining: boolean; err: string }) {
+function ExplainButton({ ts, onExplain, explaining }: { ts: string; onExplain: (fresh?: boolean) => void; explaining: boolean }) {
+  const prev = typeof window !== "undefined" && !!explainedChat(ts);
   return (
-    <>
-      <button onClick={onExplain} disabled={explaining}
+    <span className="flex flex-col items-stretch gap-1 sm:items-start">
+      <button onClick={() => onExplain()} disabled={explaining}
         className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/15 px-4 text-[14px] text-neutral-200 hover:border-white/30 disabled:opacity-50">
-        <Sparkles className="h-4 w-4" />{explaining ? "Starting a chat…" : "Explain with AI"}
+        <Sparkles className="h-4 w-4" />{explaining ? "Starting a chat… (~15s)" : prev ? "Continue the AI chat" : "Explain with AI"}
       </button>
-      {err && <p className="text-[12px] text-[#ef7c7c]">{err}</p>}
-    </>
+      {prev && !explaining && <button onClick={() => onExplain(true)} className="text-[12px] text-neutral-500 underline-offset-2 hover:underline">or start a new one</button>}
+    </span>
   );
 }
 
-function CardView({ card, reload, onExplain, explaining, explainErr }: { card: TeamCard; reload: (force?: boolean) => void; onExplain: () => void; explaining: boolean; explainErr: string }) {
+function CardView({ card, reload, onExplain, explaining, explainErr }: { card: TeamCard; reload: (force?: boolean) => void; onExplain: (fresh?: boolean) => void; explaining: boolean; explainErr: string }) {
   // Pre-pick the asker's recommendation, as the Slack card does: agreeing is then one tap on Send.
   const [picked, setPicked] = useState<string[][]>(() => card.questions.map((q) => (q.rec ? [q.rec] : [])));
   const [other, setOther] = useState<string[]>(() => card.questions.map(() => ""));
@@ -187,7 +199,18 @@ function CardView({ card, reload, onExplain, explaining, explainErr }: { card: T
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState("");
   const editable = card.state === "open";
+  // An unanswered question used to go out silently as null (audit 2026-10-08). Send now says how many
+  // are left and stays off until each has a pick or words.
+  const missing = card.questions.filter((_, i) => !picked[i]?.length && !other[i]?.trim()).length;
+  // team-ask reconciles every ~20s, and the inbox polls every 30s — so after a send, look again at 10s
+  // and 25s rather than leave "Sent" up for a minute after Slack has closed the card.
+  useEffect(() => {
+    if (card.state !== "sent") return;
+    const a = setTimeout(() => reload(true), 10_000), b = setTimeout(() => reload(true), 25_000);
+    return () => { clearTimeout(a); clearTimeout(b); };
+  }, [card.state, reload]);
   const send = async () => {
+    if (missing) return;
     setSending(true); setErr("");
     const answers: Answer[] = card.questions.map((_, i) => (picked[i].length || other[i].trim() ? { picked: picked[i], ...(other[i].trim() ? { text: other[i].trim() } : {}) } : null));
     try {
@@ -196,25 +219,18 @@ function CardView({ card, reload, onExplain, explaining, explainErr }: { card: T
     } catch { setErr("Didn't send — try again"); }
     setSending(false);
   };
+  const background = !!(card.doing || card.blocking || card.settled?.length);
 
+  // Order (audit 2026-10-08): what they want from you first — headline, why it's yours, the review ask,
+  // the questions — then the material. It used to open on "What they're doing" and the settled list,
+  // and on the folded phone the actual question sat two screens down, Send further still.
   return (
-    <div className="px-4 pb-6 pt-3 md:px-5">
-      <p className="text-[12px] text-neutral-500"><span className={`font-semibold ${STATE[card.state].cls}`}>{STATE[card.state].label}</span> · {card.repo || "no repo"} · {ago(card.at)}{card.context ? ` · ${card.context}` : ""}</p>
+    <div className="px-4 pt-3 md:px-5">
+      <p className="text-[12px] text-neutral-500"><span className={`font-semibold ${STATE[card.state].cls}`}>{STATE[card.state].label}</span> · {card.kind === "review" ? "Review" : "Decision"} · {card.repo || "no repo"} · {ago(card.at)}</p>
       <h2 className="mt-1 text-[19px] font-semibold leading-snug text-neutral-50">{card.headline || card.topic}</h2>
       {card.headline && card.topic !== card.headline && <p className="text-[13px] text-neutral-500">{card.topic}</p>}
-      {card.doing && <Sec title="What they're doing">{card.doing}</Sec>}
       {card.whyNow && <Sec title={card.kind === "review" ? "Why they want your review" : "Why it's your call"}>{card.whyNow}</Sec>}
-      {card.blocking && <Sec title="What it blocks">{card.blocking}</Sec>}
-      {card.settled?.length ? <Sec title="Already settled">{card.settled.map((s) => `• ${s}`).join("\n")}</Sec> : null}
-      {card.review && <Sec title="Review">{card.review.ask}{card.review.steps?.length ? "\n" + card.review.steps.map((s, i) => (/^\d+[.)]/.test(s) ? s : `${i + 1}. ${s}`)).join("\n") : ""}</Sec>}
-      {card.files.map((f) => (
-        <details key={f.name} className="mt-4 rounded-xl border border-white/10">
-          <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-3 text-[14px] text-neutral-300"><Paperclip className="h-3.5 w-3.5" />{f.name} <span className="text-neutral-600">· {f.lines} lines</span></summary>
-          {/\.(md|markdown)$/i.test(f.name)
-            ? <div className="max-h-[60vh] overflow-auto border-t border-white/10 px-3 py-2 text-[14px]"><Markdown text={f.text} /></div>
-            : <pre className="max-h-[50vh] overflow-auto border-t border-white/10 p-3 text-[12px] leading-relaxed text-neutral-300">{f.text}</pre>}
-        </details>
-      ))}
+      {card.review && <Sec title="What to review">{card.review.ask}{card.review.steps?.length ? "\n" + card.review.steps.map((s, i) => (/^\d+[.)]/.test(s) ? s : `${i + 1}. ${s}`)).join("\n") : ""}</Sec>}
 
       {card.questions.map((q, i) => (
         <section key={i} className="mt-6">
@@ -237,26 +253,50 @@ function CardView({ card, reload, onExplain, explaining, explainErr }: { card: T
         </section>
       ))}
 
+      {card.files.map((f) => (
+        <details key={f.name} className="mt-5 rounded-xl border border-white/10">
+          <summary className="flex min-h-[44px] min-w-0 cursor-pointer items-center gap-2 px-3 text-[14px] text-neutral-300">
+            <Paperclip className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 truncate">{f.name}</span><span className="shrink-0 text-neutral-600">· {f.lines} lines</span>
+          </summary>
+          {/\.(md|markdown)$/i.test(f.name)
+            ? <div className="max-h-[60vh] overflow-auto border-t border-white/10 px-3 py-2 text-[14px]"><Markdown text={f.text} /></div>
+            : <pre className="max-h-[50vh] overflow-auto border-t border-white/10 p-3 text-[12px] leading-relaxed text-neutral-300">{f.text}</pre>}
+        </details>
+      ))}
+      {background && (
+        <details className="mt-3 rounded-xl border border-white/10 px-3">
+          <summary className="flex min-h-[44px] cursor-pointer items-center text-[14px] text-neutral-300">Background{card.settled?.length ? ` · ${card.settled.length} already settled` : ""}{card.context ? <span className="ml-2 min-w-0 truncate text-[12px] text-neutral-600">{card.context}</span> : null}</summary>
+          <div className="pb-3">
+            {card.doing && <Sec title="What they're doing">{card.doing}</Sec>}
+            {card.blocking && <Sec title="What it blocks">{card.blocking}</Sec>}
+            {card.settled?.length ? <Sec title="Already settled — don't reopen">{card.settled.map((s) => `• ${s}`).join("\n")}</Sec> : null}
+          </div>
+        </details>
+      )}
+
       {editable ? (
         <>
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="A note for them (optional)"
             className="mt-5 w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2.5 text-[15px] text-neutral-100 placeholder:text-neutral-600 focus:border-white/30 focus:outline-none" />
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row-reverse">
-            <button onClick={send} disabled={sending} className="min-h-[44px] flex-1 rounded-xl bg-[var(--sakura)] px-4 text-[15px] font-semibold text-white disabled:opacity-50">{sending ? "Sending…" : "Send answer"}</button>
-            <ExplainButton onExplain={onExplain} explaining={explaining} err="" />
+          {/* Pinned to the bottom of the scroller: on a folded phone a long card put Send screens away. */}
+          <div className="sticky bottom-0 -mx-4 mt-3 flex flex-col gap-2 border-t border-white/[0.07] bg-neutral-950/95 px-4 py-3 backdrop-blur sm:flex-row-reverse md:-mx-5 md:px-5">
+            <button onClick={send} disabled={sending || missing > 0} className="min-h-[44px] flex-1 rounded-xl bg-[var(--sakura)] px-4 text-[15px] font-semibold text-white disabled:opacity-50">
+              {sending ? "Sending…" : missing ? `Answer ${missing === card.questions.length && missing === 1 ? "the question" : `${missing} more`} to send` : `Send to ${card.asker}`}
+            </button>
+            <ExplainButton ts={card.ts} onExplain={onExplain} explaining={explaining} />
+            {(err || explainErr) && <p className="text-[13px] text-[#ef7c7c]">{err || explainErr}</p>}
           </div>
-          {(err || explainErr) && <p className="mt-2 text-[13px] text-[#ef7c7c]">{err || explainErr}</p>}
         </>
       ) : (
-        <div className="mt-5 rounded-xl border border-white/10 p-3 text-[13px] leading-relaxed text-neutral-400">
-          {card.state === "sent" ? "Sent. Slack's card closes when their machine picks it up — usually within 20 seconds." : card.summary || STATE[card.state].label}
+        <div className="mb-6 mt-5 rounded-xl border border-white/10 p-3 text-[13px] leading-relaxed text-neutral-400">
+          {card.state === "sent" ? `Sent to ${card.asker}. Slack's card closes when their machine picks it up — usually within 20 seconds.` : card.summary || STATE[card.state].label}
         </div>
       )}
     </div>
   );
 }
 
-function DmView({ dm, gate, reload, onExplain, explaining, explainErr }: { dm: TeamDm; gate?: string; reload: (force?: boolean) => void; onExplain: () => void; explaining: boolean; explainErr: string }) {
+function DmView({ dm, gate, reload, onExplain, explaining, explainErr }: { dm: TeamDm; gate?: string; reload: (force?: boolean) => void; onExplain: (fresh?: boolean) => void; explaining: boolean; explainErr: string }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<"" | "sending" | "sent">("");
   const [err, setErr] = useState("");
@@ -279,7 +319,7 @@ function DmView({ dm, gate, reload, onExplain, explaining, explainErr }: { dm: T
         className="mt-5 w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2.5 text-[15px] text-neutral-100 placeholder:text-neutral-600 focus:border-white/30 focus:outline-none" />
       <div className="mt-3 flex flex-col gap-2 sm:flex-row-reverse">
         <button onClick={send} disabled={!text.trim() || state === "sending"} className="min-h-[44px] flex-1 rounded-xl bg-[var(--sakura)] px-4 text-[15px] font-semibold text-white disabled:opacity-50">{state === "sending" ? "Sending…" : state === "sent" ? "Sent ✓" : "Send reply"}</button>
-        <ExplainButton onExplain={onExplain} explaining={explaining} err="" />
+        <ExplainButton ts={dm.ts} onExplain={onExplain} explaining={explaining} />
       </div>
       {(err || explainErr) && <p className="mt-2 text-[13px] text-[#ef7c7c]">{err || explainErr}</p>}
     </div>

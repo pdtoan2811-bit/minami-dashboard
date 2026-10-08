@@ -99,7 +99,9 @@ prefix is whatever `claude mcp add` was given), keeps it on `s.askTeam`, and bro
 the snapshot, so a pane that reattaches mid-wait gets the card back instead of "running a tool" for
 an hour. `AskTeamCard` draws topic → doing → why now → where → each question → options with
 consequences, the recommended one starred with its reason — the same order as the DM card — and
-says where to answer. `doing`, `why_now` and a per-question `recommendation` are required by
+says where to answer. Since 2026-10-08 the event carries `since` (when the wait began), and the
+card shows "waiting 2h 14m · expires in 3h 46m", turns amber past 30 min, folds to that one line,
+and has **Stop waiting** (two taps; it stops the turn, the only exit, since ask_team has no cancel). `doing`, `why_now` and a per-question `recommendation` are required by
 team-ask since 2026-09-29 (a teammate read cards cold and had to reconstruct why they were being
 asked, with no proposal to react to); they are optional in `AskTeamPacket` only so a packet from an
 older team-ask build still renders.

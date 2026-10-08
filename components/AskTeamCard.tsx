@@ -10,8 +10,16 @@
 //
 // It reads in the SAME order as the Slack card — topic → where → each question → its options with
 // consequences — so what the teammate is being asked and what the asker sees are one thing.
+import { useEffect, useState } from "react";
 import type { AskTeamPrompt } from "@/lib/use-agent";
 import { atLeast, useDensityTier } from "@/lib/density";
+
+const dur = (ms: number) => {
+  const m = Math.max(0, Math.round(ms / 60000));
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+};
+// Past this the wait is long enough that "are they even around?" is the question — the card says so.
+const LONG_WAIT_MS = 30 * 60_000;
 
 const SCALE = {
   reading: { eyebrow: "text-[10.5px]", section: "text-[10.5px]", body: "text-[12.5px] leading-relaxed", question: "text-[14px] leading-snug", label: "text-[13px]", desc: "text-[11.5px] leading-relaxed", note: "text-[11.5px]", mark: "h-3.5 w-3.5" },
@@ -19,8 +27,20 @@ const SCALE = {
 } as const;
 type Scale = (typeof SCALE)[keyof typeof SCALE];
 
-export default function AskTeamCard({ ask }: { ask: NonNullable<AskTeamPrompt> }) {
+export default function AskTeamCard({ ask, onStop, stopping }: { ask: NonNullable<AskTeamPrompt>; onStop?: () => void; stopping?: boolean }) {
   const d = useDensityTier();
+  // A wait runs for hours (ASK_TIMEOUT_MINUTES 360). The card used to pulse identically at minute one
+  // and hour five, and its full question list covered the chat the whole time (audit 2026-10-08) —
+  // so: a ticking "waiting 2h 14m · expires in 3h 46m", amber past 30 min, and a fold.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(t); }, []);
+  const [open, setOpen] = useState(true);
+  const [confirmStop, setConfirmStop] = useState(false);
+  useEffect(() => { if (!confirmStop) return; const t = setTimeout(() => setConfirmStop(false), 4000); return () => clearTimeout(t); }, [confirmStop]);
+  const since = ask.since;
+  const waited = since ? now - since : 0;
+  const left = since && ask.packet.timeout_minutes ? since + ask.packet.timeout_minutes * 60_000 - now : null;
+  const long = waited > LONG_WAIT_MS;
   const sc: Scale = atLeast(d, "snug") ? SCALE.reading : SCALE.compact;
   const p = ask.packet;
   // `assignee` is a roster key or an expertise area, or absent (the tool picks the owner). Shown as
@@ -35,13 +55,15 @@ export default function AskTeamCard({ ask }: { ask: NonNullable<AskTeamPrompt> }
         <p className={`flex min-w-0 items-center gap-1.5 ${sc.eyebrow} font-medium uppercase tracking-wider text-[var(--sakura)]`}>
           <span>✻</span><span className="truncate">Asked {who} on Slack · {p.topic}</span>
         </p>
-        <span className={`flex shrink-0 items-center gap-1.5 ${sc.note} text-neutral-500`}>
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--sakura)]" />
-          waiting for an answer in Slack
-        </span>
+        <button onClick={() => setOpen((v) => !v)} aria-expanded={open} title={open ? "Fold the card" : "Show the questions"}
+          className={`flex shrink-0 items-center gap-1.5 rounded-md px-1 ${sc.note} ${long ? "text-amber-300" : "text-neutral-500"} pointer-coarse:min-h-10`}>
+          <span className={`h-1.5 w-1.5 animate-pulse rounded-full ${long ? "bg-amber-300" : "bg-[var(--sakura)]"}`} />
+          {since ? `waiting ${dur(waited)}${left !== null ? ` · ${left > 0 ? `expires in ${dur(left)}` : "expiring"}` : ""}` : "waiting for an answer in Slack"}
+          <span className="text-neutral-600">{open ? "▴" : "▾"}</span>
+        </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-0.5">
+      {open && <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-0.5">
         {p.doing && <p className={`${sc.body} text-neutral-300`}><span className="text-neutral-500">Doing ·</span> {p.doing}</p>}
         {p.why_now && <p className={`${sc.body} text-neutral-300`}><span className="text-neutral-500">Why them, why now ·</span> {p.why_now}</p>}
         <p className={`${sc.body} text-neutral-400`}><span className="text-neutral-500">Where ·</span> {p.context}</p>
@@ -78,9 +100,19 @@ export default function AskTeamCard({ ask }: { ask: NonNullable<AskTeamPrompt> }
 
         <p className={`${sc.note} text-neutral-500`}>
           Answer it in the Slack DM — pick a row there (or reply in the thread). This card clears when the answer comes back.
-          {p.timeout_minutes ? ` Expires in ${p.timeout_minutes} min.` : ""}
+          {long ? " It has been a while — nudge them in Slack, or stop waiting and decide it yourself." : ""}
         </p>
-      </div>
+      </div>}
+      {/* Stop waiting = stop the turn: ask_team blocks inside the tool call and has no cancel of its
+          own, so ending the turn is the only way out. Two taps, because it also drops the question. */}
+      {onStop && (
+        <div className="mt-2 flex shrink-0 items-center justify-end gap-2">
+          <button onClick={() => (confirmStop ? (setConfirmStop(false), onStop()) : setConfirmStop(true))} disabled={stopping}
+            className={`rounded-lg border px-2.5 py-1 ${sc.note} transition-colors pointer-coarse:min-h-11 pointer-coarse:px-3.5 disabled:opacity-50 ${confirmStop ? "border-[#ef7c7c]/60 text-[#ef7c7c]" : "border-white/15 text-neutral-400 hover:border-white/30 hover:text-neutral-200"}`}>
+            {stopping ? "Stopping…" : confirmStop ? "Stop the turn? Tap again" : "Stop waiting"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -24,7 +24,7 @@ export type AgentQuestion = { question: string; header?: string; multiSelect?: b
 export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
 // The in-flight `ask_team` call — a question for a teammate, showing as a Slack DM card (team-ask).
 // Read-only here: it is answered in Slack, and the tool_result is what clears it.
-export type AskTeamPrompt = { id: string; packet: AskTeamPacket } | null;
+export type AskTeamPrompt = { id: string; packet: AskTeamPacket; since?: number } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 // `agent`/`status` only ride along on kind "task" — see manager.ts's AgentEvent for why.
 export type Notice = { kind: string; text: string; at: number; agent?: string; taskKind?: TaskKind; status?: "completed" | "failed" | "stopped" };
@@ -487,7 +487,7 @@ export function useAgent(paneKey: string) {
           break;
         case "ask_team":
           // REPLACE semantics from the server: a null packet is the call returning, whoever answered.
-          setAskTeam(ev.packet ? { id: ev.id, packet: ev.packet } : null); break;
+          setAskTeam(ev.packet ? { id: ev.id, packet: ev.packet, since: ev.since } : null); break;
         case "busy":
           setBusy(ev.busy); if (!ev.busy) setStopping(false); break;
         case "queued":
