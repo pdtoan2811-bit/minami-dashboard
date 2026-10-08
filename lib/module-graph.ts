@@ -108,6 +108,8 @@ export const NODES: ModuleNode[] = [
   { id: "r/tailnet", label: "/api/tailnet/expose", sub: "localhost:<port> → its tailnet\nhttps (tailscale serve, §23)", layer: "route", row: 18 },
   { id: "x/tailscale", label: "tailscale serve", sub: "tailnet-only https per port\n(never funnel)", layer: "runtime", row: 10 },
   { id: "r/fsimage", label: "/api/fs/image", sub: "serves an image for\nthumbnails (magic-byte gated)", layer: "route", row: 11 },
+  { id: "r/teaminbox", label: "/api/team/*", sub: "inbox · answer · reply\nfile · explain", layer: "route", row: 12, pipeline: "live" },
+  { id: "c/TeamInbox", label: "TeamInbox.tsx", sub: "from-the-team sheet", layer: "component", row: 2, pipeline: "live" },
   { id: "r/team", label: "/api/team/roster", sub: "who a question can be\nhanded to (team-ask)", layer: "route", row: 12, pipeline: "live" },
   { id: "r/browserfile", label: "/api/agent/browser/file", sub: "serves <cwd>/.playwright-mcp/*\n(full-res shots, console logs)", layer: "route", row: 7, pipeline: "live" },
 
@@ -123,6 +125,7 @@ export const NODES: ModuleNode[] = [
   // it, and polls that stop for a hidden tab.
   { id: "l/sessionfetch", label: "session-fetch.ts", sub: "coalesced transcript GET\n(per-caller freshness)", layer: "core", row: 6, pipeline: "read" },
   { id: "l/pagevisible", label: "page-visible.ts", sub: "pause polls for a hidden tab", layer: "core", row: 7, pipeline: "live" },
+  { id: "l/teaminbox", label: "team-inbox.ts", sub: "team-ask cards + relay\nanswers (Slack Web API)", layer: "core", row: 4, pipeline: "live" },
   { id: "l/teamroster", label: "team-roster.ts", sub: "reads team-ask's team.json", layer: "core", row: 4, pipeline: "live" },
   { id: "l/teamforward", label: "team-forward.ts", sub: "the \"go ask them\" answer text", layer: "core", row: 5, pipeline: "live" },
   { id: "l/sessions", label: "claude-sessions.ts", sub: "windowed parser + caches", layer: "core", row: 3, pipeline: "read" },
@@ -273,6 +276,9 @@ export const EDGES: ModuleEdge[] = [
   { from: "app/page", to: "l/pagevisible", kind: "import" },
   { from: "c/AskCard", to: "r/team", kind: "http" },
   { from: "r/team", to: "l/teamroster", kind: "import" },
+  { from: "c/TeamInbox", to: "r/teaminbox", kind: "http" },
+  { from: "r/teaminbox", to: "l/teaminbox", kind: "import" },
+  { from: "r/teaminbox", to: "l/manager", kind: "import" },
   // The roster is also a PROMPT input: every session is told who it can ask and how.
   { from: "l/manager", to: "l/teamroster", kind: "import" },
   { from: "l/teamroster", to: "l/teamforward", kind: "import" },
