@@ -8,6 +8,10 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-08
+- **Audit round 1 fixes** (§3, §1, §5c). New chats' first reply froze (a stream closed on the mid-turn key change; regression from 10-07): the stream is kept and its budget slot re-keyed. Idle panes no longer flap release↔reattach (`evictedRef`). A `settled` event clears cards answered elsewhere, and clears only touch the prompt they answered. AgentChat's AskCard is keyed. Server: `/api/bento/sessions` shares one result per second; `enrich()` is single-flight; the link-meta cache is capped at 500; one `tailscale serve status` at a time.
+- **Fix: tapping Other on a question could send it back unanswered** (§5e, `components/AskCard.tsx`). Keyboard-close reflow on phones put the tap on Skip / Skip all. Next/Send keep focus; skips ignore taps for 700 ms after blur or a resize; skipping everything takes a second tap; the Other field scrolls into view.
+
 ### 2026-10-07
 - **Fix: Send on a question did nothing, then sent later** (§3, §5e, `lib/use-agent.ts`, `components/AskCard.tsx`). Chrome's six HTTP/1.1 connections per host were full of pane streams, so the POST queued, and any click re-attached every released pane. The page now holds at most 4 streams (`need` evicts the LRU idle pane, background `want` never evicts). The ask card shows Sending…, a slow notice and inline errors. The tailnet URL (HTTP/2) avoids the limit outright.
 - **Fix: multi-part questions answerable on the cover; "Open on main screen" no longer loops; temp-folder chats can't flood the board; link thumbnails opt-in** (§23, §1, §5c). `Need.qs` + a stepper in `/glance`, `answers` on `/api/glance/answer`. `?open=` skips the cover redirect. Scratch-folder transcripts are capped before the 150-file window (10) and in the 60-chat list (5). LinkCard frames only on "Preview", never the dashboard's own origin.

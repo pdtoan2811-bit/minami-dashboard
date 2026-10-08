@@ -108,7 +108,9 @@ export default function AgentChat({ agent, cwd }: { agent: AgentDef; cwd?: strin
           </div>
         ))}
 
-        {a.ask && <AskCard questions={a.ask.questions} onAnswer={a.answerAsk} />}
+        {/* Keyed by the prompt id, as in app/page.tsx: one ask replacing another must remount the card,
+            or it carries the old question's index and picks onto the new one. */}
+        {a.ask && <AskCard key={a.ask.id} questions={a.ask.questions} onAnswer={a.answerAsk} />}
 
         {a.pending && (
           <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-[12px]">
