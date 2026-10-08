@@ -236,6 +236,10 @@ export function useAgent(paneKey: string) {
       victim?.[1].release();
     }
     streamKeyRef.current = paneKey;
+    // Attached again by whatever path (a send, not only reattach()): an old eviction mark left set
+    // would make the 30s tick re-open this stream after its next idle release — the flap evictedRef
+    // exists to stop (round-3 review).
+    releasedRef.current = false; evictedRef.current = false;
     openStreams.set(paneKey, {
       releasable: () => releasableRef.current,
       lastUse: () => Math.max(lastActiveRef.current, lastDeltaAtRef.current),
@@ -257,7 +261,9 @@ export function useAgent(paneKey: string) {
     let opens = 0;
     es.onopen = () => {
       opens++;
-      if (opens > 1) { closeStream(); attachingRef.current = true; ensureStream(true); }
+      // Through the ref, not this closure's `ensureStream`: a blank chat's key changes mid-stream, and
+      // the captured one would reopen under the old `pane-…` key (audit R2).
+      if (opens > 1) { closeStream(); attachingRef.current = true; ensureStreamRef.current(true); }
     };
     es.onmessage = (e) => {
       let ev: any;
@@ -530,6 +536,8 @@ export function useAgent(paneKey: string) {
     es.onerror = () => { if (es.readyState === 2 /* CLOSED */) setLink("stale"); };
     esRef.current = es;
   }, [paneKey, reconcile, closeStream, applyActivity]);
+  const ensureStreamRef = useRef(ensureStream);
+  ensureStreamRef.current = ensureStream;
 
   // The silence watchdog. Polls rather than arming a timer per event, because the thing being measured
   // is the ABSENCE of events — there is nothing to hang a timeout on. Only runs while a stream object
@@ -628,6 +636,7 @@ export function useAgent(paneKey: string) {
       if (idleFor < limit) return;
       closeStream();
       releasedRef.current = true;
+      evictedRef.current = false; // let go for idleness, not for room — the tick must not re-open it
     };
     const onVisible = () => {
       if (document.visibilityState !== "visible") { check(); return; } // may already be over the limit

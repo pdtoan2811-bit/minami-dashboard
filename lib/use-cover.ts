@@ -19,16 +19,35 @@ import { useSyncExternalStore } from "react";
 export const COVER_QUERY =
   "(pointer: coarse) and (max-width: 560px) and (max-height: 600px) and (min-aspect-ratio: 4/5) and (max-aspect-ratio: 5/4)";
 
+// The decision only changes when the viewport WIDTH changes — folding, unfolding, moving to the cover,
+// rotating. A soft keyboard changes only the height, and on the Flip's main screen (and the N5 folded)
+// it squeezed the viewport near-square and short enough to pass COVER_QUERY: the page jumped to
+// /glance mid-answer, losing the typed text and the question you were on (audit 2026-10-08 — very
+// likely the "tapped Other, it flashed" report). `screen` can't settle it (see above), width can.
+// The latch is re-read only from the resize listener, when the width has moved — never from
+// snapshot(), which React calls on every render. Re-reading there meant a width change that didn't
+// flip the query (400 → 380) left the latch on the old width, and the next render with the keyboard
+// up re-evaluated against the shrunken height: the original bug (round-3 review).
+let latched: { cover: boolean; w: number } | null = null;
+function relatch(): boolean {
+  const w = window.innerWidth;
+  if (latched && latched.w === w) return false;
+  const cover = window.matchMedia(COVER_QUERY).matches;
+  const changed = !latched || latched.cover !== cover;
+  latched = { cover, w };
+  return changed;
+}
 function snapshot(): boolean {
-  return window.matchMedia(COVER_QUERY).matches;
+  if (!latched) relatch();
+  return latched!.cover;
 }
 
 export function useCoverScreen(): boolean {
   return useSyncExternalStore(
     (cb) => {
-      const mq = window.matchMedia(COVER_QUERY);
-      mq.addEventListener("change", cb);
-      return () => mq.removeEventListener("change", cb);
+      const onResize = () => { if (relatch()) cb(); };
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
     },
     snapshot,
     // Server render: not a cover screen. The redirect is a client decision; the worst case is one

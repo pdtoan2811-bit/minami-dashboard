@@ -457,6 +457,13 @@ costs nothing: a paused animation schedules no frames, which is the only measure
 > the field blurs or the (visual) viewport resizes; Skip all, and a Skip that would send nothing,
 > need a second tap ("tap again" for 4 s); the field focuses with `preventScroll` and scrolls itself
 > into view inside its own list.
+>
+> **Round 2 (2026-10-08).** Two corrections. The blur guard was dropped: on desktop, clicking Skip
+> blurs the field first, so the guard swallowed every first Skip click. Resizes (the keyboard) still
+> arm it. The "tap again" label for an empty send only shows on the last question, where Skip actually
+> sends. The card grows to 88% of the pane while the field has focus, and its buttons, chips and the
+> field are ≥44 px on coarse pointers. The likelier cause of the original report was not here at all:
+> see §23, the cover redirect firing with the keyboard up.
 
 **Sending is visible (2026-10-07).** Send used to fire `answerAsk` and show nothing until the server
 replied, with failures going to the pane's error line, far from the card. A stalled request

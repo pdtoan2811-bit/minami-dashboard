@@ -231,7 +231,7 @@ function Row({ s, l, g, icon, on, onOpen, onPin, onUnpin }: {
   const REVEAL = 92;
   const line = g === "need" ? `${NEED_VERB[l?.need?.kind || ""] || "Needs you"}: ${l?.need?.summary || ""}`
     : g === "failed" ? `Failed: ${l?.ended?.error || "the turn ended with an error"}`
-    : g === "running" ? (l?.progress ? stepLine(l.progress) : `${l?.label || "working"}…`)
+    : g === "running" ? (l?.progress ? stepLine(l.progress) : !l?.busy && l?.bg ? `${l.bg} running in background` : `${l?.label || "working"}…`)
     : (l?.ended?.text || s.tail || "").replace(/\s+/g, " ");
   const row = (
     <div className={`relative z-10 flex items-center gap-3 rounded-xl px-3 py-2.5 ${on ? "bg-[#2b1e23]" : "bg-neutral-900"}`}

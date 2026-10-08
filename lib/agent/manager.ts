@@ -918,6 +918,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
           s.pending.delete(id);
           resolve({ behavior: "deny", message: `Not reviewed within ${Math.round(HOLD_TIMEOUT_MS / 60000)} minutes — the step was held for human review and auto-denied. Ask before retrying it.` });
           broadcast(s, { t: "notice", kind: "denied", text: "a held step timed out waiting for review — auto-denied" });
+          broadcast(s, { t: "settled", id }); // the card goes; the turn carries on (audit R2)
           settle(s);
         }, HOLD_TIMEOUT_MS);
       }
@@ -1803,7 +1804,7 @@ export async function stop(key: string): Promise<boolean> {
     broadcast(s, { t: "notice", kind: "aborted", text: `stopped — running your ${surviving === 1 ? "queued message" : `${surviving} queued messages`} next` });
   }
   for (const [id, p] of toDeny) {
-    if (s.pending.get(id) === p) { if (p.timer) clearTimeout(p.timer); p.resolve({ behavior: "deny", message: "Stopped by user." }); s.pending.delete(id); }
+    if (s.pending.get(id) === p) { if (p.timer) clearTimeout(p.timer); p.resolve({ behavior: "deny", message: "Stopped by user." }); s.pending.delete(id); broadcast(s, { t: "settled", id }); }
   }
   // Aborting is also the end of supervising this turn — leaving the brake on would silently park the
   // first tool call of whatever the user sends next, which reads as "my next message hung".
@@ -2193,7 +2194,9 @@ export function pendingFor(sessionId: string, id: string): { key: string; toolNa
   return { key: SID_KEY + sessionId, toolName: p.toolName, questions: Array.isArray(qs) ? qs.map((q) => String(q?.question ?? "")) : [] };
 }
 
-export type LiveTile = { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; progress?: TaskProgress; need?: Need; needs?: number; ended?: { at: number; ok: boolean; text?: string; error?: string; turnMs?: number }; mode?: string; hold?: boolean };
+export type LiveTile = { phase: ActivityPhase; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; progress?: TaskProgress; need?: Need; needs?: number; ended?: { at: number; ok: boolean; text?: string; error?: string; turnMs?: number }; mode?: string; hold?: boolean;
+  /** Background agents still running after the turn ended — a count, so stable between polls. */
+  bg?: number };
 export function liveActivity(): Record<string, LiveTile> {
   const out: Record<string, LiveTile> = {};
   const seen = new Set<Session>();
@@ -2213,9 +2216,13 @@ export function liveActivity(): Record<string, LiveTile> {
     // `need` / `ended` are as stable between polls as the fields above: they change only when a
     // pending entry is added or settled, or a turn ends — so the grid's change-detection still holds.
     const first = s.pending.entries().next().value as [string, Pending] | undefined;
+    // Agents only, same reading as fleetInFlight's deploy veto: a background shell is as often a dev
+    // server left running, and counting it would show the chat "working" all day.
+    let bg = 0;
+    if (Date.now() - s.lastEventAt < BG_REAP_MS) for (const t of s.liveTasks.values()) if (t.backgrounded && (t.kind === "agent" || t.kind === "workflow")) bg++;
     const need = first ? needOf(first[0], first[1].toolName, first[1].input, !!first[1].timer, first[1].expiresAt, first[1].since) : undefined;
     out[s.sessionId] = { phase: a.phase, label: a.label, busy: s.busy, cwd: s.cwd, turnStartedAt: s.turnStartedAt, ...(s.busy && a.progress ? { progress: a.progress } : {}),
-      ...(need ? { need, needs: s.pending.size } : {}), ...(s.ended ? { ended: s.ended } : {}), mode: s.mode, ...(s.hold ? { hold: true } : {}) };
+      ...(need ? { need, needs: s.pending.size } : {}), ...(s.ended ? { ended: s.ended } : {}), mode: s.mode, ...(s.hold ? { hold: true } : {}), ...(bg ? { bg } : {}) };
   }
   return out;
 }
