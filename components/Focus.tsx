@@ -19,6 +19,7 @@
 // - Sorted by urgency, never recency: failed → needs you → running → new → idle. Nothing expands or
 //   opens on its own; the sheet waits for the tap.
 import ChatName from "@/components/ChatName";
+import { projectLabel } from "@/lib/chat-title";
 import { memo, useMemo, useRef, useState, type TouchEvent } from "react";
 import { Plus, X } from "lucide-react";
 import { groupOf, Ring, type Group, type InboxLive, type InboxSession } from "@/components/Inbox";
@@ -95,14 +96,15 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
   const visitor = ctx.sessions
     .filter((s) => s.id !== current.id && !ctx.focus.includes(s.id) && (groups[s.id] === "failed" || groups[s.id] === "need"))
     .sort((a, b) => RANK[groups[a.id]] - RANK[groups[b.id]] || b.lastActivity - a.lastActivity)[0];
-  const shown = pins.slice(0, 2), more = pins.length - shown.length;
+  const shown = pins.slice(0, visitor ? 1 : 2), more = pins.length - shown.length;
+  const curG = current.id ? groups[current.id] : undefined;
   // Handle swipe-up opens the sheet; the bar's horizontal swipe keeps stepping through recent chats.
   const y0 = useRef<number | null>(null);
   const chip = (id: string, g: Group, dashed?: boolean) => {
     const s = byId.get(id)!;
     return (
       <button key={id} onClick={() => onOpen(id)} aria-label={s.title}
-        className={`relative flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-2 ${dashed ? "border-dashed" : ""} ${g === "failed" && dashed ? "border-[#ef7c7c]/70" : "border-white/10"} active:bg-white/10`}>
+        className={`relative flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border px-2 ${dashed ? "border-dashed" : ""} ${g === "failed" && dashed ? "border-[#ef7c7c]/70" : "border-white/10"} active:bg-white/10`}>
         <span className="relative"><ProjectIcon name={s.project} icon={ctx.icons[s.project]} size={20} /><Ring g={g} /></span>
       </button>
     );
@@ -114,19 +116,34 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
         onTouchEnd={(e) => { if (y0.current != null && y0.current - e.changedTouches[0].clientY > 24) onSheet(); y0.current = null; }}
         className="flex w-full justify-center pb-1 pt-1.5"><span className="h-1 w-9 rounded-full bg-white/20" /></button>
       <div className="flex items-center gap-1.5 px-1.5" onTouchStart={onSwipe} onTouchEnd={onSwipe}>
-        <button onClick={onSheet} className="flex h-10 min-w-0 max-w-[45%] shrink items-center gap-2 rounded-xl border border-[var(--sakura)]/50 bg-[var(--sakura)]/10 px-3 text-left">
-          <span className="min-w-0 truncate text-[14px] font-medium">{current.project ? <ChatName project={current.project} title={current.title} /> : current.title}</span>
+        {/* "Where am I", answered in the one place the folded N5 looks (audit 2026-10-08: the only identity
+            was this chip cut to "Ecvision: Fix pinn…", with no state). Two lines — project · state over
+            the title — and wider. Keyed by chat so a swipe that lands somewhere new visibly slides in;
+            the ‹ › are the swipe's only affordance. */}
+        <button key={current.id || "new"} onClick={onSheet} aria-label={`${current.title} — all chats`}
+          className="flex h-11 min-w-0 max-w-[62%] shrink animate-[slidein_.25s_ease] items-center gap-1.5 rounded-xl border border-[var(--sakura)]/50 bg-[var(--sakura)]/10 pl-1.5 pr-3 text-left">
+          <span aria-hidden className="text-[12px] text-neutral-600">‹</span>
+          <span className="min-w-0 leading-tight">
+            <span className="flex items-center gap-1 text-[11px] text-neutral-400">
+              {current.project && <span className="truncate">{projectLabel(current.project)}</span>}
+              {curG && <span className={`shrink-0 ${STATE_TINT[curG]}`}>· {STATE_WORD[curG]}</span>}
+            </span>
+            <span className="block truncate text-[14px] font-medium">{current.title}</span>
+          </span>
         </button>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {visitor && chip(visitor.id, groups[visitor.id], true)}
           {shown.map((id) => chip(id, groups[id]))}
-          {more > 0 && <button onClick={onSheet} className="h-10 shrink-0 rounded-xl border border-white/10 px-2.5 text-[13px] tabular-nums text-neutral-400">+{more}</button>}
+          {more > 0 && <button onClick={onSheet} className="h-11 min-w-11 shrink-0 rounded-xl border border-white/10 px-2.5 text-[13px] tabular-nums text-neutral-400">+{more}</button>}
         </div>
-        <button onClick={onSheet} aria-label="All chats" className="flex h-10 shrink-0 items-center rounded-xl border border-white/10 px-3 text-[15px] text-neutral-300">☰</button>
+        <button onClick={onSheet} aria-label="All chats" className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 px-3 text-[15px] text-neutral-300">☰</button>
       </div>
     </div>
   );
 });
+
+const STATE_WORD: Record<Group, string> = { failed: "failed", need: "needs you", running: "working", new: "new reply", idle: "done" };
+const STATE_TINT: Record<Group, string> = { failed: "text-[#ef7c7c]", need: "text-[#4ade80]", running: "text-[#f0a868]", new: "text-neutral-200", idle: "text-neutral-500" };
 
 // ── the sheet ─────────────────────────────────────────────────────────────────────────────────────
 export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, onClose, onInbox, onDismiss }: {
@@ -195,8 +212,8 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
                 <div className="mx-2 mb-2 rounded-xl bg-white/[0.05] p-3">
                   <p className="text-[13px] font-semibold">Dock is full ({FOCUS_MAX}). Swap out:</p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {inFocus.map((f) => <button key={f.id} onClick={() => doPin(s.id, f.id)} className="h-9 max-w-[60%] truncate rounded-lg border border-white/10 px-3 text-[13px] active:bg-white/10">{f.title}</button>)}
-                    <button onClick={() => setSwapFor(null)} className="h-9 px-3 text-[13px] text-neutral-500">Cancel</button>
+                    {inFocus.map((f) => <button key={f.id} onClick={() => doPin(s.id, f.id)} className="h-11 max-w-[60%] truncate rounded-lg border border-white/10 px-3 text-[13px] active:bg-white/10">{f.title}</button>)}
+                    <button onClick={() => setSwapFor(null)} className="h-11 px-3 text-[13px] text-neutral-500">Cancel</button>
                   </div>
                 </div>
               )}
@@ -252,7 +269,7 @@ function Row({ s, l, g, icon, on, onOpen, onPin, onUnpin }: {
           {g === "running" && l?.progress && <span className="mt-1.5 block"><Segments p={l.progress} /></span>}
         </span>
       </button>
-      {onPin && <button onClick={() => onPin(s.id)} aria-label="Pin to focus" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dashed border-white/15 text-neutral-400 active:bg-white/10"><Plus className="h-4 w-4" /></button>}
+      {onPin && <button onClick={() => onPin(s.id)} aria-label="Pin to focus" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-dashed border-white/15 text-neutral-400 active:bg-white/10"><Plus className="h-4 w-4" /></button>}
     </div>
   );
   if (!onUnpin) return row;

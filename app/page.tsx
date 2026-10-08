@@ -1299,7 +1299,7 @@ export default function BentoHome() {
         {/* Only the full-width (no project open) case needs the bell's gutter: with a panel open the
             bento is a left column whose right edge is nowhere near the viewport corner. */}
         {/* Split (N5 unfolded) with the keyboard up: the list is an icon strip, no header at all. */}
-        {!(split && keyboardUp && proj) && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${compact ? "px-3 pb-1 pt-3" : `pb-2 pl-6 pt-5 ${proj ? "pr-6" : team.waiting > 0 ? "pr-28" : "pr-16"}`}`}>
+        {!(split && keyboardUp && proj) && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${compact ? "px-3 pb-1 pt-3" : `pb-2 pl-6 pt-5 ${proj ? "pr-6" : team.data?.ok ? "pr-28" : "pr-16"}`}`}>
           <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">{compact ? "Minami" : "Minami Bento"}</h1>
           {!compact && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>}
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
@@ -1316,7 +1316,7 @@ export default function BentoHome() {
               <div className="flex shrink-0 rounded-xl border border-white/10 p-0.5">
                 {(["inbox", "topics"] as const).map((v) => (
                   <button key={v} onClick={() => setHomeView(v)}
-                    className={`rounded-lg px-3 py-2 text-[13px] font-medium ${homeView === v ? "bg-[var(--sakura)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Topics"}</button>
+                    className={`min-h-11 rounded-lg px-3 py-2 text-[13px] font-medium ${homeView === v ? "bg-[var(--sakura)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Topics"}</button>
                 ))}
               </div>
             )}
@@ -1579,8 +1579,8 @@ export default function BentoHome() {
           const waiting = others.filter((x) => liveAct[x.id]?.need).length;
           return (
             // pr-16: the app-wide bell is pinned top-right over this row (see the NotificationBell note).
-            <div className={`flex shrink-0 items-center gap-3 border-b border-white/10 py-2.5 pl-6 ${team.waiting > 0 ? "pr-28" : "pr-16"}`}>
-              <button onClick={() => setChatSheet(true)} className="flex min-w-0 max-w-[60%] items-center gap-2 rounded-full bg-white/[0.06] px-3.5 py-1.5 text-[13px] active:bg-white/10">
+            <div className={`flex shrink-0 items-center gap-3 border-b border-white/10 py-2.5 pl-6 ${team.data?.ok ? "pr-28" : "pr-16"}`}>
+              <button onClick={() => setChatSheet(true)} className="flex min-w-0 max-w-[60%] items-center gap-2 rounded-full bg-white/[0.06] px-3.5 min-h-11 py-1.5 text-[13px] active:bg-white/10">
                 <span className="min-w-0 truncate">{s ? titleOf(s) : "New chat"}</span><ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
               </button>
               <span className="truncate text-[12px] text-neutral-500">{proj.name}</span>
@@ -1920,7 +1920,7 @@ export default function BentoHome() {
           below the lightbox and folder picker (z-[90]/z-[100]) so a modal still covers it. */}
       <div className="fixed right-3 top-2.5 z-[60] flex gap-1.5">
         {/* Only while something waits, and only where there's room: on a phone it's the inbox's first row. */}
-        {team.waiting > 0 && <span className="hidden md:block"><TeamButton waiting={team.waiting} onOpen={() => setTeamOpen(true)} /></span>}
+        {team.data?.ok && <span className="hidden md:block"><TeamButton waiting={team.waiting} onOpen={() => setTeamOpen(true)} /></span>}
         <NotificationBell />
       </div>
       {teamOpen && <TeamSheet inbox={team.data} reload={team.reload} onClose={() => setTeamOpen(false)} onExplained={openWhenListed} />}
@@ -3487,7 +3487,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
 
       {/* Claude's ask_team — a question for a teammate, in flight as a Slack DM (team-ask). Read-only
           mirror: it is answered in Slack. Keyed like AskCard, for the same reason. */}
-      {agent.askTeam && <AskTeamCard key={agent.askTeam.id} ask={agent.askTeam} />}
+      {agent.askTeam && <AskTeamCard key={agent.askTeam.id} ask={agent.askTeam} onStop={agent.stop} stopping={agent.stopping} />}
 
       {/* Tool-permission prompt (default mode) — Claude is paused until the user decides.
           Browser calls get the Claude Code treatment: a plain-English verb phrase plus the host, e.g.

@@ -52,6 +52,20 @@ session first, worktrees skipped because they get recycled), then `~/<repo>`, `~
 home. The seed prompt carries the whole card and attached files and tells the chat **not** to call
 ask_team or post to Slack — you send the answer from the card.
 
+## The card's layout (audit 2026-10-08)
+
+The card opens on what's wanted from you: headline, why it's your call, the review ask, then the
+questions. Files follow, then **Background** (doing, blocking, already settled) folded. It used to
+open on "What they're doing" and the settled list, which put the question two screens down on a
+folded phone. Send is sticky at the bottom of the scroller, names the asker ("Send to Đức"), and
+stays off until every question has a pick or words — an unanswered one used to go out as `null`.
+After a send the inbox re-reads at 10s and 25s instead of waiting for the 30s poll.
+
+**Explain with AI** remembers its chat per card in `localStorage` (`minami.team-explain.<ts>`):
+the button becomes "Continue the AI chat", with "or start a new one" under it. The list shows a
+Review/Decision chip, "N need you", and puts open cards before sent ones. On desktop the 👥 button is
+always there once team-ask is set up, quiet when nothing waits.
+
 ## Deliberately absent
 
 - **No push, no unread state.** Slack already notified you; a second ping for the same question is

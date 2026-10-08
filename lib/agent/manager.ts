@@ -385,7 +385,7 @@ export type AgentEvent =
   // nothing is parked at the gate and nothing here can answer it — the tool's own Socket Mode
   // connection is what's waiting, and the answer is given in Slack. The pane only mirrors what was
   // asked, to whom, so a session "running a tool" for an hour reads as what it is. §3.
-  | { t: "ask_team"; id: string; packet: AskTeamPacket | null }
+  | { t: "ask_team"; id: string; packet: AskTeamPacket | null; since?: number }
   | { t: "result"; subtype: string; costUsd?: number } // turn finished
   | { t: "busy"; busy: boolean }
   // The placement pass moved this conversation to a new folder (see relocate); the pane must adopt
@@ -538,7 +538,7 @@ type Session = {
   toolBufs: Map<number, { id: string; name: string; buf: string }>; // block index → streaming tool input
   /** The in-flight `ask_team` call, if any — kept so a pane that (re)attaches mid-wait gets the card
    *  back from the snapshot instead of finding a session that is "running a tool" for half an hour. */
-  askTeam: { id: string; packet: AskTeamPacket } | null;
+  askTeam: { id: string; packet: AskTeamPacket; since: number } | null;
 };
 
 // Persist the registry on globalThis so Next.js dev hot-reloads don't orphan live sessions. Sessions
@@ -1203,8 +1203,10 @@ function handleMessage(s: Session, m: any) {
           // Top-level only: a subagent's ask_team is the subagent's to wait on. `questions` guards
           // against a partial/foreign input shape rendering a blank card.
           if (!parentId && b.id && isAskTeamTool(b.name) && Array.isArray(b.input?.questions)) {
-            s.askTeam = { id: b.id, packet: b.input as AskTeamPacket };
-            broadcast(s, { t: "ask_team", id: b.id, packet: s.askTeam.packet });
+            // `since` is when the wait began, so the card can say "waiting 2h" rather than pulse the same
+            // at minute one and hour five.
+            s.askTeam = { id: b.id, packet: b.input as AskTeamPacket, since: Date.now() };
+            broadcast(s, { t: "ask_team", id: b.id, packet: s.askTeam.packet, since: s.askTeam.since });
           }
           changed = true;
         }
@@ -2104,7 +2106,7 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
   // `activity` rides along so a client that refreshed mid-tool-call resumes with the real label and a
   // correctly-offset elapsed clock, instead of falling back to a generic "working…".
   replay.push({ t: "snapshot", busy: s.busy, partial: s.partial, partialThinking: s.partialThinking, activity: activityOf(s), hold: s.hold, queued: s.queued.map((q) => ({ uuid: q.uuid, text: q.text })), ctxUsed: s.ctxUsed || undefined });
-  if (s.askTeam) replay.push({ t: "ask_team", id: s.askTeam.id, packet: s.askTeam.packet });
+  if (s.askTeam) replay.push({ t: "ask_team", id: s.askTeam.id, packet: s.askTeam.packet, since: s.askTeam.since });
   for (const [id, p] of s.pending) {
     if (p.toolName === "AskUserQuestion") replay.push({ t: "ask", id, questions: (p.input as { questions?: AgentQuestion[] })?.questions || [] });
     // `expiresAt` is an absolute timestamp, not a remaining duration, precisely so a client that

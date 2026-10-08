@@ -465,6 +465,10 @@ out of the focus".
 - **Focus is a pinned set of at most 5 session ids**, stored on the server (`~/.minami/focus.json`,
   `/api/agent/focus`) so the Flip, the N5 and the Mac share one dock. Before any pin exists, the dock
   falls back to recently visited chats, so it is never empty.
+- **The current-chat chip (2026-10-08)** is two lines, project · state ("needs you", "working",
+  "done") over the title, up to 62% of the bar, so the folded N5 answers "where am I" in the place
+  you look. It is keyed by chat and slides in, so a swipe visibly lands; the ‹ is the swipe's only
+  hint. With a visitor showing, one pin fits rather than two. Dock targets are 44px.
 - **The dock (vertical phone)** replaces the old chat bar. It holds the current chat, one **visitor**
   (the most urgent chat *outside* focus that failed or needs you, dashed), two pins, "+N" and ☰. It
   never grows wider: each new mechanic wanted its own chip. The dock only switches chats; there is no
