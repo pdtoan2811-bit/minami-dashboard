@@ -53,7 +53,7 @@ export function groupOf(s: InboxSession, l: InboxLive | undefined, seenAt: numbe
   return "idle";
 }
 
-export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, current, strip, onOpen, onMarkRead }: {
+export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, current, strip, onOpen, onMarkRead, head }: {
   sessions: InboxSession[];
   live: Record<string, InboxLive>;
   seen: Record<string, number>;
@@ -65,6 +65,8 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
   strip?: boolean;
   onOpen: (id: string) => void;
   onMarkRead: (id: string) => void;
+  /** Rendered above the groups — the team inbox's row (§25). */
+  head?: React.ReactNode;
 }) {
   const [showIdle, setShowIdle] = useState(5);
   // Frozen while a finger is down: the poll keeps landing, but the order the user is aiming at
@@ -104,6 +106,7 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2" onTouchStart={() => setTouching(true)} onTouchEnd={() => setTouching(false)} onTouchCancel={() => setTouching(false)}>
+      {head}
       {GROUPS.map(({ key, label }) => {
         const rows = g[key];
         if (!rows.length) return null;

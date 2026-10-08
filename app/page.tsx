@@ -44,6 +44,7 @@ import { imageSrc } from "@/lib/agent/labels";
 import { useFocus } from "@/lib/use-focus";
 import { PhoneAccess } from "@/components/PhoneAccess";
 import { Inbox, type InboxLive } from "@/components/Inbox";
+import { TeamButton, TeamRow, TeamSheet, useTeamInbox } from "@/components/TeamInbox";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { useCoverScreen } from "@/lib/use-cover";
@@ -892,6 +893,11 @@ export default function BentoHome() {
     history.replaceState(history.state, "", location.pathname);
     openChat(sid);
   }, [sessions, openChat]);
+  // The team inbox (§25). Explain starts its chat server-side and hands back the id; parking it in
+  // openParam reuses the `?open=` path, which already waits for the new session to reach the list.
+  const team = useTeamInbox();
+  const [teamOpen, setTeamOpen] = useState(false);
+  const openWhenListed = (sid: string) => { openParam.current = sid; } // the next sessions poll runs the effect;
   const startTopic = (cwd: string, label?: string) => {
     const name = label || cwd.split("/").filter(Boolean).pop() || cwd;
     setPicker(false); setProject(null); setAddMenu(false);
@@ -1203,6 +1209,7 @@ export default function BentoHome() {
   useBackLayer(chatSheet, () => setChatSheet(false));
   useBackLayer(!!flowFor, () => setFlowFor(null));
   useBackLayer(picker, () => setPicker(false));
+  useBackLayer(teamOpen, () => setTeamOpen(false));
   useBackLayer(addMenu, () => setAddMenu(false));
   useBackLayer(!!preview, () => setPreview(null));
   // ⌘B / Ctrl+B toggles the bento between grid and rail — the shortcut every editor with a sidebar
@@ -1292,7 +1299,7 @@ export default function BentoHome() {
         {/* Only the full-width (no project open) case needs the bell's gutter: with a panel open the
             bento is a left column whose right edge is nowhere near the viewport corner. */}
         {/* Split (N5 unfolded) with the keyboard up: the list is an icon strip, no header at all. */}
-        {!(split && keyboardUp && proj) && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${compact ? "px-3 pb-1 pt-3" : `pb-2 pl-6 pt-5 ${proj ? "pr-6" : "pr-16"}`}`}>
+        {!(split && keyboardUp && proj) && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${compact ? "px-3 pb-1 pt-3" : `pb-2 pl-6 pt-5 ${proj ? "pr-6" : team.waiting > 0 ? "pr-28" : "pr-16"}`}`}>
           <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">{compact ? "Minami" : "Minami Bento"}</h1>
           {!compact && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>}
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
@@ -1334,7 +1341,8 @@ export default function BentoHome() {
           <div className={`flex min-h-0 flex-1 flex-col ${split ? "" : "pb-20"}`}>
             <Inbox sessions={inboxSessions} live={liveAct} seen={seen.seen} floor={seen.floor} icons={topicIcons}
               current={proj && focusPane != null ? panes[focusPane]?.sid : null} strip={split && keyboardUp && !!proj}
-              onOpen={openChat} onMarkRead={markRead} />
+              onOpen={openChat} onMarkRead={markRead}
+              head={team.data?.ok && team.waiting > 0 ? <TeamRow inbox={team.data} waiting={team.waiting} onOpen={() => setTeamOpen(true)} /> : null} />
           </div>
         ) : (
         <div className={`min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3 ${split ? "" : "compact:pb-24"}`}>
@@ -1571,7 +1579,7 @@ export default function BentoHome() {
           const waiting = others.filter((x) => liveAct[x.id]?.need).length;
           return (
             // pr-16: the app-wide bell is pinned top-right over this row (see the NotificationBell note).
-            <div className="flex shrink-0 items-center gap-3 border-b border-white/10 py-2.5 pl-6 pr-16">
+            <div className={`flex shrink-0 items-center gap-3 border-b border-white/10 py-2.5 pl-6 ${team.waiting > 0 ? "pr-28" : "pr-16"}`}>
               <button onClick={() => setChatSheet(true)} className="flex min-w-0 max-w-[60%] items-center gap-2 rounded-full bg-white/[0.06] px-3.5 py-1.5 text-[13px] active:bg-white/10">
                 <span className="min-w-0 truncate">{s ? titleOf(s) : "New chat"}</span><ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
               </button>
@@ -1910,7 +1918,12 @@ export default function BentoHome() {
 
           z-[60] is deliberate: above the panel/bento headers (z-20/z-30) so it's always clickable,
           below the lightbox and folder picker (z-[90]/z-[100]) so a modal still covers it. */}
-      <div className="fixed right-3 top-2.5 z-[60]"><NotificationBell /></div>
+      <div className="fixed right-3 top-2.5 z-[60] flex gap-1.5">
+        {/* Only while something waits, and only where there's room: on a phone it's the inbox's first row. */}
+        {team.waiting > 0 && <span className="hidden md:block"><TeamButton waiting={team.waiting} onOpen={() => setTeamOpen(true)} /></span>}
+        <NotificationBell />
+      </div>
+      {teamOpen && <TeamSheet inbox={team.data} reload={team.reload} onClose={() => setTeamOpen(false)} onExplained={openWhenListed} />}
 
       {preview && <PreviewOverlay href={preview} onClose={() => setPreview(null)} />}
       {picker && <FolderPicker onPick={startTopic} onClose={() => setPicker(false)} recents={recentTopics} />}
