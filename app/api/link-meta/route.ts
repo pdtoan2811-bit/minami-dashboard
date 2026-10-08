@@ -9,6 +9,15 @@ export const runtime = "nodejs";
 type Meta = { own: boolean; ok?: boolean; title?: string; description?: string; image?: string; remote?: string | null };
 const cache = new Map<string, { at: number; m: Meta }>();
 const TTL = 60_000; // short: these are dev servers, and a title changes the moment the page is edited
+// Bounded: entries were only ever checked for age, never removed, so every distinct url a transcript
+// ever showed stayed in memory (audit: 20k urls → +400 MB). Map keeps insertion order, so the first
+// key is the oldest.
+const MAX_ENTRIES = 500;
+function remember(url: string, m: Meta) {
+  cache.delete(url);
+  remember(url, m);
+  while (cache.size > MAX_ENTRIES) { const k = cache.keys().next().value; if (k === undefined) break; cache.delete(k); }
+}
 
 const decode = (s: string) => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&#x27;/g, "'").replace(/\s+/g, " ").trim();
 function metaTag(html: string, names: string[]): string | undefined {

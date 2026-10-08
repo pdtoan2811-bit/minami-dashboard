@@ -376,6 +376,10 @@ export type AgentEvent =
   | { t: "permission"; id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } // waiting on the user
   | { t: "hold"; hold: boolean } // the Flow view's brake: park every tool call at the gate (REPLACE semantics)
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
+  /** A parked prompt (ask or permission) was resolved — by this pane, another tab, the cover screen, a
+   *  notification or a session ending. The pane drops the matching card instead of keeping a dead one
+   *  up until the turn ends (audit 2026-10-08). */
+  | { t: "settled"; id: string }
   // Claude's `ask_team` MCP tool — a question for a TEAMMATE, in flight as a Slack DM card (team-ask).
   // REPLACE semantics: `packet: null` means the call returned (answered, or expired). Unlike `ask`,
   // nothing is parked at the gate and nothing here can answer it — the tool's own Socket Mode
@@ -701,7 +705,7 @@ function settle(s: Session) {
 // HOLD_TIMEOUT_MS) — resolving its promise without clearing that timer leaves a callback that fires
 // minutes later and broadcasts a spurious "auto-denied" notice into a session that moved on long ago.
 function denyAllPending(s: Session, message: string) {
-  for (const [, p] of s.pending) { if (p.timer) clearTimeout(p.timer); p.resolve({ behavior: "deny", message }); }
+  for (const [id, p] of s.pending) { if (p.timer) clearTimeout(p.timer); p.resolve({ behavior: "deny", message }); broadcast(s, { t: "settled", id }); }
   s.pending.clear();
 }
 
@@ -1713,6 +1717,7 @@ export function decide(key: string, id: string, decision: "allow" | "deny", mess
   // tool result, so a correction typed on a node lands INSIDE the same turn with its context intact,
   // rather than as a follow-up message after the bad step already ran.
   else p.resolve({ behavior: "deny", message: message || "User denied this tool call." });
+  broadcast(s, { t: "settled", id });
   // Leave "waiting for you" behind the instant the user acts, so the pane goes back to animating.
   settle(s);
   return true;
@@ -1728,6 +1733,7 @@ export function answer(key: string, id: string, answers: Record<string, string |
   s.pending.delete(id);
   const questions = (p.input as { questions?: unknown })?.questions ?? [];
   p.resolve({ behavior: "allow", updatedInput: { questions, answers } });
+  broadcast(s, { t: "settled", id });
   settle(s);
   return true;
 }

@@ -140,12 +140,13 @@ export async function setPhoneAccess(on: boolean): Promise<PhoneAccess> {
 // answer is what keeps that route from being a general-purpose fetcher for whatever a transcript says.
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
 let serveCache: { at: number; s: ServeStatus } | null = null;
+let serveInflight: Promise<ServeStatus> | null = null;
 async function cachedStatus(): Promise<ServeStatus> {
   // 30s: a card asks once per render of a message, and a long transcript can hold a dozen of them.
   if (serveCache && Date.now() - serveCache.at < 30_000) return serveCache.s;
-  const s = await status().catch(() => ({} as ServeStatus));
-  serveCache = { at: Date.now(), s };
-  return s;
+  // One `tailscale serve status` at a time: a burst of cards at expiry used to start one each.
+  serveInflight ??= status().catch(() => ({} as ServeStatus)).then((s) => { serveCache = { at: Date.now(), s }; serveInflight = null; return s; });
+  return serveInflight;
 }
 
 export type OwnUrl = {

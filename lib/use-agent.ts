@@ -148,8 +148,19 @@ export function useAgent(paneKey: string) {
     esRef.current?.close(); esRef.current = null;
     if (streamKeyRef.current) { openStreams.delete(streamKeyRef.current); streamKeyRef.current = null; }
   }, []);
-  // Close on unmount AND when the pane key changes — the stream belongs to the key it was opened for.
-  useEffect(() => closeStream, [closeStream, paneKey]);
+  useEffect(() => closeStream, [closeStream]);
+  // A pane's key changes WHILE its stream is open: a blank chat's first send opens under `pane-…`,
+  // then `init` adopts the session id and the key becomes `live:<sid>` — mid-turn. The server aliases
+  // the session, so the stream stays; only its budget slot moves to the new key. (2026-10-08: closing
+  // it here instead froze every new chat's first reply — the stream died mid-turn and nothing reopened.)
+  useEffect(() => {
+    const was = streamKeyRef.current;
+    if (!was || was === paneKey) return;
+    const h = openStreams.get(was);
+    openStreams.delete(was);
+    if (h) openStreams.set(paneKey, h);
+    streamKeyRef.current = paneKey;
+  }, [paneKey]);
 
   // Adopt a server activity state. The phase clock only restarts when the phase/label actually
   // changes, so a burst of text deltas doesn't reset the visible "12s" counter.
@@ -221,14 +232,14 @@ export function useAgent(paneKey: string) {
       const victim = [...openStreams.entries()]
         .filter(([k, h]) => k !== paneKey && h.releasable())
         .sort((a, b) => a[1].lastUse() - b[1].lastUse())[0];
-      if (mode === "want") { releasedRef.current = true; return; } // no room: stay released, a later tick retries
+      if (mode === "want") { releasedRef.current = true; evictedRef.current = true; return; } // no room: a later tick retries
       victim?.[1].release();
     }
     streamKeyRef.current = paneKey;
     openStreams.set(paneKey, {
       releasable: () => releasableRef.current,
       lastUse: () => Math.max(lastActiveRef.current, lastDeltaAtRef.current),
-      release: () => { closeStream(); releasedRef.current = true; },
+      release: () => { closeStream(); releasedRef.current = true; evictedRef.current = true; },
     });
     const es = new EventSource(`/api/agent/stream?key=${encodeURIComponent(paneKey)}${attaching ? "&attach=1" : ""}`);
     // EventSource silently auto-reconnects at the transport level on a network blip (mobile switching
@@ -462,6 +473,12 @@ export function useAgent(paneKey: string) {
           setHoldState(!!ev.hold); break;
         case "ask":
           setAsk({ id: ev.id, questions: ev.questions || [] }); break;
+        case "settled":
+          // A prompt answered somewhere else (the cover, a notification, another tab) — drop its card
+          // now rather than leaving a dead one up until the turn ends.
+          setAsk((cur) => (cur?.id === ev.id ? null : cur));
+          setPending((cur) => (cur?.id === ev.id ? null : cur));
+          break;
         case "ask_team":
           // REPLACE semantics from the server: a null packet is the call returning, whoever answered.
           setAskTeam(ev.packet ? { id: ev.id, packet: ev.packet } : null); break;
@@ -567,6 +584,10 @@ export function useAgent(paneKey: string) {
   const UNPIN_IDLE_MS = 5 * 60 * 1000;
   const UNPIN_HIDDEN_MS = 60 * 1000; // hidden AND idle: nobody can be reading it, so don't wait long
   const releasedRef = useRef(false);
+  // Released by the STREAM BUDGET (no room / evicted), as opposed to released for being idle. Only
+  // these are re-attached by the 30 s tick — re-attaching idle releases made every idle visible pane
+  // flap release→reattach every 30 s, which also reset the server's idle reaper forever.
+  const evictedRef = useRef(false);
   // Everything the check needs lives in refs: a single interval that reads state through refs cannot
   // develop the stale-closure and cleared-timer bugs that a per-transition setTimeout chain did (an
   // earlier version silently lost its pending timer whenever the effect re-registered).
@@ -581,6 +602,7 @@ export function useAgent(paneKey: string) {
     const reattach = () => {
       if (!releasedRef.current) return;
       releasedRef.current = false;
+      evictedRef.current = false;
       if (esRef.current) return; // a send() already reopened it — don't flag a resync over a live stream
       attachingRef.current = true; // full resync, same path a manual refresh takes
       // `want`: a click anywhere fires this for EVERY released pane — it must not evict others.
@@ -594,7 +616,7 @@ export function useAgent(paneKey: string) {
     };
     const check = () => {
       // Released for lack of room (the stream budget) — take a slot back once one is free.
-      if (!esRef.current && releasedRef.current && document.visibilityState === "visible" && openStreams.size < STREAM_BUDGET) { reattach(); return; }
+      if (!esRef.current && evictedRef.current && document.visibilityState === "visible" && openStreams.size < STREAM_BUDGET) { reattach(); return; }
       if (!esRef.current || !liveRef.current || detachedRef.current) return; // nothing pinned to give back
       // Never release mid-turn or over an unanswered prompt: a parked permission/AskUserQuestion promise
       // is auto-denied once the server reaps the session, so releasing would answer for the user, and
@@ -775,7 +797,8 @@ export function useAgent(paneKey: string) {
       const r = await fetch("/api/agent/permission", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: p.id, decision, message }) });
       const d = await r.json().catch(() => null);
       if (!d?.ok) throw new Error("the server didn't confirm this decision");
-      setPending(null);
+      // Only THIS prompt: the next one may already have arrived over SSE before this POST returned.
+      setPending((cur) => (cur?.id === p.id ? null : cur));
     } catch (e) { setError(`Couldn't send that decision — try again (${String((e as Error)?.message || e)})`); }
   }, [pending, paneKey]);
 
@@ -790,7 +813,7 @@ export function useAgent(paneKey: string) {
       const r = await fetch("/api/agent/answer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: paneKey, id: a.id, answers }), signal: AbortSignal.timeout(45_000) });
       const d = await r.json().catch(() => null);
       if (!d?.ok) throw new Error(d?.error || "the server didn't confirm this answer");
-      setAsk(null);
+      setAsk((cur) => (cur?.id === a.id ? null : cur));
       return null;
     } catch (e) {
       const msg = (e as Error)?.name === "TimeoutError" ? "the server didn't answer in 45 s" : String((e as Error)?.message || e);

@@ -597,6 +597,24 @@ everything else.
 - `closeStream` frees the slot by the key the stream was registered under (`streamKeyRef`), because a
   pane's key can change while it's open.
 
+> 🐛 **Regression, live 2026-10-07 18:35 → 10-08: every new chat's first reply never appeared.** To
+> free the budget slot on a key change I made the unmount effect also run on `paneKey` changes. But a
+> blank chat's key changes MID-TURN (`pane-…` → `live:<sid>` when `init` adopts the session), so the
+> stream closed during the first turn and nothing reopened it: "still starting…" forever. Found by the
+> stability audit. Now the stream is kept, and only its slot moves to the new key (a `paneKey` effect
+> that re-registers `openStreams`). Verified: two replies in a brand-new chat, one stream throughout.
+
+> 🐛 **Idle panes flapped every 30 s.** The tick that re-attaches panes released "for lack of room" also
+> re-attached panes released for being idle, which the next tick released again, forever. Each flap
+> resubscribed, which reset the server's 30 min idle reaper, so idle sessions were never reaped.
+> `evictedRef` now marks budget releases only, and only those are re-attached by the tick.
+
+**Prompt settled → `settled` event.** `answer()`, `decide()` and `denyAllPending()` broadcast
+`{ t: "settled", id }`. A pane drops the matching ask/permission card, so one answered on the cover, in a
+notification or in another tab no longer stays up dead until the turn ends. The pane's own clears are
+functional (`cur?.id === id ? null : cur`), so answering one prompt can't wipe the next one that
+arrived over SSE before the POST returned.
+
 **Not covered:** two dashboard **tabs** share the same six (4 + 4 > 6). Keep one tab, or use the
 tailnet URL: `tailscale serve` speaks **HTTP/2**, which multiplexes everything over one connection
 and has no six-per-host limit (`curl --http2` → `proto 2`). Proper fix if it recurs: one multiplexed

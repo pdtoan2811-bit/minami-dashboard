@@ -68,7 +68,16 @@ function needs(d: Digest, cache: Record<string, Entry>): boolean {
 
 // Summarize un-enriched sessions in one Haiku call, into Project > Goal > Task. Goals are reused
 // within a project for consistency. Only fills MISSING entries — curated edits are never clobbered.
+// One labelling call at a time across the whole server. The board's lock was per tab, so a laptop
+// and a phone each started a Haiku call over the same list (audit 2026-10-08); a second caller now
+// waits for the first and reads its result.
+let enriching: Promise<Record<string, Entry>> | null = null;
 export async function enrich(digests: Digest[]): Promise<Record<string, Entry>> {
+  if (enriching) return enriching;
+  enriching = enrichOnce(digests).finally(() => { enriching = null; });
+  return enriching;
+}
+async function enrichOnce(digests: Digest[]): Promise<Record<string, Entry>> {
   const cache = readCache();
   const todo = digests.filter((d) => needs(d, cache)).slice(0, 16);
   if (!todo.length) return cache;
