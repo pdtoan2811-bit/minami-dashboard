@@ -3683,7 +3683,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
               and that's two clicks that must not fight over one slot. */}
           {agent.busy && (
             <button onClick={agent.stop} disabled={agent.stopping} title="Stop this turn (anything queued still runs)"
-              className="shrink-0 rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-medium pointer-coarse:px-3.5 pointer-coarse:py-2 text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-50">
+              className="shrink-0 rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3.5 pointer-coarse:py-2 text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-50">
               {agent.stopping ? "⋯" : "■"}
             </button>
           )}

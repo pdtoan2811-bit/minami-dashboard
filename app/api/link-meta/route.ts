@@ -15,7 +15,7 @@ const TTL = 60_000; // short: these are dev servers, and a title changes the mom
 const MAX_ENTRIES = 500;
 function remember(url: string, m: Meta) {
   cache.delete(url);
-  remember(url, m);
+  cache.set(url, { at: Date.now(), m });
   while (cache.size > MAX_ENTRIES) { const k = cache.keys().next().value; if (k === undefined) break; cache.delete(k); }
 }
 
@@ -52,6 +52,6 @@ export async function GET(req: Request) {
       break;
     } catch { /* refused on this family — try the next; none answering leaves ok false */ }
   }
-  cache.set(url, { at: Date.now(), m });
+  remember(url, m);
   return Response.json(m);
 }

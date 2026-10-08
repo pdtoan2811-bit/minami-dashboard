@@ -69,7 +69,7 @@ type MqDraft = { qi: number; picks: number[][]; texts: string[] };
 type Progress = { done: number; total: number; now?: string; etaAt?: number; lastDoneAt?: number };
 type Tile = {
   phase: string; label: string; busy: boolean; cwd: string; turnStartedAt: number | null; mode?: string; progress?: Progress;
-  need?: Need; needs?: number; ended?: { at: number; ok: boolean; text?: string; error?: string }; hold?: boolean;
+  need?: Need; needs?: number; ended?: { at: number; ok: boolean; text?: string; error?: string }; hold?: boolean; bg?: number;
 };
 type Activity = Record<string, Tile>;
 type State = "you" | "work" | "held" | "fail" | "done";
@@ -148,7 +148,7 @@ const folderOf = (cwd: string) => cwd.split("/").filter(Boolean).pop() || cwd;
 const projectOf = (cwd: string) => folderOf(cwd.split(/\/\.(?:minami-worktrees|claude\/worktrees)\//)[0]);
 
 const stateOf = (t: Tile): State =>
-  t.need ? "you" : t.busy ? (t.hold ? "held" : "work") : t.ended && !t.ended.ok ? "fail" : "done";
+  t.need ? "you" : t.busy ? (t.hold ? "held" : "work") : t.ended && !t.ended.ok ? "fail" : t.bg ? "work" : "done"; // bg: agents outliving the turn
 
 // Neutral shapes, never colour alone — the screen is small, outdoors, and read at a glance. Under
 // prefers-reduced-motion the ring stops turning; its open gap still tells it apart from the dot.

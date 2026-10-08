@@ -417,6 +417,13 @@ viewport). Redirecting someone mid-typing would lose the screen they were on. Ch
 cover 360×400 true; Flip main 412×960 false; 412×450 viewport on a 412×960 screen false; 400×450 window
 on a laptop screen false.
 
+> 🐛 **The keyboard could still redirect to `/glance` mid-answer (fixed 2026-10-08).** On a Flip main
+> screen or a folded N5, a keyboard opened over a short-landscape-ish viewport can leave a box that
+> passes `COVER_QUERY` for a moment, and the redirect took the user off the question they were
+> typing into. It came back as "the ask tool ran again" (the pane remounts, the turn sees no answer).
+> Fix: `snapshot()` latches its answer per `innerWidth`. A keyboard changes only the height, so the
+> decision only moves on fold, unfold, rotation or a switch to the cover.
+
 **Getting it onto the Flex Window.** Samsung's own *Labs → Apps allowed on cover screen* is a short
 allowlist (Messages, WhatsApp, YouTube, Maps…), and Chrome isn't on it. The route that works is Good
 Lock → MultiStar → *I ♡ Galaxy Foldable* → **Launcher Widget**. Pick the apps, then add the Good Lock

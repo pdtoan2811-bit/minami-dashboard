@@ -19,8 +19,17 @@ import { useSyncExternalStore } from "react";
 export const COVER_QUERY =
   "(pointer: coarse) and (max-width: 560px) and (max-height: 600px) and (min-aspect-ratio: 4/5) and (max-aspect-ratio: 5/4)";
 
+// The decision only changes when the viewport WIDTH changes — folding, unfolding, moving to the cover,
+// rotating. A soft keyboard changes only the height, and on the Flip's main screen (and the N5 folded)
+// it squeezed the viewport near-square and short enough to pass COVER_QUERY: the page jumped to
+// /glance mid-answer, losing the typed text and the question you were on (audit 2026-10-08 — very
+// likely the "tapped Other, it flashed" report). `screen` can't settle it (see above), width can.
+let latched: { cover: boolean; w: number } | null = null;
 function snapshot(): boolean {
-  return window.matchMedia(COVER_QUERY).matches;
+  const w = window.innerWidth;
+  if (latched && latched.w === w) return latched.cover;
+  latched = { cover: window.matchMedia(COVER_QUERY).matches, w };
+  return latched.cover;
 }
 
 export function useCoverScreen(): boolean {

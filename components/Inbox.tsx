@@ -20,7 +20,7 @@ import { ProjectIcon } from "@/components/ProjectIcon";
 
 export type InboxSession = { id: string; project: string; title: string; tail: string; lastActivity: number; lastRole: string };
 export type InboxLive = {
-  phase: string; label: string; busy: boolean; turnStartedAt?: number | null;
+  phase: string; label: string; busy: boolean; bg?: number; turnStartedAt?: number | null;
   need?: { kind: string; summary: string; expiresAt?: number }; needs?: number;
   ended?: { at: number; ok: boolean; text?: string; error?: string };
 };
@@ -46,6 +46,10 @@ export function groupOf(s: InboxSession, l: InboxLive | undefined, seenAt: numbe
   const unread = endedAt > Math.max(seenAt, floor);
   if (l?.ended && !l.ended.ok && unread) return "failed";
   if (unread) return "new";
+  // The turn ended but agents or shells it backgrounded are still out there — that is not idle
+  // (audit 2026-10-08: the dock read "0 working" with three agents running). An unread reply still
+  // ranks above it, since that is what there is to read right now.
+  if (l?.bg) return "running";
   return "idle";
 }
 

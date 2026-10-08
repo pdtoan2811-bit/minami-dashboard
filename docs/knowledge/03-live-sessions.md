@@ -609,11 +609,20 @@ everything else.
 > resubscribed, which reset the server's 30 min idle reaper, so idle sessions were never reaped.
 > `evictedRef` now marks budget releases only, and only those are re-attached by the tick.
 
-**Prompt settled → `settled` event.** `answer()`, `decide()` and `denyAllPending()` broadcast
+**Prompt settled → `settled` event.** `answer()`, `decide()`, `denyAllPending()`, the held-step
+timeout and the Stop deny loop (the last two since 2026-10-08) broadcast
 `{ t: "settled", id }`. A pane drops the matching ask/permission card, so one answered on the cover, in a
 notification or in another tab no longer stays up dead until the turn ends. The pane's own clears are
 functional (`cur?.id === id ? null : cur`), so answering one prompt can't wipe the next one that
 arrived over SSE before the POST returned.
+
+**`onopen` reconnects through `ensureStreamRef`** (2026-10-08). The EventSource handler captured the
+`ensureStream` from the render that opened it, so a reconnect after a pane re-key used the old key.
+It now calls the latest one through a ref.
+
+**`LiveTile.bg`** counts backgrounded agents (not shells — a dev server would read "working" all day)
+still running after the turn ended. The inbox groups such a chat as Running unless its reply is
+unread, Focus shows "N running in background", and the cover shows Working instead of Done.
 
 **Not covered:** two dashboard **tabs** share the same six (4 + 4 > 6). Keep one tab, or use the
 tailnet URL: `tailscale serve` speaks **HTTP/2**, which multiplexes everything over one connection

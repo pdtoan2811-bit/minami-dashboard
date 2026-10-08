@@ -93,6 +93,8 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   const settled = () => Date.now() >= settledAt.current;
   const [armed, setArmed] = useState<"skipAll" | "empty" | null>(null);
   useEffect(() => { if (!armed) return; const t = setTimeout(() => setArmed(null), 4000); return () => clearTimeout(t); }, [armed]);
+  // A confirm belongs to the question it was armed on.
+  useEffect(() => { setArmed(null); }, [qi]);
   // Folded to one line so the transcript gets the pane back. A question is only answerable with the
   // conversation that produced it in view, and the expanded card can't always leave room for that.
   // Lives here, not at the call site, so folding never remounts the card and loses half-made picks.
@@ -291,7 +293,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     // the transcript (flex-basis 0) gave them all up — a four-option question left the log at zero
     // height, so the context the question was about was exactly what you couldn't scroll back to.
     // The cap keeps 40% of the pane for the conversation; the fold button gives it all of it.
-    <div className="mx-4 mb-2 flex max-h-[60%] min-h-0 flex-col rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
+    <div className="mx-4 mb-2 flex max-h-[60%] min-h-0 flex-col focus-within:max-h-[88%] rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
       <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2">
         <p className={`flex items-center gap-1.5 ${sc.eyebrow} font-medium uppercase tracking-wider text-[var(--sakura)]`}><span>✻</span> Claude is asking</p>
         {n > 1 && (
@@ -308,7 +310,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
         )}
         {/* After the dots and set off by a rule: beside them it read as a label for the step dots. */}
         <button onClick={() => setFolded(true)} title="Fold this card to read the conversation above it — your picks are kept"
-          className={`${n > 1 ? "" : "ml-auto "}border-l border-white/10 pl-2.5 ${sc.hint} text-neutral-500 transition-colors hover:text-neutral-200`}>
+          className={`${n > 1 ? "" : "ml-auto "}border-l border-white/10 pl-2.5 pointer-coarse:min-h-10 ${sc.hint} text-neutral-500 transition-colors hover:text-neutral-200`}>
           ▾ read the chat
         </button>
       </div>
@@ -357,11 +359,11 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
         <Row sc={sc} multi={multi} on={picked.includes(OTHER)} onClick={() => toggle(OTHER)} label="Other"
           description={picked.includes(OTHER) ? undefined : "type your own answer"}>
           <input ref={otherRef} value={other[qi] || ""} onChange={(e) => typeOther(e.target.value)}
-            onBlur={unsettle}
+
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && answered) next(); }}
             placeholder="type your own answer…"
-            className={`mt-1.5 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1.5 ${sc.input} text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-[var(--sakura)]/60`} />
+            className={`mt-1.5 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1.5 pointer-coarse:py-2.5 ${sc.input} text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-[var(--sakura)]/60`} />
         </Row>
       </div>
 
@@ -375,7 +377,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
             return (
               <button key={m.key} title={m.role || m.expertise?.join(", ")}
                 onClick={() => setFwd((p) => ({ ...p, [qi]: on ? (undefined as unknown as TeamMember) : m }))}
-                className={`rounded-full border px-2 py-0.5 transition-colors ${
+                className={`rounded-full border px-2 py-0.5 transition-colors pointer-coarse:min-h-10 pointer-coarse:px-3 ${
                   on ? "border-[var(--sakura)] bg-[var(--sakura)]/20 text-white"
                      : "border-white/15 text-neutral-400 hover:border-white/30 hover:text-neutral-200"}`}>
                 {on ? "✓ " : ""}{m.name}
@@ -388,13 +390,13 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
 
       {/* Pinned. This row is the exit from `phase=awaiting`; it may never be the thing that overflows. */}
       <div className="mt-2.5 flex shrink-0 flex-wrap items-center gap-2">
-        {qi > 0 && <button onClick={back} className={`rounded-lg border border-white/15 px-3 py-1.5 ${sc.button} text-neutral-300 transition-colors hover:bg-white/10`}>← Back</button>}
+        {qi > 0 && <button onClick={back} className={`rounded-lg border border-white/15 px-3 py-1.5 pointer-coarse:min-h-11 ${sc.button} text-neutral-300 transition-colors hover:bg-white/10`}>← Back</button>}
         <button onClick={next} onPointerDown={keepFocus} disabled={!answered || sending}
-          className={`rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 ${sc.button} font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40 ${sending ? "animate-pulse" : ""}`}>
+          className={`rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-5 ${sc.button} font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40 ${sending ? "animate-pulse" : ""}`}>
           {sending ? "Sending…" : isLast ? "Send answer" : "Next →"}
         </button>
-        <button onClick={guardedSkipOne} disabled={sending} className={`${sc.skip} ${armed === "empty" ? "font-medium text-[#f0a868]" : "text-neutral-500"} transition-colors hover:text-neutral-300 hover:underline disabled:opacity-40`}>
-          {armed === "empty" ? "Send with no answer? Tap again" : `Skip${isLast && n > 1 ? " & send" : ""}`}
+        <button onClick={guardedSkipOne} disabled={sending} className={`pointer-coarse:min-h-11 pointer-coarse:px-2 ${sc.skip} ${armed === "empty" ? "font-medium text-[#f0a868]" : "text-neutral-500"} transition-colors hover:text-neutral-300 hover:underline disabled:opacity-40`}>
+          {armed === "empty" && isLast ? "Send with no answer? Tap again" : `Skip${isLast && n > 1 ? " & send" : ""}`}
         </button>
         {/* What will actually be sent, in the words that will be sent. The old hint described the
             *rules* of the control; this describes the outcome, which is the thing in doubt. */}
@@ -411,7 +413,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
           {sendErr ? `Didn't go through — ${sendErr}. Tap Send again.` : "Still sending — the server is slow right now. Your answer is on its way; no need to click again."}
         </p>
       )}
-      {n > 1 && <button onClick={guardedSkipAll} disabled={sending} className={`mt-1.5 shrink-0 self-start ${sc.skip} ${armed === "skipAll" ? "font-medium text-[#f0a868]" : "text-neutral-600"} transition-colors hover:text-neutral-400 disabled:opacity-40`}>{armed === "skipAll" ? `Skip all ${n}? Claude gets no answers — tap again` : `Skip all ${n} questions`}</button>}
+      {n > 1 && <button onClick={guardedSkipAll} disabled={sending} className={`mt-1.5 shrink-0 self-start pointer-coarse:min-h-11 ${sc.skip} ${armed === "skipAll" ? "font-medium text-[#f0a868]" : "text-neutral-600"} transition-colors hover:text-neutral-400 disabled:opacity-40`}>{armed === "skipAll" ? `Skip all ${n}? Claude gets no answers — tap again` : `Skip all ${n} questions`}</button>}
     </div>
   );
 }
