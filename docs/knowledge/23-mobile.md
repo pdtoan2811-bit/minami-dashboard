@@ -422,7 +422,9 @@ on a laptop screen false.
 > passes `COVER_QUERY` for a moment, and the redirect took the user off the question they were
 > typing into. It came back as "the ask tool ran again" (the pane remounts, the turn sees no answer).
 > Fix: `snapshot()` latches its answer per `innerWidth`. A keyboard changes only the height, so the
-> decision only moves on fold, unfold, rotation or a switch to the cover.
+> decision only moves on fold, unfold, rotation or a switch to the cover. The latch is updated from a
+> `resize` listener only — `getSnapshot` runs on every render, and re-reading there let a width change
+> that didn't flip the query leave the next keyboard-up render to re-evaluate (round-3 review).
 
 **Getting it onto the Flex Window.** Samsung's own *Labs → Apps allowed on cover screen* is a short
 allowlist (Messages, WhatsApp, YouTube, Maps…), and Chrome isn't on it. The route that works is Good

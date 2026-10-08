@@ -106,8 +106,12 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   const [sending, setSending] = useState(false);
   const [slow, setSlow] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
+  // A ref, not `sending`: two Enters (key repeat, or Enter + click) inside one render both read the
+  // stale state and both POST — the second lands "already settled" as an error on the card.
+  const sendingRef = useRef(false);
   const deliver = async (answers: Record<string, string | string[]>) => {
-    if (sending) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true); setSlow(false); setSendErr(null);
     const t = setTimeout(() => setSlow(true), 5000);
     try {
@@ -116,7 +120,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
       if (err) setSendErr(err);
     } finally {
       clearTimeout(t);
-      setSending(false); setSlow(false);
+      sendingRef.current = false; setSending(false); setSlow(false);
     }
   };
 

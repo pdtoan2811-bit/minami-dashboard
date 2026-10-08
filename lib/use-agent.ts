@@ -236,6 +236,10 @@ export function useAgent(paneKey: string) {
       victim?.[1].release();
     }
     streamKeyRef.current = paneKey;
+    // Attached again by whatever path (a send, not only reattach()): an old eviction mark left set
+    // would make the 30s tick re-open this stream after its next idle release — the flap evictedRef
+    // exists to stop (round-3 review).
+    releasedRef.current = false; evictedRef.current = false;
     openStreams.set(paneKey, {
       releasable: () => releasableRef.current,
       lastUse: () => Math.max(lastActiveRef.current, lastDeltaAtRef.current),
@@ -632,6 +636,7 @@ export function useAgent(paneKey: string) {
       if (idleFor < limit) return;
       closeStream();
       releasedRef.current = true;
+      evictedRef.current = false; // let go for idleness, not for room — the tick must not re-open it
     };
     const onVisible = () => {
       if (document.visibilityState !== "visible") { check(); return; } // may already be over the limit
