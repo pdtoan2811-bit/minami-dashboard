@@ -80,6 +80,19 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   const [fwd, setFwd] = useState<Record<number, TeamMember>>({});
   const [team, setTeam] = useState<TeamMember[]>([]);
   const otherRef = useRef<HTMLInputElement>(null);
+  // Tap guards — the reasoning is at "Taps that land somewhere else" below. Hooks, so above the early return.
+  const SETTLE_MS = 700;
+  const settledAt = useRef(0);
+  const unsettle = () => { settledAt.current = Date.now() + SETTLE_MS; };
+  useEffect(() => {
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    vv?.addEventListener("resize", unsettle);
+    window.addEventListener("resize", unsettle);
+    return () => { vv?.removeEventListener("resize", unsettle); window.removeEventListener("resize", unsettle); };
+  }, []);
+  const settled = () => Date.now() >= settledAt.current;
+  const [armed, setArmed] = useState<"skipAll" | "empty" | null>(null);
+  useEffect(() => { if (!armed) return; const t = setTimeout(() => setArmed(null), 4000); return () => clearTimeout(t); }, [armed]);
   // Folded to one line so the transcript gets the pane back. A question is only answerable with the
   // conversation that produced it in view, and the expanded card can't always leave room for that.
   // Lives here, not at the call site, so folding never remounts the card and loses half-made picks.
@@ -115,6 +128,18 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     return () => { alive = false; };
   }, []);
 
+  // With the keyboard up the options scroller shrinks and the field was left out of sight — focused,
+  // typed into, invisible. preventScroll stops the browser scrolling the clipped ANCESTORS (which is
+  // what made the pane jump); the nearest-scroll then brings it into view inside its own list, and
+  // again once the keyboard has finished resizing the viewport.
+  const focusOther = () => {
+    const el = otherRef.current;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.scrollIntoView({ block: "nearest" });
+    setTimeout(() => el.scrollIntoView({ block: "nearest" }), 350);
+  };
+
   const n = questions.length;
   const q = questions[qi];
   // Defense in depth alongside the `key={agent.ask.id}` at the call site (app/page.tsx): if `qi` is ever
@@ -143,7 +168,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     });
     // Only chase the caret when the row ends up ON. Focusing a row the same click just switched off
     // is what made the old trap read as a UI freeze rather than a deselect.
-    if (label === OTHER && (hasText || !picked.includes(OTHER))) otherRef.current?.focus();
+    if (label === OTHER && (hasText || !picked.includes(OTHER))) focusOther();
   };
 
   // Typing IS choosing. Without this the text sat there looking accepted while a chip quietly outranked
@@ -207,6 +232,29 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     else setQi((i) => i + 1);
   };
   const skipAll = () => deliver({});
+
+  // ── Taps that land somewhere else (2026-10-07) ─────────────────────────────────────────────────────
+  // "Tapped Other, the panel flashed, and Claude asked again." The question had come back as "The user
+  // did not answer the questions" — an EMPTY answer, which only Skip / Skip all send. On a phone, the
+  // tap that leaves the Other field closes the keyboard; the pane reflows under the finger; and the
+  // click lands on whatever is there now — Skip sits beside Next, Skip all just below. Emulated touch
+  // showed the half of it a script can see: the first tap on Next after typing didn't register.
+  // Three guards: Next/Send keep the field focused (pointerdown preventDefault), so nothing moves;
+  // a Skip within SETTLE_MS of the keyboard closing or the layout resizing is ignored; and anything
+  // that would send NO answer at all takes a second tap.
+  // (SETTLE_MS, settledAt, armed: declared at the top with the other hooks — see "Taps that land".)
+  const guardedSkipOne = () => {
+    if (!settled()) return;
+    // Skipping the last question when nothing else was answered sends an empty answer: confirm it.
+    if (isLast && Object.keys(buildAnswers(qi)).length === 0 && armed !== "empty") { setArmed("empty"); return; }
+    setArmed(null); skipOne();
+  };
+  const guardedSkipAll = () => {
+    if (!settled()) return;
+    if (armed !== "skipAll") { setArmed("skipAll"); return; }
+    setArmed(null); skipAll();
+  };
+  const keepFocus = (e: React.PointerEvent) => { if (document.activeElement === otherRef.current) e.preventDefault(); };
 
   const count = answerFor(qi);
   const nPicked = Array.isArray(count) ? count.length : count ? 1 : 0;
@@ -309,6 +357,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
         <Row sc={sc} multi={multi} on={picked.includes(OTHER)} onClick={() => toggle(OTHER)} label="Other"
           description={picked.includes(OTHER) ? undefined : "type your own answer"}>
           <input ref={otherRef} value={other[qi] || ""} onChange={(e) => typeOther(e.target.value)}
+            onBlur={unsettle}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && answered) next(); }}
             placeholder="type your own answer…"
@@ -340,12 +389,12 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
       {/* Pinned. This row is the exit from `phase=awaiting`; it may never be the thing that overflows. */}
       <div className="mt-2.5 flex shrink-0 flex-wrap items-center gap-2">
         {qi > 0 && <button onClick={back} className={`rounded-lg border border-white/15 px-3 py-1.5 ${sc.button} text-neutral-300 transition-colors hover:bg-white/10`}>← Back</button>}
-        <button onClick={next} disabled={!answered || sending}
+        <button onClick={next} onPointerDown={keepFocus} disabled={!answered || sending}
           className={`rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 ${sc.button} font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40 ${sending ? "animate-pulse" : ""}`}>
           {sending ? "Sending…" : isLast ? "Send answer" : "Next →"}
         </button>
-        <button onClick={skipOne} disabled={sending} className={`${sc.skip} text-neutral-500 transition-colors hover:text-neutral-300 hover:underline disabled:opacity-40`}>
-          Skip{isLast && n > 1 ? " & send" : ""}
+        <button onClick={guardedSkipOne} disabled={sending} className={`${sc.skip} ${armed === "empty" ? "font-medium text-[#f0a868]" : "text-neutral-500"} transition-colors hover:text-neutral-300 hover:underline disabled:opacity-40`}>
+          {armed === "empty" ? "Send with no answer? Tap again" : `Skip${isLast && n > 1 ? " & send" : ""}`}
         </button>
         {/* What will actually be sent, in the words that will be sent. The old hint described the
             *rules* of the control; this describes the outcome, which is the thing in doubt. */}
@@ -362,7 +411,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
           {sendErr ? `Didn't go through — ${sendErr}. Tap Send again.` : "Still sending — the server is slow right now. Your answer is on its way; no need to click again."}
         </p>
       )}
-      {n > 1 && <button onClick={skipAll} disabled={sending} className={`mt-1.5 ${sc.skip} text-neutral-600 transition-colors hover:text-neutral-400 disabled:opacity-40`}>Skip all {n} questions</button>}
+      {n > 1 && <button onClick={guardedSkipAll} disabled={sending} className={`mt-1.5 shrink-0 self-start ${sc.skip} ${armed === "skipAll" ? "font-medium text-[#f0a868]" : "text-neutral-600"} transition-colors hover:text-neutral-400 disabled:opacity-40`}>{armed === "skipAll" ? `Skip all ${n}? Claude gets no answers — tap again` : `Skip all ${n} questions`}</button>}
     </div>
   );
 }

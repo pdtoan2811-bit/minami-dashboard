@@ -446,6 +446,18 @@ costs nothing: a paused animation schedules no frames, which is the only measure
 
 ### The ask card — one question at a time, and one visible answer
 
+> 🐛 **"Tapped Other, the panel flashed, Claude asked again" (2026-10-08).** The question came back as
+> *"The user did not answer the questions."* (seen in an ecvision chat, Oct 6 17:32 UTC), which is
+> an **empty** answer, and only Skip / Skip all send one. Desktop and emulated touch couldn't reproduce it
+> end to end, but emulation showed the mechanism: with the keyboard up the Other field was scrolled out
+> of view, and the first tap on Next after typing didn't register. On a real phone that tap closes the
+> keyboard, the pane reflows under the finger, and the click lands on what's there now. Skip sits
+> beside Next, and Skip all just below. Guards: Next/Send `preventDefault` on pointerdown while the Other
+> field is focused (the keyboard stays, nothing moves); Skip and Skip all ignore taps for 700 ms after
+> the field blurs or the (visual) viewport resizes; Skip all, and a Skip that would send nothing,
+> need a second tap ("tap again" for 4 s); the field focuses with `preventScroll` and scrolls itself
+> into view inside its own list.
+
 **Sending is visible (2026-10-07).** Send used to fire `answerAsk` and show nothing until the server
 replied, with failures going to the pane's error line, far from the card. A stalled request
 (see §3, the stream budget) looked like a dead button. Now the button reads **Sending…** and
