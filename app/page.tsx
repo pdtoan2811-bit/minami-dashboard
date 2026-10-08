@@ -3563,7 +3563,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
                 fast, and the safe direction, so it never hides inside the sheet (§23). */}
             {compact && (
               <button onClick={() => agent.setHold(!agent.hold)} aria-label={agent.hold ? "Resume — stop holding tool calls" : "Pause — hold every tool call for review"}
-                className={`flex h-9 shrink-0 items-center gap-1 rounded-lg border px-2.5 text-[12px] ${agent.hold ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#f0a868]" : "border-white/10 text-neutral-400"}`}>
+                className={`flex h-9 min-w-9 shrink-0 items-center justify-center gap-1 rounded-lg border px-2.5 text-[12px] pointer-coarse:h-11 pointer-coarse:min-w-11 ${agent.hold ? "border-[#c47f18]/60 bg-[#c47f18]/15 text-[#f0a868]" : "border-white/10 text-neutral-400"}`}>
                 {agent.hold ? "▶ resume" : "⏸"}
               </button>
             )}
@@ -3647,7 +3647,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             <div className="relative shrink-0 self-end">
               <button onClick={() => setAttachMenu((v) => !v)} disabled={!cwd || nativeBusy}
                 title="Attach a file or folder (inserts its path for Claude to read) — or just drag one in"
-                className="rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30 pointer-coarse:px-2 pointer-coarse:py-1.5">📎</button>
+                className="rounded-md px-1 py-1 text-neutral-500 transition-colors hover:text-neutral-200 disabled:opacity-30 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-2 pointer-coarse:py-1.5">📎</button>
               {attachMenu && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setAttachMenu(false)} />
@@ -3689,7 +3689,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           )}
           <button onClick={submit} disabled={!input.trim() || !cwd}
             title={agent.busy ? "Queue this for after the current turn" : "Send"}
-            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30 pointer-coarse:px-3.5 pointer-coarse:py-2 ${agent.busy ? "bg-[#c47f18]/90" : "bg-[var(--sakura)]"}`}>
+            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3.5 pointer-coarse:py-2 ${agent.busy ? "bg-[#c47f18]/90" : "bg-[var(--sakura)]"}`}>
             {agent.busy ? "＋↵" : "↵"}
           </button>
         </div>

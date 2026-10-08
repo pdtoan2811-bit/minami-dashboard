@@ -441,19 +441,25 @@ function summarize(file: string, id: string, raw?: string): SessionMeta {
     acc.byteLeftoverB64 = "";
     for (const line of raw.split("\n")) foldLine(acc, line);
   } else {
-    const newBuf = readNewBytes(file, readStart, size);
-    const leftoverBytes = acc.byteLeftoverB64 ? Buffer.from(acc.byteLeftoverB64, "base64") : Buffer.alloc(0);
-    const combinedBuf = leftoverBytes.length ? Buffer.concat([leftoverBytes, newBuf]) : newBuf;
-    const { complete, leftover } = splitTrailingIncompleteUtf8(combinedBuf);
-    acc.byteLeftoverB64 = leftover.length ? leftover.toString("base64") : "";
-    const text = acc.lineLeftover + complete.toString("utf8");
-    const parts = text.split("\n");
-    // If this chunk doesn't end in a newline, the last part is an as-yet-incomplete line — hold it for
-    // next time instead of failing to parse it now. If it DOES end in "\n", split() leaves a trailing
-    // "" element to drop.
-    acc.lineLeftover = text.endsWith("\n") ? "" : (parts.pop() || "");
-    if (text.endsWith("\n")) parts.pop();
-    for (const line of parts) foldLine(acc, line);
+    // In READ_CHUNK slices, through the same carry-over (lineLeftover / byteLeftoverB64) an incremental
+    // parse uses between polls. A full reparse used to read the whole file in one go: measured on a
+    // 194 MB transcript, +635 MB RSS (the Buffer, the string, the split) on the server that hosts every
+    // live chat (audit 2026-10-08). Peak is now one chunk; the CPU time is unchanged.
+    for (let at = readStart; at < size; at += READ_CHUNK) {
+      const newBuf = readNewBytes(file, at, Math.min(size, at + READ_CHUNK));
+      const leftoverBytes = acc.byteLeftoverB64 ? Buffer.from(acc.byteLeftoverB64, "base64") : Buffer.alloc(0);
+      const combinedBuf = leftoverBytes.length ? Buffer.concat([leftoverBytes, newBuf]) : newBuf;
+      const { complete, leftover } = splitTrailingIncompleteUtf8(combinedBuf);
+      acc.byteLeftoverB64 = leftover.length ? leftover.toString("base64") : "";
+      const text = acc.lineLeftover + complete.toString("utf8");
+      const parts = text.split("\n");
+      // If this chunk doesn't end in a newline, the last part is an as-yet-incomplete line — hold it for
+      // the next chunk (or the next poll) instead of failing to parse it now. If it DOES end in "\n",
+      // split() leaves a trailing "" element to drop.
+      acc.lineLeftover = text.endsWith("\n") ? "" : (parts.pop() || "");
+      if (text.endsWith("\n")) parts.pop();
+      for (const line of parts) foldLine(acc, line);
+    }
   }
 
   const meta = buildMeta(id, file, acc, mtime);
@@ -500,8 +506,11 @@ export function listSessions(): SessionMeta[] {
   // Scratch-folder transcripts are capped HERE too, before the window: a looping `cd /tmp && claude -p`
   // wrote 130+ of them in a day and they took most of the 150 places, so real projects never even got
   // parsed (2026-10-07). See SCRATCH_CAP.
+  // A transcript written in the last SCRATCH_FRESH_MS is exempt: the cap is for a loop's leftovers, and
+  // capping a chat that is running right now hid it from the inbox while it was live (audit R1).
   let sc = 0;
-  const kept = candidates.filter((c) => !c.scratch || ++sc <= SCRATCH_CAP * 2);
+  const fresh = Date.now() - SCRATCH_FRESH_MS;
+  const kept = candidates.filter((c) => !c.scratch || c.mtime > fresh || ++sc <= SCRATCH_CAP * 2);
   const windowed = kept.length > CANDIDATE_WINDOW ? kept.slice(0, CANDIDATE_WINDOW) : kept;
 
   const out: SessionMeta[] = [];
@@ -523,10 +532,12 @@ export function listSessions(): SessionMeta[] {
   // The newest few stay visible, so a scratch chat you're actually in is still there.
   const sorted = out.sort((a, b) => b.lastActivity - a.lastActivity);
   let scratch = 0;
-  return sorted.filter((m) => !isScratchCwd(m.cwd) || ++scratch <= SCRATCH_CAP).slice(0, 60);
+  return sorted.filter((m) => !isScratchCwd(m.cwd) || m.active || m.lastActivity > Date.now() - SCRATCH_FRESH_MS || ++scratch <= SCRATCH_CAP).slice(0, 60);
 }
 
+const READ_CHUNK = 4 * 1024 * 1024;
 const SCRATCH_CAP = 5;
+const SCRATCH_FRESH_MS = 15 * 60_000;
 // macOS reports the temp dirs both ways (/tmp vs /private/tmp, /var/folders vs /private/var/folders).
 const SCRATCH_DIRS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"].map((d) => d.replace(/\/+$/, ""));
 function isScratchCwd(cwd: string): boolean {

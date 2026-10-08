@@ -529,7 +529,7 @@ export function Glance() {
           <div className="flex shrink-0 items-center gap-0.5 px-1 pt-1"
             onTouchStart={(e) => { swipeX.current = e.touches[0].clientX; }}
             onTouchEnd={(e) => { const x = swipeX.current; swipeX.current = null; if (x == null || focus.length < 2) return; const dx = e.changedTouches[0].clientX - x; if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1); }}>
-            {focus.length > 1 && <button type="button" aria-label="Previous chat" onClick={() => step(-1)} className="flex h-11 w-7 shrink-0 items-center justify-center text-[20px] text-neutral-500">‹</button>}
+            {focus.length > 1 && <button type="button" aria-label="Previous chat" onClick={() => step(-1)} className="flex h-11 w-10 shrink-0 items-center justify-center text-[20px] text-neutral-500">‹</button>}
             <div className="min-w-0 flex-1 px-1">
               {cur ? (
                 <>
@@ -542,7 +542,7 @@ export function Glance() {
                 </>
               ) : <p className="py-2 text-[15px] text-neutral-400">{stale ? "Not updating" : act ? "Nothing needs you" : "Loading…"}</p>}
             </div>
-            {focus.length > 1 && <button type="button" aria-label="Next chat" onClick={() => step(1)} className="flex h-11 w-7 shrink-0 items-center justify-center text-[20px] text-neutral-500">›</button>}
+            {focus.length > 1 && <button type="button" aria-label="Next chat" onClick={() => step(1)} className="flex h-11 w-10 shrink-0 items-center justify-center text-[20px] text-neutral-500">›</button>}
           </div>
         );
       })()}
@@ -639,10 +639,10 @@ export function Glance() {
               enterKeyHint={last ? "send" : "next"}
               placeholder={(mqd.picks[mqd.qi] || []).length ? "add a note, or go on" : "pick, or type"}
               aria-label={`Answer to question ${mqd.qi + 1}`}
-              className="min-w-0 flex-1 bg-transparent py-1.5 text-[16px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
+              className="min-w-0 flex-1 bg-transparent py-2.5 text-[16px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
             />
             <button type="submit" aria-label={last ? "Send all answers" : "Next question"} disabled={sending || (last && !hasAny)} onPointerDown={(e) => e.preventDefault()}
-              className="flex h-9 min-w-9 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] px-2.5 text-[14px] text-white disabled:opacity-40">
+              className="flex h-10 min-w-10 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] px-2.5 text-[14px] text-white disabled:opacity-40">
               {sending ? "…" : last ? "Send" : "›"}
             </button>
           </form>
@@ -661,10 +661,10 @@ export function Glance() {
             enterKeyHint="send"
             placeholder={isQuestion ? (draft.pick ? "add a note, or send" : "pick one, or type") : cur.state === "work" ? "Queue a follow-up" : "Reply"}
             aria-label={isQuestion ? "Your answer" : "Your reply"}
-            className="min-w-0 flex-1 bg-transparent py-1.5 text-[16px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
+            className="min-w-0 flex-1 bg-transparent py-2.5 text-[16px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
           />
           <button type="submit" aria-label="Send" disabled={sending || (!draft.text.trim() && !draft.pick)} onPointerDown={(e) => e.preventDefault()}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] text-[15px] text-white disabled:opacity-40">
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] text-[15px] text-white disabled:opacity-40">
             {sending ? "…" : "↑"}
           </button>
         </form>

@@ -41,7 +41,12 @@ Two passes. First a **stat-only** sweep over every project dir, sorted by mtime 
 > the 60 listed, so ecvision vanished from the board. Scratch folders (`isScratchDir` on the projects
 > folder name, `isScratchCwd` on the cwd: `/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders`,
 > `os.tmpdir()`) are now capped: 10 candidates before the window, 5 of the 60 listed. The newest stay,
-> so a scratch chat you're actually in is still there.
+> so a scratch chat you're actually in is still there. Anything written in the last 15 min is exempt
+> outright: capping by recency alone hid live chats run in `/tmp` from the inbox (audit 2026-10-08).
+>
+> **Full reparses read in 4 MB chunks** (`READ_CHUNK`), through the same carry-over an incremental
+> parse uses. One 194 MB transcript used to cost +635 MB RSS in a single read. Cold `listSessions` is
+> now 208 MB peak instead of 614, with identical results on the five largest transcripts.
 
 ### Turns: windows, not a tail
 
