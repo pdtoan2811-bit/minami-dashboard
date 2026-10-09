@@ -233,6 +233,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     setSkipped((p) => ({ ...p, [qi]: true }));
     setSel((p) => ({ ...p, [qi]: [] }));
     setOther((p) => ({ ...p, [qi]: "" }));
+    if (otherRef.current) otherRef.current.value = ""; // the field is uncontrolled — clear the DOM too
     setFwd((p) => ({ ...p, [qi]: undefined as unknown as TeamMember }));
     if (isLast) deliver(buildAnswers(qi));
     else setQi((i) => i + 1);
@@ -362,7 +363,16 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
             thing is ever highlighted, and what's highlighted is what gets sent. */}
         <Row sc={sc} multi={multi} on={picked.includes(OTHER)} onClick={() => toggle(OTHER)} label="Other"
           description={picked.includes(OTHER) ? undefined : "type your own answer"}>
-          <input ref={otherRef} value={other[qi] || ""} onChange={(e) => typeOther(e.target.value)}
+          {/* UNCONTROLLED, keyed by question (2026-10-09). "Everything I type got mirrored from right to
+              left" on the phone: typing came out reversed or right-to-left. A controlled input lets React
+              write `value` back into the field, and an Android keyboard that is composing a word reads any
+              write as a caret move to the start, so every letter landed in front of the last. It didn't
+              reproduce in emulation (WebKit, Chromium + IME composition), so this removes the mechanism:
+              React never writes the field while you type; `defaultValue` + `key={qi}` restore a
+              question's text when you page back, and `dir="ltr"` pins the direction. `other` stays the
+              source of truth for the answer. */}
+          <input key={qi} ref={otherRef} defaultValue={other[qi] || ""} onChange={(e) => typeOther(e.target.value)}
+            dir="ltr" autoCapitalize="sentences" autoCorrect="on" spellCheck
 
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && answered) next(); }}
