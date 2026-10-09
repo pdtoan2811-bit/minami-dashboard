@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-09
+- **Ask card: the Other field is uncontrolled** (§3, `components/AskCard.tsx`). Thomas on the phone: "when I select other everything I type got mirrored from right to left". Didn't reproduce in emulation (WebKit iPhone, Chromium Galaxy with IME composition), so the fix removes the mechanism rather than a proven trigger: the field is `defaultValue` + `key={qi}` (React never writes `value` while a keyboard is composing), `dir="ltr"` pins direction, and Skip clears the DOM as well as state. `other` stays the answer's source of truth. Confirm on the Flip.
 - **Phone: one row per task, and a sheet for switching** (§23, `lib/task-groups.ts`). Sessions in the same worktree are one row showing their most urgent session, with "N chats ⌄" for the rest; the Inbox groups the same way. The sheet is Pinned (≤3 tasks) → Active (waiting/working/unread or touched in 6h) → Older folded; pinning moved behind "Edit pins". Live list: 26 rows → 4 + fold. Focus storage cap is 8 session ids; the 3-task limit is client-side.
 
 ### 2026-10-08
