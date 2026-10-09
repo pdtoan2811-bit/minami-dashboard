@@ -487,6 +487,30 @@ out of the focus".
 - **Not built yet from the pitch:** the keyboard-up quote strip (the picked option shown as two lines
   with "swap ▾"). It needs option-picking in the composer first.
 
+#### Round 13 — one row per task, a sheet for switching (2026-10-09) — `lib/task-groups.ts`
+
+Thomas, on the Flip: "a lot of chats, I can't manage which one, and a chat spawns but it's the same
+chat". The data said why: work continues by starting a NEW session in the same worktree ("continue",
+"check progress", "go" — on purpose, a new step of the same task, per the interview). `ecvision/chat-14`
+was three rows with three unrelated AI titles; two of five focus slots were two sessions of chat-4.
+
+- **The worktree is the task.** Sessions sharing a `.minami-worktrees/<name>` cwd group into one row
+  (`taskKeyOf`, `groupTasks`). Main-checkout chats stay one row each — two chats in `~/ecvision` are
+  usually unrelated. The row shows its **most urgent** session (ties → newest), never just the newest,
+  so yesterday's waiting question can't hide behind today's idle session; "3 chats ⌄" lists the rest.
+- **Sheet = switching** (research: Slack Activity's triage-vs-recall split, Telegram folders + pop-back
+  archive, GitHub's Copilot session list, Gmail threading). PINNED (≤3 tasks) → ACTIVE (anything not
+  idle, or touched in 6h, by urgency) → "Older · N tasks ›" folded. Measured on the live list: 26 rows → 4
+  plus a fold.
+- **Pinning behind "Edit pins"**: visible Pin/Unpin buttons in edit mode replace the ＋ on every row and
+  the swipe-only unpin (swipe actions go undiscovered unless paired with a button).
+- The Inbox uses the same grouping, with a "N chats" chip.
+
+> 🐛 Caught before ship: cutting `lib/focus.ts`'s cap from 5 to 3 sliced the stored ids and dropped a
+> real pin (chat-14 was 5th; chat-4's two sessions held two slots). The server now caps STORED session
+> ids at 8 and the three-TASK limit is enforced in the sheet — a limit on tasks must never be applied to
+> a list of sessions.
+
 ### How to re-audit
 
 There is no checked-in harness. The audit was two throwaway Playwright scripts (route × viewport

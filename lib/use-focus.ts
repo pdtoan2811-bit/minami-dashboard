@@ -5,7 +5,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { onPageVisible, pageHidden } from "@/lib/page-visible";
 
-export const FOCUS_MAX = 5;
+// Pinned TASKS, not sessions — three, not five (2026-10-09): pins are the few tasks you juggle by hand;
+// everything active below them sorts itself, so a big pin set only duplicated the automatic list.
+export const FOCUS_MAX = 3;
+const STORE_MAX = 8; // lib/focus.ts's cap on stored session ids
 
 type PinResult = { ok: boolean; full?: boolean; focus: string[] };
 
@@ -30,7 +33,7 @@ export function useFocus() {
 
   /** Resolves `full` when the set is full and nothing was swapped out — the caller decides what to offer. */
   const pin = useCallback(async (id: string, swapOut?: string): Promise<"ok" | "full" | "error"> => {
-    setFocus((f) => (f.includes(id) ? f : [...f.filter((x) => x !== swapOut), id].slice(-FOCUS_MAX)));
+    setFocus((f) => (f.includes(id) ? f : [...f.filter((x) => x !== swapOut), id].slice(-STORE_MAX)));
     const r = await post({ id, on: true, swapOut });
     if (!r) { load(); return "error"; }
     setFocus(r.focus);

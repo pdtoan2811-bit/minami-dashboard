@@ -65,6 +65,7 @@ export const NODES: ModuleNode[] = [
   { id: "c/Inbox", label: "Inbox", sub: "phone home: every chat by\nwhat it needs (§23)", layer: "component", row: 29 },
   { id: "r/seen", label: "/api/agent/seen", sub: "server-side read marks\n(lib/seen.ts)", layer: "route", row: 19 },
   { id: "c/PhoneAccess", label: "PhoneAccess", sub: "📱 switch: dashboard on the\ntailnet + phones online", layer: "component", row: 30 },
+  { id: "l/taskgroups", label: "task-groups.ts", sub: "sessions in one worktree\n= one task row", layer: "core", row: 27 },
   { id: "c/Focus", label: "Focus", sub: "phone dock = focus set +\nprogress sheet / N5 drawer", layer: "component", row: 27 },
   { id: "r/focus", label: "/api/agent/focus", sub: "the pinned focus set, ≤5\n(lib/focus.ts, all devices)", layer: "route", row: 20 },
   { id: "r/viewport", label: "/api/viewport", sub: "each device's real sizes\n→ viewports.jsonl", layer: "route", row: 22 },
@@ -259,6 +260,8 @@ export const NODES: ModuleNode[] = [
 
 export const EDGES: ModuleEdge[] = [
   // surfaces → components (static imports)
+  { from: "c/Focus", to: "l/taskgroups", kind: "import" },
+  { from: "c/Inbox", to: "l/taskgroups", kind: "import" },
   { from: "app/page", to: "c/Composer", kind: "import" },
   // page.tsx measures each pane and PROVIDES the tier; Composer is the one leaf that consumes it.
   { from: "app/page", to: "l/density", kind: "import" },

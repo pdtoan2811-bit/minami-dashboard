@@ -17,8 +17,11 @@
 import ChatName from "@/components/ChatName";
 import { memo, useMemo, useRef, useState } from "react";
 import { ProjectIcon } from "@/components/ProjectIcon";
+import { groupTasks } from "@/lib/task-groups";
 
-export type InboxSession = { id: string; project: string; title: string; tail: string; lastActivity: number; lastRole: string };
+export type InboxSession = { id: string; project: string; title: string; tail: string; lastActivity: number; lastRole: string;
+  /** Task key (lib/task-groups.ts): sessions sharing a worktree are one task, one row. */
+  task?: string };
 export type InboxLive = {
   phase: string; label: string; busy: boolean; bg?: number; turnStartedAt?: number | null;
   need?: { kind: string; summary: string; expiresAt?: number }; needs?: number;
@@ -72,9 +75,14 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
   // Frozen while a finger is down: the poll keeps landing, but the order the user is aiming at
   // doesn't move until they let go.
   const [touching, setTouching] = useState(false);
-  const grouped = useMemo(() => {
+  // One row per task (lib/task-groups.ts): a task's row is its most urgent session, so the group it
+  // lands in is the task's state, and the older sessions of the same worktree stay out of the list.
+  const { grouped, extra } = useMemo(() => {
+    const gs: Record<string, Group> = {};
+    for (const s of sessions) gs[s.id] = groupOf(s, live[s.id], seen[s.id] || 0, floor);
     const by: Record<Group, InboxSession[]> = { need: [], failed: [], new: [], running: [], idle: [] };
-    for (const s of sessions) by[groupOf(s, live[s.id], seen[s.id] || 0, floor)].push(s);
+    const extra: Record<string, number> = {};
+    for (const t of groupTasks(sessions, gs)) { by[t.g].push(t.rep); if (t.members.length > 1) extra[t.rep.id] = t.members.length; }
     // Needs-you: soonest auto-deny first (a held step expires), then longest waiting.
     by.need.sort((a, b) => (live[a.id]?.need?.expiresAt ?? Infinity) - (live[b.id]?.need?.expiresAt ?? Infinity) || a.lastActivity - b.lastActivity);
     const endedAt = (s: InboxSession) => live[s.id]?.ended?.at ?? s.lastActivity;
@@ -82,7 +90,7 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
     by.new.sort((a, b) => endedAt(b) - endedAt(a));
     by.running.sort((a, b) => (live[b.id]?.turnStartedAt ?? 0) - (live[a.id]?.turnStartedAt ?? 0));
     by.idle.sort((a, b) => b.lastActivity - a.lastActivity);
-    return by;
+    return { grouped: by, extra };
   }, [sessions, live, seen, floor]);
   const last = useRef(grouped);
   if (!touching) last.current = grouped;
@@ -116,7 +124,7 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
             <h3 className={`sticky top-0 z-10 bg-neutral-950/95 px-4 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.09em] ${key === "need" ? "text-[#4ade80]" : key === "failed" ? "text-[#ef7c7c]" : "text-neutral-500"}`}>
               {label} · {rows.length}
             </h3>
-            {shown.map((s) => <Row key={s.id} s={s} l={live[s.id]} group={key} icon={icons[s.project]} on={current === s.id} onOpen={onOpen} onMarkRead={onMarkRead} />)}
+            {shown.map((s) => <Row key={s.id} s={s} l={live[s.id]} group={key} icon={icons[s.project]} on={current === s.id} chats={extra[s.id]} onOpen={onOpen} onMarkRead={onMarkRead} />)}
             {key === "idle" && rows.length > showIdle && (
               <button onClick={() => setShowIdle((n) => n + 20)} className="w-full px-4 py-3 text-left text-[13px] text-neutral-500 active:bg-white/5">Show {Math.min(20, rows.length - showIdle)} more</button>
             )}
@@ -137,8 +145,8 @@ export function Ring({ g }: { g: Group }) {
   return <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 bg-neutral-950" style={{ borderColor: c, background: g === "new" ? c : undefined }} />;
 }
 
-const Row = memo(function Row({ s, l, group, icon, on, onOpen, onMarkRead }: {
-  s: InboxSession; l?: InboxLive; group: Group; icon?: string; on: boolean; onOpen: (id: string) => void; onMarkRead: (id: string) => void;
+const Row = memo(function Row({ s, l, group, icon, on, chats, onOpen, onMarkRead }: {
+  s: InboxSession; l?: InboxLive; group: Group; icon?: string; on: boolean; chats?: number; onOpen: (id: string) => void; onMarkRead: (id: string) => void;
 }) {
   // Line 2 is the decision, the activity or the result — never a tool dump.
   const detail = group === "need" ? `${NEED_VERB[l!.need!.kind] || "Needs you"}: ${l!.need!.summary}`
@@ -161,6 +169,7 @@ const Row = memo(function Row({ s, l, group, icon, on, onOpen, onMarkRead }: {
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span className={`min-w-0 flex-1 truncate text-[15px] ${bold ? "font-semibold text-neutral-50" : "text-neutral-300"}`}><ChatName project={s.project} title={s.title} /></span>
+          {chats && <span className="shrink-0 rounded-md bg-white/[0.06] px-1.5 text-[11px] tabular-nums text-neutral-400">{chats} chats</span>}
           <span className={`shrink-0 text-[12px] tabular-nums ${group === "need" ? "text-[#f0a868]" : "text-neutral-500"}`}>{when}</span>
         </span>
         <span className={`block text-[13px] leading-snug ${group === "need" ? "line-clamp-2 text-neutral-200" : "truncate text-neutral-500"}`}>

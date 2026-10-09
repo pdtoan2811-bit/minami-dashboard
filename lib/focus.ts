@@ -16,7 +16,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const FOCUS_MAX = 5;
+// A cap on stored SESSION ids, not on pins. The phone pins TASKS (≤3, enforced client-side in
+// components/Focus.tsx) and one task can hold several pinned sessions of the same worktree — cutting
+// storage to 3 dropped a real pin on deploy (2026-10-09: chat-4's two sessions filled two slots).
+export const FOCUS_MAX = 8;
 const FILE = process.env.MINAMI_FOCUS_FILE || path.join(os.homedir(), ".minami", "focus.json");
 let cache: string[] | null = null;
 

@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-09
+- **Phone: one row per task, and a sheet for switching** (§23, `lib/task-groups.ts`). Sessions in the same worktree are one row showing their most urgent session, with "N chats ⌄" for the rest; the Inbox groups the same way. The sheet is Pinned (≤3 tasks) → Active (waiting/working/unread or touched in 6h) → Older folded; pinning moved behind "Edit pins". Live list: 26 rows → 4 + fold. Focus storage cap is 8 session ids; the 3-task limit is client-side.
+
 ### 2026-10-08
 - **Audit round 4: team-ask and N5 navigation** (§25, §3, §23). Team card opens on the question, Background folded, Send sticky and off until every question is answered, "Send to <asker>", re-read at 10s/25s after sending. Explain reopens its chat per card. List: Review/Decision chip, "N need you", open first. Desktop 👥 always present. AskTeamCard: waiting time + expiry, amber past 30 min, fold, Stop waiting. Forward chips say what happens on send. N5: two-line current-chat chip (project · state / title) that slides in on swipe; 44px dock, sheet, Inbox/Topics and desk pill.
 - **Team inbox** (§25, new doc). Questions a teammate's Claude sends you through team-ask show in the dashboard (desktop 👥 beside the bell; phone: first inbox row) with full context, attached files and options with the recommendation; Send answer posts team-ask's own relay, so the Slack card closes itself. Explain with AI starts a seeded chat in the matching repo. Plain DMs and DM files are gated on an optional Slack user token and say so. Reverses team-forward's "no Slack of its own" for answering only.
