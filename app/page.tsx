@@ -44,6 +44,7 @@ import { imageSrc } from "@/lib/agent/labels";
 import { useFocus } from "@/lib/use-focus";
 import { PhoneAccess } from "@/components/PhoneAccess";
 import { Inbox, type InboxLive } from "@/components/Inbox";
+import { taskKeyOf } from "@/lib/task-groups";
 import { TeamButton, TeamRow, TeamSheet, useTeamInbox } from "@/components/TeamInbox";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
@@ -759,7 +760,7 @@ export default function BentoHome() {
   const inboxSessions = useMemo(() => {
     const ids = new Set(windowed.map((x) => x.id));
     return [...windowed, ...pool.filter((x) => !ids.has(x.id) && (liveAct[x.id]?.need || liveAct[x.id]?.busy))]
-      .map((x) => ({ id: x.id, project: x.project, title: titleOf(x), tail: x.tail || "", lastActivity: x.lastActivity, lastRole: x.lastRole || "" }));
+      .map((x) => ({ id: x.id, project: x.project, title: titleOf(x), tail: x.tail || "", lastActivity: x.lastActivity, lastRole: x.lastRole || "", task: taskKeyOf(x.cwd, x.id) }));
   }, [windowed, pool, liveAct]);
   const openProj = useMemo(
     () => (project ? allProjects.find((p) => p.name === project) ?? null : null),
