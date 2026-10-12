@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-12
+- **today (§26)** — redesigned as ecvision's onboarding: one-question-per-screen decisions with tap-to-advance pills, titles-only to-dos, folded research/log, phone-first. New hand-offs: Do it with Minami, Let Minami decide, Ask <teammate> (team-ask, fire). *Reported by user: "wall of text tho".*
+- **today (§26)** — new `/today` page + `/api/today`: a 07:30 heartbeat (vault `bin/morning-heartbeat.mjs`) plans SEO/AEO and video to-dos and open loops; answered with AskCard; opens itself at login and 09:00 (`bin/install-today.sh`). Nav gains ☀ Today first.
+- **deploy (§8, §26)** — a bare `npx next dev` on a side port overwrote `.next` under the live server (chunks gone, BUILD_ID gone); redeployed with `bin/deploy.sh --detach`. Use `npm run dev -- -p <port>`, which sets `NEXT_DIST_DIR`.
 - **preview comments (§21)** — a second client of `/api/agent/send` + `/api/fs/paste` + `/api/agent/live`: the Hyperframes Studio fork's comment mode (Video Studio). Docs only; no dashboard code changed. Why: a video comment needs a moment, which the pop-out can't give.
 
 ### 2026-10-09

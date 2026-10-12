@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { useSetting } from "@/lib/use-settings";
 
 const ITEMS = [
+  { href: "/today", label: "Today", icon: "☀" },
   { href: "/", label: "Bento", icon: "⊞" },
   { href: "/agents", label: "Agents", icon: "🜂" },
   { href: "/teams", label: "Teams", icon: "⛩" },

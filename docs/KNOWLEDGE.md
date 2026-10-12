@@ -58,6 +58,7 @@ recycle one.
 | [`23-mobile.md`](knowledge/23-mobile.md) | §23 | ~1,500 | The phone view: what the Flip 7 / Find N5 audit found, why a few decisions are about the device rather than the box (`lib/use-media.ts`), the stacked phone-local side slot, taps that triggered focus behaviour, `dvh` + `interactive-widget`, installing it as an app, opening localhost links from the phone through `tailscale serve`, and `/glance`, the Flip 7 cover-screen view (`useCoverScreen()`, Good Lock route onto the Flex Window). |
 | [`24-push.md`](knowledge/24-push.md) | §24 | ~2,600 | Web push: liveEvents → rules → hand-rolled VAPID/aes128gcm → service worker. The heads-up/silent/summary rules, why "settled" is polled, the one-time nonce behind every notification button (and why there is no approve button), why the worker has no fetch handler, and what was verified against real FCM. |
 | [`25-team-inbox.md`](knowledge/25-team-inbox.md) | §25 | ~1,100 | Questions from teammates via team-ask, read and answered in the dashboard: reading cards from metadata, answering with team-ask's own relay, the user-token gate for plain DMs and files, and how Explain starts a seeded chat in the right repo. |
+| [`26-today.md`](knowledge/26-today.md) | §26 | ~1,300 | The morning page: a 07:30 heartbeat plans SEO/AEO + video to-dos from pipeline state, open loops answered with AskCard, auto-open at login and 09:00 via launchd, the day log mirrored into the vault — and the dev server that overwrote the production build. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~24,000 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -140,6 +141,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Canvas A/B harness | `lib/canvas-modes.ts` + `?mode=` + the panel scorecard | **shipped** | 3 arms, one variable each, `report` event per run. Verified end-to-end 2026-08-10: control produced nothing in 175s, real-ASR arm got first transcript in 1.4s — see §17 |
 | Web push | `lib/push/*` + `public/sw.js` + `lib/push-client.ts` + `/api/push/*` | **partial** | server, worker, Settings toggle shipped; verified through real FCM on desktop Chrome 2026-10-05. Not yet wired: `?open=`, `onOpen`, presence in `app/page.tsx`; not yet tried on an Android device — see §24 |
 | Meeting launch | `bin/Minami Call.command` + `bin/meet-now.sh` + `bin/tunnel-lib.sh` | **shipped** | app :3011 → receiver :8787 → quick tunnel → Recall. Shared probe verified against a live tunnel 2026-08-24 (detects in ~1s; the poisoned-cache path detected never) — see §18 |
+| Today page | `app/today/*` + `lib/today.ts` + `bin/minami-open.sh` + vault `bin/morning-heartbeat.mjs` | **partial** | heartbeat verified end-to-end 2026-10-12 ($0.20, 10 to-dos, 3 loops); page verified on a dev port; launchd agents installed; login agent untested until next login — see §26 |
 
 ---
 
