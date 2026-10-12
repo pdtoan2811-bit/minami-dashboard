@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-12
+- **today (§26)** — 5-round multi-agent stability audit: 35 fixes (heartbeat re-read-before-save, no stuck `running`, normalised model output, read-only 07:30 model, stale-edit 400s, Decide input guards, local fonts, port-based login check). Hand-offs now use the install's default permission mode. *Reported by user: "tasks from the today flow are asking permission every time".*
 - **Phone meet: `/meet`** (§17b, `app/meet`, `lib/meet-mic.ts`, `/api/meet/mic`, `/api/meet/status`). The phone mic streams 0.5s PCM frames into the Recall receiver's chunker and on into ingest, in-process. The screen leads with a verdict line and a Mic → Box → Heard → Judged → Board strip that names the first stage that stopped, then the cards and the last lines heard. Wake lock, re-open on 409 after a restart, a bounded queue. Home-screen shortcut "Meet". §17's doc, emptied by `d0d270a`, is restored from `4962b79`.
 - **Fix: the meeting-ended frame was filed under no meeting** (§17b, `app/api/canvas/ingest/route.ts`). The end path's graph had no `meetingId`, so it went to `/api/canvas`'s legacy `""` bucket, and a pinned canvas, Recall's screen-share included, kept showing "live" and missed the last cards.
 - **today (§26)** — redesigned as ecvision's onboarding: one-question-per-screen decisions with tap-to-advance pills, titles-only to-dos, folded research/log, phone-first. New hand-offs: Do it with Minami, Let Minami decide, Ask <teammate> (team-ask, fire). *Reported by user: "wall of text tho".*

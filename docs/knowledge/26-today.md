@@ -13,7 +13,7 @@ Files: `app/today/{page,Today}.tsx`, `app/api/today/route.ts`, `lib/today.ts`,
 
 | When | What | Where it writes |
 |---|---|---|
-| 07:30 | `com.thomas.minami-heartbeat` runs `morning-heartbeat.mjs`: gathers facts from disk, one `claude -p --model sonnet` (WebSearch/WebFetch/Read/Glob/Grep only) turns them into to-dos + open loops + research | `~/.minami/today/<date>.json`, vault `00-09 System/daily/<date>.md` |
+| 07:30 | `com.thomas.minami-heartbeat` runs `morning-heartbeat.mjs`: gathers facts from disk, one `claude -p --model sonnet` (read-only: `--tools WebSearch,WebFetch,Read,Glob,Grep`, `--strict-mcp-config` so no MCP server starts, and a deny list for Bash/Write/Edit and the qone/Slack/Gmail connectors — `--allowedTools` alone only *adds* to the vault's allow list, which already grants Write, Bash and qone) turns them into to-dos + open loops + research | `~/.minami/today/<date>.json`, vault `00-09 System/daily/<date>.md` |
 | login | `com.thomas.minami-login` → `minami-open.sh login`: starts the dashboard **only if nothing answers on :3000**, runs the heartbeat if today has no plan (the Mac was off at 07:30), opens `/today` | `~/.minami/today-open.log` |
 | 09:00 | `com.thomas.minami-morning` → `minami-open.sh morning`: macOS notification with the headline, opens `/today` | same |
 | all day | the page ticks, adds, drops, resolves, reopens, logs notes via `POST /api/today` | the day JSON (atomic rename) |
@@ -47,7 +47,7 @@ pill pins to the bottom once the hero has scrolled away.
 ## Hand-offs
 
 Three ways out, all started server-side by `handoff()` in `lib/today.ts` the way §25's Explain is:
-**Do it with Minami** (a to-do → a chat in its folder, `acceptEdits`, told to ask before anything
+**Do it with Minami** (a to-do → a chat in its folder, in the install's default permission mode like any chat — an explicit `acceptEdits` here made every task stop for approval on each command, reported 2026-10-12 — told to ask before anything
 outward-facing), **Let Minami decide** (a question → a chat told to take the suggested option unless
 the facts say otherwise, then act), **Ask <teammate>** (a chat told to send the question verbatim via
 `ask_team`, mode `fire`; tapping the name IS the confirmation, so the chat doesn't ask again). An
@@ -61,7 +61,8 @@ A teammate's answer comes back through team-ask, not this page — the next hear
   heartbeat defines. A rerun the same day keeps everything he touched (done ticks, his own to-dos,
   answers) and replaces only the untouched suggestions — so "Rebuild plan" is safe to press.
 - **Open loops reuse `AskCard`** (the chat's AskUserQuestion wizard) with a page-local `onAnswer`.
-  An answer is recorded, logged, and read by the next heartbeat. It does **not** start a chat or run
+  An answer is recorded, logged, and read by the next heartbeat. "Hand all N to Minami" sends the
+  answer the server saved, not the last pill tapped (a failed tap is un-lit). It does **not** start a chat or run
   anything — v1 resolves by recording. Wiring an answer to an action is the next step, not an oversight.
 - **Never restart a live server from a schedule.** `minami-open.sh` starts `serve.sh` only when no
   next server exists at all (a reboot). A server that exists but is slow is waited on, not replaced —
@@ -70,12 +71,62 @@ A teammate's answer comes back through team-ask, not this page — the next hear
   writes a facts-only plan (drafts awaiting publish, failed stages, each project's next_move) with
   `status: "facts-only"` and the error, which the header shows.
 - **Asleep vs off.** launchd runs a missed `StartCalendarInterval` job on wake, but not after a
-  power-off; the login agent covers that by running the heartbeat if today has no plan after 06:00.
+  power-off; the login agent covers that by running the heartbeat if today has no plan after 07:30
+  (not earlier: a boot before 07:30 leaves it to launchd's own job, so the two can't overlap).
+
+## Hardening — the 2026-10-12 audit
+
+Five rounds of three auditors (data · ops · UI) → a cross-examining chair → one fixer; 35 fixes, no
+regressions in the final check. What changed in behaviour, so nobody "fixes" it back:
+
+- **The heartbeat re-reads the day right before it saves** and merges into that copy; it never saves
+  the copy it read before the 4–15 min model call (that lost every tick made meanwhile). Each writer
+  uses its own tmp name. A second run while one is live (<20 min) exits.
+- **Nothing he touched is ever replaced**: done, his own, carried, handed-off to-dos and resolved or
+  handed-off loops survive a rebuild. A dropped suggestion stays dropped for that day only.
+- **Model output is normalised** (`normalise()`): missing arrays, todos with only a title, loops
+  without ≥2 labelled options are coerced or dropped; a malformed plan falls back to facts-only.
+  Any throw after the first save marks the day `facts-only` with the error — never stuck at `running`.
+  The page also treats a `running` older than 20 min as stalled and re-enables Rebuild.
+- **The 07:30 model is read-only** via `--tools WebSearch,WebFetch,Read,Glob,Grep` plus an explicit
+  deny list — `--allowedTools` alone only ADDS to the vault's allow list, which grants Write/Bash/Slack.
+- **API refuses stale edits with a 400** (unknown id, re-answering a handed-off loop, a corrupt day
+  file — which is never overwritten). Toggle is idempotent; no-op ops write nothing.
+- **Decide**: digits and Escape typed into "Something else" no longer answer/close; double taps can't
+  skip a question; a failed hand-off shows its error in the overlay and is not recorded as settled.
+- **Fonts are local files** (`app/today/fonts/*.woff2`, committed with `fonts.ts`) so a build never
+  fetches from Google.
+- **Login**: `minami-open.sh` starts the last complete build (`npm start`) rather than rebuilding,
+  detaches what it starts, checks the PORT (`lsof :3000`) rather than `pgrep next-server` (which
+  matched every worktree's server), and catches up the heartbeat when the day has no `built_at`.
+- **Test seam**: `MINAMI_TODAY_DIR` / `MINAMI_DIGEST_DIR` point both the heartbeat and `lib/today.ts`
+  at scratch dirs — never test against `~/.minami/today`.
+
+Still open after the audit: the paid model path and a real carry-over first run at 07:30 on
+2026-10-13; no cross-process lock (last writer wins within milliseconds — low risk); dropping a
+handed-off to-do loses its chat link.
 
 ## Gotchas
 
 - His shell exports `PORT=3000` and `NODE_ENV=production`; `minami-open.sh` unsets both, and the
   plists set their own `PATH` (launchd has none of his shell).
+- `minami-open.sh` exports the PATH his login shell would give (`~/.local/bin` for tools/models/tok,
+  Python 3.11, Homebrew), prepended by hand rather than via `zsh -lc` so the NODE_ENV/PORT unset wins.
+  The server it starts after a reboot hosts every chat, and chats inherit its env: on launchd's bare
+  PATH, `tools find` / `models resolve` failed and `python3` was the system 3.9 (fixed 2026-10-12).
+- The page's fonts are local woff2 files (`app/today/fonts/`, `next/font/local`), never
+  `next/font/google`: that made every dashboard build fetch Google Fonts, and `next build` replaces
+  `.next` under the live server, so an offline deploy could leave nothing serving. Inter's Vietnamese
+  subset is a second face chained in the font stack (`--today-sans-vi`).
+- Login recovery never builds while a build is on disk: if nothing answers on :3000,
+  `minami-open.sh` runs `npm start` on the existing `.next` (it has a `BUILD_ID`), and only falls
+  back to `bin/serve.sh` when there is none. The working tree is the dashboard editing itself, so it
+  can hold half-done code, and `next build` clears `.next` first. One compile error would leave
+  nothing serving all day.
+- launchd reaps a job's whole process group when it exits, and `nohup … &` doesn't leave it. So
+  anything `minami-open.sh` starts (serve.sh, the catch-up heartbeat) goes through its `detach`
+  (setsid); the two open plists also set `AbandonProcessGroup` as a backstop. The heartbeat plist
+  deliberately doesn't — the group reap is what cleans up a timed-out `claude`.
 - The login agent is installed but not bootstrapped (it's `RunAtLoad`, so loading it opens the page
   immediately); it takes effect at the next login.
 - Cost of a plan: ~$0.20 on Sonnet (first run, 2026-10-12). Research is optional in the prompt; the

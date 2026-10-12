@@ -27,6 +27,7 @@ fi
 
 mkdir -p "$LA" "$LOGS"
 plist() { # label, program args (xml), schedule (xml), log name
+  # PATH matches minami-open.sh's (his login shell's, not launchd's bare one); $HOME expands here.
   cat > "$LA/$1.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -34,24 +35,26 @@ plist() { # label, program args (xml), schedule (xml), log name
   <key>Label</key><string>$1</string>
   <key>ProgramArguments</key><array>$2</array>
   $3
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>$HOME/.local/bin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
   <key>StandardOutPath</key><string>$LOGS/$4.log</string>
   <key>StandardErrorPath</key><string>$LOGS/$4.log</string>
 </dict></plist>
 EOF
 }
 
+# AbandonProcessGroup is a backstop on the two open jobs only: minami-open.sh setsid-detaches what it
+# starts anyway. The heartbeat job keeps launchd's group reap — that is what cleans up a timed-out claude.
 plist com.thomas.minami-heartbeat \
   "<string>$NODE</string><string>$HOME/secondBrain/bin/morning-heartbeat.mjs</string>" \
   "<key>WorkingDirectory</key><string>$HOME/secondBrain</string><key>StartCalendarInterval</key><dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>" \
   heartbeat
 plist com.thomas.minami-morning \
   "<string>/bin/bash</string><string>$DASH/bin/minami-open.sh</string><string>morning</string>" \
-  "<key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>" \
+  "<key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict><key>AbandonProcessGroup</key><true/>" \
   today-open
 plist com.thomas.minami-login \
   "<string>/bin/bash</string><string>$DASH/bin/minami-open.sh</string><string>login</string>" \
-  "<key>RunAtLoad</key><true/>" \
+  "<key>RunAtLoad</key><true/><key>AbandonProcessGroup</key><true/>" \
   today-open
 
 for a in com.thomas.minami-heartbeat com.thomas.minami-morning; do
