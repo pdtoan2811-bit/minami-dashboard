@@ -9,6 +9,8 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-12
+- **Phone meet: `/meet`** (§17b, `app/meet`, `lib/meet-mic.ts`, `/api/meet/mic`, `/api/meet/status`). The phone mic streams 0.5s PCM frames into the Recall receiver's chunker and on into ingest, in-process. The screen leads with a verdict line and a Mic → Box → Heard → Judged → Board strip that names the first stage that stopped, then the cards and the last lines heard. Wake lock, re-open on 409 after a restart, a bounded queue. Home-screen shortcut "Meet". §17's doc, emptied by `d0d270a`, is restored from `4962b79`.
+- **Fix: the meeting-ended frame was filed under no meeting** (§17b, `app/api/canvas/ingest/route.ts`). The end path's graph had no `meetingId`, so it went to `/api/canvas`'s legacy `""` bucket, and a pinned canvas, Recall's screen-share included, kept showing "live" and missed the last cards.
 - **preview comments (§21)** — a second client of `/api/agent/send` + `/api/fs/paste` + `/api/agent/live`: the Hyperframes Studio fork's comment mode (Video Studio). Docs only; no dashboard code changed. Why: a video comment needs a moment, which the pop-out can't give.
 
 ### 2026-10-09

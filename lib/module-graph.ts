@@ -65,10 +65,13 @@ export const NODES: ModuleNode[] = [
   { id: "c/Inbox", label: "Inbox", sub: "phone home: every chat by\nwhat it needs (§23)", layer: "component", row: 29 },
   { id: "r/seen", label: "/api/agent/seen", sub: "server-side read marks\n(lib/seen.ts)", layer: "route", row: 19 },
   { id: "c/PhoneAccess", label: "PhoneAccess", sub: "📱 switch: dashboard on the\ntailnet + phones online", layer: "component", row: 30 },
+  { id: "l/meetmic", label: "meet-mic.ts", sub: "phone PCM → receiver's chunker\n→ ingest in-process (§17b)", layer: "core", row: 33 },
   { id: "l/taskgroups", label: "task-groups.ts", sub: "sessions in one worktree\n= one task row", layer: "core", row: 27 },
   { id: "c/Focus", label: "Focus", sub: "phone dock = focus set +\nprogress sheet / N5 drawer", layer: "component", row: 27 },
   { id: "r/focus", label: "/api/agent/focus", sub: "the pinned focus set, ≤5\n(lib/focus.ts, all devices)", layer: "route", row: 20 },
   { id: "r/viewport", label: "/api/viewport", sub: "each device's real sizes\n→ viewports.jsonl", layer: "route", row: 22 },
+  { id: "r/meetmic", label: "/api/meet/mic", sub: "start · 0.5s PCM frames · end\nphone-… ids only", layer: "route", row: 25 },
+  { id: "r/meetstatus", label: "/api/meet/status", sub: "mic stats + trace tail\nfor the health strip", layer: "route", row: 27 },
   { id: "r/glancelast", label: "/api/glance/last", sub: "a chat's latest reply in full\n(the cover's reader)", layer: "route", row: 23 },
   { id: "r/glanceanswer", label: "/api/glance/answer", sub: "cover screen answers ONE\nquestion; never approves", layer: "route", row: 21 },
   { id: "c/Markdown", label: "Markdown", sub: "memoised renderer\n(chat + thought tones)", layer: "component", row: 3 },
@@ -237,6 +240,7 @@ export const NODES: ModuleNode[] = [
   // The few decisions that are about the DEVICE, not the box: a phone forces tabs and stacks the slot (§23).
   { id: "l/use-media", label: "use-media.ts", sub: "useMediaQuery / usePhone\n(device, not box — §23)", layer: "core", row: 20 },
   // The Flip 7 cover screen: counts, needs-you lines, one Pause-all button. Read-only bar the brake (§23).
+  { id: "app/meet", label: "/meet", sub: "phone mic as the ear\nverdict + 5-stage strip", layer: "surface", row: 11 },
   { id: "app/glance", label: "/glance", sub: "cover screen around its lenses\nask · answer · switch", layer: "surface", row: 9, pipeline: "live" },
   { id: "l/use-cover", label: "use-cover.ts", sub: "useCoverScreen()\nviewport AND screen ≤ 420×480", layer: "core", row: 21 },
   // Shared so "the browser matches the file preview" is a fact about the code, not a thing to re-check.
@@ -542,6 +546,10 @@ export const EDGES: ModuleEdge[] = [
   { from: "app/glance", to: "r/agent", kind: "http", label: "/live 5s while visible · /send a reply" },
   { from: "app/glance", to: "r/hold", kind: "http", label: "pause / resume all" },
   { from: "app/glance", to: "r/sessions", kind: "http", label: "?ids= titles only" },
+  { from: "app/meet", to: "r/meetmic", kind: "http", label: "frames, in order, one in flight" },
+  { from: "app/meet", to: "r/meetstatus", kind: "http", label: "poll 1.5s" },
+  { from: "r/meetmic", to: "l/meetmic", kind: "import" },
+  { from: "r/meetstatus", to: "l/meetmic", kind: "import" },
   { from: "app/glance", to: "l/pagevisible", kind: "import" },
   { from: "app/glance", to: "r/glanceanswer", kind: "http", label: "answer a question" },
   { from: "app/glance", to: "r/glancelast", kind: "http", label: "read all" },
