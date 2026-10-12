@@ -110,6 +110,13 @@ export function Today() {
     addEventListener("focus", f); document.addEventListener("visibilitychange", f);
     return () => { removeEventListener("focus", f); document.removeEventListener("visibilitychange", f); };
   }, [date, today, load]);
+  // The auto-tick (vault bin/today-sync.mjs, every 10 min) writes the day file behind the page's back;
+  // a visible tab looks again every minute so a tick shows up without a reload. Hidden tabs don't poll.
+  useEffect(() => {
+    if (!date) return;
+    const t = setInterval(() => { if (document.visibilityState === "visible") load(date); }, 60_000);
+    return () => clearInterval(t);
+  }, [date, load]);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 9000); return () => clearTimeout(t); }, [toast]);
 
   const act = useCallback(async (body: Record<string, unknown>) => {
@@ -468,6 +475,7 @@ function TodoRow({ t, first, onToggle, onRemove, onDo }: { t: TodayTodo; first: 
           <span className={`min-w-0 flex-1 text-[15px] font-medium leading-snug ${t.done ? "line-through" : ""}`} style={{ color: t.done ? K.faint : K.ink, textDecorationColor: K.line2 }}>
             <Inline text={titleOf(t)} /></span>
           {t.handoff && <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.accent, 22), color: K.accentBright, fontFamily: "var(--today-mono)" }}>MINAMI</span>}
+          {t.done && t.done_by === "auto" && <span title={t.done_evidence} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.cat3, 22), color: "#f3c766", fontFamily: "var(--today-mono)" }}>AUTO</span>}
           {t.est_min ? <span className="shrink-0 tabular-nums" style={{ color: K.faint, fontFamily: "var(--today-mono)", fontSize: 11 }}>{t.est_min}m</span> : null}
           <span className="shrink-0 text-[12px] transition-transform" style={{ color: K.faint, transform: open ? "rotate(90deg)" : "none" }}>›</span>
         </button>
@@ -476,6 +484,7 @@ function TodoRow({ t, first, onToggle, onRemove, onDo }: { t: TodayTodo; first: 
         <div className="flex flex-col gap-3 pb-4 pl-[56px] pr-5">
           {detail && <p className="text-[13.5px] leading-relaxed" style={{ color: K.muted }}><Inline text={detail} /></p>}
           {t.why && <p className="text-[13px] leading-snug" style={{ color: K.faint }}><Inline text={t.why} /></p>}
+          {t.done && t.done_by === "auto" && t.done_evidence && <p className="text-[13px] leading-snug" style={{ color: "#f3c766" }}>Ticked automatically — {t.done_evidence} Untick it if that's wrong; it won't be ticked again.</p>}
           <div className="flex flex-wrap items-center gap-2 text-[11.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
             {t.folder && <span className="rounded-full px-2.5 py-1" style={{ background: "rgba(255,255,255,.06)" }}>{t.folder}</span>}
             {t.source === "carried" && <span style={{ color: K.cat3 }}>from yesterday</span>}

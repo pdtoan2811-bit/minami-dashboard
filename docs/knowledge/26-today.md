@@ -106,6 +106,23 @@ Still open after the audit: the paid model path and a real carry-over first run 
 2026-10-13; no cross-process lock (last writer wins within milliseconds — low risk); dropping a
 handed-off to-do loses its chat link.
 
+## Auto-tick (2026-10-12)
+
+Thomas: *"the today page needs a hook or something to show tasks done without me manually input."*
+`~/secondBrain/bin/today-sync.mjs`, every 10 min (launchd `com.thomas.minami-today-sync`), reads what
+happened today — every chat turn in every folder (the thread ledgers, so work done in a hand-off chat,
+a terminal or a dashboard pane all count), drafts' gate state and today's pipeline runs, renders in
+`~/tiktok-studio/out`, git commits in the to-dos' folders — and asks the models helper's `text` role
+which open to-dos are FINISHED. It ticks at confidence ≥ 0.8 only, stores `done_by: "auto"` and
+`done_evidence`, and logs it; the page shows an amber AUTO badge and the evidence, and polls every
+60 s while visible. Hand-off chats end with `TODAY: done` / `TODAY: blocked — why`, which it trusts.
+
+Rules that keep it from being annoying: it only ever ticks, never unticks; any to-do he ticks or
+unticks himself gets `manual: true` and is never touched again; no model call when nothing new
+happened (hash of the open list + evidence in `.sync-state.json`). `topics/published.json` is labelled
+as NOT proof of publishing — it lists topics the pipeline used, and the first dry run read it as
+"published" (held back only by the threshold). `--dry` prints verdicts; `--force` ignores the hash.
+
 ## Gotchas
 
 - His shell exports `PORT=3000` and `NODE_ENV=production`; `minami-open.sh` unsets both, and the

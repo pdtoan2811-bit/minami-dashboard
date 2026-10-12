@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 // SHAPE (it reads yesterday's file to plan today), so this module only mutates fields it defines.
 
 type HandoffMark = { how: "do" | "decide" | "ask"; sessionId: string; at: string; to?: string };
-export type TodayTodo = { id: string; title?: string; text: string; handoff?: HandoffMark; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
+export type TodayTodo = { id: string; title?: string; text: string; handoff?: HandoffMark; manual?: boolean; done_by?: "auto"; done_evidence?: string; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
 export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; recommended?: number; question: string; context?: string; focus?: string; folder?: string; multiSelect?: boolean;
   options: { label: string; description?: string }[]; resolved: null | { answer: string | string[]; at: string } };
 export type TodayDay = { date: string; status: "running" | "ready" | "facts-only" | "none"; built_at: string | null; started_at?: string; usd: number | null; error?: string | null; carried?: boolean;
@@ -77,7 +77,10 @@ export function applyAction(date: string, a: TodayAction): TodayDay {
       const t = day.todos.find((x) => x.id === a.id); if (!t) throw gone();
       const want = typeof a.done === "boolean" ? a.done : !t.done;
       if (t.done === want) break;
-      t.done = want; t.done_at = t.done ? now() : undefined; changed = true;
+      // `manual`: he decided this one himself, so the auto-tick (vault bin/today-sync.mjs) leaves it alone
+      // from now on — it never re-ticks what he unticked, and never second-guesses what he ticked.
+      t.done = want; t.done_at = t.done ? now() : undefined; t.manual = true; changed = true;
+      if (!want) { delete t.done_by; delete t.done_evidence; }
       log(day, "todo", `${t.done ? "Done" : "Reopened"}: ${t.text}`);
       break;
     }
@@ -139,7 +142,7 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
   const head = `From my Today page (${day.date}). Today's focus: ${day.focus.map((f) => `${f.name} — ${f.status}`).join(" · ")}`;
   if (h.kind === "todo") {
     const t = day.todos.find((x) => x.id === h.id)!;
-    return { cwd: expand(t.folder), message: `${head}\n\nDo this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).` };
+    return { cwd: expand(t.folder), message: `${head}\n\nDo this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).\n\nEnd your last message with one line on its own: `TODAY: done` if the to-do is finished, or `TODAY: blocked — <why>` — my Today page reads it to tick the item.` };
   }
   const l = day.loops.find((x) => x.id === h.id)!;
   const opts = l.options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n");
