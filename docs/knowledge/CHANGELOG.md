@@ -11,6 +11,9 @@ this to do a piece of work; read the subsystem's own doc.
 ### 2026-10-12
 - **Phone meet: `/meet`** (§17b, `app/meet`, `lib/meet-mic.ts`, `/api/meet/mic`, `/api/meet/status`). The phone mic streams 0.5s PCM frames into the Recall receiver's chunker and on into ingest, in-process. The screen leads with a verdict line and a Mic → Box → Heard → Judged → Board strip that names the first stage that stopped, then the cards and the last lines heard. Wake lock, re-open on 409 after a restart, a bounded queue. Home-screen shortcut "Meet". §17's doc, emptied by `d0d270a`, is restored from `4962b79`.
 - **Fix: the meeting-ended frame was filed under no meeting** (§17b, `app/api/canvas/ingest/route.ts`). The end path's graph had no `meetingId`, so it went to `/api/canvas`'s legacy `""` bucket, and a pinned canvas, Recall's screen-share included, kept showing "live" and missed the last cards.
+- **today (§26)** — redesigned as ecvision's onboarding: one-question-per-screen decisions with tap-to-advance pills, titles-only to-dos, folded research/log, phone-first. New hand-offs: Do it with Minami, Let Minami decide, Ask <teammate> (team-ask, fire). *Reported by user: "wall of text tho".*
+- **today (§26)** — new `/today` page + `/api/today`: a 07:30 heartbeat (vault `bin/morning-heartbeat.mjs`) plans SEO/AEO and video to-dos and open loops; answered with AskCard; opens itself at login and 09:00 (`bin/install-today.sh`). Nav gains ☀ Today first.
+- **deploy (§8, §26)** — a bare `npx next dev` on a side port overwrote `.next` under the live server (chunks gone, BUILD_ID gone); redeployed with `bin/deploy.sh --detach`. Use `npm run dev -- -p <port>`, which sets `NEXT_DIST_DIR`.
 - **preview comments (§21)** — a second client of `/api/agent/send` + `/api/fs/paste` + `/api/agent/live`: the Hyperframes Studio fork's comment mode (Video Studio). Docs only; no dashboard code changed. Why: a video comment needs a moment, which the pop-out can't give.
 
 ### 2026-10-09
