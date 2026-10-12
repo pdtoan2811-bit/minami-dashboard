@@ -14,6 +14,9 @@ export default function manifest(): MetadataRoute.Manifest {
     display: "standalone",
     background_color: "#0a0a0a",
     theme_color: "#0a0a0a",
+    // Long-press the home-screen icon → Meet. An in-room meeting starts with the phone already in
+    // hand, so the mic page should be one gesture away rather than three taps through the inbox.
+    shortcuts: [{ name: "Meet — listen in the room", short_name: "Meet", url: "/meet" }],
     icons: [
       { src: "/app-icon-192.png", sizes: "192x192", type: "image/png" },
       { src: "/app-icon-512.png", sizes: "512x512", type: "image/png" },

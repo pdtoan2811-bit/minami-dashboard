@@ -430,6 +430,12 @@ export async function POST(req: Request) {
     // are all built on. They were never content; they must not become history.
     s.board.clearPlaceholders();
     const graph = s.board.graph({ ...(body.title ? { title: body.title } : {}), status: "ended" });
+    /** ⚠️ WITHOUT THIS THE "ENDED" FRAME REACHES NOBODY. /api/canvas files a frame under its
+     *  meetingId and falls back to the legacy "" bucket; every viewer pins itself to a meeting. So the
+     *  final publish below (the one that exists to tell the screen it is over) landed in "", and a
+     *  pinned canvas kept the last LIVE frame and lost the last cards. Found 2026-10-12 by the phone
+     *  view (§17b): the summary said 5 cards and the board, re-read after end, showed 3. */
+    graph.meetingId = id;
 
     // THE DURABLE RECORD. Until this existed a meeting produced a live board and nothing you could
     // read the next morning — the canvas is in-memory by design and dies with the call.
