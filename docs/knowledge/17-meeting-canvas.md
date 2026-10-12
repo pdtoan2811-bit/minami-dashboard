@@ -332,6 +332,54 @@ clip: 150 frames → 8 utterances → 5 cards.
 > before the archive. Verified: the meeting's bucket now reads `status: ended` with the summary's card
 > count.
 
+### No call at all: the room screen, recordings, keeping the audio
+
+A meeting with no Meet still gets everything a Recall meeting gets: the board, the memes, and the archive.
+
+- **The room screen is `/meet/screen`.** It is opened on the TV or laptop *before* Start, polls
+  `/api/meet/status?latest=1` every 2s, and `location.replace`s itself onto
+  `/canvas?present=1&meeting=<id>` when a phone meeting begins. It exists because the canvas needs the
+  meeting id, and that id is minted on the phone at Start. Nobody should have to type
+  `phone-20261012-1415-x7k2` into a TV. Present mode is the same tab-share mode the meet launcher uses:
+  no operator panel, memes on. `/meet` also offers "Open the board here" and the copyable address, and
+  on a desktop a checkbox opens the board in a second window at Start. That window is opened inside the
+  tap and pointed at the board after the id exists, because a `window.open` after an `await` is no
+  longer a user gesture and gets popup-blocked.
+- **A laptop can be the mic.** The leaving-the-page rule (red Mic) applies only to touch devices
+  (`pointer: coarse`). A desktop background tab keeps capturing, which the laptop-plus-board setup
+  relies on.
+- **Recordings: `POST /api/meet/recording`**, with the file as the body. The Mac decodes it with ffmpeg
+  and feeds 0.5s frames through the same `pushFrame`, so downstream cannot tell a file from a mic. It is
+  decoded on the Mac rather than in the browser because `decodeAudioData` on an hour of audio is a
+  ~1 GB float buffer, which a phone tab will not survive. The feed is **paced** (1/2/4/8×, default 4×)
+  on a deadline clock. Unpaced, an hour becomes ~360 utterances in a minute: ingest's
+  `MAX_QUEUED_JUDGES` drops them as backlog, and nothing visibly builds on screen. A recording ends
+  itself when the file runs out, so the phone can lock after the upload.
+- **Keep the audio** (off by default, like `CANVAS_DUMP_DIR`, because it is real meeting audio). A live
+  meeting's PCM is appended to `~/.minami/meet-audio/<id>.pcm` (`MEET_AUDIO_TMP`) per frame (an hour
+  is ~115 MB, so not in RAM), then encoded to `recording.m4a` (AAC 32 kbps, ~14 MB/hour) in the
+  archive folder. A recording keeps its original file instead (`recording.mp3` etc.), with no
+  re-encode. The scratch copy is deleted either way.
+- **`stats.summary` is written after the audio is saved**, because the phone reads it as "finished".
+  `stats.ended` goes true earlier, before the archive exists, so the phone keeps polling until the
+  summary arrives.
+
+> 🐛 **"Meeting ended." with no outcome.** The first recording run ended on the phone with no Saved
+> panel. The phone took `ended` as the signal and copied `summary` once, a few seconds before the Mac
+> had written it. **Fix:** the phone keeps taking the summary while it is still missing.
+
+Verified 2026-10-12 on a production preview (:3012):
+- An 80s mp3 at 4× played through 8 utterances into 8 cards, ended itself, and saved
+  `recording.mp3` in the archive.
+- A 30s live stream with keep on gave a 30.0s `recording.m4a` at 36 kbps, and the scratch folder was
+  empty afterwards.
+- `/meet/screen` at 1280×720 jumped to the board within 2s of an upload and built it live.
+- A 3-minute recording fired 4 cut scenes (new-idea ×2, that-landed, strongest-claim). The preview
+  showed their emoji fallback only because `public/memes` is gitignored and missing from a worktree
+  build; the live server serves the GIFs (200, image/gif).
+- The phone recording flow (pick file → upload → progress → Saved + "Audio saved") ran end to end
+  at 412×915.
+
 ### Not verified / not built
 
 - **Not yet tried on the real Find N5 / Flip 7 mic.** The chunker's speech floor is calibrated against
@@ -342,4 +390,9 @@ clip: 150 frames → 8 utterances → 5 cards.
 - **No speaker names.** One mic hears the whole room, so utterances go in with `speaker: null`.
 - **Launching a Recall bot from the phone is not built.** That is still `Minami Call.command` on the
   Mac (§18).
+- **A recording's archive says "minutes" in wall-clock time.** ingest measures from the session's start,
+  so 80s played at 4× books as 0.3 min. Cost and cards are right.
+- **The board's language does not always follow the audio.** An English clip produced some Vietnamese
+  cards and a Vietnamese "Đang nghe" pill. That is §17's language rule, not this leg.
+- **The meetings page has no player for `recording.*`.** The file is in the folder.
 

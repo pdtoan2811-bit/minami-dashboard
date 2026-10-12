@@ -16,12 +16,24 @@
 
 import { createChunker, normalisePcm, wav, BYTES_PER_MS } from "@/server/utterance-chunker.mjs";
 import { POST as ingest } from "@/app/api/canvas/ingest/route";
+import { spawn, type ChildProcess } from "node:child_process";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { basename, dirname, extname, join } from "node:path";
 
 const TOKEN = process.env.CANVAS_INGEST_TOKEN || "";
 const PORT = process.env.PORT || "3000";
 /** Same ceiling the receiver uses (CANVAS_MIC_GAIN_MAX) — a phone held at arm's length across a
  *  table is the quiet-speaker case that number was chosen for. */
 const GAIN_MAX = Number(process.env.CANVAS_MIC_GAIN_MAX || 2.0);
+const FFMPEG = process.env.FFMPEG_PATH || "/opt/homebrew/bin/ffmpeg";
+/** Scratch for audio that has not been archived yet: uploads being fed, and the running PCM of a
+ *  meeting whose audio is being kept. Emptied at end — only the archive folder keeps a copy. */
+const AUDIO_TMP = process.env.MEET_AUDIO_TMP || `${process.env.HOME}/.minami/meet-audio`;
+/** 0.5s of 16 kHz s16le — the same frame the phone sends, so a recording and a live mic look
+ *  identical to everything downstream of pushFrame. */
+const FRAME_BYTES = 16_000;
+
+export type Summary = { utterances?: number; cards?: number; topics?: number; minutes?: number; cost?: number; archived?: string | null };
 
 export type MicStats = {
   id: string;
@@ -43,9 +55,27 @@ export type MicStats = {
   lastResult: { at: number; status: number; note: string } | null;
   errors: { at: number; text: string }[];
   ended: boolean;
+  /** Where the audio comes from. A file is fed by the box itself, paced, so the phone may leave. */
+  source: "mic" | "file";
+  file: { name: string; totalMs: number | null; doneMs: number; speed: number; finished: boolean } | null;
+  /** Keep the meeting's audio in its archive folder. Off by default: this is real meeting audio, the
+   *  same reason the receiver's CANVAS_DUMP_DIR is off by default. */
+  keep: boolean;
+  /** Set once at end, so a screen that reloads (or a phone that left during a recording) still gets
+   *  the outcome. The transcript is left out — it can be long, and it is in the archive. */
+  summary: Summary | null;
+  audioSaved: string | null;
 };
 
-type Mic = { stats: MicStats; chunker: ReturnType<typeof createChunker>; origin: string };
+type Mic = {
+  stats: MicStats; chunker: ReturnType<typeof createChunker>; origin: string;
+  /** Running PCM on disk when `keep` is on. Appended per frame: an hour is ~115 MB, not for RAM. */
+  pcmPath: string | null;
+  /** The uploaded file when source is "file". */
+  upload: string | null;
+  proc: ChildProcess | null;
+  cancelled: boolean;
+};
 
 /** On globalThis for the reason every canvas store is: a dev hot-reload must not orphan a meeting
  *  that is in progress. */
@@ -128,14 +158,25 @@ async function sendChunk(m: Mic, chunk: { pcm: Buffer; speechMs: number; totalMs
   }
 }
 
-export async function startMic(id: string, title: string, context: string, origin: string): Promise<MicStats> {
+export async function startMic(
+  id: string, title: string, context: string, origin: string,
+  opts: { keep?: boolean; source?: "mic" | "file" } = {},
+): Promise<MicStats> {
   const existing = mics.get(id);
   if (existing && !existing.stats.ended) return existing.stats;
   const stats: MicStats = {
     id, title, startedAt: Date.now(), framesIn: 0, audioMsIn: 0, lastFrameAt: null, level: 0,
     chunksOut: 0, lastChunkAt: null, lastChunkMs: 0, inflight: 0, lastResult: null, errors: [], ended: false,
+    source: opts.source ?? "mic", file: null, keep: Boolean(opts.keep), summary: null, audioSaved: null,
   };
-  const m: Mic = { stats, chunker: null as unknown as Mic["chunker"], origin };
+  let pcmPath: string | null = null;
+  // A file source keeps the ORIGINAL file instead (no generation loss, and it is already compressed).
+  if (stats.keep && stats.source === "mic") {
+    mkdirSync(AUDIO_TMP, { recursive: true });
+    pcmPath = join(AUDIO_TMP, `${id}.pcm`);
+    rmSync(pcmPath, { force: true });
+  }
+  const m: Mic = { stats, chunker: null as unknown as Mic["chunker"], origin, pcmPath, upload: null, proc: null, cancelled: false };
   m.chunker = createChunker((chunk: { pcm: Buffer; speechMs: number; totalMs: number }) => { void sendChunk(m, chunk); });
   mics.set(id, m);
   // Seed even with no context: it opens the board under this meeting id, so the phone's board view
@@ -155,6 +196,9 @@ export function pushFrame(id: string, pcm: Buffer): MicStats | null {
   let peak = 0;
   for (let i = 0; i + 1 < pcm.length; i += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(i)));
   s.level = +(peak / 32768).toFixed(3);
+  if (m.pcmPath) {
+    try { appendFileSync(m.pcmPath, pcm); } catch (e) { m.pcmPath = null; note(s, `keeping audio failed: ${e instanceof Error ? e.message : e}`); }
+  }
   m.chunker.push(ROOM, pcm);
   return s;
 }
@@ -162,7 +206,10 @@ export function pushFrame(id: string, pcm: Buffer): MicStats | null {
 export async function endMic(id: string): Promise<{ stats: MicStats | null; summary: unknown }> {
   const m = mics.get(id);
   if (!m) return { stats: null, summary: null };
-  if (m.stats.ended) return { stats: m.stats, summary: null };
+  if (m.stats.ended) return { stats: m.stats, summary: m.stats.summary };
+  // A recording still being fed: stop the feeder first, or it keeps pushing into a closed meeting.
+  m.cancelled = true;
+  m.proc?.kill("SIGKILL");
   // Flush the half-finished utterance first, then give in-flight sends a bounded moment to land —
   // ingest's own `end` drains its judges, but it cannot drain a request that has not reached it yet.
   m.chunker.end();
@@ -170,7 +217,124 @@ export async function endMic(id: string): Promise<{ stats: MicStats | null; summ
   while (m.stats.inflight > 0 && Date.now() < until) await new Promise((ok) => setTimeout(ok, 200));
   m.stats.ended = true;
   const r = await callIngest(m.origin, { meetingId: id, event: "end" });
-  return { stats: m.stats, summary: r.json.summary ?? null };
+  const full = (r.json.summary ?? null) as (Summary & { transcript?: unknown }) | null;
+  const { transcript: _t, ...rest } = full ?? {};
+  // Audio first, summary second: the summary is what the phone reads as "finished", so publishing it
+  // before the audio is saved would show "not saved" for the seconds the AAC encode takes.
+  await saveAudio(m, rest.archived ?? null);
+  m.stats.summary = full ? rest : {};
+  return { stats: m.stats, summary: full };
+}
+
+/** Put the kept audio next to the meeting's notes, then clear the scratch copy either way. */
+async function saveAudio(m: Mic, archived: string | null) {
+  const s = m.stats;
+  try {
+    if (s.keep && archived && existsSync(archived)) {
+      if (m.upload) {
+        const out = join(archived, `recording${extname(m.upload) || ".audio"}`);
+        copyFileSync(m.upload, out);
+        s.audioSaved = out;
+      } else if (m.pcmPath && existsSync(m.pcmPath)) {
+        // AAC at 32 kbps mono: ~14 MB an hour, plenty for speech, and plays everywhere.
+        const out = join(archived, "recording.m4a");
+        await run(FFMPEG, ["-loglevel", "error", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", m.pcmPath, "-c:a", "aac", "-b:a", "32k", out]);
+        s.audioSaved = out;
+      }
+    }
+  } catch (e) {
+    note(s, `saving the recording failed: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    if (m.pcmPath) rmSync(m.pcmPath, { force: true });
+    if (m.upload) rmSync(m.upload, { force: true });
+    m.pcmPath = m.upload = null;
+  }
+}
+
+function run(cmd: string, args: string[]): Promise<string> {
+  return new Promise((ok, fail) => {
+    const p = spawn(cmd, args);
+    let out = "", err = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.stderr.on("data", (d) => (err += d));
+    p.on("error", fail);
+    p.on("close", (code) => (code === 0 ? ok(out) : fail(new Error(err.trim().split("\n").pop() || `${basename(cmd)} exited ${code}`))));
+  });
+}
+
+/** Where an upload should be written before feeding. */
+export function uploadPath(id: string, name: string): string {
+  mkdirSync(AUDIO_TMP, { recursive: true });
+  const ext = (extname(name) || ".audio").toLowerCase().replace(/[^.\w]/g, "").slice(0, 8);
+  return join(AUDIO_TMP, `${id}${ext}`);
+}
+
+/** Play a recording through the live pipeline, paced, so the board and its memes build the way they
+ *  would have in the room.
+ *
+ *  ⚠️ PACED, NOT AS FAST AS POSSIBLE. Unpaced, an hour of audio becomes ~360 utterances inside a
+ *  minute, ingest's MAX_QUEUED_JUDGES starts dropping speech as "backlog" — exactly the silent loss
+ *  the dead-man's switch exists to catch — and nobody watching the screen sees anything build.
+ *  4x keeps about one utterance in flight every 2.5s, inside what concurrent judges absorb. */
+export async function feedRecording(id: string, file: string, name: string, speed: number) {
+  const m = mics.get(id);
+  if (!m || m.stats.ended) return;
+  const s = m.stats;
+  m.upload = file;
+  let totalMs: number | null = null;
+  try {
+    const probe = await run(join(dirname(FFMPEG), "ffprobe"), ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file]);
+    const sec = parseFloat(probe);
+    if (Number.isFinite(sec)) totalMs = Math.round(sec * 1000);
+  } catch { /* no ffprobe: the strip shows elapsed without a total */ }
+  s.file = { name: name.slice(0, 120), totalMs, doneMs: 0, speed, finished: false };
+
+  const proc = spawn(FFMPEG, ["-loglevel", "error", "-i", file, "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1"]);
+  m.proc = proc;
+  let err = "";
+  proc.stderr.on("data", (d) => (err += d));
+  let buf: Buffer = Buffer.alloc(0);
+  const wait = 500 / speed;
+  let next = Date.now();
+  try {
+    // for-await pauses reading while we sleep, so ffmpeg is held back by the pipe rather than
+    // decoding the whole file into memory ahead of the pacing.
+    for await (const chunk of proc.stdout as AsyncIterable<Buffer>) {
+      buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+      while (buf.length >= FRAME_BYTES) {
+        if (m.cancelled) return;
+        pushFrame(id, buf.subarray(0, FRAME_BYTES));
+        buf = buf.subarray(FRAME_BYTES);
+        s.file.doneMs += 500;
+        // A deadline clock, not a sleep per frame: sleeps drift late under load and an hour at 4x
+        // would quietly become 4x-minus-a-bit with nobody able to say why.
+        next += wait;
+        const d = next - Date.now();
+        if (d > 0) await new Promise((ok) => setTimeout(ok, d));
+      }
+    }
+    if (m.cancelled) return;
+    if (buf.length >= 2) pushFrame(id, buf.subarray(0, buf.length - (buf.length % 2)));
+    const code: number | null = proc.exitCode ?? (await new Promise((ok) => proc.on("close", ok)));
+    if (code) note(s, `could not read the recording: ${err.trim().split("\n").pop() || `ffmpeg exited ${code}`}`);
+  } catch (e) {
+    note(s, `feeding the recording failed: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    m.proc = null;
+  }
+  if (m.cancelled) return;
+  s.file.finished = true;
+  await endMic(id);
+}
+
+/** The newest phone meeting still running — what a room screen at /meet/screen should follow. */
+export function latestMic(): MicStats | null {
+  let best: MicStats | null = null;
+  for (const { stats } of mics.values()) {
+    if (stats.ended) continue;
+    if (!best || stats.startedAt > best.startedAt) best = stats;
+  }
+  return best;
 }
 
 export function micStats(id: string): MicStats | null {

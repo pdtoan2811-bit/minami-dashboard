@@ -1,6 +1,6 @@
 // The phone's microphone leg into the meeting canvas (§17b). See lib/meet-mic.ts for the shape.
 //
-// POST /api/meet/mic?id=<meeting>&event=start   body { title?, context? }  → opens + seeds the board
+// POST /api/meet/mic?id=<meeting>&event=start   body { title?, context?, keep? } → opens + seeds the board
 // POST /api/meet/mic?id=<meeting>               body = raw 16 kHz mono s16le PCM
 // POST /api/meet/mic?id=<meeting>&event=end                                → flush, archive, summary
 //
@@ -27,9 +27,9 @@ export async function POST(req: Request) {
   const event = url.searchParams.get("event");
 
   if (event === "start") {
-    let b: { title?: string; context?: string } = {};
-    try { b = await req.json(); } catch { /* both optional */ }
-    const stats = await startMic(id, String(b.title || "").slice(0, 80), String(b.context || "").slice(0, 400), selfOrigin(req));
+    let b: { title?: string; context?: string; keep?: boolean } = {};
+    try { b = await req.json(); } catch { /* all optional */ }
+    const stats = await startMic(id, String(b.title || "").slice(0, 80), String(b.context || "").slice(0, 400), selfOrigin(req), { keep: b.keep === true });
     return Response.json({ ok: true, stats });
   }
   if (event === "end") {
