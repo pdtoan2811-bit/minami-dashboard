@@ -55,6 +55,40 @@ answered question can also be handed over afterwards ("Hand all N to Minami" on 
 session id is stored on the item as `handoff`, so the button becomes "Open Minami's chat" (`/?open=`).
 A teammate's answer comes back through team-ask, not this page — the next heartbeat doesn't read it yet.
 
+**Where a hand-off runs, and what it's called (2026-10-12).** `handoff()` now places the chat the way
+a pane is placed: `isolate(folder, "today-<slug>", "birth")` honours the repo's `minami.isolate`.
+An eager repo gives every hand-off its own worktree, and `handoff.cwd` records where the chat
+actually runs. Off, or lazy before a write, keeps the folder; then the message names the other
+hand-offs live in that folder ("keep to your own task's files; re-read a shared file right before
+editing it, and add to it rather than rewrite it"). The message's first line is
+`Today · <to-do title>`, which becomes the chat's name everywhere (§5h's title seed, so the board,
+the phone inbox, the desktop pill and push notifications all say it).
+
+**`~/ecvisionContent` is `minami.isolate off`**: a shared workspace, set by hand 2026-10-12, undo
+with `git -C ~/ecvisionContent config --unset minami.isolate`. The repo is nearly all uncommitted
+(drafts, facts, topics and strategy are untracked; last commit 7 days before), and its CMS
+credentials are gitignored under `env/`. A worktree is a checkout of HEAD, so a hand-off isolated
+there would get an almost empty folder: no drafts, no credentials. Its protection is the "others"
+note above, not a branch.
+
+**The page watches its hand-offs** (`app/today/live.ts`). It polls `/api/agent/live`, the same feed
+as the tiles, every 3s, only for today and only while the tab is visible. Each handed-off item gets
+a chip: ● NEEDS YOU, ◌ WORKING, ✕ FAILED, ✓ REPLIED (turn over, reply waiting), or plain MINAMI when
+no live session is left (closed, or the server restarted). Any that needs you goes into a
+**"N chats are waiting on you"** card under the hero. A single, single-select question gets its
+options as buttons, sent through `/api/glance/answer`, the cover screen's path that resolves the full
+question text by need id. Anything heavier opens the chat: several questions, multi-select, a plan,
+a held or permission step. Approvals stay in the pane, the same rule the cover keeps (§23).
+
+> 🐛 **"6 agents are live in this folder — they share one branch and will overwrite each other" /
+> "a chat asked me something but it's so hard to find" (Thomas, 2026-10-12).** Nine hand-offs put
+> six live chats in `~/ecvisionContent`, one checkout, because a pane gets its worktree from the
+> browser (`/api/worktree`) before its first send, and `handoff()` starts chats server-side and never
+> went through that. All six opened with the same line ("From my Today page (date)…"), so all six had
+> the same name on the board, and the page forgot each hand-off once it started. One was waiting
+> on a question (publish on bench vs. hold), and nothing on any screen said which. **Fix:** the three
+> changes above, plus the desktop "N need you" pill (§3, `components/NeedsYou.tsx`).
+
 ## Why it's shaped this way
 
 - **The day file is the contract, and the heartbeat owns its shape.** The page only mutates fields the

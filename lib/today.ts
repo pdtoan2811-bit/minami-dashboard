@@ -9,7 +9,8 @@ import { spawn } from "node:child_process";
 // as Thomas ticks to-dos, adds his own, answers open questions and logs notes. The heartbeat owns the
 // SHAPE (it reads yesterday's file to plan today), so this module only mutates fields it defines.
 
-type HandoffMark = { how: "do" | "decide" | "ask"; sessionId: string; at: string; to?: string };
+/** `cwd` is where the chat actually runs — a worktree when the repo isolates, else the folder itself. */
+type HandoffMark = { how: "do" | "decide" | "ask"; sessionId: string; at: string; to?: string; cwd?: string };
 export type TodayTodo = { id: string; title?: string; text: string; handoff?: HandoffMark; manual?: boolean; done_by?: "auto"; done_evidence?: string; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
 export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; recommended?: number; question: string; context?: string; focus?: string; folder?: string; multiSelect?: boolean;
   options: { label: string; description?: string }[]; resolved: null | { answer: string | string[]; at: string } };
@@ -154,6 +155,21 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
   return { cwd: expand(l.folder), message: `${head}\n\n${answer ? `I decided: **${answer}**.` : "Decide this for me — take the recommended option unless the facts on disk clearly say otherwise, and tell me which you took and why in one line."}\n\nQuestion: ${l.question}\nContext: ${l.context || "—"}\nOptions:\n${opts}\n\nNow carry it out. Ask me before anything outward-facing (publishing, Slack, email, spending money).` };
 }
 
+/** A hand-off's human name: the to-do's title, or the question. One line, short enough for a tab. */
+function handoffLabel(item: TodayTodo | TodayLoop): string {
+  const t = ("title" in item && item.title) || ("text" in item && item.text) || ("question" in item && item.question) || "Today task";
+  const one = String(t).split("\n")[0].trim();
+  return one.length > 70 ? `${one.slice(0, 69)}…` : one;
+}
+
+const slug = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "task";
+
+/** Titles of today's hand-offs whose chat is live right now in `folder` (not ended). */
+function liveHandoffsIn(day: TodayDay, folder: string, live: { sessionId: string | null; cwd: string }[]): string[] {
+  const alive = new Set(live.filter((d) => d.sessionId && path.resolve(d.cwd) === path.resolve(folder)).map((d) => d.sessionId));
+  return [...day.todos, ...day.loops].filter((x) => x.handoff && alive.has(x.handoff.sessionId)).map((x) => handoffLabel(x));
+}
+
 export async function handoff(date: string, h: Handoff): Promise<{ ok: boolean; sessionId?: string; error?: string; day?: TodayDay }> {
   const { sendMessage, liveStats } = await import("@/lib/agent/manager");
   const day = readDay(date);
@@ -167,9 +183,33 @@ export async function handoff(date: string, h: Handoff): Promise<{ ok: boolean; 
     const { message, cwd } = handoffPrompt(day, h);
     if (!fs.existsSync(cwd)) return { ok: false, error: `folder ${cwd} doesn't exist` };
     const key = `today-${h.how}-${h.id}-${Date.now().toString(36)}`;
+    const label = handoffLabel(item);
+
+    // ⚠️ A HAND-OFF MUST BE PLACED LIKE ANY CHAT. A pane gets its worktree from the browser
+    // (/api/worktree) before its first send; a hand-off is started here, server-side, and skipped that
+    // entirely — so nine Today hand-offs put six chats on one branch of ~/ecvisionContent and the pane
+    // said "6 agents are live in this folder — they share one branch and will overwrite each other"
+    // (2026-10-12). isolate() honours the repo's own minami.isolate: eager → a worktree each, lazy →
+    // shared until a chat writes under contention, off → the folder itself (a workspace that is mostly
+    // uncommitted, like ecvisionContent, where a checkout of HEAD would be nearly empty).
+    const { isolate } = await import("@/lib/worktree");
+    const iso = await isolate(cwd, `today-${slug(label)}`, "birth").catch(() => null);
+    const runCwd = iso?.dir ?? cwd;
+
+    // Sharing a folder is then a fact the chat should KNOW, not discover: name the other hand-offs
+    // working there so each keeps to its own files.
+    const others = iso ? [] : liveHandoffsIn(day, cwd, liveStats().details).filter((t) => t !== label);
+    const shared = others.length
+      ? `\n\nOther Minami chats from my Today page are working in this same folder right now:\n${others.map((t) => `- ${t}`).join("\n")}\nKeep to your own task's files. If you must change a shared file (a backlog, a log, a playbook), re-read it immediately before editing and add to it rather than rewrite it.`
+      : "";
+
+    // The first line IS the chat's name everywhere (§5h: the title seed is the opening line). It used
+    // to be "From my Today page (date)…" — identical for every hand-off, so the board showed six chats
+    // with one name and the one asking a question could not be found.
+    const titled = `Today · ${label}\n\n${message}${shared}`;
     // No `mode`: a hand-off runs like any chat he opens himself (the install default, DEFAULT_PERMISSION_MODE).
     // Pinning "acceptEdits" here made every Today task stop for approval on each shell command.
-    let { sessionId } = sendMessage({ key, cwd, message });
+    let { sessionId } = sendMessage({ key, cwd: runCwd, message: titled });
     for (let i = 0; !sessionId && i < 60; i++) {
       await new Promise((r) => setTimeout(r, 250));
       sessionId = liveStats().details.find((d) => d.key === key)?.sessionId ?? null;
@@ -179,7 +219,7 @@ export async function handoff(date: string, h: Handoff): Promise<{ ok: boolean; 
     const it = (h.kind === "todo" ? fresh.todos : fresh.loops).find((x) => x.id === h.id) as (TodayTodo | TodayLoop) | undefined;
     if (it?.handoff) return { ok: true, sessionId: it.handoff.sessionId, day: fresh }; // another process got there first
     if (it) {
-      it.handoff = { how: h.how, sessionId, at: now(), to: h.member?.name };
+      it.handoff = { how: h.how, sessionId, at: now(), to: h.member?.name, cwd: runCwd };
       // Always overwrite: the stored answer must be the one the chat was given. An earlier pick he
       // backed out of (Decide → Back → "Let Minami decide") is not what Minami was told.
       if (h.kind === "loop" && h.how !== "ask")
