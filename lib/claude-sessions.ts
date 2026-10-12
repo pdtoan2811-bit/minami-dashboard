@@ -51,7 +51,9 @@ function cleanTitle(raw: string): string {
   if (/^You are compacting/i.test(s)) return "Compacting memory";
   if (/^You are Minami/i.test(s)) return "Minami · Slack turn";
   if (/^<local-command/i.test(s) || /^<command-name/i.test(s) || /^Caveat: The messages/i.test(s)) return "";
-  return s.slice(0, 80);
+  // First LINE, then 80 chars. A message that opens with a name line ("Today · Publish the…") must
+  // be titled by that line alone; slicing across the newline glued the next paragraph onto the name.
+  return s.split("\n")[0].trim().slice(0, 80);
 }
 
 // Does this message say enough to NAME a conversation?

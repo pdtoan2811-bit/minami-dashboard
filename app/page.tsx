@@ -46,6 +46,7 @@ import { PhoneAccess } from "@/components/PhoneAccess";
 import { Inbox, type InboxLive } from "@/components/Inbox";
 import { taskKeyOf } from "@/lib/task-groups";
 import { TeamButton, TeamRow, TeamSheet, useTeamInbox } from "@/components/TeamInbox";
+import { NeedsYouButton, type Waiting } from "@/components/NeedsYou";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { useCoverScreen } from "@/lib/use-cover";
@@ -897,6 +898,17 @@ export default function BentoHome() {
   // The team inbox (§25). Explain starts its chat server-side and hands back the id; parking it in
   // openParam reuses the `?open=` path, which already waits for the new session to reach the list.
   const team = useTeamInbox();
+  // Every chat waiting on you, oldest first — the desktop's counterpart of the phone inbox's "needs
+  // you" group, from the same poll the tiles read (§26: nine Today hand-offs, one question, no way to
+  // find it).
+  const waitingOnYou = useMemo<Waiting[]>(() => Object.entries(liveAct)
+    .filter(([, a]) => a.need)
+    .map(([sid, a]) => {
+      const s = sessions.find((x) => x.id === sid);
+      return { sid, title: (s && titleOf(s)) || a.label || "A chat", project: s?.project || a.cwd.split("/").pop() || "",
+        summary: a.need!.summary, kind: a.need!.kind, since: (a.need as { since?: number }).since };
+    })
+    .sort((x, y) => (x.since ?? 0) - (y.since ?? 0)), [liveAct, sessions]);
   const [teamOpen, setTeamOpen] = useState(false);
   const openWhenListed = (sid: string) => { openParam.current = sid; } // the next sessions poll runs the effect;
   const startTopic = (cwd: string, label?: string) => {
@@ -1921,6 +1933,7 @@ export default function BentoHome() {
           below the lightbox and folder picker (z-[90]/z-[100]) so a modal still covers it. */}
       <div className="fixed right-3 top-2.5 z-[60] flex gap-1.5">
         {/* Only while something waits, and only where there's room: on a phone it's the inbox's first row. */}
+        <span className="hidden md:block"><NeedsYouButton items={waitingOnYou} onOpen={openChat} /></span>
         {team.data?.ok && <span className="hidden md:block"><TeamButton waiting={team.waiting} onOpen={() => setTeamOpen(true)} /></span>}
         <NotificationBell />
       </div>

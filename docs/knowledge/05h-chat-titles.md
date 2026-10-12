@@ -4,6 +4,10 @@ Part of the [Minami Bento knowledge record](../KNOWLEDGE.md).
 
 ## 5h. What a chat is called, and when that changes
 
+> **Title seeds stop at the first line (2026-10-12).** `cleanTitle` takes the first line, then 80 chars.
+> A server-started chat names itself by opening with a name line (`Today · <to-do>`, §26). Slicing
+> across the newline glued the next paragraph onto the name.
+
 A chat has three names. Every surface shows the first that exists: **`now || task || title`**
 (`titleOf` in `app/page.tsx`; `/glance` and the push notifier make the same choice).
 

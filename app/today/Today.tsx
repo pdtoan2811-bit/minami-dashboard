@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { TodayDay, TodayTodo, TodayLoop } from "@/lib/today";
 import { inter, interVi, mono } from "./fonts";
+import { answerInPlace, quickAnswerable, stateOf, useHandoffLive, type HandoffState, type LiveTile } from "./live";
 
 // ── tokens (kit.css: [data-ground="dark"] + [data-brand="ecvision"] dark) ───────────────────────────
 const K = {
@@ -152,6 +153,10 @@ export function Today() {
     return r;
   }, [act]);
 
+  // Every handed-off item's chat, watched live (§26). Above the early return: a hook can't follow it.
+  const handedOff = (day ? [...day.todos, ...day.loops] : []).filter((x) => x.handoff);
+  const live = useHandoffLive(day && day.date === today ? handedOff.map((x) => x.handoff!.sessionId) : []);
+
   if (!day) return <Ground>{loadErr
     ? <div className="flex flex-col items-center gap-3 pt-32 text-center text-sm" style={{ color: K.muted }}>
         <p>{loadErr}</p>
@@ -203,6 +208,10 @@ export function Today() {
         </Glass>
         <div ref={heroRef} className="-mt-4 h-px" />{/* below the hero's button: once this scrolls off, the sticky one appears */}
 
+        {/* A handed-off chat that is waiting on HIM goes to the top, answerable here. This page started
+            the chat; it is the one place he is guaranteed to look for it. */}
+        <Waiting items={handedOff.filter((x) => stateOf(live[x.handoff!.sessionId]) === "needs")} live={live} />
+
         {/* focus */}
         {day.todos.length > 0 && (
           <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] sm:justify-center">
@@ -220,7 +229,7 @@ export function Today() {
         {/* to-dos */}
         {(day.todos.length > 0 || isToday) && (
           <Glass className="overflow-hidden">
-            <ul>{shown.map((t, i) => <TodoRow key={t.id} t={t} first={i === 0}
+            <ul>{shown.map((t, i) => <TodoRow key={t.id} t={t} first={i === 0} live={t.handoff ? live[t.handoff.sessionId] : undefined} watching={isToday}
               onToggle={() => act({ op: "toggle", id: t.id, done: !t.done })} onRemove={() => act({ op: "remove", id: t.id })}
               onDo={() => handoff("todo", t.id, "do")} />)}</ul>
             <AddTodo first={!shown.length} onAdd={(text) => act({ op: "add", text, focus: filter === "all" ? "other" : filter })} />
@@ -235,6 +244,7 @@ export function Today() {
                 <p style={{ color: K.muted }}>{l.question}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="font-semibold">{l.handoff?.how === "ask" ? `Asked ${l.handoff.to}` : [].concat((l.resolved?.answer ?? "") as never).map(plain).join(", ")}</span>
+                  {l.handoff && isToday && <StateChip state={stateOf(live[l.handoff.sessionId])} />}
                   {l.handoff && <Link href={`/?open=${l.handoff.sessionId}`} className="text-[12.5px]" style={{ color: K.accentBright }}>Open chat →</Link>}
                   {!l.handoff && <button className="text-[12.5px]" style={{ color: K.accentBright }} onClick={() => handoff("loop", l.id, "decide", { answer: l.resolved?.answer })}>Hand to Minami →</button>}
                   {/* a handed-off answer belongs to its chat — changing it here would never reach it */}
@@ -459,7 +469,7 @@ function Done({ qs, outcome, onClose, onHandAll }: { qs: TodayLoop[]; outcome: R
 }
 
 // ── rows ─────────────────────────────────────────────────────────────────────────────────────────
-function TodoRow({ t, first, onToggle, onRemove, onDo }: { t: TodayTodo; first: boolean; onToggle: () => void; onRemove: () => void; onDo: () => Promise<unknown> }) {
+function TodoRow({ t, first, live, watching, onToggle, onRemove, onDo }: { t: TodayTodo; first: boolean; live?: LiveTile; watching: boolean; onToggle: () => void; onRemove: () => void; onDo: () => Promise<unknown> }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -474,7 +484,8 @@ function TodoRow({ t, first, onToggle, onRemove, onDo }: { t: TodayTodo; first: 
           <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: FOCUS[fkey(t.focus)].color }} />
           <span className={`min-w-0 flex-1 text-[15px] font-medium leading-snug ${t.done ? "line-through" : ""}`} style={{ color: t.done ? K.faint : K.ink, textDecorationColor: K.line2 }}>
             <Inline text={titleOf(t)} /></span>
-          {t.handoff && <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.accent, 22), color: K.accentBright, fontFamily: "var(--today-mono)" }}>MINAMI</span>}
+          {t.handoff && (watching ? <StateChip state={stateOf(live)} />
+            : <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.accent, 22), color: K.accentBright, fontFamily: "var(--today-mono)" }}>MINAMI</span>)}
           {t.done && t.done_by === "auto" && <span title={t.done_evidence} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.cat3, 22), color: "#f3c766", fontFamily: "var(--today-mono)" }}>AUTO</span>}
           {t.est_min ? <span className="shrink-0 tabular-nums" style={{ color: K.faint, fontFamily: "var(--today-mono)", fontSize: 11 }}>{t.est_min}m</span> : null}
           <span className="shrink-0 text-[12px] transition-transform" style={{ color: K.faint, transform: open ? "rotate(90deg)" : "none" }}>›</span>
@@ -500,6 +511,66 @@ function TodoRow({ t, first, onToggle, onRemove, onDo }: { t: TodayTodo; first: 
         </div>
       )}
     </li>
+  );
+}
+
+/** A hand-off's chat at a glance. Shape and word carry the state, not only the colour. */
+const STATE: Record<HandoffState, { label: string; color: string; dot: string }> = {
+  needs: { label: "NEEDS YOU", color: "#ffd27a", dot: "●" },
+  running: { label: "WORKING", color: K.accentBright, dot: "◌" },
+  failed: { label: "FAILED", color: "#ff8a8d", dot: "✕" },
+  finished: { label: "REPLIED", color: "#8fe0b8", dot: "✓" },
+  gone: { label: "MINAMI", color: K.accentBright, dot: "" },
+};
+function StateChip({ state }: { state: HandoffState }) {
+  const s = STATE[state];
+  return (
+    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] ${state === "running" ? "animate-pulse" : ""}`}
+      style={{ background: mix(s.color, 18), color: s.color, fontFamily: "var(--today-mono)" }}>{s.dot ? `${s.dot} ` : ""}{s.label}</span>
+  );
+}
+
+/** The chats this page started that are waiting on him: the question, and the answer buttons when
+ *  it's a single pick. Anything heavier (several questions, a plan, a held tool call) opens the chat. */
+function Waiting({ items, live }: { items: (TodayTodo | TodayLoop)[]; live: Record<string, LiveTile> }) {
+  const [sent, setSent] = useState<Record<string, string>>({});
+  const [err, setErr] = useState<string | null>(null);
+  if (!items.length) return null;
+  return (
+    <Glass className="flex flex-col gap-4 px-5 py-5" elevated>
+      <Eyebrow>{items.length === 1 ? "1 CHAT IS WAITING ON YOU" : `${items.length} CHATS ARE WAITING ON YOU`}</Eyebrow>
+      {items.map((x) => {
+        const sid = x.handoff!.sessionId;
+        const n = live[sid]?.need;
+        if (!n) return null;
+        const name = ("title" in x && x.title) || ("text" in x && x.text) || ("question" in x && x.question) || "Today task";
+        const q = n.qs?.[0]?.q || n.summary;
+        return (
+          <div key={sid} className="flex flex-col gap-2.5">
+            <div className="text-[12px]" style={{ color: K.faint, fontFamily: "var(--today-mono)" }}>{String(name).slice(0, 80)}</div>
+            <div className="text-[15.5px] font-semibold leading-snug" style={{ color: K.ink }}><Inline text={q} /></div>
+            {sent[n.id] ? <p className="text-[13px]" style={{ color: "#8fe0b8" }}>Sent: {sent[n.id]} — the chat carries on.</p>
+              : quickAnswerable(n) ? (
+                <div className="flex flex-col gap-2">
+                  {n.options.map((o) => (
+                    <PillButton key={o} tone="paper" small onClick={async () => {
+                      setErr(null);
+                      const r = await answerInPlace(sid, n.id, o);
+                      if (r.ok) setSent((m) => ({ ...m, [n.id]: o }));
+                      else setErr(r.reason === "already settled" ? "Already answered somewhere else." : `Didn't send: ${r.reason}`);
+                    }}>{o}</PillButton>
+                  ))}
+                  <Link href={`/?open=${sid}`} className="text-[12.5px]" style={{ color: K.accentBright }}>Something else — open the chat →</Link>
+                </div>
+              ) : (
+                <Link href={`/?open=${sid}`} className="inline-flex"><PillButton tone="accent" small>
+                  {n.kind === "question" ? "Answer in the chat →" : n.kind === "plan" ? "Review the plan →" : "Approve in the chat →"}</PillButton></Link>
+              )}
+          </div>
+        );
+      })}
+      {err && <p className="text-[13px]" style={{ color: "#ff8a8d" }}>{err}</p>}
+    </Glass>
   );
 }
 
