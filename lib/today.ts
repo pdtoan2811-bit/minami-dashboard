@@ -142,7 +142,7 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
   const head = `From my Today page (${day.date}). Today's focus: ${day.focus.map((f) => `${f.name} — ${f.status}`).join(" · ")}`;
   if (h.kind === "todo") {
     const t = day.todos.find((x) => x.id === h.id)!;
-    return { cwd: expand(t.folder), message: `${head}\n\nDo this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).\n\nEnd your last message with one line on its own: `TODAY: done` if the to-do is finished, or `TODAY: blocked — <why>` — my Today page reads it to tick the item.` };
+    return { cwd: expand(t.folder), message: `${head}\n\nDo this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).\n\nEnd your last message with one line on its own: "TODAY: done" if the to-do is finished, or "TODAY: blocked — <why>" — my Today page reads it to tick the item.` };
   }
   const l = day.loops.find((x) => x.id === h.id)!;
   const opts = l.options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n");
