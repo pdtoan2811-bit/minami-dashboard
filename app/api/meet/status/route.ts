@@ -5,13 +5,20 @@
 // The trace buffer is process-wide, not per meeting. That is fine for its job here — on the dashboard
 // process the phone is the only thing producing canvas traffic; Recall meetings run on :3011.
 
-import { micStats } from "@/lib/meet-mic";
+import { latestMic, micStats } from "@/lib/meet-mic";
 import { traceBuffer } from "@/lib/canvas-trace";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const id = new URL(req.url).searchParams.get("id") || "";
+  const q = new URL(req.url).searchParams;
+  // ?latest=1 — for a room screen opened before anyone pressed Start (/meet/screen). Ids only: the
+  // screen goes on to /canvas, which already knows how to show a board.
+  if (q.get("latest") === "1") {
+    const l = latestMic();
+    return Response.json({ ok: true, id: l?.id ?? null, title: l?.title ?? null }, { headers: { "cache-control": "no-store" } });
+  }
+  const id = q.get("id") || "";
   const stats = id ? micStats(id) : null;
   const since = stats?.startedAt ?? Date.now();
   const trace = traceBuffer().filter((e) => e.at >= since - 2000).slice(-40);
