@@ -197,6 +197,14 @@ embedded apps are out of scope — they render inside `admin.shopify.com`, which
 if that need materialises, the fallback is the script drawing its own toolbar in the app tab
 (the Q5 option that was declined for v1).
 
+**Video, not pages: the Hyperframes Studio talks to the same API (2026-10-12).** A video's comment needs a *moment*,
+which this pop-out has no notion of, so Video Studio's renderer got its own comment mode instead: Thomas's fork of
+Hyperframes (`~/hyperframes`, branch `minami-comments`, `FORK.md`). It reuses this subsystem's contract rather than
+framing: its own server POSTs frames to `/api/fs/paste` and the batch to `/api/agent/send` with `key: live:<session>`
+(+ `resume` when idle), and reads `/api/agent/live` for the status dot. Same message shape (`[Studio comments] …`, ①
+numbering, the paste path on its own line). Bound at launch by env from the chat that ran `npm run studio:hf`. If
+`/api/agent/send` or `/api/agent/live` change shape, that fork breaks silently — it is a second client of both.
+
 ### First contact with a real app — what it broke, and why (2026-09-22)
 
 Pointed at ecvision (`localhost:3150`, a Next.js app with an app-shell layout), the feature was
