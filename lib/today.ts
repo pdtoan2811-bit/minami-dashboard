@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import { handoffReport, STATUS_CONTRACT, type HandoffReport } from "@/lib/today-status";
 
 // The Today page's store (§26). One JSON file per day in ~/.minami/today, written first by the vault's
 // morning heartbeat (~/secondBrain/bin/morning-heartbeat.mjs, 07:30 via launchd) and then edited here
@@ -11,7 +12,12 @@ import { spawn } from "node:child_process";
 
 /** `cwd` is where the chat actually runs — a worktree when the repo isolates, else the folder itself. */
 type HandoffMark = { how: "do" | "decide" | "ask"; sessionId: string; at: string; to?: string; cwd?: string };
-export type TodayTodo = { id: string; title?: string; text: string; handoff?: HandoffMark; manual?: boolean; done_by?: "auto"; done_evidence?: string;
+export type TodayTodo = { id: string; title?: string; text: string; handoff?: HandoffMark; manual?: boolean;
+  /** Who ticked it: "auto" = the model judge or a done_when check (vault today-sync), "minami" = its
+   *  hand-off chat reported "TODAY: done" (lib/today-status.ts). Absent = Thomas. */
+  done_by?: "auto" | "minami"; done_evidence?: string;
+  /** Ids of to-dos that must be done first (written by the heartbeat). Its hand-off waits for them. */
+  after?: string[];
   /** Machine checks that tick it (secondBrain/bin/today-checks.mjs); `progress` is their last partial result. */
   done_when?: Record<string, unknown>[]; progress?: { met: number; total: number; detail: string }; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
 export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; recommended?: number; question: string; context?: string; focus?: string; folder?: string; multiSelect?: boolean;
@@ -145,7 +151,7 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
   const head = `From my Today page (${day.date}). Today's focus: ${day.focus.map((f) => `${f.name} — ${f.status}`).join(" · ")}`;
   if (h.kind === "todo") {
     const t = day.todos.find((x) => x.id === h.id)!;
-    return { cwd: expand(t.folder), message: `${head}\n\nDo this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).\n\nEnd your last message with one line on its own: "TODAY: done" if the to-do is finished, or "TODAY: blocked — <why>" — my Today page reads it to tick the item.` };
+    return { cwd: expand(t.folder), message: `${head}\n\nDo this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).\n\n${STATUS_CONTRACT}` };
   }
   const l = day.loops.find((x) => x.id === h.id)!;
   const opts = l.options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n");
@@ -155,6 +161,43 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
   }
   const answer = h.answer ? [].concat(h.answer as never).join(", ") : null;
   return { cwd: expand(l.folder), message: `${head}\n\n${answer ? `I decided: **${answer}**.` : "Decide this for me — take the recommended option unless the facts on disk clearly say otherwise, and tell me which you took and why in one line."}\n\nQuestion: ${l.question}\nContext: ${l.context || "—"}\nOptions:\n${opts}\n\nNow carry it out. Ask me before anything outward-facing (publishing, Slack, email, spending money).` };
+}
+
+/** Prerequisites (`after`) that aren't done yet. An id that's no longer in the day (dropped, or a
+ *  rebuild renamed it) doesn't hold anything up. */
+export function unmetDeps(day: TodayDay, t: TodayTodo): TodayTodo[] {
+  return (t.after ?? []).map((id) => day.todos.find((x) => x.id === id)).filter((x): x is TodayTodo => !!x && !x.done);
+}
+
+export type ItemStatus = HandoffReport & { busy: boolean; live: boolean };
+
+/** What each hand-off came to, and the ticks that follow from it (§26).
+ *
+ *  Ticks a to-do whose chat's last status line is "TODAY: done" — unless Thomas set the box himself
+ *  (`manual`): a tick he took back stays taken back, the same rule the vault auto-tick keeps.
+ *  Writes the day only when something changed. Returns a report per item id for the page. */
+export async function reconcile(date: string): Promise<{ day: TodayDay; status: Record<string, ItemStatus> }> {
+  const { liveStats } = await import("@/lib/agent/manager");
+  const live = new Map(liveStats().details.filter((d) => d.sessionId).map((d) => [d.sessionId as string, d]));
+  const day = readDay(date);
+  const status: Record<string, ItemStatus> = {};
+  let changed = false;
+  for (const it of [...day.todos, ...day.loops] as (TodayTodo & TodayLoop)[]) {
+    const h = it.handoff;
+    if (!h?.sessionId) continue;
+    const l = live.get(h.sessionId);
+    const r = handoffReport(h.sessionId, [it.folder, h.cwd], !!l?.busy);
+    status[it.id] = { ...r, busy: !!l?.busy, live: !!l };
+    const isTodo = day.todos.includes(it as TodayTodo);
+    if (isTodo && r.outcome?.state === "done" && !r.outcome.stale && !it.done && !it.manual) {
+      it.done = true; it.done_at = new Date(r.outcome.at).toISOString(); it.done_by = "minami";
+      it.done_evidence = `Minami's chat reported it done${r.outcome.why ? ` — ${r.outcome.why}` : ""}.`;
+      log(day, "auto", `Done (Minami reported): ${it.title || it.text}`);
+      changed = true;
+    }
+  }
+  if (changed) write(day);
+  return { day, status };
 }
 
 /** A hand-off's human name: the to-do's title, or the question. One line, short enough for a tab. */
@@ -178,6 +221,11 @@ export async function handoff(date: string, h: Handoff): Promise<{ ok: boolean; 
   const item = h.kind === "todo" ? day.todos.find((x) => x.id === h.id) : day.loops.find((x) => x.id === h.id);
   if (!item) return { ok: false, error: "not found" };
   if (item.handoff) return { ok: true, sessionId: item.handoff.sessionId, day };
+  // A dependent task started early runs straight into the wall its prerequisite exists to remove:
+  // three publish hand-offs on 2026-10-12 hit "no prod CMS target" while the task that settles it ran
+  // beside them. The page disables the button; this is the server saying the same.
+  const waitingOn = h.kind === "todo" ? unmetDeps(day, item as TodayTodo) : [];
+  if (waitingOn.length) return { ok: false, error: `starts after: ${waitingOn.map((t) => t.title || t.text).join(", ")}` };
   const lockKey = `${date}:${h.kind}:${h.id}`;
   if (starting.has(lockKey)) return { ok: false, error: "already starting — give it a few seconds" };
   starting.add(lockKey);

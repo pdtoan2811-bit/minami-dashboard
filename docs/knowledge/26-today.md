@@ -217,3 +217,61 @@ plan could suggest a finished item again.
 > so any fresh page load would come up dead. Fixed by `bin/deploy.sh --detach` (a full rebuild + swap
 > when the box is quiet). **Always start a side dev server with `npm run dev -- -p <port>`** — the
 > script sets `NEXT_DIST_DIR=.next-dev`; a bare `next dev` does not.
+
+## Task status (2026-10-13)
+
+Thomas: *"the UX are not showing clear status of tasks"*. The two days on record said why:
+
+- **Oct 12:** 9 to-dos and 7 hand-offs, **none ticked**, though three had finished. Three publish
+  tasks hit the same wall ("no prod CMS target") while the task that settles it ran beside them. One
+  chat ran 17½ h and edited an ADR in `~/ecvision` and this repo's own `lib/today.ts`. Nothing on the
+  page said any of this.
+- **Oct 13:** 4 hand-offs all ended "TODAY: done" and **one** was ticked, by other evidence. The
+  vault checker read the thread ledger, which keeps the first 320 characters of a reply, and the
+  status line is the last line. "Done" also hid two different things: the price-cut draft's
+  part was done but it waited on Thomas to publish, and the updated-date check said done and then
+  reported Docker wasn't running.
+
+So the page shows what the **task** is doing, not what the chat is doing:
+
+| State | When | Line under the title |
+|---|---|---|
+| ● NEEDS YOU | the chat has a question or step pending | the question |
+| → YOUR MOVE | last status line `TODAY: yours — …` | what only he can do |
+| ■ BLOCKED | `TODAY: blocked — …` | the blocker |
+| ◌ WORKING | the chat is busy | — |
+| ⏸ AFTER | an `after` prerequisite isn't done and it hasn't started | which one |
+| ✉ READ REPLY | the turn ended with no status line, or a newer message followed the line (`stale`) | why |
+| ✓ DONE | ticked | by whom: Minami reported / a check / the judge |
+
+- **`lib/today-status.ts`** reads each hand-off's transcript, with no model involved. The last
+  `TODAY:` line wins. It's `stale` if assistant text follows it, so a correction is never ticked
+  over. Results are cached per file version.
+- **`reconcile(date)`** (GET `/api/today`, today only) ticks a to-do whose line is a non-stale `done`.
+  It sets `done_by: "minami"`, never touches a box he set himself (`manual`), and writes only on
+  change. The page polls every 20s while hand-offs are out.
+- **The contract** (`STATUS_CONTRACT`, in the hand-off message): `done` / `yours — <the one thing
+  only I can do>` / `blocked — <under 8 words, worded the same every time>`. The line is repeated on
+  any later message, so the latest message always carries it.
+- **Blockers are grouped** by their lower-cased words ("no prod CMS target" and "No prod CMS
+  target." are one group), in a card under the hero. "Your move" gets its own card with a Done button.
+  The hero shows the honest split, e.g. "1 done · 1 your move · 2 blocked · 2 to read".
+- **`after`** is written by the heartbeat as 1-based positions in its own list (it can't know the ids,
+  which are a hash of the text). `normalise` turns them into ids. The page holds a dependent task's
+  start button ("Minami can start this after: …"), and `handoff()` refuses with the same message.
+- **Drift:** ⚠ when a chat has run ≥ 120 min without finishing, or edited ≥ 3 files outside its
+  to-do's folder and worktree. Vault notes, scratch and harness state don't count. One or two edits
+  next door is a task using its tools; five, an ADR included, was the drift.
+
+Verified 2026-10-13 against a scratch day (`MINAMI_TODAY_DIR`) built from five synthetic transcripts
+plus two real chats. Every state rendered, two blocker wordings merged into one group, the `done`
+ticked as `minami` and the stale one didn't, and the 17½ h chat showed `running 17h 32m · edited
+outside its folder: …ADR-0034…, ~/minami-dashboard/lib/today.ts`. A direct POST to hand off the
+dependent task returned `starts after: Settle where articles publish`. Not yet run against a real
+morning's hand-offs under the new contract.
+
+> 🐛 **The status line the checker trusted was cut off before it could read it.** today-sync.mjs read
+> the thread ledger, which keeps the first 320 characters of a reply. Every "TODAY: done" sat at
+> the end, so all four of Oct 13's lines were absent from the data the judge was shown. **Fix:**
+> parse the transcript (above). today-sync keeps its job for to-dos with no hand-off.
+

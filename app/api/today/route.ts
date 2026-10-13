@@ -1,4 +1,4 @@
-import { readDay, listDays, applyAction, runHeartbeat, handoff, localDate, type TodayAction, type Handoff } from "@/lib/today";
+import { readDay, listDays, applyAction, runHeartbeat, handoff, localDate, reconcile, type TodayAction, type Handoff } from "@/lib/today";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -7,7 +7,15 @@ export const runtime = "nodejs";
 // newest first, for the history strip.
 export async function GET(req: Request) {
   const date = new URL(req.url).searchParams.get("date") || localDate();
-  try { return Response.json({ day: readDay(date), days: listDays(), today: localDate() }); }
+  // Today's page reconciles on read: each hand-off's status line comes from its transcript, and a
+  // "TODAY: done" ticks the item (lib/today-status.ts). Past days are history — read as stored.
+  try {
+    if (date === localDate()) {
+      const { day, status } = await reconcile(date);
+      return Response.json({ day, days: listDays(), today: localDate(), status });
+    }
+    return Response.json({ day: readDay(date), days: listDays(), today: localDate(), status: {} });
+  }
   catch (e) { return Response.json({ error: String(e) }, { status: 400 }); }
 }
 
