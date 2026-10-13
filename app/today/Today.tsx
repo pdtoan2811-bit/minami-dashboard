@@ -515,7 +515,9 @@ function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo }: { t: Today
         <div className="flex flex-col gap-3 pb-4 pl-[56px] pr-5">
           {state?.why && <p className="text-[13px] leading-snug" style={{ color: TASK[state.s].color }}>{TASK[state.s].label.toLowerCase()}: {state.why}</p>}
           {state?.drift && <p className="text-[13px] leading-snug" style={{ color: "#ff8a8d" }}>⚠ {state.drift}</p>}
-          {detail && <p className="text-[13.5px] leading-relaxed" style={{ color: K.muted }}><Inline text={detail} /></p>}
+          {/* pre-line: a to-do written as "Problem / Recommended / Prompt for Minami" (2026-10-13) must keep its
+              line breaks, or the prompt runs into the problem as one block. */}
+          {detail && <p className="whitespace-pre-line text-[13.5px] leading-relaxed" style={{ color: K.muted }}><Inline text={detail} /></p>}
           {t.why && <p className="text-[13px] leading-snug" style={{ color: K.faint }}><Inline text={t.why} /></p>}
           {!t.done && t.progress && <p className="text-[13px] leading-snug" style={{ color: K.faint }}>Ticks itself when all {t.progress.total} checks pass — {t.progress.detail}.</p>}
           {t.done && t.done_by === "auto" && t.done_evidence && <p className="text-[13px] leading-snug" style={{ color: "#f3c766" }}>Ticked automatically — {t.done_evidence} Untick it if that's wrong; it won't be ticked again.</p>}
