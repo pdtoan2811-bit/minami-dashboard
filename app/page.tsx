@@ -47,6 +47,7 @@ import { Inbox, type InboxLive } from "@/components/Inbox";
 import { taskKeyOf } from "@/lib/task-groups";
 import { TeamButton, TeamRow, TeamSheet, useTeamInbox } from "@/components/TeamInbox";
 import { NeedsYouButton, type Waiting } from "@/components/NeedsYou";
+import { VoiceButton } from "@/components/VoiceButton";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
 import { useCoverScreen } from "@/lib/use-cover";
@@ -2603,6 +2604,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // Keyed by the same effectiveKey as the agent so the draft follows a session, not a pane slot.
   const [input, setInput] = useSetting<string>("draft:" + effectiveKey, "");
   const [attachOpen, setAttachOpen] = useState(false); // the in-app (portable) folder browser
+  const insertText = useRef<((t: string) => void) | null>(null); // VoiceButton → Composer caret
   const [attachMenu, setAttachMenu] = useState(false); // 📎 → which picker?
   const [nativeBusy, setNativeBusy] = useState(false); // a macOS panel is open ON THE MAC
   const [attachErr, setAttachErr] = useState<string | null>(null);
@@ -3695,8 +3697,11 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
               )}
             </div>
           )}
+          {/* 🎤 always, phone or desk: a voice note is the fastest way in on a phone, where typing
+              mixed Vietnamese/English is slowest. */}
+          <VoiceButton onText={(t) => insertText.current?.(t)} disabled={!cwd} />
           <Composer
-            value={input} onChange={setInput} onSubmit={submit} pickPhotoRef={pickPhoto}
+            value={input} onChange={setInput} onSubmit={submit} pickPhotoRef={pickPhoto} insertTextRef={insertText}
             // "Message Claude in minami-dashboard…" wraps to three lines in a narrow pane, and the
             // composer's own comment (see Composer.tsx) records that the browser lays out the
             // placeholder for real — so a long one isn't just ugly, it's what the empty box is sized by.
