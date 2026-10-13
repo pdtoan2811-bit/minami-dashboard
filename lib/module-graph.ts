@@ -113,6 +113,7 @@ export const NODES: ModuleNode[] = [
   { id: "r/tailnet", label: "/api/tailnet/expose", sub: "localhost:<port> → its tailnet\nhttps (tailscale serve, §23)", layer: "route", row: 18 },
   { id: "x/tailscale", label: "tailscale serve", sub: "tailnet-only https per port\n(never funnel)", layer: "runtime", row: 10 },
   { id: "r/fsimage", label: "/api/fs/image", sub: "serves an image for\nthumbnails (magic-byte gated)", layer: "route", row: 11 },
+  { id: "l/todaystatus", label: "today-status.ts", sub: "hand-off transcript → TODAY:\ndone/yours/blocked · drift", layer: "core", row: 41, pipeline: "live" },
   { id: "c/Today", label: "app/today/Today.tsx", sub: "the morning page (§26)\nto-dos · loops · log", layer: "component", row: 40, pipeline: "live" },
   { id: "r/today", label: "/api/today", sub: "read · tick · resolve\nrun heartbeat", layer: "route", row: 40, pipeline: "live" },
   { id: "l/today", label: "today.ts", sub: "~/.minami/today/<date>.json\nspawns morning-heartbeat.mjs", layer: "core", row: 40, pipeline: "live" },
@@ -296,6 +297,7 @@ export const EDGES: ModuleEdge[] = [
   { from: "app/page", to: "c/NeedsYou", kind: "import" },
   { from: "c/Today", to: "c/AskCard", kind: "import" },
   { from: "r/today", to: "l/today", kind: "import" },
+  { from: "l/today", to: "l/todaystatus", kind: "import", label: "reconcile() on GET" },
   { from: "r/teaminbox", to: "l/teaminbox", kind: "import" },
   { from: "r/teaminbox", to: "l/manager", kind: "import" },
   // The roster is also a PROMPT input: every session is told who it can ask and how.

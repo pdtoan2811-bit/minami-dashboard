@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-13
+- **Today: task status** (§26, `lib/today-status.ts`). Each row says where the TASK stands (needs you / your move / blocked / working / after / read reply / done), with the reason on a line under the title. The status line is read from each hand-off's transcript; it used to come from the 320-char ledger, which cut it off, so Oct 13's four "TODAY: done" went unseen. The contract adds `yours` and `blocked`, and a stale line never ticks. Shared blockers are grouped, "Your move" has its own card, and the hero shows the real split. The heartbeat writes `after` dependencies (vault prompt + `normalise`); dependent tasks wait to start. Drift ⚠ at ≥ 2 h or ≥ 3 edits outside the folder. `done_when` checks (written by a hand-off chat) committed alongside.
+
 ### 2026-10-12
 - **Needs you: Today's hand-offs, findable** (§26, §5h, §3). Hand-offs are placed like panes: `isolate()` honours the repo's mode, so an eager repo gives a worktree each, and a shared folder's chats are told who else is working there. They open with `Today · <to-do>`, which is their name everywhere (`cleanTitle` now stops at the first line). `/today` shows each hand-off's live state, and a "waiting on you" card puts single-pick questions as buttons. The desktop board header has an "N need you" pill listing every waiting chat, oldest first. `~/ecvisionContent` set to `minami.isolate off` (mostly-uncommitted workspace, gitignored CMS env).
 - **today (§26)** — auto-tick: vault `bin/today-sync.mjs` every 10 min ticks to-dos that today's evidence shows finished (ledgers, pipeline, renders, commits); AUTO badge + evidence on the page, 60 s polling, `manual` items never touched. *Reported by user: "show task done etc without me manually input".*

@@ -9,7 +9,7 @@
 // Colours are ecvision's dark-ground kit tokens (kit.css, origin/develop 2026-10-12), not approximations.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import type { TodayDay, TodayTodo, TodayLoop } from "@/lib/today";
+import type { TodayDay, TodayTodo, TodayLoop, ItemStatus } from "@/lib/today";
 import { inter, interVi, mono } from "./fonts";
 import { answerInPlace, quickAnswerable, stateOf, useHandoffLive, type HandoffState, type LiveTile } from "./live";
 
@@ -57,6 +57,8 @@ export function Today() {
   const [toast, setToast] = useState<{ text: string; href?: string } | null>(null);
   const [heroGone, setHeroGone] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  /** Per item id: what its hand-off came to (status line, drift), from the server's reconcile. */
+  const [status, setStatus] = useState<Record<string, ItemStatus>>({});
   const heroRef = useCallback((el: HTMLDivElement | null) => {
     if (!el) return;
     new IntersectionObserver(([e]) => setHeroGone(!e.isIntersecting), { threshold: 0 }).observe(el);
@@ -77,7 +79,7 @@ export function Today() {
     try { r = await fetch(`/api/today${d ? `?date=${d}` : ""}`, { cache: "no-store" }).then((r) => r.json()); }
     catch { r = null; }
     if (n !== seq.current) return false;
-    if (r?.day) { setDay(r.day); setDays(r.days); setToday(r.today); loadedOn.current = localDateClient(); setLoadErr(null); return true; }
+    if (r?.day) { setDay(r.day); setDays(r.days); setToday(r.today); setStatus(r.status ?? {}); loadedOn.current = localDateClient(); setLoadErr(null); return true; }
     // A failed first load (server still warming up at login, a bad ?date=) must offer a retry, not hang.
     // With a day on screen loadErr isn't rendered, so a failed switch says so in the toast instead.
     const text = r ? r.error || "Couldn't load that day." : "Couldn't reach the dashboard.";
@@ -115,9 +117,11 @@ export function Today() {
   // a visible tab looks again every minute so a tick shows up without a reload. Hidden tabs don't poll.
   useEffect(() => {
     if (!date) return;
-    const t = setInterval(() => { if (document.visibilityState === "visible") load(date); }, 60_000);
+    // 20s while hand-offs are out: a chat's status line should show up about when its reply does.
+    const every = dayRef.current && [...dayRef.current.todos, ...dayRef.current.loops].some((x) => x.handoff) ? 20_000 : 60_000;
+    const t = setInterval(() => { if (document.visibilityState === "visible") load(date); }, every);
     return () => clearInterval(t);
-  }, [date, load]);
+  }, [date, load, day?.todos.some((x) => x.handoff)]);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 9000); return () => clearTimeout(t); }, [toast]);
 
   const act = useCallback(async (body: Record<string, unknown>) => {
@@ -175,6 +179,14 @@ export function Today() {
   // Not status: his first edit on a plan-less day flips "none" to "ready" with built_at still null, and
   // the hero must keep offering the build (minami-open.sh only checks that the file exists).
   const planned = !!day.built_at || day.status === "running";
+  // One state per to-do, from everything the page knows (§26 "task status"). The order of the rules is
+  // the precedence: done beats everything; a question beats "working"; a chat's own status line beats
+  // "replied".
+  const states = new Map(day.todos.map((t) => [t.id, taskState(t, day, status[t.id], t.handoff ? live[t.handoff.sessionId] : undefined)]));
+  const counts = { done: 0, yours: 0, needs: 0, blocked: 0, working: 0, waiting: 0, check: 0, todo: 0 } as Record<TaskState["s"], number>;
+  for (const st of states.values()) counts[st.s]++;
+  const yours = day.todos.filter((t) => states.get(t.id)?.s === "yours");
+  const blockedGroups = groupBlockers(day.todos.filter((t) => states.get(t.id)?.s === "blocked").map((t) => ({ t, why: states.get(t.id)!.why })));
 
   return (
     <Ground>
@@ -189,6 +201,7 @@ export function Today() {
         {/* hero */}
         <Glass className="flex flex-col items-center gap-5 px-6 py-7 text-center sm:px-9">
           <Pills n={Math.max(day.todos.length, 1)} filled={done} max={9} />
+          {day.todos.length > 0 && <Summary counts={counts} />}
           <Eyebrow>{eyebrowDate(day.date)}{day.status === "ready" && day.built_at ? ` · PLANNED ${hhmm(day.built_at)}` : ""}</Eyebrow>
           {!planned && <Title size="m">{isToday ? "No plan yet." : day.status === "none" ? "Nothing was recorded." : "No plan was built."}</Title>}
           {day.status === "running" && !day.headline && <Title size="m">Reading your pipelines…</Title>}
@@ -211,6 +224,8 @@ export function Today() {
         {/* A handed-off chat that is waiting on HIM goes to the top, answerable here. This page started
             the chat; it is the one place he is guaranteed to look for it. */}
         <Waiting items={handedOff.filter((x) => stateOf(live[x.handoff!.sessionId]) === "needs")} live={live} />
+        {isToday && <YourMove items={yours} states={states} onDone={(id) => act({ op: "toggle", id, done: true })} />}
+        {isToday && <Blockers groups={blockedGroups} />}
 
         {/* focus */}
         {day.todos.length > 0 && (
@@ -229,7 +244,7 @@ export function Today() {
         {/* to-dos */}
         {(day.todos.length > 0 || isToday) && (
           <Glass className="overflow-hidden">
-            <ul>{shown.map((t, i) => <TodoRow key={t.id} t={t} first={i === 0} live={t.handoff ? live[t.handoff.sessionId] : undefined} watching={isToday}
+            <ul>{shown.map((t, i) => <TodoRow key={t.id} t={t} first={i === 0} state={isToday ? states.get(t.id) : undefined} deps={unmet(day, t)}
               onToggle={() => act({ op: "toggle", id: t.id, done: !t.done })} onRemove={() => act({ op: "remove", id: t.id })}
               onDo={() => handoff("todo", t.id, "do")} />)}</ul>
             <AddTodo first={!shown.length} onAdd={(text) => act({ op: "add", text, focus: filter === "all" ? "other" : filter })} />
@@ -469,7 +484,7 @@ function Done({ qs, outcome, onClose, onHandAll }: { qs: TodayLoop[]; outcome: R
 }
 
 // ── rows ─────────────────────────────────────────────────────────────────────────────────────────
-function TodoRow({ t, first, live, watching, onToggle, onRemove, onDo }: { t: TodayTodo; first: boolean; live?: LiveTile; watching: boolean; onToggle: () => void; onRemove: () => void; onDo: () => Promise<unknown> }) {
+function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo }: { t: TodayTodo; first: boolean; state?: TaskState; deps: TodayTodo[]; onToggle: () => void; onRemove: () => void; onDo: () => Promise<unknown> }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -484,16 +499,21 @@ function TodoRow({ t, first, live, watching, onToggle, onRemove, onDo }: { t: To
           <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: FOCUS[fkey(t.focus)].color }} />
           <span className={`min-w-0 flex-1 text-[15px] font-medium leading-snug ${t.done ? "line-through" : ""}`} style={{ color: t.done ? K.faint : K.ink, textDecorationColor: K.line2 }}>
             <Inline text={titleOf(t)} /></span>
-          {t.handoff && (watching ? <StateChip state={stateOf(live)} />
-            : <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.accent, 22), color: K.accentBright, fontFamily: "var(--today-mono)" }}>MINAMI</span>)}
+          {state && state.s !== "todo" && state.s !== "done" ? <TaskChip s={state.s} />
+            : t.handoff && !state ? <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.accent, 22), color: K.accentBright, fontFamily: "var(--today-mono)" }}>MINAMI</span> : null}
+          {state?.drift && <span title={state.drift} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix("#ff8a8d", 16), color: "#ff8a8d", fontFamily: "var(--today-mono)" }}>⚠ DRIFT</span>}
           {t.done && t.done_by === "auto" && <span title={t.done_evidence} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.cat3, 22), color: "#f3c766", fontFamily: "var(--today-mono)" }}>AUTO</span>}
           {!t.done && t.progress && <span title={t.progress.detail} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px] tabular-nums" style={{ background: "rgba(255,255,255,.06)", color: K.muted, fontFamily: "var(--today-mono)" }}>{t.progress.met}/{t.progress.total}</span>}
           {t.est_min ? <span className="shrink-0 tabular-nums" style={{ color: K.faint, fontFamily: "var(--today-mono)", fontSize: 11 }}>{t.est_min}m</span> : null}
           <span className="shrink-0 text-[12px] transition-transform" style={{ color: K.faint, transform: open ? "rotate(90deg)" : "none" }}>›</span>
         </button>
       </div>
+      {/* The one line that says where this stands — visible without opening the row. */}
+      {state?.why && !open && <p className="-mt-2 truncate pb-3 pl-[56px] pr-5 text-[12.5px] leading-snug" style={{ color: TASK[state.s].color }}>{state.why}</p>}
       {open && (
         <div className="flex flex-col gap-3 pb-4 pl-[56px] pr-5">
+          {state?.why && <p className="text-[13px] leading-snug" style={{ color: TASK[state.s].color }}>{TASK[state.s].label.toLowerCase()}: {state.why}</p>}
+          {state?.drift && <p className="text-[13px] leading-snug" style={{ color: "#ff8a8d" }}>⚠ {state.drift}</p>}
           {detail && <p className="text-[13.5px] leading-relaxed" style={{ color: K.muted }}><Inline text={detail} /></p>}
           {t.why && <p className="text-[13px] leading-snug" style={{ color: K.faint }}><Inline text={t.why} /></p>}
           {!t.done && t.progress && <p className="text-[13px] leading-snug" style={{ color: K.faint }}>Ticks itself when all {t.progress.total} checks pass — {t.progress.detail}.</p>}
@@ -507,12 +527,123 @@ function TodoRow({ t, first, live, watching, onToggle, onRemove, onDo }: { t: To
           <div className="flex flex-wrap items-center gap-2">
             {t.handoff
               ? <Link href={`/?open=${t.handoff.sessionId}`} className="inline-flex"><PillButton tone="paper" small>Open Minami's chat →</PillButton></Link>
+              : deps.length ? <span className="text-[12.5px]" style={{ color: K.faint }}>Minami can start this after: {deps.map((d) => titleOf(d)).join(", ")}</span>
               : <PillButton tone="accent" cap small disabled={busy || t.done} onClick={async () => { setBusy(true); await onDo(); setBusy(false); }}>{busy ? "Starting…" : "Do it with Minami"}</PillButton>}
             <button onClick={onRemove} className="ml-auto text-[12.5px] hover:text-white" style={{ color: K.faint }}>Drop</button>
           </div>
         </div>
       )}
     </li>
+  );
+}
+
+// ── task status (§26) ───────────────────────────────────────────────────────────────────────────
+// The chip used to say what the CHAT was doing (working / replied). What matters is the TASK: done,
+// on you, blocked, waiting on another task. "Replied" hid all three.
+type TaskState = { s: "done" | "yours" | "needs" | "blocked" | "working" | "waiting" | "check" | "todo"; why?: string; drift?: string };
+const TASK: Record<TaskState["s"], { label: string; color: string; dot: string }> = {
+  needs: { label: "NEEDS YOU", color: "#ffd27a", dot: "●" },
+  yours: { label: "YOUR MOVE", color: "#ffd27a", dot: "→" },
+  blocked: { label: "BLOCKED", color: "#ff8a8d", dot: "■" },
+  working: { label: "WORKING", color: K.accentBright, dot: "◌" },
+  waiting: { label: "AFTER", color: K.faint, dot: "⏸" },
+  check: { label: "READ REPLY", color: K.accent2, dot: "✉" },
+  done: { label: "DONE", color: "#8fe0b8", dot: "✓" },
+  todo: { label: "TO DO", color: K.faint, dot: "" },
+};
+
+function unmet(day: TodayDay, t: TodayTodo): TodayTodo[] {
+  return (t.after ?? []).map((id) => day.todos.find((x) => x.id === id)).filter((x): x is TodayTodo => !!x && !x.done);
+}
+
+function taskState(t: TodayTodo, day: TodayDay, st: ItemStatus | undefined, tile: LiveTile | undefined): TaskState {
+  const d = st?.drift;
+  const drift = d ? [d.longMin ? `running ${Math.floor(d.longMin / 60)}h ${d.longMin % 60}m` : "", d.outside?.length ? `edited outside its folder: ${d.outside.join(", ")}` : ""].filter(Boolean).join(" · ") : undefined;
+  if (t.done) return { s: "done", why: t.done_by === "minami" ? "Minami reported it done" : t.done_by === "auto" ? t.done_evidence : undefined };
+  const deps = unmet(day, t);
+  if (deps.length && !t.handoff) return { s: "waiting", why: `after ${deps.map((x) => titleOf(x)).join(", ")}` };
+  if (tile?.need) return { s: "needs", why: tile.need.summary, drift };
+  if (tile?.busy) return { s: "working", drift };
+  const o = st?.outcome;
+  if (o?.stale) return { s: "check", why: `Minami said "${o.state}${o.why ? ` — ${o.why}` : ""}", then wrote more — read the chat`, drift };
+  if (o?.state === "yours") return { s: "yours", why: o.why || "Minami's part is done — over to you", drift };
+  if (o?.state === "blocked") return { s: "blocked", why: o.why || "blocked", drift };
+  if (t.handoff && st && !o) return { s: "check", why: "Minami replied without a status — read the chat", drift };
+  if (t.progress) return { s: "todo", why: `${t.progress.met}/${t.progress.total} checks pass — ${t.progress.detail}` };
+  return { s: "todo" };
+}
+
+/** Same blocker, one group: "no prod CMS target — 3 tasks". Chats are asked to name a blocker the same
+ *  way every time; grouping is on the lower-cased words, so case and punctuation don't split a group. */
+function groupBlockers(items: { t: TodayTodo; why?: string }[]): { why: string; ts: TodayTodo[] }[] {
+  const g = new Map<string, { why: string; ts: TodayTodo[] }>();
+  for (const { t, why } of items) {
+    const w = (why || "blocked").trim();
+    const k = w.toLowerCase().replace(/[^\p{L}\p{N} ]+/gu, "").replace(/\s+/g, " ").trim();
+    (g.get(k) ?? g.set(k, { why: w, ts: [] }).get(k)!).ts.push(t);
+  }
+  return [...g.values()].sort((a, b) => b.ts.length - a.ts.length);
+}
+
+function TaskChip({ s }: { s: TaskState["s"] }) {
+  const v = TASK[s];
+  return <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] ${s === "working" ? "animate-pulse" : ""}`}
+    style={{ background: mix(v.color, 18), color: v.color, fontFamily: "var(--today-mono)" }}>{v.dot ? `${v.dot} ` : ""}{v.label}</span>;
+}
+
+/** The day in one honest line: what's done, what's on him, what's stuck — not just a tick count. */
+function Summary({ counts }: { counts: Record<TaskState["s"], number> }) {
+  const order: TaskState["s"][] = ["done", "needs", "yours", "blocked", "working", "check", "waiting", "todo"];
+  const words: Record<TaskState["s"], string> = { done: "done", needs: "need you", yours: "your move", blocked: "blocked", working: "working", check: "to read", waiting: "waiting", todo: "to do" };
+  const parts = order.filter((k) => counts[k]);
+  return (
+    <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[12px]" style={{ fontFamily: "var(--today-mono)" }}>
+      {parts.map((k) => <span key={k} style={{ color: TASK[k].color }}>{counts[k]} {words[k]}</span>)}
+    </div>
+  );
+}
+
+/** Minami finished its part; only he can finish the task. Each says what, in the chat's words. */
+function YourMove({ items, states, onDone }: { items: TodayTodo[]; states: Map<string, TaskState>; onDone: (id: string) => void }) {
+  if (!items.length) return null;
+  return (
+    <Glass className="flex flex-col gap-3 px-5 py-5">
+      <Eyebrow>{items.length === 1 ? "1 THING IS YOUR MOVE" : `${items.length} THINGS ARE YOUR MOVE`}</Eyebrow>
+      {items.map((t) => (
+        <div key={t.id} className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[12px]" style={{ color: K.faint, fontFamily: "var(--today-mono)" }}>{titleOf(t)}</div>
+            <div className="text-[15px] font-semibold leading-snug" style={{ color: K.ink }}><Inline text={states.get(t.id)?.why || ""} /></div>
+            {t.handoff && <Link href={`/?open=${t.handoff.sessionId}`} className="text-[12.5px]" style={{ color: K.accentBright }}>Open Minami's chat →</Link>}
+          </div>
+          <PillButton tone="paper" small onClick={() => onDone(t.id)}>Done</PillButton>
+        </div>
+      ))}
+    </Glass>
+  );
+}
+
+/** Tasks stuck on the same thing, together — yesterday's story was one line: three publish tasks, one
+ *  missing prod CMS target. */
+function Blockers({ groups }: { groups: { why: string; ts: TodayTodo[] }[] }) {
+  if (!groups.length) return null;
+  const n = groups.reduce((a, g) => a + g.ts.length, 0);
+  return (
+    <Glass className="flex flex-col gap-3 px-5 py-5">
+      <Eyebrow>{n === 1 ? "1 TASK IS BLOCKED" : `${n} TASKS ARE BLOCKED`}</Eyebrow>
+      {groups.map((g) => (
+        <div key={g.why} className="flex flex-col gap-1">
+          <div className="text-[15px] font-semibold leading-snug" style={{ color: "#ff8a8d" }}>
+            ■ {g.why}{g.ts.length > 1 ? <span style={{ color: K.faint, fontWeight: 400 }}> · {g.ts.length} tasks</span> : null}</div>
+          {g.ts.map((t) => (
+            <div key={t.id} className="flex items-center gap-2 text-[13px]" style={{ color: K.muted }}>
+              <span className="min-w-0 flex-1 truncate">{titleOf(t)}</span>
+              {t.handoff && <Link href={`/?open=${t.handoff.sessionId}`} className="shrink-0" style={{ color: K.accentBright }}>chat →</Link>}
+            </div>
+          ))}
+        </div>
+      ))}
+    </Glass>
   );
 }
 
