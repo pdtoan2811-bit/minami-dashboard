@@ -275,3 +275,40 @@ morning's hand-offs under the new contract.
 > the end, so all four of Oct 13's lines were absent from the data the judge was shown. **Fix:**
 > parse the transcript (above). today-sync keeps its job for to-dos with no hand-off.
 
+## "Done" with nothing on ecvision.ai (2026-10-13)
+
+Thomas: *"those articles are not on production ecvision.ai — check why it's done"*. The public sitemap
+(`api.ecvision.ai/api/v1/content/sitemap`) listed **0** posts while the page showed four ticks under a
+"publish before Black Friday" headline.
+
+- **Every tick was a step.** Finish the draft, add a section, check the dates, queue a topic: each
+  done, none of them "live". Only the carried "Publish the discount-calendar pieces" had `live`
+  checks, and it correctly read 0/3.
+- **Publishing was Thomas's tap by design.** The ecvisionContent rule was that agents never call
+  `publish_article`, and the page never said the last step was his.
+- **"Proposed" meant three things.** Prod was wired at 09:04 (`env/prod.env`), but the pipeline
+  defaults to bench. Three drafts were in the prod CMS. Seven, the price-cut piece among them, were in
+  bench only, which reaches nobody. The heartbeat ran without `CONTENT_ENV`, so it concluded "no prod
+  target" anyway.
+- **A tick landed mid-stage.** "Add a BFCM section" was ticked by the vault judge while verify was
+  still running.
+
+**What changed.** Thomas: *"can publish using agent already - no more tap"*.
+- **The first three went live (verified in the sitemap and HTTP 200).** The ecvision-content skill,
+  ecvisionContent's CLAUDE.md and the pipeline now say agents publish on prod only, after gates,
+  on the Today stagger, confirmed in the sitemap.
+- **vault `bin/content-funnel.mjs`:** per draft live / prod_waiting / bench_only / in_progress,
+  from the sitemap and `proposed.json` / `gate.env`. today-sync writes it to `day.pipeline.seo`
+  every 10 min, and the page shows it as one line under the hero ("SEO 3 live on ecvision.ai · 5 on
+  bench only · 3 in progress"). The heartbeat gets it as facts, and `hasProd()` replaces the
+  `CONTENT_ENV` guess.
+- **The heartbeat prompt plans the outcome:** a publishing headline needs a to-do with `live`
+  checks. Bench-only drafts need "re-propose on prod" first. Publishing goes in "Publish <slug>"
+  to-dos, at most 2 a day unless the strategy says otherwise.
+- **The today-sync judge** gets `drafts_now`. A draft whose stage is running or failed isn't done,
+  and only `live` is published.
+- **pump.mjs:** a prod run sets a bench `proposed.json`/`card.md` aside first. Without that, all 8
+  drafts failed: the stage chased the bench article id on prod and got a 404. The three that had
+  reached prod got there only because their bench files had been renamed by hand. The gate now
+  records `env`.
+

@@ -202,6 +202,7 @@ export function Today() {
         <Glass className="flex flex-col items-center gap-5 px-6 py-7 text-center sm:px-9">
           <Pills n={Math.max(day.todos.length, 1)} filled={done} max={9} />
           {day.todos.length > 0 && <Summary counts={counts} />}
+          {day.pipeline?.seo && <Funnel seo={day.pipeline.seo} />}
           <Eyebrow>{eyebrowDate(day.date)}{day.status === "ready" && day.built_at ? ` · PLANNED ${hhmm(day.built_at)}` : ""}</Eyebrow>
           {!planned && <Title size="m">{isToday ? "No plan yet." : day.status === "none" ? "Nothing was recorded." : "No plan was built."}</Title>}
           {day.status === "running" && !day.headline && <Title size="m">Reading your pipelines…</Title>}
@@ -599,6 +600,26 @@ function Summary({ counts }: { counts: Record<TaskState["s"], number> }) {
   return (
     <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[12px]" style={{ fontFamily: "var(--today-mono)" }}>
       {parts.map((k) => <span key={k} style={{ color: TASK[k].color }}>{counts[k]} {words[k]}</span>)}
+    </div>
+  );
+}
+
+/** The SEO pipeline in one line — what's actually on ecvision.ai, not what was "proposed". On
+ *  2026-10-13 the page showed four ticks under "publish before Black Friday" with nothing live; this
+ *  line would have read "0 live · 8 on bench only". */
+function Funnel({ seo }: { seo: NonNullable<NonNullable<TodayDay["pipeline"]>["seo"]> }) {
+  const c = seo.counts;
+  const parts: [number, string, string, string | undefined][] = [
+    [c.live, "live on ecvision.ai", "#8fe0b8", undefined],
+    [c.prod_waiting, "in the prod CMS, not live", "#ffd27a", seo.waiting?.join("\n")],
+    [c.bench_only, "on bench only", "#ff8a8d", seo.bench?.join("\n")],
+    [c.in_progress, "in progress", K.faint, undefined],
+  ];
+  return (
+    <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[12px]" style={{ fontFamily: "var(--today-mono)" }}
+      title={`SEO pipeline, checked ${hhmm(seo.at)}`}>
+      <span style={{ color: K.faint }}>SEO</span>
+      {parts.filter(([n]) => n > 0).map(([n, w, col, tip]) => <span key={w} title={tip} style={{ color: col }}>{n} {w}</span>)}
     </div>
   );
 }

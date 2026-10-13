@@ -22,7 +22,10 @@ export type TodayTodo = { id: string; title?: string; text: string; handoff?: Ha
   done_when?: Record<string, unknown>[]; progress?: { met: number; total: number; detail: string }; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
 export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; recommended?: number; question: string; context?: string; focus?: string; folder?: string; multiSelect?: boolean;
   options: { label: string; description?: string }[]; resolved: null | { answer: string | string[]; at: string } };
-export type TodayDay = { date: string; status: "running" | "ready" | "facts-only" | "none"; built_at: string | null; started_at?: string; usd: number | null; error?: string | null; carried?: boolean;
+/** Where the content pipeline's drafts stand, written by vault bin/today-sync.mjs every 10 min from
+ *  bin/content-funnel.mjs: live (public sitemap) / prod_waiting / bench_only / in_progress. */
+export type Pipeline = { seo?: { at: string; live_ok: boolean; counts: { live: number; prod_waiting: number; bench_only: number; in_progress: number }; waiting?: string[]; bench?: string[] } };
+export type TodayDay = { pipeline?: Pipeline; date: string; status: "running" | "ready" | "facts-only" | "none"; built_at: string | null; started_at?: string; usd: number | null; error?: string | null; carried?: boolean;
   dropped?: string[]; // ids he dropped — the heartbeat won't re-suggest them on a Rebuild
   headline: string; focus: { id: string; name: string; status: string }[]; todos: TodayTodo[]; loops: TodayLoop[];
   research: { title: string; url: string; takeaway: string; focus?: string }[]; log: { at: string; kind: string; text: string }[] };
