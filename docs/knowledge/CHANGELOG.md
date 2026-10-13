@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-13
+- **Today: the SEO funnel, and agents publish** (§26). The page shows "SEO N live · N in the prod CMS · N on bench only · N in progress" from vault `content-funnel.mjs` via today-sync (`day.pipeline.seo`). The first 3 posts are live on ecvision.ai, published by an agent at Thomas's word; the skill, the workspace rules and the heartbeat prompt now plan "live", re-propose bench drafts on prod, and stagger publishing. The vault judge won't tick a draft mid-stage. pump.mjs sets bench proposals aside on a prod run.
 - **Today: task status** (§26, `lib/today-status.ts`). Each row says where the TASK stands (needs you / your move / blocked / working / after / read reply / done), with the reason on a line under the title. The status line is read from each hand-off's transcript; it used to come from the 320-char ledger, which cut it off, so Oct 13's four "TODAY: done" went unseen. The contract adds `yours` and `blocked`, and a stale line never ticks. Shared blockers are grouped, "Your move" has its own card, and the hero shows the real split. The heartbeat writes `after` dependencies (vault prompt + `normalise`); dependent tasks wait to start. Drift ⚠ at ≥ 2 h or ≥ 3 edits outside the folder. `done_when` checks (written by a hand-off chat) committed alongside.
 
 ### 2026-10-12
