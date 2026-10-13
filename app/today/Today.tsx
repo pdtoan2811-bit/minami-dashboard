@@ -487,6 +487,7 @@ function TodoRow({ t, first, live, watching, onToggle, onRemove, onDo }: { t: To
           {t.handoff && (watching ? <StateChip state={stateOf(live)} />
             : <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.accent, 22), color: K.accentBright, fontFamily: "var(--today-mono)" }}>MINAMI</span>)}
           {t.done && t.done_by === "auto" && <span title={t.done_evidence} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.cat3, 22), color: "#f3c766", fontFamily: "var(--today-mono)" }}>AUTO</span>}
+          {!t.done && t.progress && <span title={t.progress.detail} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px] tabular-nums" style={{ background: "rgba(255,255,255,.06)", color: K.muted, fontFamily: "var(--today-mono)" }}>{t.progress.met}/{t.progress.total}</span>}
           {t.est_min ? <span className="shrink-0 tabular-nums" style={{ color: K.faint, fontFamily: "var(--today-mono)", fontSize: 11 }}>{t.est_min}m</span> : null}
           <span className="shrink-0 text-[12px] transition-transform" style={{ color: K.faint, transform: open ? "rotate(90deg)" : "none" }}>›</span>
         </button>
@@ -495,6 +496,7 @@ function TodoRow({ t, first, live, watching, onToggle, onRemove, onDo }: { t: To
         <div className="flex flex-col gap-3 pb-4 pl-[56px] pr-5">
           {detail && <p className="text-[13.5px] leading-relaxed" style={{ color: K.muted }}><Inline text={detail} /></p>}
           {t.why && <p className="text-[13px] leading-snug" style={{ color: K.faint }}><Inline text={t.why} /></p>}
+          {!t.done && t.progress && <p className="text-[13px] leading-snug" style={{ color: K.faint }}>Ticks itself when all {t.progress.total} checks pass — {t.progress.detail}.</p>}
           {t.done && t.done_by === "auto" && t.done_evidence && <p className="text-[13px] leading-snug" style={{ color: "#f3c766" }}>Ticked automatically — {t.done_evidence} Untick it if that's wrong; it won't be ticked again.</p>}
           <div className="flex flex-wrap items-center gap-2 text-[11.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
             {t.folder && <span className="rounded-full px-2.5 py-1" style={{ background: "rgba(255,255,255,.06)" }}>{t.folder}</span>}
