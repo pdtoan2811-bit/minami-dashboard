@@ -224,7 +224,7 @@ async function shrinkPhoto(f: File): Promise<File> {
   } catch { return f; }
 }
 
-export default function Composer({ value, onChange, onSubmit, placeholder, disabled, pickPhotoRef }: {
+export default function Composer({ value, onChange, onSubmit, placeholder, disabled, pickPhotoRef, insertTextRef }: {
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
@@ -234,6 +234,10 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
    *  menu lives in the pane, but the upload and the caret insertion live here, so the menu borrows
    *  this rather than a second copy of either. */
   pickPhotoRef?: React.MutableRefObject<(() => void) | null>;
+  /** Filled with "insert this text at the caret" — how a transcribed voice note lands in the box
+   *  (components/VoiceButton.tsx). Same contract as a pasted path: the textarea stays the only source
+   *  of truth, and the text goes where the caret is NOW, since he may have typed while it transcribed. */
+  insertTextRef?: React.MutableRefObject<((t: string) => void) | null>;
 }) {
   const touchOnly = useMediaQuery("(hover: none) and (pointer: coarse)");
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -406,6 +410,16 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
   // and Files; there is no web API that reaches the gallery any other way.
   const photoRef = useRef<HTMLInputElement>(null);
   if (pickPhotoRef) pickPhotoRef.current = () => photoRef.current?.click();
+  if (insertTextRef) insertTextRef.current = (t: string) => {
+    const el = ref.current;
+    if (!el) { onChange(value ? `${value} ${t}` : t); return; }
+    const at = el.selectionStart ?? el.value.length;
+    const before = el.value.slice(0, at), after = el.value.slice(at);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const tail = after && !/^\s/.test(after) ? " " : "";
+    replaceRange(el, at, at, `${lead}${t}${tail}`);
+    el.focus();
+  };
   const onPhotos = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     e.target.value = ""; // so picking the same photo twice still fires a change

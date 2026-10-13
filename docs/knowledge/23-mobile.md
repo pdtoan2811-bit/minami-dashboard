@@ -511,6 +511,38 @@ was three rows with three unrelated AI titles; two of five focus slots were two 
 > ids at 8 and the three-TASK limit is enforced in the sheet — a limit on tasks must never be applied to
 > a list of sessions.
 
+### Voice notes — 🎤 in the composer (`components/VoiceButton.tsx`, `/api/agent/transcribe`)
+
+Thomas, 2026-10-13: *"on phone I want a voice recording input, not by keyboard voice, and see if claude
+can transcribe vietnamese audio"*.
+
+- **Claude can't take audio.** Claude models accept text and images only, so a recording can't be
+  handed to the chat. The workaround is the meeting ear (§17, `omni:google/gemini-3.8-flash` via
+  `resolveMode(null).transcribe`). It was chosen on 2026-09-29 by benching his own
+  Vietnamese-with-English-terms speech, and its prompt already says to transcribe verbatim, keep the
+  English terms in English, and return nothing for silence.
+- **The flow:** tap 🎤 (next to 📎, on phone and desk) to record, with a timer, level bar, ✕ to
+  discard and ■ to stop. The audio goes to `/api/agent/transcribe` and the text is inserted **at the
+  caret** (`Composer`'s `insertTextRef`, the same contract as a pasted path). He reads it and sends it
+  himself; nothing is sent by the button.
+- **Capture is 16 kHz mono WAV built in the browser** (`lib/pcm-client.ts`, the same decimation as
+  `/meet`). Android Chrome's MediaRecorder gives WebM/Opus, which the OpenRouter audio models don't
+  take.
+- **Long notes are split** every 45 s at the quietest 50 ms within ±1.5 s, so no word is cut,
+  transcribed 3 at a time, and joined. One long call is where the omni ear has looped before. The
+  limit is 10 min; `/meet` is for anything longer. The ear's vocabulary file supplies spelling hints
+  and its fixes are applied (`loadVocab`, `correctLines`).
+- **Why not the keyboard's voice typing:** it transcribes word by word, mangles mixed Vietnamese and
+  English, and loses the text if the keyboard closes.
+
+Verified 2026-10-13 on the preview build, with his own clips from `~/.minami/stt-samples`:
+- **9 s English:** correct, 3.3 s.
+- **76 s mixed Vietnamese/English:** 2 pieces, 6.9 s, diacritics intact, nothing translated.
+- **At 412×915 with a stubbed mic:** the recording pill rendered, and after ■ the text appeared in a
+  real chat's composer. Sends were blocked in the test.
+- **Not yet tried on the real Find N5 / Flip 7.** The page must be on the tailnet HTTPS address, or
+  the browser won't grant the mic.
+
 ### How to re-audit
 
 There is no checked-in harness. The audit was two throwaway Playwright scripts (route × viewport

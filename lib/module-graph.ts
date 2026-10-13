@@ -55,6 +55,7 @@ export const NODES: ModuleNode[] = [
   { id: "app/browser", label: "/browser/[id]", sub: "popped-out browser panel", layer: "surface", row: 5, pipeline: "live" },
 
   // ── components ──────────────────────────────────────────────────────────
+  { id: "c/VoiceButton", label: "VoiceButton.tsx", sub: "🎤 voice note → meeting ear\n→ text at the caret", layer: "component", row: 1, pipeline: "live" },
   { id: "c/Composer", label: "Composer", sub: "message input + mode", layer: "component", row: 0, pipeline: "live" },
   { id: "c/AskCard", label: "AskCard", sub: "AskUserQuestion wizard", layer: "component", row: 1, pipeline: "live" },
   { id: "c/AskTeamCard", label: "AskTeamCard", sub: "ask_team mirror (read-only)", layer: "component", row: 1, pipeline: "live" },
