@@ -157,6 +157,33 @@ happened (hash of the open list + evidence in `.sync-state.json`). `topics/publi
 as NOT proof of publishing — it lists topics the pipeline used, and the first dry run read it as
 "published" (held back only by the threshold). `--dry` prints verdicts; `--force` ignores the hash.
 
+### Checked to-dos — `done_when` (2026-10-13)
+
+Thomas: *"reason on how today minami dashboard need to mark this one as done when this one is done and
+do it for other tasks"*, about "Publish the discount-calendar and price-drop pieces". The model judge
+couldn't do it: publishing in `/admin/content` leaves no local trace (no ledger turn, no gate change,
+no commit), so it would never see the outcome. Also, a day file starts empty, so the next morning's
+plan could suggest a finished item again.
+
+- **The mechanism:** a to-do may carry `done_when`, a list of declarative checks written by the
+  heartbeat. They live in `~/secondBrain/bin/today-checks.mjs`.
+  - `live` checks ecvision.ai's public sitemap at `api.ecvision.ai/api/v1/content/sitemap`. It needs
+    no credentials and lists only live articles (ADR-0034 rule 2).
+  - `url` (https only), `file` (under `$HOME`, optionally written today), `gate` (a draft's last
+    gate entry) and `commit` (today, `-F --grep`).
+  - There is no shell or http check, because a model writes these; `cleanChecks` drops anything else.
+- **today-sync** runs a to-do's checks every 10 min, before the hash early-return, because they cost
+  nothing. When all pass it ticks with `Checked: …` evidence. Otherwise it stores
+  `progress {met,total,detail}`, which the page shows as a `2/3` chip plus a line in the detail.
+  These to-dos never go to the model, so the judge cannot tick them wrongly.
+- **The heartbeat** prompt asks for `done_when` on every to-do with a checkable outcome.
+  `normalise` cleans it, `factsPlan`'s "Review and publish" items get a `live` check, and `main`
+  runs the checks on the new plan and drops suggestions that already pass. That last step is the
+  resurrection fix.
+- **A partial result keeps its progress.** A check that couldn't run (network, sitemap 5xx) is
+  `unsure` and leaves progress untouched.
+- **First user:** to-do `f110e18b`, carried into 2026-10-13 with three `live` checks.
+
 ## Gotchas
 
 - His shell exports `PORT=3000` and `NODE_ENV=production`; `minami-open.sh` unsets both, and the

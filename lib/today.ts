@@ -11,7 +11,9 @@ import { spawn } from "node:child_process";
 
 /** `cwd` is where the chat actually runs — a worktree when the repo isolates, else the folder itself. */
 type HandoffMark = { how: "do" | "decide" | "ask"; sessionId: string; at: string; to?: string; cwd?: string };
-export type TodayTodo = { id: string; title?: string; text: string; handoff?: HandoffMark; manual?: boolean; done_by?: "auto"; done_evidence?: string; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
+export type TodayTodo = { id: string; title?: string; text: string; handoff?: HandoffMark; manual?: boolean; done_by?: "auto"; done_evidence?: string;
+  /** Machine checks that tick it (secondBrain/bin/today-checks.mjs); `progress` is their last partial result. */
+  done_when?: Record<string, unknown>[]; progress?: { met: number; total: number; detail: string }; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
 export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; recommended?: number; question: string; context?: string; focus?: string; folder?: string; multiSelect?: boolean;
   options: { label: string; description?: string }[]; resolved: null | { answer: string | string[]; at: string } };
 export type TodayDay = { date: string; status: "running" | "ready" | "facts-only" | "none"; built_at: string | null; started_at?: string; usd: number | null; error?: string | null; carried?: boolean;
