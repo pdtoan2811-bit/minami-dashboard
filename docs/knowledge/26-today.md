@@ -146,8 +146,8 @@ Thomas: *"the today page needs a hook or something to show tasks done without me
 `~/secondBrain/bin/today-sync.mjs`, every 10 min (launchd `com.thomas.minami-today-sync`), reads what
 happened today — every chat turn in every folder (the thread ledgers, so work done in a hand-off chat,
 a terminal or a dashboard pane all count), drafts' gate state and today's pipeline runs, renders in
-`~/tiktok-studio/out`, git commits in the to-dos' folders — and asks the models helper's `text` role
-which open to-dos are FINISHED. It ticks at confidence ≥ 0.8 only, stores `done_by: "auto"` and
+`~/tiktok-studio/out`, git commits in the to-dos' folders — and asks **Claude haiku** (`~/secondBrain/70-79 Toolshed/tools/models/claude.mjs`, headless and quarantined)
+which open to-dos are FINISHED. (Until 2026-10-14 it was the models helper's `text` role → OpenRouter `qwen3.8-max-prime`; see the 🐛 below.) It ticks at confidence ≥ 0.8 only, stores `done_by: "auto"` and
 `done_evidence`, and logs it; the page shows an amber AUTO badge and the evidence, and polls every
 60 s while visible. Hand-off chats end with `TODAY: done` / `TODAY: blocked — why`, which it trusts.
 
@@ -312,3 +312,12 @@ Thomas: *"those articles are not on production ecvision.ai — check why it's do
   reached prod got there only because their bench files had been renamed by hand. The gate now
   records `env`.
 
+
+
+> 🐛 **The Today checker drained the OpenRouter credits (2026-10-14).** `today-sync.mjs` asked the models helper's `text`
+> role, which resolved to OpenRouter `qwen3.8-max-prime` ($4/M in, $12/M out, up to 65,536 output tokens), every 10 min
+> whenever the evidence changed (~46 paid calls on 2026-10-13), and once the credits ran out it retried the same failing
+> call every 10 min. Fix: the judge runs on Claude haiku through `models/claude.mjs` (no settings, hooks, plugins or MCP; a
+> 1-line prompt = 9 input tokens); a failed judge stores the evidence hash and waits for new evidence instead of
+> retrying; `models.mjs` `chat()` / `look()` are quarantined (they throw), so OpenRouter is image generation only.
+> Global rule: `~/.claude/CLAUDE.md` "LLM calls inside tools: Claude for text, Qwen for images ONLY".
