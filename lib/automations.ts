@@ -42,9 +42,12 @@ export type Automation = {
   status: "running" | "idle" | "paused" | "failing" | "not-loaded";
   pid?: number; lastExit?: number | null; runs?: number; lastRun?: string | null;
   protected?: boolean; host?: string;
+  pausedAt?: string | null;   // when it was paused from this page
+  upSec?: number | null;      // how long the running process has been up
+  lastLine?: string | null;   // the last thing it wrote to its log — the cheapest sign of life there is
 };
 
-type Meta = Record<string, { name?: string; description?: string; project?: string }>;
+type Meta = Record<string, { name?: string; description?: string; project?: string; pausedAt?: string }>;
 
 const KNOWN: Meta = {
   "com.thomas.minami-bot": { name: "Minami bot", description: "The Slack bot in both workspaces: captures, recall, ideas, and the video-plan card. Pausing it takes Minami off Slack.", project: "Minami" },
@@ -147,6 +150,26 @@ function disabledSet(): Set<string> {
   return new Set([...out.matchAll(/"([^"]+)" => (?:disabled|true)/g)].map((m) => m[1]));
 }
 
+// The last non-empty line of a log, colour codes stripped. Reads only the tail, so a 50 MB log costs nothing.
+function lastLineOf(file?: string): string | null {
+  if (!file) return null;
+  try {
+    const fd = fs.openSync(file, "r"); const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, 4096); const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len); fs.closeSync(fd);
+    const line = buf.toString("utf8").replace(/\x1b\[[0-9;]*m/g, "").split("\n").map((l) => l.trim()).filter(Boolean).pop();
+    return line ? line.replaceAll(HOME, "~").slice(0, 180) : null;
+  } catch { return null; }
+}
+
+// `ps -o etime` is [[dd-]hh:]mm:ss.
+function upSeconds(pid?: number): number | null {
+  if (!pid) return null;
+  const t = tryRun("ps", ["-o", "etime=", "-p", String(pid)]).trim();
+  const m = t.match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  return m ? ((+(m[1] || 0) * 24 + +(m[2] || 0)) * 60 + +m[3]) * 60 + +m[4] : null;
+}
+
 function logTime(file?: string): string | null {
   if (!file) return null;
   try { return fs.statSync(file).mtime.toISOString(); } catch { return null; }
@@ -172,13 +195,16 @@ export function list(): Automation[] {
     items.push({ id: label, kind: "launchd", name: m.name || label.slice(PREFIX.length), description: m.description || "", project: m.project,
       schedule: s, scheduleText: describeSchedule(s), nextRun: status === "paused" ? null : nextRun(s, lastRun),
       command: args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ").replaceAll(HOME, "~"), workdir: p.WorkingDirectory?.replace(HOME, "~"),
-      log: p.StandardOutPath, status, pid: st.pid, lastExit: st.lastExit ?? null, runs: st.runs, lastRun, protected: PROTECTED.has(label) });
+      log: p.StandardOutPath, status, pid: st.pid, lastExit: st.lastExit ?? null, runs: st.runs, lastRun, protected: PROTECTED.has(label),
+      pausedAt: status === "paused" ? m.pausedAt ?? null : null, upSec: upSeconds(st.pid), lastLine: lastLineOf(p.StandardOutPath || p.StandardErrorPath) });
   }
   for (const j of INPROC) {
     const host = items.find((i) => i.id === j.host);
     const m = meta[j.id] || {};
-    const paused = fs.existsSync(path.join(PAUSED, j.id));
+    const flag = path.join(PAUSED, j.id);
+    const paused = fs.existsSync(flag);
     items.push({ ...j, name: m.name || j.name, description: m.description || j.description,
+      pausedAt: paused ? fs.readFileSync(flag, "utf8").trim() || null : null,
       status: paused ? "paused" : !host || host.status === "paused" || host.status === "not-loaded" ? "not-loaded" : "idle" });
   }
   return items;
@@ -204,6 +230,7 @@ export function pause(id: string) {
   assertLabel(id);
   sh("launchctl", ["disable", `${DOMAIN}/${id}`]);
   bootout(id);
+  const meta = readMeta(); meta[id] = { ...meta[id], pausedAt: new Date().toISOString() }; writeMeta(meta);
 }
 
 export function resume(id: string) {
@@ -211,6 +238,7 @@ export function resume(id: string) {
   assertLabel(id);
   sh("launchctl", ["enable", `${DOMAIN}/${id}`]);
   bootstrap(id);
+  const meta = readMeta(); if (meta[id]) { delete meta[id].pausedAt; writeMeta(meta); }
 }
 
 export function runNow(id: string) {

@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-14
+- **Automations: redesign** (§27). Added a 24-hour lane timeline, a next-up countdown, status filter chips, and cards with a status stripe, pulse, uptime, paused-since and the last log line. Each card now has a switch, ▶ and a ⋯ menu, plus a toast with Undo. *Reported by user: "better UI UX and visual clues".*
 - **Ideas: `/ideas` + DM capture in Slack** (§28, `app/ideas/*`, `lib/ideas.ts`, `app/api/ideas/*`; bot: `~/Minami/src/ideas.js`, `bin/ideas-add.mjs`). Links, memes, screenshots and thoughts DMed to Minami (auto-detected save vs. ask) or dropped on the page are read and tagged by Haiku and ranked hot/warm/cold by recency, echo and touch. The Today look moved to `app/today/ui.tsx` so both pages share it; Today's nav gains Ideas. Same day: Minami itself moved from the Hetzner box to this Mac (launchd `com.thomas.minami-bot`).
   *Requested by user: "a hub to store news I read or find funny, that can be used to brainstorm new ideas every day".*
 - **Automations page** (§27, new: `app/automations`, `app/api/automations`, `lib/automations.ts`). One place for every unattended job: launchd `com.thomas.*` plus the Minami bot's video-plan loop, with run, pause, edit, create, delete and restore. *Asked for by user: "a place to handle, list all autonomous things like these and CRUD, pause etc".*

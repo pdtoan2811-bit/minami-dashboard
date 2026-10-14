@@ -32,6 +32,35 @@ The one consumer outside the repo is `~/Minami/src/videoPlan.js`, which checks t
 - Ids must match `^com\.thomas\.[a-z0-9.-]+$`, and every call is `execFile` with no shell, so an id from
   the client can't reach another domain or inject a command.
 
+## The page (redesign, 2026-10-14)
+
+The first version was a list of rows with five buttons each. Thomas: "better UI UX and visual clues".
+Read top to bottom, the page now answers four questions in order:
+- **What fires when.** "Your 24 hours" has one lane per project, running 06:00 → 06:00 so the night's
+  video chain (20:00 → 21:30 → 00:30) isn't cut at midnight.
+  - Fixed times are glowing dots joined by a line.
+  - `every N` jobs are a dotted band; always-on jobs are a solid one.
+  - A paused job is a hollow, dashed dot; a failed one is red.
+  - Two times within ~2 h step their labels onto a second line.
+  - Clicking anything jumps to its card and flashes it.
+- **What's next.** A live countdown, plus whatever is running right now.
+- **Is anything wrong.** Filter chips with counts. "Failed" always shows, as a green "✓ Nothing failed"
+  when the count is zero, so its absence is information.
+- **Each job's state**, carried by colour and motion before words:
+  - the left stripe and the pill;
+  - a pulsing dot plus "up 3 h" while a process runs;
+  - a hatched, dimmed card plus "paused 2 h ago";
+  - the last line the job wrote to its log (red when it failed). It's the cheapest sign of life there
+    is, and clicking it opens the full log.
+
+**Controls:** each card has an on/off switch, a ▶ button and a ⋯ menu (Edit / Full log / Delete).
+Pause, delete and restore show a toast; pause and delete offer **Undo**.
+
+The server side added three fields per job:
+- `pausedAt`: stored in `meta.json` on pause; for an in-process job, it's the content of its flag file.
+- `upSec`: from `ps -o etime`.
+- `lastLine`: read from the last 4 KB of the log only.
+
 ## Gotchas
 
 - **Status `NOT LOADED` is real, not a bug.** On 2026-10-14, `minami-login` was not loaded in the GUI
