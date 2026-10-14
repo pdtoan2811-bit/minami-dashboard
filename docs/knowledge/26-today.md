@@ -253,6 +253,17 @@ So the page shows what the **task** is doing, not what the chat is doing:
 - **The contract** (`STATUS_CONTRACT`, in the hand-off message): `done` / `yours — <the one thing
   only I can do>` / `blocked — <under 8 words, worded the same every time>`. The line is repeated on
   any later message, so the latest message always carries it.
+- **Decisions carried out are tasks too (2026-10-14).** A question handed to Minami with `decide`
+  ("I decided: X. Now carry it out") gets the same contract and the same tick: `reconcile` sets
+  `done / done_by: "minami"` on the loop, and the Decisions fold shows the task chip (DONE, YOUR MOVE,
+  BLOCKED…) instead of the chat's live state. `resolved` stays the *answer*; `done` is the *work*.
+  An `ask` hand-off is finished once the card is out, so it keeps the live-state chip and never ticks.
+
+> 🐛 **2026-10-14 — a decision's work could never be marked done.** Reported by user: *"check minami
+> dashboard for a solution to mark task done … for the general of task"*, after the skills-b decision
+> chat finished its work. The `decide` prompt ended at "Now carry it out" with no status line, and
+> `reconcile` only ticked to-dos (`isTodo`). So a decision's chat could finish, commit and close out,
+> and the page still said "finished": the chat's state, not the task's.
 - **Blockers are grouped** by their lower-cased words ("no prod CMS target" and "No prod CMS
   target." are one group), in a card under the hero. "Your move" gets its own card with a Done button.
   The hero shows the honest split, e.g. "1 done · 1 your move · 2 blocked · 2 to read".

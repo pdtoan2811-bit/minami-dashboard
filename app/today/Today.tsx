@@ -260,7 +260,9 @@ export function Today() {
                 <p style={{ color: K.muted }}>{l.question}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="font-semibold">{l.handoff?.how === "ask" ? `Asked ${l.handoff.to}` : [].concat((l.resolved?.answer ?? "") as never).map(plain).join(", ")}</span>
-                  {l.handoff && isToday && <StateChip state={stateOf(live[l.handoff.sessionId])} />}
+                  {/* a decision Minami carries out is a task: done / your move / blocked, not just "chat finished" */}
+                  {l.handoff && l.handoff.how !== "ask" && (l.done || isToday) && <TaskChip s={taskState(l, day, status[l.id], live[l.handoff.sessionId]).s} />}
+                  {l.handoff?.how === "ask" && isToday && <StateChip state={stateOf(live[l.handoff.sessionId])} />}
                   {l.handoff && <Link href={`/?open=${l.handoff.sessionId}`} className="text-[12.5px]" style={{ color: K.accentBright }}>Open chat →</Link>}
                   {!l.handoff && <button className="text-[12.5px]" style={{ color: K.accentBright }} onClick={() => handoff("loop", l.id, "decide", { answer: l.resolved?.answer })}>Hand to Minami →</button>}
                   {/* a handed-off answer belongs to its chat — changing it here would never reach it */}
@@ -555,11 +557,14 @@ const TASK: Record<TaskState["s"], { label: string; color: string; dot: string }
   todo: { label: "TO DO", color: K.faint, dot: "" },
 };
 
-function unmet(day: TodayDay, t: TodayTodo): TodayTodo[] {
+// a to-do, or a decision handed to Minami to carry out — both end in the same task states
+type Tracked = { done?: boolean; done_by?: TodayTodo["done_by"]; done_evidence?: string; handoff?: TodayTodo["handoff"]; after?: string[]; progress?: TodayTodo["progress"] };
+
+function unmet(day: TodayDay, t: Tracked): TodayTodo[] {
   return (t.after ?? []).map((id) => day.todos.find((x) => x.id === id)).filter((x): x is TodayTodo => !!x && !x.done);
 }
 
-function taskState(t: TodayTodo, day: TodayDay, st: ItemStatus | undefined, tile: LiveTile | undefined): TaskState {
+function taskState(t: Tracked, day: TodayDay, st: ItemStatus | undefined, tile: LiveTile | undefined): TaskState {
   const d = st?.drift;
   const drift = d ? [d.longMin ? `running ${Math.floor(d.longMin / 60)}h ${d.longMin % 60}m` : "", d.outside?.length ? `edited outside its folder: ${d.outside.join(", ")}` : ""].filter(Boolean).join(" · ") : undefined;
   if (t.done) return { s: "done", why: t.done_by === "minami" ? "Minami reported it done" : t.done_by === "auto" ? t.done_evidence : undefined };

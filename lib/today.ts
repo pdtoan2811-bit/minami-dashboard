@@ -21,7 +21,9 @@ export type TodayTodo = { id: string; title?: string; text: string; handoff?: Ha
   /** Machine checks that tick it (secondBrain/bin/today-checks.mjs); `progress` is their last partial result. */
   done_when?: Record<string, unknown>[]; progress?: { met: number; total: number; detail: string }; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
 export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; recommended?: number; question: string; context?: string; focus?: string; folder?: string; multiSelect?: boolean;
-  options: { label: string; description?: string }[]; resolved: null | { answer: string | string[]; at: string } };
+  options: { label: string; description?: string }[]; resolved: null | { answer: string | string[]; at: string };
+  /** `resolved` is the decision; `done` is the work it was handed off to (a `decide` chat's "TODAY: done", reconcile). */
+  done?: boolean; done_at?: string; done_by?: "minami"; done_evidence?: string };
 /** Where the content pipeline's drafts stand, written by vault bin/today-sync.mjs every 10 min from
  *  bin/content-funnel.mjs: live (public sitemap) / prod_waiting / bench_only / in_progress. */
 export type Pipeline = { seo?: { at: string; live_ok: boolean; counts: { live: number; prod_waiting: number; bench_only: number; in_progress: number }; waiting?: string[]; bench?: string[] } };
@@ -163,7 +165,7 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
     return { cwd: expand(l.folder), message: `${head}\n\nI don't know the answer to this one, so ask ${m.name}${m.role ? ` (${m.role})` : ""} for me with the ask_team tool: assignee "${m.key}", mode "fire" (don't wait). I've already confirmed sending it by tapping "Ask ${m.name}" — don't ask me again. Keep my question and options verbatim, add a short doing/why_now from the context, and a recommendation based on the first option.\n\nQuestion: ${l.question}\nContext: ${l.context || "—"}\nOptions:\n${opts}\n\nAfter it's sent, reply with one line: the ticket and that it's out.` };
   }
   const answer = h.answer ? [].concat(h.answer as never).join(", ") : null;
-  return { cwd: expand(l.folder), message: `${head}\n\n${answer ? `I decided: **${answer}**.` : "Decide this for me — take the recommended option unless the facts on disk clearly say otherwise, and tell me which you took and why in one line."}\n\nQuestion: ${l.question}\nContext: ${l.context || "—"}\nOptions:\n${opts}\n\nNow carry it out. Ask me before anything outward-facing (publishing, Slack, email, spending money).` };
+  return { cwd: expand(l.folder), message: `${head}\n\n${answer ? `I decided: **${answer}**.` : "Decide this for me — take the recommended option unless the facts on disk clearly say otherwise, and tell me which you took and why in one line."}\n\nQuestion: ${l.question}\nContext: ${l.context || "—"}\nOptions:\n${opts}\n\nNow carry it out. Ask me before anything outward-facing (publishing, Slack, email, spending money).\n\n${STATUS_CONTRACT}` };
 }
 
 /** Prerequisites (`after`) that aren't done yet. An id that's no longer in the day (dropped, or a
@@ -176,9 +178,10 @@ export type ItemStatus = HandoffReport & { busy: boolean; live: boolean };
 
 /** What each hand-off came to, and the ticks that follow from it (§26).
  *
- *  Ticks a to-do whose chat's last status line is "TODAY: done" — unless Thomas set the box himself
- *  (`manual`): a tick he took back stays taken back, the same rule the vault auto-tick keeps.
- *  Writes the day only when something changed. Returns a report per item id for the page. */
+ *  Ticks a to-do — or a decision handed to Minami to carry out (`decide`) — whose chat's last status
+ *  line is "TODAY: done", unless Thomas set the box himself (`manual`): a tick he took back stays taken
+ *  back, the same rule the vault auto-tick keeps. An `ask` is finished when the card is out; it has no
+ *  work to tick. Writes the day only when something changed. Returns a report per item id for the page. */
 export async function reconcile(date: string): Promise<{ day: TodayDay; status: Record<string, ItemStatus> }> {
   const { liveStats } = await import("@/lib/agent/manager");
   const live = new Map(liveStats().details.filter((d) => d.sessionId).map((d) => [d.sessionId as string, d]));
@@ -191,11 +194,10 @@ export async function reconcile(date: string): Promise<{ day: TodayDay; status: 
     const l = live.get(h.sessionId);
     const r = handoffReport(h.sessionId, [it.folder, h.cwd], !!l?.busy);
     status[it.id] = { ...r, busy: !!l?.busy, live: !!l };
-    const isTodo = day.todos.includes(it as TodayTodo);
-    if (isTodo && r.outcome?.state === "done" && !r.outcome.stale && !it.done && !it.manual) {
+    if (h.how !== "ask" && r.outcome?.state === "done" && !r.outcome.stale && !it.done && !it.manual) {
       it.done = true; it.done_at = new Date(r.outcome.at).toISOString(); it.done_by = "minami";
       it.done_evidence = `Minami's chat reported it done${r.outcome.why ? ` — ${r.outcome.why}` : ""}.`;
-      log(day, "auto", `Done (Minami reported): ${it.title || it.text}`);
+      log(day, "auto", `Done (Minami reported): ${it.title || it.text || it.question}`);
       changed = true;
     }
   }
