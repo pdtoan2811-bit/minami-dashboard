@@ -37,6 +37,8 @@ const isRec = (s: string) => /\(Recommended\)\s*$/i.test(s);
 const human = (s: string) => s.replace(/`(?:\d{4}-\d{2}-\d{2}-)?([^`]+)`/g, (_, x: string) => x.replace(/[-_]+/g, " "));
 const firstSentence = (s: string) => (s.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? s);
 const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n).replace(/[\s,;:]+\S*$/, "") + "…" : s);
+/** Research still running and not stalled (a run that died never writes its end state; 10 min, as RESEARCH_STALL_MS). */
+const researching = (t: TodayTodo) => t.research?.state === "running" && Date.now() - Date.parse(t.research.at) < 10 * 60e3;
 const titleOf = (t: TodayTodo) => t.title || cut(human(firstSentence(t.text)).replace(/\s*\([^)]*\)/g, "").replace(/[.]$/, ""), 64);
 type Member = { key: string; name: string; role?: string };
 
@@ -118,10 +120,12 @@ export function Today() {
   useEffect(() => {
     if (!date) return;
     // 20s while hand-offs are out: a chat's status line should show up about when its reply does.
-    const every = dayRef.current && [...dayRef.current.todos, ...dayRef.current.loops].some((x) => x.handoff) ? 20_000 : 60_000;
+    // 8s while a to-do he added is being researched: he's usually looking at it, waiting for the detail.
+    const every = dayRef.current?.todos.some(researching) ? 8_000
+      : dayRef.current && [...dayRef.current.todos, ...dayRef.current.loops].some((x) => x.handoff) ? 20_000 : 60_000;
     const t = setInterval(() => { if (document.visibilityState === "visible") load(date); }, every);
     return () => clearInterval(t);
-  }, [date, load, day?.todos.some((x) => x.handoff)]);
+  }, [date, load, day?.todos.some((x) => x.handoff), day?.todos.some(researching)]);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 9000); return () => clearTimeout(t); }, [toast]);
 
   const act = useCallback(async (body: Record<string, unknown>) => {
@@ -247,7 +251,8 @@ export function Today() {
           <Glass className="overflow-hidden">
             <ul>{shown.map((t, i) => <TodoRow key={t.id} t={t} first={i === 0} state={isToday ? states.get(t.id) : undefined} deps={unmet(day, t)}
               onToggle={() => act({ op: "toggle", id: t.id, done: !t.done })} onRemove={() => act({ op: "remove", id: t.id })}
-              onDo={() => handoff("todo", t.id, "do")} />)}</ul>
+              onDo={(note) => handoff("todo", t.id, "do", note ? { note } : {})} onResearch={() => act({ op: "research", id: t.id })}
+              onComment={(text) => act({ op: "comment", id: t.id, text })} />)}</ul>
             <AddTodo first={!shown.length} onAdd={(text) => act({ op: "add", text, focus: filter === "all" ? "other" : filter })} />
           </Glass>
         )}
@@ -487,11 +492,16 @@ function Done({ qs, outcome, onClose, onHandAll }: { qs: TodayLoop[]; outcome: R
 }
 
 // ── rows ─────────────────────────────────────────────────────────────────────────────────────────
-function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo }: { t: TodayTodo; first: boolean; state?: TaskState; deps: TodayTodo[]; onToggle: () => void; onRemove: () => void; onDo: () => Promise<unknown> }) {
+function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo, onResearch, onComment }: { t: TodayTodo; first: boolean; state?: TaskState; deps: TodayTodo[]; onToggle: () => void; onRemove: () => void; onDo: (note?: string) => Promise<{ ok?: boolean } | undefined>; onResearch: () => unknown; onComment: (text: string) => Promise<{ day?: unknown; error?: string } | undefined> }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  // One box, two uses: "Comment" saves it on the task (and, once Minami has the task, sends it into that
+  // chat); "Do it with Minami" starts the chat with it as the instruction. Kept until the server says ok.
+  const [note, setNote] = useState("");
   const detail = t.text;
+  const looking = researching(t);
+  const stalled = t.research?.state === "running" && !looking;
   return (
     <li style={{ borderTop: first ? undefined : `1px solid ${K.line}` }}>
       <div className="flex items-center gap-3.5 px-5 py-3.5">
@@ -504,6 +514,7 @@ function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo }: { t: Today
             <Inline text={titleOf(t)} /></span>
           {state && state.s !== "todo" && state.s !== "done" ? <TaskChip s={state.s} />
             : t.handoff && !state ? <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.accent, 22), color: K.accentBright, fontFamily: "var(--today-mono)" }}>MINAMI</span> : null}
+          {looking && !t.handoff && <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: "rgba(255,255,255,.06)", color: K.muted, fontFamily: "var(--today-mono)" }}>◌ RESEARCHING</span>}
           {state?.drift && <span title={state.drift} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix("#ff8a8d", 16), color: "#ff8a8d", fontFamily: "var(--today-mono)" }}>⚠ DRIFT</span>}
           {t.done && t.done_by === "auto" && <span title={t.done_evidence} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.cat3, 22), color: "#f3c766", fontFamily: "var(--today-mono)" }}>AUTO</span>}
           {!t.done && t.progress && <span title={t.progress.detail} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px] tabular-nums" style={{ background: "rgba(255,255,255,.06)", color: K.muted, fontFamily: "var(--today-mono)" }}>{t.progress.met}/{t.progress.total}</span>}
@@ -519,6 +530,10 @@ function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo }: { t: Today
           {state?.drift && <p className="text-[13px] leading-snug" style={{ color: "#ff8a8d" }}>⚠ {state.drift}</p>}
           {/* pre-line: a to-do written as "Problem / Recommended / Prompt for Minami" (2026-10-13) must keep its
               line breaks, or the prompt runs into the problem as one block. */}
+          {looking && <p className="text-[13px] leading-snug" style={{ color: K.faint }}>Minami is looking into this — the folders, the project notes, the web if it needs to — and will fill in the detail, folder and command. Usually 1–4 minutes.</p>}
+          {(t.research?.state === "failed" || stalled) && <p className="text-[13px] leading-snug" style={{ color: "#ff8a8d" }}>
+            Research didn't finish{t.research?.error ? ` — ${t.research.error}` : ""}. <button onClick={() => onResearch()} className="underline hover:text-white">Try again</button></p>}
+          {t.asked && t.asked !== t.text && <p className="text-[12.5px] leading-snug" style={{ color: K.faint }}>You wrote: “{t.asked}”</p>}
           {detail && <p className="whitespace-pre-line text-[13.5px] leading-relaxed" style={{ color: K.muted }}><Inline text={detail} /></p>}
           {t.why && <p className="text-[13px] leading-snug" style={{ color: K.faint }}><Inline text={t.why} /></p>}
           {!t.done && t.progress && <p className="text-[13px] leading-snug" style={{ color: K.faint }}>Ticks itself when all {t.progress.total} checks pass — {t.progress.detail}.</p>}
@@ -529,11 +544,26 @@ function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo }: { t: Today
             {t.cmd && <button onClick={() => { navigator.clipboard?.writeText(t.cmd!); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
               className="max-w-full truncate rounded-full px-2.5 py-1 text-left hover:text-white" style={{ background: "rgba(255,255,255,.06)" }}>{copied ? "copied" : `$ ${t.cmd}`}</button>}
           </div>
+          {!!t.comments?.length && <ul className="flex flex-col gap-1.5">{t.comments.map((c, i) => (
+            <li key={i} className="text-[13px] leading-snug" style={{ color: K.muted }}>
+              <span style={{ color: K.faint, fontFamily: "var(--today-mono)", fontSize: 11 }}>{hhmm(c.at)}{c.to === "chat" ? " · to Minami" : c.to === "instruction" ? " · instruction" : ""} </span>
+              <Inline text={c.text} /></li>))}</ul>}
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={note.includes("\n") || note.length > 60 ? 3 : 1}
+            placeholder={t.handoff ? "Tell Minami something about this task…" : "Comment, or tell Minami how to do it…"}
+            className="w-full resize-none rounded-2xl bg-transparent px-3.5 py-2.5 text-[13.5px] leading-snug outline-none placeholder:text-white/35"
+            style={{ border: `1px solid ${K.line2}`, color: K.ink }} />
           <div className="flex flex-wrap items-center gap-2">
             {t.handoff
-              ? <Link href={`/?open=${t.handoff.sessionId}`} className="inline-flex"><PillButton tone="paper" small>Open Minami's chat →</PillButton></Link>
-              : deps.length ? <span className="text-[12.5px]" style={{ color: K.faint }}>Minami can start this after: {deps.map((d) => titleOf(d)).join(", ")}</span>
-              : <PillButton tone="accent" cap small disabled={busy || t.done} onClick={async () => { setBusy(true); await onDo(); setBusy(false); }}>{busy ? "Starting…" : "Do it with Minami"}</PillButton>}
+              ? <>
+                  {note.trim() && <PillButton tone="accent" cap small disabled={busy} onClick={async () => { setBusy(true); const r = await onComment(note.trim()); if (r?.day) setNote(""); setBusy(false); }}>{busy ? "Sending…" : "Send to Minami"}</PillButton>}
+                  <Link href={`/?open=${t.handoff.sessionId}`} className="inline-flex"><PillButton tone="paper" small>Open Minami's chat →</PillButton></Link>
+                </>
+              : <>
+                  {deps.length ? <span className="text-[12.5px]" style={{ color: K.faint }}>Minami can start this after: {deps.map((d) => titleOf(d)).join(", ")}</span>
+                    : <PillButton tone="accent" cap small disabled={busy || t.done} onClick={async () => { setBusy(true); const r = await onDo(note.trim() || undefined); if (r?.ok) setNote(""); setBusy(false); }}>
+                        {busy ? "Starting…" : note.trim() ? "Do it with Minami + this" : "Do it with Minami"}</PillButton>}
+                  {note.trim() && <PillButton tone="paper" small disabled={busy} onClick={async () => { setBusy(true); const r = await onComment(note.trim()); if (r?.day) setNote(""); setBusy(false); }}>Comment</PillButton>}
+                </>}
             <button onClick={onRemove} className="ml-auto text-[12.5px] hover:text-white" style={{ color: K.faint }}>Drop</button>
           </div>
         </div>

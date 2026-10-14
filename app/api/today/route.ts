@@ -1,4 +1,4 @@
-import { readDay, listDays, applyAction, runHeartbeat, handoff, localDate, reconcile, type TodayAction, type Handoff } from "@/lib/today";
+import { readDay, listDays, applyAction, runHeartbeat, handoff, commentTodo, localDate, reconcile, type TodayAction, type Handoff } from "@/lib/today";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,6 +27,8 @@ export async function POST(req: Request) {
     if (body.op === "heartbeat") return Response.json(runHeartbeat());
     // { op: "handoff", kind, id, how: do|decide|ask, member?, answer? } → { ok, sessionId } (open /?open=<id>)
     if (body.op === "handoff") return Response.json(await handoff(body.date || localDate(), body as Handoff));
+    // { op: "comment", id, text } → { ok, day } — a handed-off to-do's comment also goes into its chat.
+    if (body.op === "comment") return Response.json(await commentTodo(body.date || localDate(), String(body.id), String(body.text ?? "")));
     const date = body.date || localDate();
     return Response.json({ day: applyAction(date, body as TodayAction) });
   } catch (e) { return Response.json({ error: String(e) }, { status: 400 }); }

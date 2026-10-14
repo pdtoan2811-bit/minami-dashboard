@@ -19,7 +19,12 @@ export type TodayTodo = { id: string; title?: string; text: string; handoff?: Ha
   /** Ids of to-dos that must be done first (written by the heartbeat). Its hand-off waits for them. */
   after?: string[];
   /** Machine checks that tick it (secondBrain/bin/today-checks.mjs); `progress` is their last partial result. */
-  done_when?: Record<string, unknown>[]; progress?: { met: number; total: number; detail: string }; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
+  done_when?: Record<string, unknown>[];
+  /** A to-do he typed is researched in the background (bin/today-research.mjs); `asked` keeps his own words. */
+  research?: { state: "running" | "done" | "failed"; at: string; error?: string; usd?: number | null }; asked?: string;
+  /** His comments on the task. `to: "chat"` = also sent into its hand-off chat; `instruction` = given with "Do it with Minami". */
+  comments?: { at: string; text: string; to?: "chat" | "instruction" }[];
+  progress?: { met: number; total: number; detail: string }; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
 export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; recommended?: number; question: string; context?: string; focus?: string; folder?: string; multiSelect?: boolean;
   options: { label: string; description?: string }[]; resolved: null | { answer: string | string[]; at: string };
   /** `resolved` is the decision; `done` is the work it was handed off to (a `decide` chat's "TODAY: done", reconcile). */
@@ -35,6 +40,8 @@ export type TodayDay = { pipeline?: Pipeline; date: string; status: "running" | 
 // MINAMI_TODAY_DIR is a test seam (the heartbeat honours it too): point a dev server at a scratch dir.
 const DIR = process.env.MINAMI_TODAY_DIR || path.join(os.homedir(), ".minami/today");
 const HEARTBEAT = path.join(os.homedir(), "secondBrain/bin/morning-heartbeat.mjs");
+const RESEARCH = path.join(process.cwd(), "bin/today-research.mjs");
+const NODE = fs.existsSync("/opt/homebrew/bin/node") ? "/opt/homebrew/bin/node" : process.execPath;
 
 export const localDate = (d = new Date()) => d.toLocaleDateString("en-CA");
 const file = (date: string) => path.join(DIR, `${date}.json`);
@@ -75,7 +82,9 @@ export type TodayAction =
   | { op: "remove"; id: string }
   | { op: "resolve"; id: string; answer: string | string[] }
   | { op: "reopen"; id: string }
-  | { op: "note"; text: string };
+  | { op: "note"; text: string }
+  | { op: "research"; id: string } // research a to-do again (after a failure, or a stalled run)
+  | { op: "comment"; id: string; text: string };
 
 // A tap aimed at an item that isn't in the file any more (a Rebuild on another device dropped it, or the
 // page rolled over to a new day) must fail loudly: a silent 200 told Decide "That's settled" and lost it.
@@ -86,6 +95,7 @@ export function applyAction(date: string, a: TodayAction): TodayDay {
   // Only a real change writes: a no-op used to create the file and flip none→ready, which turned off
   // the heartbeat's carry-over for the day.
   let changed = false;
+  let research: string | null = null;
   switch (a.op) {
     case "toggle": {
       const t = day.todos.find((x) => x.id === a.id); if (!t) throw gone();
@@ -101,8 +111,23 @@ export function applyAction(date: string, a: TodayAction): TodayDay {
     case "add": {
       const text = a.text.trim(); if (!text) break;
       const id = crypto.createHash("sha1").update(text + now()).digest("hex").slice(0, 8);
-      day.todos.push({ id, text, focus: a.focus || "other", done: false, source: "you" });
-      log(day, "todo", `Added: ${text}`); changed = true;
+      day.todos.push({ id, text, asked: text, focus: a.focus || "other", done: false, source: "you", research: { state: "running", at: now() } });
+      log(day, "todo", `Added: ${text}`); changed = true; research = id;
+      break;
+    }
+    case "comment": {
+      // A handed-off task's comment goes through commentTodo() (it also reaches the chat); this is the
+      // plain note on a task nobody has started.
+      const t = day.todos.find((x) => x.id === a.id); if (!t) throw gone();
+      const text = a.text.trim(); if (!text) break;
+      (t.comments ||= []).push({ at: now(), text });
+      log(day, "comment", `${t.title || t.text.split("\n")[0]}: ${text}`); changed = true;
+      break;
+    }
+    case "research": {
+      const t = day.todos.find((x) => x.id === a.id); if (!t) throw gone();
+      if (t.research?.state === "running" && Date.now() - Date.parse(t.research.at) < RESEARCH_STALL_MS) break;
+      t.research = { state: "running", at: now() }; changed = true; research = t.id;
       break;
     }
     case "remove": {
@@ -136,7 +161,20 @@ export function applyAction(date: string, a: TodayAction): TodayDay {
   if (!changed) return day;
   if (day.status === "none") day.status = "ready";
   write(day);
+  // After the write: the runner reads the to-do from the file.
+  if (research) startResearch(date, research);
   return day;
+}
+
+// ── Research an added to-do (§26) ─────────────────────────────────────────────────────────────────
+// He types a line; bin/today-research.mjs (one read-only sonnet call, 1–4 min) turns it into what the
+// heartbeat would have written — title, detail, folder, command, done_when — so "Do it with Minami" has
+// something to start from. Detached, like runHeartbeat: a deploy mustn't kill it halfway. A run that
+// never wrote its end state (the Mac slept, the process died) reads as stalled after 10 min on the page.
+export const RESEARCH_STALL_MS = 10 * 60e3;
+function startResearch(date: string, id: string) {
+  const out = fs.openSync(path.join(os.homedir(), ".minami/today-research.log"), "a");
+  spawn(NODE, [RESEARCH, date, id], { cwd: path.dirname(path.dirname(RESEARCH)), detached: true, stdio: ["ignore", out, out] }).unref();
 }
 
 // ── Hand-offs (§26) ────────────────────────────────────────────────────────────────────────────────
@@ -147,7 +185,8 @@ export function applyAction(date: string, a: TodayAction): TodayDay {
 // `starting` covers the 15 s before the mark is written: a double tap or a second device gets turned away.
 const starting = new Set<string>();
 
-export type Handoff = { kind: "todo" | "loop"; id: string; how: "do" | "decide" | "ask"; member?: { key: string; name: string; role?: string }; answer?: string | string[] };
+/** `note`: his extra instruction for this run ("Do it with Minami" with a comment), placed above the task. */
+export type Handoff = { kind: "todo" | "loop"; id: string; how: "do" | "decide" | "ask"; member?: { key: string; name: string; role?: string }; answer?: string | string[]; note?: string };
 
 // unknown, not string: day files written before the heartbeat coerced loop folders can hold anything.
 const expand = (folder?: unknown) => (typeof folder === "string" && folder ? folder.replace(/^~(?=\/|$)/, os.homedir()) : os.homedir());
@@ -156,7 +195,11 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
   const head = `From my Today page (${day.date}). Today's focus: ${day.focus.map((f) => `${f.name} — ${f.status}`).join(" · ")}`;
   if (h.kind === "todo") {
     const t = day.todos.find((x) => x.id === h.id)!;
-    return { cwd: expand(t.folder), message: `${head}\n\nDo this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).\n\n${STATUS_CONTRACT}` };
+    // His instruction comes first and is called that: it is the newest thing he said, and it outranks
+    // the research write-up below it. Earlier comments follow the task as context.
+    const note = h.note?.trim() ? `My instruction for this one: ${h.note.trim()}\n\n` : "";
+    const said = (t.comments ?? []).filter((c) => c.to !== "instruction").map((c) => `- ${c.text}`).join("\n");
+    return { cwd: expand(t.folder), message: `${head}\n\n${note}Do this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.asked && t.asked !== t.text ? `(I typed: "${t.asked}" — the detail above is Minami's research on it; my words win if they disagree.)\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}${said ? `My comments on it:\n${said}\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).\n\n${STATUS_CONTRACT}` };
   }
   const l = day.loops.find((x) => x.id === h.id)!;
   const opts = l.options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n");
@@ -275,6 +318,7 @@ export async function handoff(date: string, h: Handoff): Promise<{ ok: boolean; 
     if (it?.handoff) return { ok: true, sessionId: it.handoff.sessionId, day: fresh }; // another process got there first
     if (it) {
       it.handoff = { how: h.how, sessionId, at: now(), to: h.member?.name, cwd: runCwd };
+      if (h.kind === "todo" && h.note?.trim()) ((it as TodayTodo).comments ||= []).push({ at: now(), text: h.note.trim(), to: "instruction" });
       // Always overwrite: the stored answer must be the one the chat was given. An earlier pick he
       // backed out of (Decide → Back → "Let Minami decide") is not what Minami was told.
       if (h.kind === "loop" && h.how !== "ask")
@@ -289,13 +333,44 @@ export async function handoff(date: string, h: Handoff): Promise<{ ok: boolean; 
   } finally { starting.delete(lockKey); }
 }
 
+/** A comment on a to-do Minami is already working on: saved on the task AND sent into its chat, so
+ *  he can steer it from the Today page without finding the pane. A live chat gets it as its next turn
+ *  (queued if it's mid-turn, the way a pane's composer does); one that closed or didn't survive a
+ *  restart is resumed from its transcript under a fresh key. A task nobody started gets a plain
+ *  comment (applyAction "comment"), which the hand-off message carries later. */
+export async function commentTodo(date: string, id: string, text: string): Promise<{ ok: boolean; error?: string; day?: TodayDay }> {
+  const body = text.trim();
+  if (!body) return { ok: false, error: "empty comment" };
+  const day = readDay(date);
+  const t = day.todos.find((x) => x.id === id);
+  if (!t) return { ok: false, error: "that item is no longer on this day's plan — reload" };
+  if (!t.handoff?.sessionId) return { ok: true, day: applyAction(date, { op: "comment", id, text: body }) };
+  const { sendMessage, liveStats } = await import("@/lib/agent/manager");
+  const h = t.handoff;
+  const owner = liveStats().details.find((d) => d.sessionId === h.sessionId);
+  const cwd = owner?.cwd ?? h.cwd ?? expand(t.folder);
+  if (!fs.existsSync(cwd)) return { ok: false, error: `the chat's folder ${cwd} is gone — open the chat instead` };
+  try {
+    sendMessage(owner
+      ? { key: owner.key, cwd, message: `(From my Today page) ${body}` }
+      : { key: `today-comment-${id}-${Date.now().toString(36)}`, cwd, message: `(From my Today page) ${body}\n\n${STATUS_CONTRACT}`, resume: h.sessionId });
+  } catch (e) { return { ok: false, error: String((e as Error).message || e) }; }
+  const fresh = readDay(date);
+  const it = fresh.todos.find((x) => x.id === id);
+  if (it) {
+    (it.comments ||= []).push({ at: now(), text: body, to: "chat" });
+    log(fresh, "comment", `To Minami (${it.title || it.text.split("\n")[0]}): ${body}`);
+    write(fresh);
+  }
+  return { ok: true, day: fresh };
+}
+
 // "Run it now" — the same script launchd runs at 07:30, detached so a dashboard restart can't kill it.
 export function runHeartbeat(): { started: boolean; reason?: string } {
   const day = readDay(localDate());
   const started = day.started_at ? Date.parse(day.started_at) : 0;
   if (day.status === "running" && Date.now() - started < 20 * 60e3) return { started: false, reason: "already running" };
-  const node = fs.existsSync("/opt/homebrew/bin/node") ? "/opt/homebrew/bin/node" : process.execPath;
   const out = fs.openSync(path.join(os.homedir(), ".minami/heartbeat.log"), "a");
-  spawn(node, [HEARTBEAT], { cwd: path.dirname(path.dirname(HEARTBEAT)), detached: true, stdio: ["ignore", out, out] }).unref();
+  spawn(NODE, [HEARTBEAT], { cwd: path.dirname(path.dirname(HEARTBEAT)), detached: true, stdio: ["ignore", out, out] }).unref();
   return { started: true };
 }

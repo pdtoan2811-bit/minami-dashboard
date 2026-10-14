@@ -9,6 +9,10 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-14
+- **Today: comments, and "Do it with Minami" with an instruction** (§26, `lib/today.ts` `commentTodo`, `app/api/today`, `app/today/Today.tsx`). An open to-do has a comment box. Before a hand-off the text is a saved comment, or the start instruction (`Handoff.note`). After one it is sent into the chat (live: queued; closed: resumed). Comments ride along in the hand-off and research prompts.
+  *Requested by user: "let me comment on task created and the button to let minami to do it with additional instruction".*
+- **Today: an added to-do researches itself** (§26, `bin/today-research.mjs`, `lib/today.ts`, `app/today/Today.tsx`). Adding a to-do spawns a detached, read-only sonnet run (folders, vault project notes, web) that fills in title, detail, why, folder, focus, est_min, cmd and `done_when`; his words stay in `asked`. The row shows ◌ RESEARCHING, the page polls every 8s, a failed or stalled run gets "Try again" (`op: "research"`). ~30s and ~$0.17 each.
+  *Requested by user: "like I add, then Minami dashboard research and complete the task detail".*
 - **Today: decisions get done too** (§26, `lib/today.ts`, `app/today/Today.tsx`). A question handed to Minami with `decide` now carries `STATUS_CONTRACT`, `reconcile` ticks it on a non-stale "TODAY: done" (`done_by: "minami"`), and the Decisions fold shows the task chip instead of the chat's live state. `ask` hand-offs are unchanged.
   *Reported by user: a decision's chat finished its work and nothing on the page could say so.*
 

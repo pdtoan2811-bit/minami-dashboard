@@ -184,6 +184,55 @@ plan could suggest a finished item again.
   `unsure` and leaves progress untouched.
 - **First user:** to-do `f110e18b`, carried into 2026-10-13 with three `live` checks.
 
+## An added to-do researches itself (2026-10-14)
+
+Thomas: *"like I add, then Minami dashboard research and complete the task detail"*. A to-do he typed
+used to stay one bare line: no detail, folder or command, and nothing for "Do it with Minami" to
+start from.
+
+- **`op: "add"`** stores his words in `asked`, sets `research: {state: "running"}` and, after the
+  write, spawns `bin/today-research.mjs <date> <id>` **detached** (log `~/.minami/today-research.log`),
+  so a deploy can't kill it halfway.
+- **The runner** is one `claude -p --model sonnet` with only read tools (`--tools` +
+  `--allowedTools` WebSearch, WebFetch, Read, Glob, Grep; `--add-dir` for the known folders plus any
+  folder from the last 4 days' to-dos). It is quarantined the way `models/claude.mjs` is:
+  `--setting-sources ""` means no hooks, so a research turn never lands in a thread ledger, where
+  today-sync's judge would read it as work done. `--strict-mcp-config` means no MCP.
+  `--no-session-persistence` means no chat on the board. It returns the heartbeat's to-do shape.
+  `done_when` goes through the vault's `cleanChecks`, and a folder must exist under `~/`.
+- **Write-back re-reads the day** and changes only that to-do. If he dropped it meanwhile, nothing is
+  written. A tick he made stays. `focus` changes only if he left it at `other`.
+- **The page** shows ◌ RESEARCHING and "Minami is looking into this…", polls every 8s while any
+  to-do is researching, and shows "You wrote: …" above the detail. A failed run, or one still
+  `running` after 10 min (`RESEARCH_STALL_MS`, the process died), shows its error and **Try again**
+  (`op: "research"`, which researches `asked`, not the rewrite). A hand-off of a researched to-do
+  tells the chat what he typed and that his words win.
+- **Cost:** two trial runs on 2026-10-14 took about 30s and cost $0.16 and $0.18. Both found real
+  files and ids (an ElevenLabs voice id in `episode.json`, `PricingBand` in ecvision). One also
+  pointed out that the new to-do overlapped three already on the list.
+
+## Comments and "Do it with Minami" with an instruction (2026-10-14)
+
+Thomas: *"let me comment on task created and the button to let minami to do it with additional
+instruction"*. An open to-do row has one box: "Comment, or tell Minami how to do it…".
+
+- **Not started yet:** **Comment** saves it on the to-do (`comments[]`, `op: "comment"` through
+  `applyAction`). **Do it with Minami + this** starts the hand-off with the text as `Handoff.note`.
+  The note goes above the task as "My instruction for this one", because it is the newest thing he
+  said and outranks the research write-up. It is stored as a comment with `to: "instruction"`.
+  Earlier comments go into the hand-off message as "My comments on it", and into a research retry.
+- **Already handed off:** the box says "Tell Minami something about this task…" and the button is
+  **Send to Minami**. `commentTodo()` saves it with `to: "chat"` and sends it into the chat as
+  `(From my Today page) …`. A live chat gets it under its own key, so it queues if the chat is
+  mid-turn, as the composer does. A chat that closed or didn't survive a restart is **resumed** from its
+  transcript under a fresh key, with `STATUS_CONTRACT` again so the page can still tick it. That is
+  the usual case after a deploy.
+- Every comment shows under the detail with its time and where it went (· to Minami, · instruction).
+- Verified 2026-10-14 on a side server with a scratch day and a scratch folder. The instruction
+  ("answer in Vietnamese") and the earlier comment ("under five words") were both followed. A comment
+  reached the running chat. After a server restart, a comment resumed the closed chat with its
+  context intact, in the same transcript.
+
 ## Gotchas
 
 - His shell exports `PORT=3000` and `NODE_ENV=production`; `minami-open.sh` unsets both, and the
