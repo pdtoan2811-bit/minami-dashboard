@@ -8,6 +8,10 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-14
+- **Today: decisions get done too** (§26, `lib/today.ts`, `app/today/Today.tsx`). A question handed to Minami with `decide` now carries `STATUS_CONTRACT`, `reconcile` ticks it on a non-stale "TODAY: done" (`done_by: "minami"`), and the Decisions fold shows the task chip instead of the chat's live state. `ask` hand-offs are unchanged.
+  *Reported by user: a decision's chat finished its work and nothing on the page could say so.*
+
 ### 2026-10-13
 - **Voice notes in the composer** (§23, `components/VoiceButton.tsx`, `lib/pcm-client.ts`, `/api/agent/transcribe`). 🎤 next to 📎 records a 16 kHz WAV in the browser; the meeting ear (Gemini 3.8 Flash, the omni ear) transcribes it in 45 s pieces cut at pauses, and the text goes in at the caret for review. Claude itself can't take audio. Verified on his own Vietnamese/English clips.
 - **Today: the SEO funnel, and agents publish** (§26). The page shows "SEO N live · N in the prod CMS · N on bench only · N in progress" from vault `content-funnel.mjs` via today-sync (`day.pipeline.seo`). The first 3 posts are live on ecvision.ai, published by an agent at Thomas's word; the skill, the workspace rules and the heartbeat prompt now plan "live", re-propose bench drafts on prod, and stagger publishing. The vault judge won't tick a draft mid-stage. pump.mjs sets bench proposals aside on a prod run.
