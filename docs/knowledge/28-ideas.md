@@ -73,6 +73,22 @@ quarantined `claude.mjs` (vision for images) → ✅ and one line in the thread:
 > `IDEAS_TEAMS` entirely, so his first Instagram link went to the assistant. Append to `.env` only
 > after checking the last byte.
 
+**Fixed for real the same day: a logged-in browser.** Thomas: *"the browser harness approach … let me
+login instagram and more, and use it to view things"*. The toolshed's `browser` tool
+(`~/secondBrain/70-79 Toolshed/tools/browser`) keeps a real Chrome profile that he logs into once
+(`browser login`). Its cookies go to `~/.minami/browser/state.json` (0600). Minami's `readLink` sends
+any walled or social link (Instagram, X, TikTok, Facebook, Threads, LinkedIn) through `browser view`
+with those cookies. The screenshot joins the item's files, so Haiku sees the actual post. Verified on
+his first Instagram link: "Saudi OpenAI employee arrested for planting spy device", read via the
+browser. The dashboard's chats get the same cookies (§3, `MCP_SERVERS()` in `lib/agent/manager.ts`,
+`--storage-state`, checked per session), plus a prompt line: view only, never post, like, follow or
+DM unless asked in that chat.
+
+> 🐛 **The login window flashed every 4 s.** `context.storageState()` collects localStorage by opening a
+> page per origin. Saving it on a timer opened and closed tabs in front of him while he typed his
+> password. Fix: save `context.cookies()` only, which opens nothing. These sites keep their sessions in
+> cookies.
+
 ## Ranking — hot / warm / cold (`rank`)
 
 A few readable terms, not a model:

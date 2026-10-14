@@ -70,9 +70,19 @@ const AUTOCOMPACT_PCT = process.env.MINAMI_DASHBOARD_AUTOCOMPACT_PCT || "60";
 // through /api/agent/browser/file. Overriding it would only move the files somewhere the client can't
 // guess from `cwd`.
 const BROWSER_TOOL_ENABLED = process.env.MINAMI_DISABLE_BROWSER_TOOL !== "1";
-const MCP_SERVERS: NonNullable<Options["mcpServers"]> | undefined = BROWSER_TOOL_ENABLED
-  ? { playwright: { command: "npx", args: ["@playwright/mcp", "--isolated", "--headless", "--viewport-size=1280x800", "--caps=devtools"] } }
-  : undefined;
+//
+// Logged in (2026-10-14): when the toolshed's `browser login` has saved Thomas's cookies, each session's
+// browser starts from them (`--storage-state`, still `--isolated`, so nothing a session does is written
+// back), and can see Instagram/X/TikTok as him — a logged-out bot gets a bare login page. Checked per
+// session, not at boot: he logs in after the server started and the next chat should already see it.
+// MINAMI_BROWSER_STATE="" turns it off.
+const BROWSER_STATE = process.env.MINAMI_BROWSER_STATE ?? pathMod.join(os.homedir(), ".minami/browser/state.json");
+const browserState = () => (BROWSER_STATE && fsSync.existsSync(BROWSER_STATE) ? BROWSER_STATE : null);
+const MCP_SERVERS = (): NonNullable<Options["mcpServers"]> | undefined => {
+  if (!BROWSER_TOOL_ENABLED) return undefined;
+  const state = browserState();
+  return { playwright: { command: "npx", args: ["@playwright/mcp", "--isolated", "--headless", "--viewport-size=1280x800", "--caps=devtools", ...(state ? ["--storage-state", state] : [])] } };
+};
 
 // The browser is headless, so the ONLY way a human sees what it's doing is a screenshot landing in the
 // panel. Left to itself Claude prefers `browser_snapshot` (an accessibility tree — cheaper in tokens
@@ -81,6 +91,8 @@ const MCP_SERVERS: NonNullable<Options["mcpServers"]> | undefined = BROWSER_TOOL
 // Only appended when the browser tool is actually registered, so a MINAMI_DISABLE_BROWSER_TOOL=1
 // session doesn't get instructions about a tool it can't see.
 const BROWSER_PROMPT = `When you use the browser tools, take a screenshot after navigating and after any action that changes what's on screen. The browser is headless and a human is watching those screenshots in a live panel — an accessibility snapshot is invisible to them.`;
+// With his cookies loaded, every click is HIS account acting — in a session that auto-approves tools.
+const BROWSER_LOGGED_IN_PROMPT = `The browser is signed in to Thomas's own accounts (Instagram, X, TikTok, Facebook, LinkedIn…). Viewing and reading are fine. Never post, comment, like, follow, message, share, buy or change a setting from it unless he asked for that exact action in this chat.`;
 
 // The ending contract. The pane renders this block as clickable preview chips (see PreviewChips in
 // the shell) — the whole point is that "where do I see the work?" stops being a follow-up question.
@@ -929,6 +941,8 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     return p;
   };
 
+  // Per session: the logged-in browser state may have appeared since the server started.
+  const mcp = MCP_SERVERS();
   s.q = query({
     prompt: inputGen(s),
     options: {
@@ -992,14 +1006,15 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
           // operator session parallelism means a wave of role dispatches; BLACKSMITH_PROMPT says so.
           ...(s.fanout && !pre ? [FANOUT_PROMPT] : []),
           ...(pre ? [BLACKSMITH_PROMPT, blacksmithBriefing(pre, cwd)] : []),
-          ...(MCP_SERVERS ? [BROWSER_PROMPT] : []),
+          ...(mcp ? [BROWSER_PROMPT] : []),
+          ...(mcp && browserState() ? [BROWSER_LOGGED_IN_PROMPT] : []),
           // Who can be asked over Slack, and the rule that nothing reaches their DM unconfirmed.
           // Read fresh per session so adding someone to team-ask's team.json is enough — null
           // (no team-ask installed) leaves the prompt exactly as it was.
           ...(teamBriefing() ? [teamBriefing()!] : []),
         ].join("\n\n"),
       },
-      ...(MCP_SERVERS ? { mcpServers: MCP_SERVERS } : {}),
+      ...(mcp ? { mcpServers: mcp } : {}),
       ...(resume ? { resume } : {}),
     } as any,
   });

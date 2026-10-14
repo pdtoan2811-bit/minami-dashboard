@@ -9,6 +9,8 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-14
+- **Chats' browser is logged in as Thomas** (§3, §28, `lib/agent/manager.ts`). When `~/.minami/browser/state.json` exists (toolshed `browser login`), each session's Playwright MCP starts with `--storage-state` from it (still `--isolated`), checked per session; a prompt line keeps it view-only. `MINAMI_BROWSER_STATE=""` turns it off.
+  *Requested by user: "let me login instagram and more, and use it to view things".*
 - **Automations: redesign** (§27). Added a 24-hour lane timeline, a next-up countdown, status filter chips, and cards with a status stripe, pulse, uptime, paused-since and the last log line. Each card now has a switch, ▶ and a ⋯ menu, plus a toast with Undo. *Reported by user: "better UI UX and visual clues".*
 - **Ideas: `/ideas` + DM capture in Slack** (§28, `app/ideas/*`, `lib/ideas.ts`, `app/api/ideas/*`; bot: `~/Minami/src/ideas.js`, `bin/ideas-add.mjs`). Links, memes, screenshots and thoughts DMed to Minami (auto-detected save vs. ask) or dropped on the page are read and tagged by Haiku and ranked hot/warm/cold by recency, echo and touch. The Today look moved to `app/today/ui.tsx` so both pages share it; Today's nav gains Ideas. Same day: Minami itself moved from the Hetzner box to this Mac (launchd `com.thomas.minami-bot`).
   *Requested by user: "a hub to store news I read or find funny, that can be used to brainstorm new ideas every day".*
