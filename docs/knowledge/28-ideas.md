@@ -59,6 +59,20 @@ quarantined `claude.mjs` (vision for images) → ✅ and one line in the thread:
 > instead of JSON, because the model tried to visit the URL. Fix: a system prompt pinning the format,
 > "do not try to open the link" in the prompt, and one retry quoting the failure back.
 
+> 🐛 **Instagram can't be read by anything but a logged-in browser (2026-10-14).** His first real save was
+> an Instagram post. It answered every fetch with 200 and a page titled "Instagram": browser UA,
+> `facebookexternalhit`, `Twitterbot`, and even `/embed/captioned/`, which holds only Meta's app code.
+> Slack didn't unfurl it either. Haiku then filed "Instagram post (no context)". **Fix:** `readLink`
+> treats a page whose title is just the site's name, with no description, as a wall. An item with
+> nothing readable is `blind`, and the thread asks him for a line or a screenshot. His reply goes
+> through `addContext`, which downloads, re-reads and posts the new gist.
+>
+> 🐛 **Same day, a `.env` append with no newline.** `IDEAS_TEAMS=…` was appended to a `.env` that didn't
+> end in `\n`, so it ran onto the end of `SLACK_APP_TOKEN_B`. Slack then rejected the app token as
+> `invalid_auth`, which read as "revoked", and he regenerated it. A later rewrite of that line dropped
+> `IDEAS_TEAMS` entirely, so his first Instagram link went to the assistant. Append to `.env` only
+> after checking the last byte.
+
 ## Ranking — hot / warm / cold (`rank`)
 
 A few readable terms, not a model:
