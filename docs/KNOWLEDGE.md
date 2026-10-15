@@ -60,6 +60,7 @@ recycle one.
 | [`25-team-inbox.md`](knowledge/25-team-inbox.md) | §25 | ~1,100 | Questions from teammates via team-ask, read and answered in the dashboard: reading cards from metadata, answering with team-ask's own relay, the user-token gate for plain DMs and files, and how Explain starts a seeded chat in the right repo. |
 | [`26-today.md`](knowledge/26-today.md) | §26 | ~1,300 | The morning page: a 07:30 heartbeat plans SEO/AEO + video to-dos from pipeline state, open loops answered with AskCard, auto-open at login and 09:00 via launchd, the day log mirrored into the vault — and the dev server that overwrote the production build. |
 | [`28-ideas.md`](knowledge/28-ideas.md) | §28 | ~900 | `/ideas`: the stash of links, memes, screenshots and thoughts Thomas DMs to Minami in Slack (auto-detected save vs. ask), read and tagged by Haiku, ranked hot/warm/cold by recency + echo + touch, grouped by day and theme; a drop box for the laptop. |
+| [`29-goals.md`](knowledge/29-goals.md) | §29 | ~700 | `/goals`: autonomous goals the vault goal runner (launchd 06:45) works on daily — position per target query, a road-to-deadline strip, the runner's assessment, Thomas's part (from Today), what it did, its rules, run now. Read-only over `~/.minami/goals`; the heartbeat, not this page, puts goal to-dos on Today. |
 | [`27-automations.md`](knowledge/27-automations.md) | §27 | ~1,000 | `/automations`: every launchd job (`com.thomas.*`) and in-process loop on the Mac, with run · pause · edit · create · delete · restore. launchd is the source of truth; pause = disable + bootout; in-process loops pause through a flag file. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~24,000 | Dated log of every change. Append here; don't read it to do work. |
 
@@ -146,6 +147,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Meeting launch | `bin/Minami Call.command` + `bin/meet-now.sh` + `bin/tunnel-lib.sh` | **shipped** | app :3011 → receiver :8787 → quick tunnel → Recall. Shared probe verified against a live tunnel 2026-08-24 (detects in ~1s; the poisoned-cache path detected never) — see §18 |
 | Today page | `app/today/*` + `lib/today.ts` + `bin/minami-open.sh` + vault `bin/morning-heartbeat.mjs` | **partial** | heartbeat verified end-to-end 2026-10-12 ($0.20, 10 to-dos, 3 loops); page verified on a dev port; launchd agents installed; login agent untested until next login — see §26 |
 | Ideas | `app/ideas/*` + `lib/ideas.ts` + `~/Minami/src/ideas.js` | **partial** | capture, tagging, ranking, page and drop box verified on a scratch store 2026-10-14; real Slack DM capture not yet exercised — see §28 |
+| Goals | `app/goals/*` + `lib/goals.ts` | **partial** | page + API verified against the real first goal 2026-10-15 (preview :3055); run-now kickstart verified; not yet deployed to :3000 — see §29 |
 | Automations | `app/automations/*` + `lib/automations.ts` | **shipped** | every op verified against real launchd 2026-10-14 (create/run/edit/pause/resume/delete/restore, protected, bad id refused) — see §27 |
 
 ---

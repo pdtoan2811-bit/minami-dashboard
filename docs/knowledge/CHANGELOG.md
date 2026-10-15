@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-15
+- **Goals page** (§29, `app/goals/*`, `lib/goals.ts`, `/api/goals`, nav ◎). Shows each autonomous goal the vault goal runner (`70-79 Toolshed/tools/goals`, launchd `com.thomas.goal-runner` 06:45) works on: position per query vs target, a day-by-day road to the deadline, the runner's assessment, Thomas's part with Today's ticks, what it did, its rules, and Run now. Read-only; to-dos reach Today through the heartbeat's `withGoals()`.
+
 ### 2026-10-14
 - **Chats' browser is logged in as Thomas** (§3, §28, `lib/agent/manager.ts`). When `~/.minami/browser/state.json` exists (toolshed `browser login`), each session's Playwright MCP starts with `--storage-state` from it (still `--isolated`), checked per session; a prompt line keeps it view-only. `MINAMI_BROWSER_STATE=""` turns it off.
   *Requested by user: "let me login instagram and more, and use it to view things".*
