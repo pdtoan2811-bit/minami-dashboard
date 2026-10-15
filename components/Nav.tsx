@@ -5,6 +5,7 @@ import { useSetting } from "@/lib/use-settings";
 
 const ITEMS = [
   { href: "/today", label: "Today", icon: "☀" },
+  { href: "/goals", label: "Goals", icon: "◎" },
   { href: "/automations", label: "Automations", icon: "⟳" },
   { href: "/", label: "Bento", icon: "⊞" },
   { href: "/agents", label: "Agents", icon: "🜂" },
