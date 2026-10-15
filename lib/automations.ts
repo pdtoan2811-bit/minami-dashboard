@@ -56,6 +56,7 @@ const KNOWN: Meta = {
   "com.thomas.minami-morning": { name: "09:00 nudge", description: "A notification and /today opened in the browser.", project: "Minami Dashboard" },
   "com.thomas.minami-today-sync": { name: "Today auto-ticks", description: "Checks the day's to-dos against the repos and ticks the ones that are done.", project: "Minami Dashboard" },
   "com.thomas.minami-vocab": { name: "Vocabulary from the vault", description: "Feeds vault names into the dashboard's speech vocabulary.", project: "Minami Dashboard" },
+  "com.thomas.goal-runner": { name: "Goals — daily run", description: "Measures each autonomous goal, decides the day's moves within its rules, acts, and leaves your part for the 07:30 Today plan (§29).", project: "Second Brain" },
   "com.thomas.secondbrain-sync": { name: "Vault sync", description: "Commits and pushes the Second Brain so every device has it.", project: "Second Brain" },
   "com.thomas.video-evening": { name: "Video topics — evening plan", description: "Learns from last night's taps, scans AI news, writes tomorrow's 5 topics for the Slack card.", project: "Video Studio" },
   "com.thomas.video-overnight": { name: "Videos — overnight runner", description: "Keeps the Mac awake, waits for the 00:30 lock, then writes, builds, voices and renders every locked video. Progress goes in the card's thread; the morning card comes at 07:00.", project: "Video Studio" },
