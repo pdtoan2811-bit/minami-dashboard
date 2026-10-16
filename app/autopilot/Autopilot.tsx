@@ -54,7 +54,8 @@ export function Autopilot() {
   return (
     <Ground>
       <TopBar title="Autopilot" />
-      <div className="mx-auto max-w-[860px] px-5 pb-28 pt-2 sm:pb-16">
+      {/* Wider than the runners below: the goals are a list beside a run ledger (§29), the runners one column. */}
+      <div className="mx-auto max-w-[1160px] px-5 pb-28 pt-2 sm:pb-16">
         {pf && (
           <p className="mb-4 text-[12.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
             Filtered to {pf} · {hidden} hidden
@@ -68,7 +69,7 @@ export function Autopilot() {
             <p className="mt-4 text-[13.5px]" style={{ color: K.muted }}>No goals in {pf}.</p>
           )}
         </section>
-        <section id="runners" className="mt-14 scroll-mt-6">
+        <section id="runners" className="mx-auto mt-14 max-w-[860px] scroll-mt-6">
           <RunnersSection feed={feed} items={items} serving={serving} />
         </section>
       </div>

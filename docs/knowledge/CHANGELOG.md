@@ -9,6 +9,12 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-16
+- **Goals: list + run ledger, and "Resolve with Minami"** (§29, `app/autopilot/GoalsSection.tsx`, `lib/goals.ts`
+  `resolveGoal`, `/api/goals {op:"resolve"}`). Built from pitch `goals-console` V1, Thomas's pick. A list of
+  goals; four numbers per goal; runner health on its own line; a ledger of every run with each action's
+  outcome and cost; your part as a checklist. A button hands the goal's whole context to a vault chat that
+  fixes what it can.
+  *Requested by user: "V1 · List + run ledger with a button to send this context and let minami resolve things too".*
 - **App shell and nav revamp** (§30; new `lib/nav.ts`, `components/shell/*`, `app/api/shell`, `lib/project-filter.ts`, `/autopilot`, `/crew`).
   One grouped, collapsible rail on every page (Work · Day · Autopilot · Library, with Metrics and
   Settings in the footer). On a phone: a top strip plus a Chats · Today · Autopilot · Ideas · More bar.

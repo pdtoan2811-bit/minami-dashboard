@@ -4,7 +4,8 @@
 // (`70-79 Toolshed/tools/goals/goal.mjs`, launchd com.thomas.goal-runner at 06:45) appends one line per run to
 // ~/.minami/goals/<id>/log.jsonl and leaves Thomas's part for the day in today.json, which the 07:30 heartbeat
 // adds to Today. This module only READS those files — the runner is the one writer, so the page can never
-// disagree with what the runner will see tomorrow. The one action is "run now" (a launchctl kickstart).
+// disagree with what the runner will see tomorrow. Two actions: "run now" (a launchctl kickstart) and "resolve with
+// Minami" (resolveGoal: the goal's context handed to a vault chat, which may write; this module still doesn't).
 //
 // The note is parsed here rather than by shelling out to `goal.mjs status`: the page polls, and a node spawn per
 // poll per goal costs more than reading three small files.
@@ -100,4 +101,65 @@ export function listGoals(): Goal[] {
 export function runGoalsNow() {
   const domain = `gui/${process.getuid?.() ?? 501}`;
   execFileSync("launchctl", ["kickstart", `${domain}/${LABEL}`], { stdio: "ignore", timeout: 10_000 });
+}
+
+// ── "Resolve with Minami" (§29) ────────────────────────────────────────────────────────────────────────────
+// The page can say a goal is stuck; this hands everything the page knows to a chat that can act on it. The chat
+// runs in the vault, because the goal note, its drafts and the runner's code (70-79 Toolshed/tools/goals) all live
+// there, and the runner's state dir is named in the message. One chat per goal per day: a second click sends the
+// fresh context into the same conversation instead of opening a parallel one that would redo its work.
+const RUNNER_CODE = path.join(VAULT, "70-79 Toolshed/tools/goals/goal.mjs");
+
+function outcomeOf(a: GoalAction): string {
+  if (a.refused_by_guard) return `REFUSED by the guard: ${a.refused_by_guard.trim()}`;
+  if (a.error) return `FAILED: ${a.error}`;
+  if (a.opened) return `opened PR ${a.opened}`;
+  if (a.merged) return `merged ${a.pr ?? ""}`.trim();
+  if (a.waiting) return `waiting: ${a.waiting}`;
+  if (a.skipped) return `skipped: ${a.skipped}`;
+  if (a.queued) return `queued "${a.queued}"`;
+  if (a.note) return `drafted "${a.note}"`;
+  return "no outcome recorded";
+}
+
+export function resolveContext(g: Goal): string {
+  const q = g.spec.target.queries;
+  const runs = g.log.slice(-6).map((r) => {
+    const pos = q.map((x) => `"${x}" ${r.positions[x] == null ? "not on page 1" : r.positions[x]}`).join(", ");
+    const acts = r.actions.length ? r.actions.map((a) => `    - ${a.lever}: ${outcomeOf(a)}${a.usd ? ` ($${a.usd.toFixed(2)})` : ""}`).join("\n") : "    - measured only";
+    return `- ${r.date} ${r.at}: ${pos}; indexed ${r.index ? `${r.index.indexed}/${r.index.total}` : "?"}; ${r.decision.on_track ? "on track" : "behind"}\n${acts}`;
+  }).join("\n");
+  const asks = g.today ? [...g.today.todos.map((t) => `- [${t.done ? "x" : " "}] ${t.text}${t.why ? ` (why: ${t.why})` : ""}`),
+    ...g.today.questions.map((x) => `- question: ${x.question}`)].join("\n") : "";
+  const runner = !g.runner.loaded ? "NOT LOADED in launchd" : g.runner.running ? "running right now" : `loaded, last exit ${g.runner.lastExit ?? "unknown"}`;
+  return [
+    `Goal: ${g.spec.goal} (id ${g.spec.id}, note "10-19 Projects/${g.note}.md")`,
+    `Done when: ${g.spec.done_when}. Deadline ${g.spec.deadline}, ${g.daysLeft} days left.`,
+    `Latest assessment: ${g.log.at(-1)?.decision.assessment ?? "no run yet"}`,
+    `Runner (launchd ${LABEL}): ${runner}. Code: ${RUNNER_CODE}. State and logs: ${path.join(STATE, g.spec.id)} and ${path.join(STATE, "runner.log")}.`,
+    `Recent runs, oldest first:\n${runs || "- none"}`,
+    asks ? `Thomas's part today:\n${asks}` : "Thomas's part today: nothing.",
+    `Levers it may pull: ${Object.keys(g.spec.levers).join(", ")}. Never: ${g.spec.never.join("; ")}.`,
+  ].join("\n\n");
+}
+
+export async function resolveGoal(id: string): Promise<{ sessionId: string }> {
+  const g = listGoals().find((x) => x.spec.id === id);
+  if (!g) throw new Error(`no goal ${id}`);
+  const { sendMessage, liveStats } = await import("@/lib/agent/manager");
+  const key = `goal:resolve:${id}:${localDate()}`;
+  // The first line is the chat's name on the board (§5h).
+  const message = `Goal · resolve ${g.note}\n\nThis autonomous goal is stuck or behind. Here is everything the dashboard knows about it:\n\n${resolveContext(g)}\n\n` +
+    "Find what is blocking it and resolve what you can, in this order:\n" +
+    "1. Anything broken in the machinery (a failed or refused action, a runner error): find the cause in the runner's code or logs and fix it. Then say whether it needs a re-run (don't kickstart it without asking: a run costs money and can open PRs).\n" +
+    "2. Actions it queued that are stuck (an article never picked up, a PR waiting): find out why, and unblock them if that is within the goal's levers.\n" +
+    "3. Thomas's part: do everything that doesn't need his login, his name or a click in a third-party UI, and prepare the rest (exact copy, exact URLs, the steps) so it takes him minutes.\n" +
+    "Respect the goal's never-list. Never post as Thomas. Finish with: what you fixed, what is still waiting and on whom, and what he should do next.";
+  let { sessionId } = sendMessage({ key, cwd: VAULT, message });
+  for (let i = 0; !sessionId && i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    sessionId = liveStats().details.find((d) => d.key === key)?.sessionId ?? null;
+  }
+  if (!sessionId) throw new Error("the chat didn't start in time — look for it on the board");
+  return { sessionId };
 }
