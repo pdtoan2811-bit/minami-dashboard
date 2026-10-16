@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AccountStatus } from "@/components/AccountStatus";
+import { AppShell } from "@/components/shell/AppShell";
+import { inter, interVi, mono } from "./today/fonts";
 
 export const metadata: Metadata = {
   title: "Minami Bento — Claude Code mission control",
@@ -10,7 +12,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#e8859b",
+  themeColor: "#0b0e12",
   // Android Chrome's default (`resizes-visual`) lays the keyboard OVER the page: the layout viewport
   // keeps its height, so the app shell — a fixed `h-dvh` column with the composer pinned to its
   // bottom — keeps the composer exactly where the keyboard now is. `resizes-content` shrinks the
@@ -26,14 +28,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     // `dark:` variants — so on a machine preferring light, /dashboard rendered light while everything
     // one click away rendered dark, and Nav (hardcoded `border-white/10`) was nearly invisible on it.
     // Committing to one theme is what lets the `dark:` branches below and in the panels go away.
-    <html lang="en" className="dark">
-      <body className="min-h-dvh bg-neutral-950 text-neutral-100 antialiased">
+    <html lang="en" className={`dark ${inter.variable} ${interVi.variable} ${mono.variable}`}>
+      <body className="min-h-dvh bg-[#0b0e12] text-neutral-100 antialiased">
         {/* Global, not per-page: falling off the preferred account matters wherever you happen to
             be in the app (Bento, /dashboard, /settings), so it lives in the root layout. Renders
             nothing while healthy — it only appears when you're on a fallback account (card, then a
             persistent dot once collapsed) or for a few seconds after recovering. */}
         <AccountStatus />
-        {children}
+        {/* The shell (§30) frames every app page and steps aside for the bare routes in lib/nav.ts
+            (the meeting canvas, /meet, /glance, pop-outs), which own the whole viewport. */}
+        <AppShell>{children}</AppShell>
         {/* The dashboard is its own first preview target (§21): in development the inspect script
             is included so a dev instance of this app can be commented on from a pop-out. A relative
             src is enough — the script learns the dashboard's origin from the handshake, not the URL.

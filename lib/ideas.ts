@@ -23,6 +23,9 @@ export type Idea = {
   /** He marked it 🔥 on the page. */
   starred?: string;
   removed?: { at: string; why: string };
+  /** Where it was sent from the page (§28 "links"): a to-do on Today, a story card for Video Studio.
+   *  Kept on the item so the button turns into "On Today" / "Sent to studio" and a second tap is a no-op. */
+  sent?: { today?: { at: string; date: string }; video?: { at: string; seed: string } };
 };
 export type Heat = "hot" | "warm" | "cold";
 export type RankedIdea = Idea & { score: number; heat: Heat; echo: number; cameBack?: boolean };
@@ -116,7 +119,8 @@ export type IdeaAction =
   | { op: "star"; id: string; on: boolean }
   | { op: "comment"; id: string; text: string }
   | { op: "remove"; id: string }
-  | { op: "retry"; id: string };
+  | { op: "retry"; id: string }
+  | { op: "sent-today"; id: string; date: string };
 
 export function apply(a: IdeaAction): Idea {
   const it = find(a.id);
@@ -125,6 +129,8 @@ export function apply(a: IdeaAction): Idea {
     case "comment": { const t = a.text.trim(); if (!t) return it; (it.comments ||= []).push({ at: new Date().toISOString(), text: t }); break; }
     case "remove": it.removed = { at: new Date().toISOString(), why: "removed on the page" }; break;
     case "retry": it.status = "enriching"; write(it); runBot(["--retry", it.id]); return it;
+    // The page adds the to-do through /api/today first and marks the idea only once that landed.
+    case "sent-today": (it.sent ||= {}).today = { at: new Date().toISOString(), date: String(a.date || "").slice(0, 10) }; break;
   }
   write(it);
   return it;
@@ -163,4 +169,32 @@ export function mediaPath(id: string, n: number): string | null {
   if (!p) return null;
   const abs = path.resolve(p);
   return abs.startsWith(path.resolve(MEDIA) + path.sep) && fs.existsSync(abs) ? abs : null;
+}
+
+// ── → Video Studio (§28 "links") ──────────────────────────────────────────────────────────────────
+// Video Studio (~/tiktok-studio) plans tomorrow's videos in the evening (scripts/topic-plan.mjs, launchd
+// com.thomas.video-evening) from STORY CARDS: harness/cards/<date>/<slug>/card.json from the last two
+// days that no locked plan has used. Its own intake for one story is `story-card.mjs card "<story or
+// url>"` — it reads the sources, writes the card up (one Claude call) and drops it where the planner
+// looks. So "Make a video" runs exactly that, rather than writing into the plan file: the plan is
+// shared with the Slack card's clock (~/Minami/src/videoPlan.js) and a hand-made slot would carry no
+// evidence, which the card's "every claim points at an evidence id" rule depends on.
+// The card competes on score with the night's news; it isn't guaranteed one of the five slots.
+const STUDIO = process.env.VIDEO_STUDIO_DIR || path.join(os.homedir(), "tiktok-studio");
+
+export function toVideo(id: string): Idea {
+  const it = find(id);
+  if (it.sent?.video) return it; // one card per idea: a second tap must not pay for a second write-up
+  const script = path.join(STUDIO, "scripts/story-card.mjs");
+  if (!fs.existsSync(script)) throw new Error(`Video Studio isn't at ${STUDIO} (set VIDEO_STUDIO_DIR)`);
+  // A link is the best seed (the script reads its page title and searches from it); else his words.
+  const seed = (it.links[0]?.url || [it.title, it.gist].filter(Boolean).join(" — ") || it.note || it.text || "").trim().slice(0, 400);
+  if (!seed) throw new Error("nothing to make a video from yet — wait until Minami has read it");
+  fs.mkdirSync(path.join(os.homedir(), ".minami"), { recursive: true });
+  const out = fs.openSync(path.join(os.homedir(), ".minami/ideas-video.log"), "a");
+  // Detached, as the drop box's read is: a deploy restarts this server, and the write-up takes a minute.
+  spawn(NODE, [script, "card", seed], { cwd: STUDIO, detached: true, stdio: ["ignore", out, out] }).unref();
+  (it.sent ||= {}).video = { at: new Date().toISOString(), seed };
+  write(it);
+  return it;
 }

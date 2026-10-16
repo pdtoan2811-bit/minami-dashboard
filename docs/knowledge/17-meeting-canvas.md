@@ -396,3 +396,14 @@ Verified 2026-10-12 on a production preview (:3012):
   cards and a Vietnamese "Đang nghe" pill. That is §17's language rule, not this leg.
 - **The meetings page has no player for `recording.*`.** The file is in the folder.
 
+
+## The library's links to Today and Ideas (2026-10-16, §30 nav revamp)
+
+`GET /api/meetings` now returns `actions` per meeting — its `action` and `decision` cards (the list
+already parses every `canvas.json`, so this is free). The library shows up to four under each row, and
+the meeting's Outline view puts the same buttons on those cards (`app/meetings/SendTo.tsx`):
+**→ Today** adds a to-do with `from: {href: "/meetings/<id>", label: "meeting: <title>"}` (Today
+renders it as a link back); **→ Ideas** posts the item to `/api/ideas` with the meeting's absolute URL
+in the text, which the bot lifts into the idea's links. "Sent" is remembered in localStorage, not in the
+archive: `canvas.json` is the meeting's record and the AI tidy rewrites it. The pages stay light; the
+"Minami / Meetings" breadcrumb is gone (the shell's rail carries the brand).

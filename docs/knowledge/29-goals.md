@@ -23,6 +23,21 @@ for "ecvision" and "ecvision ai" by 2026-11-12* (note *Ecvision Brand Number One
 - Paths follow the house rule: `SECOND_BRAIN_DIR` (default `~/secondBrain`), `MINAMI_GOALS_DIR` (default
   `~/.minami/goals`).
 
+## Inside /autopilot (§30, 2026-10-16)
+
+`/goals` now redirects to `/autopilot`. The page became `GoalsSection` in `app/autopilot/GoalsSection.tsx`
+and sits first on that page, above the Runners (§27). Why: a goal is the outcome and the automations are
+the runners. Each card shows the same content as before, plus a **Worked on by** list: the goal runner
+(it serves every goal) plus any automation whose `project` matches the goal's `note`. The comparison
+uses `projectKey`/`matchesProject`, a one-way prefix match: an `ecvision` goal claims `ecvisionContent`
+jobs, but not the other way round. Each row links to `#auto-<id>` in Runners.
+
+- Each card has `id="goal-<spec.id>"`, which the shell's "Needs you" drawer targets. The page renders
+  only after both fetches arrive, so `Autopilot.tsx` re-runs the hash jump once both feeds are in. The
+  browser's own jump fires on an empty page.
+- The shell's project filter hides goals whose note doesn't match and prints "Filtered to <pf> · N
+  hidden", so an empty page reads as filtered and not as broken.
+
 ## Gotchas
 
 - **A failed check is not a result.** A position is a number, `null` (Google showed results and we weren't among

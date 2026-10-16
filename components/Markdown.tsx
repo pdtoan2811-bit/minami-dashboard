@@ -198,7 +198,7 @@ function List({ L, keyBase, tone, caret }: { L: LList; keyBase: string; tone: To
         return (
           <li key={i} className={it.task ? "-ml-5 flex list-none items-start gap-2" : undefined}>
             {it.task && (
-              <span className={`mt-[3px] inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[9px] ${it.done ? "border-[var(--sakura)] bg-[var(--sakura)] text-white" : "border-white/25"}`}>{it.done ? "✓" : ""}</span>
+              <span className={`mt-[3px] inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[9px] ${it.done ? "border-[var(--sakura)] bg-[var(--accent-fill)] text-white" : "border-white/25"}`}>{it.done ? "✓" : ""}</span>
             )}
             <span className={`min-w-0 ${it.done ? "text-neutral-500 line-through" : ""}`}>
               {inlineLines(it.text, `${keyBase}i${i}`, tone)}

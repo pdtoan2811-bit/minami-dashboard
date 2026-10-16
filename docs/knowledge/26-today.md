@@ -381,3 +381,22 @@ Thomas: *"those articles are not on production ecvision.ai — check why it's do
 > 1-line prompt = 9 input tokens); a failed judge stores the evidence hash and waits for new evidence instead of
 > retrying; `models.mjs` `chat()` / `look()` are quarantined (they throw), so OpenRouter is image generation only.
 > Global rule: `~/.claude/CLAUDE.md` "LLM calls inside tools: Claude for text, Qwen for images ONLY".
+
+## Links to the other pages (2026-10-16, §30 nav revamp)
+
+- **Each handed-off row carries its chat's state as a link** (`ChatLink` in `Today.tsx`): WORKING /
+  WAITING ON YOU / DONE / IDLE, tap → `/?open=<sid>`. It sits outside the title button (a link can't
+  live inside a button), so the chat is one tap from the list without opening the row. The task chip
+  beside it now only says what the chat chip can't (your move, blocked, read the reply).
+- **"Waiting on you" comes from the server too.** `reconcile()` adds `need` per item from
+  `liveActivity()` — the same pending entry the pane shows — so the row is right on first paint and on a
+  phone whose `/api/agent/live` poll hasn't landed. The live tile still wins when it's there.
+- **`add` takes `from: {href, label}` and `folder`.** Meetings and Ideas create to-dos that link back
+  ("from meeting: …", "from idea: …" in the row's detail). It's a field, not markdown in `text`, because
+  `Inline` renders only backticks and `today-research.mjs` rewrites `text` wholesale. `href` must be a
+  same-origin path (`cleanFrom`). A to-do added with a `folder` skips research: research's output is a
+  folder, and it would re-home a to-do that was placed on purpose.
+- **The shell's project filter** hides rows whose `folder` doesn't match ("Filtered to X · N hidden ·
+  show all"). A to-do still being researched has no folder, so it hides under a filter.
+- No more Ideas / Board links in the top bar, and the phone's "Answer N decisions" bar sits 64px up,
+  above the shell's bottom bar.

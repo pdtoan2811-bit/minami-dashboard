@@ -1,10 +1,7 @@
-import type { Metadata } from "next";
-import { Automations } from "./Automations";
+import { redirect } from "next/navigation";
 
-// Every job that runs on this Mac without being asked — launchd jobs and the loops inside the Minami bot —
-// with run · pause · edit · delete (§27).
-export const metadata: Metadata = { title: "Minami — automations" };
-
+// /automations merged into /autopilot (§30) — its jobs are the Runners section there, under the goals they serve.
+// Kept as a redirect so bookmarks and old links still land on the same list.
 export default function AutomationsPage() {
-  return <Automations />;
+  redirect("/autopilot#runners");
 }

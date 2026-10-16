@@ -54,6 +54,11 @@ function readMeeting(dir: string, withBody = false) {
     cost: Number(meta.cost ?? 0),
     cards: cards.length,
     topics,
+    /** Action items and decisions, for the library's "→ Today" / "→ Ideas" (§17 "links"). The list
+     *  already reads every canvas.json to count cards, so these cost nothing extra; the transcript and
+     *  the rest of the graph stay behind ?id=. */
+    actions: cards.filter((n) => n.kind === "action" || n.kind === "decision")
+      .map((n) => ({ id: n.id, kind: n.kind, label: n.label, ...(n.detail ? { detail: n.detail.slice(0, 400) } : {}) })),
     ...(withBody ? { graph, transcript, notes: safeRead(join(p, "notes.md")) } : {}),
   };
 }

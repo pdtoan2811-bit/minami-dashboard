@@ -1,5 +1,4 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Nav } from "@/components/Nav";
 import { ModelRouting } from "@/components/ModelRouting";
 import { RoutingFlow } from "@/components/RoutingFlow";
 import { UsagePanel } from "@/components/UsagePanel";
@@ -55,12 +54,10 @@ export default function Page() {
   return (
     <main className="mx-auto w-full max-w-md px-4 pb-16 pt-8 lg:max-w-5xl xl:max-w-6xl">
       <header className="mb-4 flex items-center gap-2 lg:mb-6">
-        <span className="text-2xl lg:text-3xl">🌸</span>
         <div className="flex-1">
-          <h1 className="text-lg font-semibold tracking-tight lg:text-2xl">Minami · Metrics</h1>
+          <h1 className="text-lg font-semibold tracking-tight lg:text-2xl">Metrics</h1>
           <p className="text-xs text-neutral-500">Live usage & model routing across your machines</p>
         </div>
-        <Nav />
       </header>
 
       {/* Masonry: 1 column on mobile, 2 on tablet, 3 on desktop. Cards never split across columns. */}

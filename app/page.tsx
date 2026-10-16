@@ -1,8 +1,6 @@
 "use client";
 
-import { Nav } from "@/components/Nav";
 import { Segmented } from "@/components/ui/Segmented";
-import { NotificationBell } from "@/components/NotificationBell";
 import AutopilotTile from "@/components/AutopilotTile";
 import { useSetting } from "@/lib/use-settings";
 // The catalog, not lib/model-pins — that module reads ~/Minami's config with node:fs and can't be
@@ -46,7 +44,9 @@ import { PhoneAccess } from "@/components/PhoneAccess";
 import { Inbox, type InboxLive } from "@/components/Inbox";
 import { taskKeyOf } from "@/lib/task-groups";
 import { TeamButton, TeamRow, TeamSheet, useTeamInbox } from "@/components/TeamInbox";
-import { NeedsYouButton, type Waiting } from "@/components/NeedsYou";
+import { useShellFullscreen } from "@/components/shell/use-shell";
+import { DayStrip } from "@/components/shell/DayStrip";
+import { matchesProject, useProjectFilter } from "@/lib/project-filter";
 import { VoiceButton } from "@/components/VoiceButton";
 import { useBackLayer } from "@/lib/use-back";
 import { useBuildRefresh } from "@/lib/use-build-refresh";
@@ -733,6 +733,7 @@ export default function BentoHome() {
     [pool, winDays],
   );
 
+  const [pf, setPf] = useProjectFilter();
   const projects = useMemo<Project[]>(() => {
     const list = groupProjects(windowed);
     const sorters = {
@@ -742,8 +743,11 @@ export default function BentoHome() {
     };
     list.sort(sorters[sortBy]);
     const ql = q.trim().toLowerCase();
-    return ql ? list.filter((p) => `${p.name} ${p.goals.join(" ")} ${p.latest}`.toLowerCase().includes(ql)) : list;
-  }, [windowed, q, sortBy]);
+    // The shell's project filter (§30) is one more view filter, like Search: it narrows the board and
+    // never the open panel (see `proj` below for why a filter must not unmount a conversation).
+    const inScope = pf ? list.filter((p) => matchesProject(pf, p.name, p.cwd)) : list;
+    return ql ? inScope.filter((p) => `${p.name} ${p.goals.join(" ")} ${p.latest}`.toLowerCase().includes(ql)) : inScope;
+  }, [windowed, q, sortBy, pf]);
 
   // The open project, resolved OUTSIDE the board's filters.
   //
@@ -899,19 +903,19 @@ export default function BentoHome() {
   // The team inbox (§25). Explain starts its chat server-side and hands back the id; parking it in
   // openParam reuses the `?open=` path, which already waits for the new session to reach the list.
   const team = useTeamInbox();
-  // Every chat waiting on you, oldest first — the desktop's counterpart of the phone inbox's "needs
-  // you" group, from the same poll the tiles read (§26: nine Today hand-offs, one question, no way to
-  // find it).
-  const waitingOnYou = useMemo<Waiting[]>(() => Object.entries(liveAct)
-    .filter(([, a]) => a.need)
-    .map(([sid, a]) => {
-      const s = sessions.find((x) => x.id === sid);
-      return { sid, title: (s && titleOf(s)) || a.label || "A chat", project: s?.project || a.cwd.split("/").pop() || "",
-        summary: a.need!.summary, kind: a.need!.kind, since: (a.need as { since?: number }).since };
-    })
-    .sort((x, y) => (x.since ?? 0) - (y.since ?? 0)), [liveAct, sessions]);
   const [teamOpen, setTeamOpen] = useState(false);
   const openWhenListed = (sid: string) => { openParam.current = sid; } // the next sessions poll runs the effect;
+  // The shell's drawer opening a chat while the board is already mounted (§30). `?open=` is read once
+  // at mount, so a same-page link would change the URL and do nothing; the drawer sends this instead.
+  // A chat not yet in the list (a goal capture that started seconds ago) waits for the next poll.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const sid = (e as CustomEvent<string>).detail;
+      if (sessionsRef.current.some((x) => x.id === sid)) openChat(sid); else openWhenListed(sid);
+    };
+    window.addEventListener("minami:open-chat", on);
+    return () => window.removeEventListener("minami:open-chat", on);
+  }, [openChat]);
   const startTopic = (cwd: string, label?: string) => {
     const name = label || cwd.split("/").filter(Boolean).pop() || cwd;
     setPicker(false); setProject(null); setAddMenu(false);
@@ -1200,6 +1204,9 @@ export default function BentoHome() {
   }, [isDragging, setPanelW, setRail]);
 
   const proj = project ? (projects.find((p) => p.name === project) || openProj) : newTopic;
+  // A chat on a phone takes the whole screen: the composer owns the bottom edge and the keyboard the
+  // rest, so the shell's top strip and tab bar step aside (Back closes the topic and brings them back).
+  useShellFullscreen(compact && !!proj);
   projCwdRef.current = proj?.cwd || "";
   const maxW = Math.max(1, ...projects.map((p) => p.weight)); // size ratio is vs the busiest project
   // The rail is only a state the bento can be *in* while a chat is open; with no panel it would just
@@ -1294,7 +1301,7 @@ export default function BentoHome() {
   );
 
   return (
-    <div ref={shellRef} className={`bg-bento flex h-dvh w-screen overflow-hidden text-neutral-100 ${isDragging ? "cursor-col-resize select-none" : ""}`} style={{ ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
+    <div ref={shellRef} className={`bg-bento flex w-full overflow-hidden text-neutral-100 ${isDragging ? "cursor-col-resize select-none" : ""}`} style={{ height: "calc(100dvh - var(--shell-top) - var(--shell-bottom))", ["--lw" as string]: proj ? `${100 - panelW}%` : "100%", ["--rw" as string]: proj ? `${panelW}%` : "0%" }}>
       {/* Left: bento — full grid, or the rail once the chat panel has taken the room. */}
       {railed && !split ? (
         <div className={`hidden shrink-0 ${compact ? "" : "md:block"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`} style={{ width: RAIL_W }}>
@@ -1313,24 +1320,25 @@ export default function BentoHome() {
         {/* Only the full-width (no project open) case needs the bell's gutter: with a panel open the
             bento is a left column whose right edge is nowhere near the viewport corner. */}
         {/* Split (N5 unfolded) with the keyboard up: the list is an icon strip, no header at all. */}
-        {!(split && keyboardUp && proj) && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${compact ? "px-3 pb-1 pt-3" : `pb-2 pl-6 pt-5 ${proj ? "pr-6" : team.data?.ok ? "pr-28" : "pr-16"}`}`}>
-          <span className="text-xl">🌸</span><h1 className="text-base font-semibold tracking-tight">{compact ? "Minami" : "Minami Bento"}</h1>
+        {!(split && keyboardUp && proj) && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${compact ? "px-3 pb-1 pt-3" : `pb-2 pl-6 pt-5 ${proj ? "pr-6" : team.data?.ok ? "pr-28" : "pr-6"}`}`}>
+          {/* The brand is the shell's (§30); on a phone its top strip already says it, so the board only names itself on a desktop. */}
+          {!compact && <h1 className="text-base font-semibold tracking-tight">Bento</h1>}
           {!compact && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>}
-          {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "#e8859b" }} />labeling…</span>}
+          {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "var(--sakura)" }} />labeling…</span>}
           {/* On a phone the search + Bento/Metrics/Settings row docks at the bottom, in the thumb's zone —
                 same band as the chat bar inside a topic, so navigation is always found in one place.
                 Fixed, so with `interactive-widget=resizes-content` it rides up on the keyboard while
                 you search, the way Safari's bottom address bar does. */}
             {/* In split view the list pane is 288px: the bar stays at the top of it (Material's
                 list-detail puts the list's own controls in its header), never across the chat. */}
-            <div className={`ml-auto flex items-center gap-2 ${compact && !split ? "fixed inset-x-0 bottom-0 z-40 ml-0 border-t border-white/10 bg-neutral-950/95 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2" : split ? "w-full ml-0" : ""}`}>
+            <div className={`ml-auto flex items-center gap-2 ${compact && !split ? "fixed inset-x-0 bottom-[var(--shell-bottom)] z-40 ml-0 border-t border-white/10 bg-[#0b0e12]/90 px-3 pb-2 pt-2 backdrop-blur" : split ? "w-full ml-0" : ""}`}>
             {/* Inbox | Topics — the phone's two homes. Inbox: every chat by what it needs from you.
                 Topics: the bento board. 44px tall, in the thumb band. */}
             {compact && (
               <div className="flex shrink-0 rounded-xl border border-white/10 p-0.5">
                 {(["inbox", "topics"] as const).map((v) => (
                   <button key={v} onClick={() => setHomeView(v)}
-                    className={`min-h-11 rounded-lg px-3 py-2 text-[13px] font-medium ${homeView === v ? "bg-[var(--sakura)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Topics"}</button>
+                    className={`min-h-11 rounded-lg px-3 py-2 text-[13px] font-medium ${homeView === v ? "bg-[var(--accent-fill)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Topics"}</button>
                 ))}
               </div>
             )}
@@ -1347,7 +1355,6 @@ export default function BentoHome() {
                 nothing to tell you they were the same idea. */}
             {proj && <button onClick={() => setRail(true)} title="Collapse the bento to a rail  (⌘B)" aria-label="Collapse the bento to a rail"
               className="hidden rounded-lg border border-white/10 p-1.5 text-neutral-500 transition-colors hover:border-white/25 hover:text-neutral-200 md:block"><PanelLeftClose className="h-3.5 w-3.5" /></button>}
-            <Nav />
           </div>
         </header>}
 
@@ -1360,6 +1367,8 @@ export default function BentoHome() {
           </div>
         ) : (
         <div className={`min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3 ${split ? "" : "compact:pb-24"}`}>
+          {!proj && !split && <DayStrip />}
+          {pf && !proj && <p className="mb-2 text-[12px] text-neutral-500">Filtered to {pf} · <button onClick={() => setPf("")} className="underline underline-offset-2 hover:text-neutral-300">show all</button></p>}
           {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? (
             <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">
@@ -1592,8 +1601,8 @@ export default function BentoHome() {
           const failed = others.filter((x) => liveAct[x.id]?.ended && !liveAct[x.id]?.ended?.ok && !liveAct[x.id]?.busy && (liveAct[x.id]?.ended?.at || 0) > (seen.seen[x.id] || seen.floor)).length;
           const waiting = others.filter((x) => liveAct[x.id]?.need).length;
           return (
-            // pr-16: the app-wide bell is pinned top-right over this row (see the NotificationBell note).
-            <div className={`flex shrink-0 items-center gap-3 border-b border-white/10 py-2.5 pl-6 ${team.data?.ok ? "pr-28" : "pr-16"}`}>
+            // The gutter is for the team button pinned top-right on a desktop (the bell moved to the shell, §30).
+            <div className={`flex shrink-0 items-center gap-3 border-b border-white/10 py-2.5 pl-6 pr-6 ${team.data?.ok ? "md:pr-28" : ""}`}>
               <button onClick={() => setChatSheet(true)} className="flex min-w-0 max-w-[60%] items-center gap-2 rounded-full bg-white/[0.06] px-3.5 min-h-11 py-1.5 text-[13px] active:bg-white/10">
                 <span className="min-w-0 truncate">{s ? titleOf(s) : "New chat"}</span><ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
               </button>
@@ -1725,7 +1734,7 @@ export default function BentoHome() {
                     {([["tabs", "tabs"], ["grid", "grid"]] as const).map(([k, label]) => (
                       <button key={k} onClick={() => setPaneView(k)}
                         className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                          paneView === k ? "bg-[var(--sakura)] text-white" : "text-neutral-500 hover:text-neutral-300"}`}>
+                          paneView === k ? "bg-[var(--accent-fill)] text-white" : "text-neutral-500 hover:text-neutral-300"}`}>
                         {k === "grid" && <Grid2x2 className="h-2.5 w-2.5" />}{label}
                       </button>
                     ))}
@@ -1932,12 +1941,12 @@ export default function BentoHome() {
 
           z-[60] is deliberate: above the panel/bento headers (z-20/z-30) so it's always clickable,
           below the lightbox and folder picker (z-[90]/z-[100]) so a modal still covers it. */}
-      <div className="fixed right-3 top-2.5 z-[60] flex gap-1.5">
-        {/* Only while something waits, and only where there's room: on a phone it's the inbox's first row. */}
-        <span className="hidden md:block"><NeedsYouButton items={waitingOnYou} onOpen={openChat} /></span>
-        {team.data?.ok && <span className="hidden md:block"><TeamButton waiting={team.waiting} onOpen={() => setTeamOpen(true)} /></span>}
-        <NotificationBell />
-      </div>
+      {/* §30: "needs you" and the update log moved to the shell's bell, which is on every page rather
+          than only this one. Team answers stay here: they are not part of the one badge (Thomas's
+          call — a teammate's reply is news, not a thing that blocks him). */}
+      {team.data?.ok && <div className="fixed right-3 top-2.5 z-[60] hidden gap-1.5 md:flex">
+        <TeamButton waiting={team.waiting} onOpen={() => setTeamOpen(true)} />
+      </div>}
       {teamOpen && <TeamSheet inbox={team.data} reload={team.reload} onClose={() => setTeamOpen(false)} onExplained={openWhenListed} />}
 
       {preview && <PreviewOverlay href={preview} onClose={() => setPreview(null)} />}
@@ -3530,7 +3539,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           )}
           <pre className="mt-1.5 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-black/40 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-neutral-400">{permPreview(agent.pending.toolName, agent.pending.input)}</pre>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button onClick={() => agent.respond("allow")} className="rounded-lg bg-[var(--sakura)] px-3 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90">Approve</button>
+            <button onClick={() => agent.respond("allow")} className="rounded-lg bg-[var(--accent-fill)] px-3 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90">Approve</button>
             {pendingHost && (
               <button onClick={() => { setBrowserAllowHost(pendingHost); agent.respond("allow"); }}
                 title={`Auto-approve every browser action on ${pendingHost} until this pane is closed`}
@@ -3721,7 +3730,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           )}
           <button onClick={submit} disabled={!input.trim() || !cwd}
             title={agent.busy ? "Queue this for after the current turn" : "Send"}
-            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3.5 pointer-coarse:py-2 ${agent.busy ? "bg-[#c47f18]/90" : "bg-[var(--sakura)]"}`}>
+            className={`shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-30 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3.5 pointer-coarse:py-2 ${agent.busy ? "bg-[#c47f18]/90" : "bg-[var(--accent-fill)]"}`}>
             {agent.busy ? "＋↵" : "↵"}
           </button>
         </div>

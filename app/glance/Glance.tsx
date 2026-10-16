@@ -642,7 +642,7 @@ export function Glance() {
               className="min-w-0 flex-1 bg-transparent py-2.5 text-[16px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
             />
             <button type="submit" aria-label={last ? "Send all answers" : "Next question"} disabled={sending || (last && !hasAny)} onPointerDown={(e) => e.preventDefault()}
-              className="flex h-10 min-w-10 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] px-2.5 text-[14px] text-white disabled:opacity-40">
+              className="flex h-10 min-w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent-fill)] px-2.5 text-[14px] text-white disabled:opacity-40">
               {sending ? "…" : last ? "Send" : "›"}
             </button>
           </form>
@@ -664,7 +664,7 @@ export function Glance() {
             className="min-w-0 flex-1 bg-transparent py-2.5 text-[16px] leading-[20px] text-neutral-100 caret-[var(--sakura)] outline-none placeholder:text-neutral-500"
           />
           <button type="submit" aria-label="Send" disabled={sending || (!draft.text.trim() && !draft.pick)} onPointerDown={(e) => e.preventDefault()}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] text-[15px] text-white disabled:opacity-40">
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent-fill)] text-[15px] text-white disabled:opacity-40">
             {sending ? "…" : "↑"}
           </button>
         </form>

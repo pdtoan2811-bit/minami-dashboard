@@ -24,6 +24,10 @@ export type TodayTodo = { id: string; title?: string; text: string; handoff?: Ha
   research?: { state: "running" | "done" | "failed"; at: string; error?: string; usd?: number | null }; asked?: string;
   /** His comments on the task. `to: "chat"` = also sent into its hand-off chat; `instruction` = given with "Do it with Minami". */
   comments?: { at: string; text: string; to?: "chat" | "instruction" }[];
+  /** Where it came from when another page made it (§26 "links"): a meeting's action item, an idea.
+   *  Its own field, not markdown in `text`: the page renders text as plain words + `code`, and the
+   *  research run rewrites `text` wholesale, which would drop a link written into it. */
+  from?: { href: string; label: string };
   progress?: { met: number; total: number; detail: string }; why?: string; focus?: string; folder?: string; est_min?: number; cmd?: string; done: boolean; source: "heartbeat" | "you" | "carried"; done_at?: string };
 export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; recommended?: number; question: string; context?: string; focus?: string; folder?: string; multiSelect?: boolean;
   options: { label: string; description?: string }[]; resolved: null | { answer: string | string[]; at: string };
@@ -78,13 +82,24 @@ const log = (day: TodayDay, kind: string, text: string) => day.log.push({ at: no
 
 export type TodayAction =
   | { op: "toggle"; id: string; done?: boolean } // `done` makes it idempotent: a stale tab can't flip it back
-  | { op: "add"; text: string; focus?: string }
+  // `from` / `folder`: set by the pages that hand a to-do over (meetings, ideas). `folder` pins where the
+  // work runs: a to-do sent from an idea to Video Studio must not be re-homed by research.
+  | { op: "add"; text: string; focus?: string; from?: { href: string; label: string }; folder?: string }
   | { op: "remove"; id: string }
   | { op: "resolve"; id: string; answer: string | string[] }
   | { op: "reopen"; id: string }
   | { op: "note"; text: string }
   | { op: "research"; id: string } // research a to-do again (after a failure, or a stalled run)
   | { op: "comment"; id: string; text: string };
+
+/** Only same-origin paths: `from` is rendered as a link on the page, so a posted `javascript:` or an
+ *  off-site URL must never reach it. */
+function cleanFrom(f: unknown): TodayTodo["from"] {
+  if (!f || typeof f !== "object") return undefined;
+  const { href, label } = f as { href?: unknown; label?: unknown };
+  if (typeof href !== "string" || !/^\/(?!\/)[^\s]*$/.test(href) || typeof label !== "string" || !label.trim()) return undefined;
+  return { href: href.slice(0, 300), label: label.trim().slice(0, 80) };
+}
 
 // A tap aimed at an item that isn't in the file any more (a Rebuild on another device dropped it, or the
 // page rolled over to a new day) must fail loudly: a silent 200 told Decide "That's settled" and lost it.
@@ -111,8 +126,13 @@ export function applyAction(date: string, a: TodayAction): TodayDay {
     case "add": {
       const text = a.text.trim(); if (!text) break;
       const id = crypto.createHash("sha1").update(text + now()).digest("hex").slice(0, 8);
-      day.todos.push({ id, text, asked: text, focus: a.focus || "other", done: false, source: "you", research: { state: "running", at: now() } });
-      log(day, "todo", `Added: ${text}`); changed = true; research = id;
+      const from = cleanFrom(a.from);
+      // A pinned folder skips research: research's whole output is a folder, a detail and a command,
+      // and it would re-home the to-do (bin/today-research.mjs overwrites `folder`).
+      const folder = typeof a.folder === "string" && /^~\/[\w./ -]+$/.test(a.folder) && !a.folder.includes("..") ? a.folder : undefined;
+      day.todos.push({ id, text, asked: text, focus: a.focus || "other", done: false, source: "you", ...(from ? { from } : {}),
+        ...(folder ? { folder } : { research: { state: "running" as const, at: now() } }) });
+      log(day, "todo", `Added${from ? ` (from ${from.label})` : ""}: ${text}`); changed = true; research = folder ? null : id;
       break;
     }
     case "comment": {
@@ -217,7 +237,10 @@ export function unmetDeps(day: TodayDay, t: TodayTodo): TodayTodo[] {
   return (t.after ?? []).map((id) => day.todos.find((x) => x.id === id)).filter((x): x is TodayTodo => !!x && !x.done);
 }
 
-export type ItemStatus = HandoffReport & { busy: boolean; live: boolean };
+/** `need`: the chat is waiting on him (a question, a plan, a held tool call), from liveActivity() — the
+ *  same pending entry the pane and the board show. Sent with the day so the row says "waiting on you"
+ *  on first paint and on a device whose /api/agent/live poll hasn't landed yet. */
+export type ItemStatus = HandoffReport & { busy: boolean; live: boolean; need?: { kind: string; summary: string } };
 
 /** What each hand-off came to, and the ticks that follow from it (§26).
  *
@@ -226,8 +249,9 @@ export type ItemStatus = HandoffReport & { busy: boolean; live: boolean };
  *  back, the same rule the vault auto-tick keeps. An `ask` is finished when the card is out; it has no
  *  work to tick. Writes the day only when something changed. Returns a report per item id for the page. */
 export async function reconcile(date: string): Promise<{ day: TodayDay; status: Record<string, ItemStatus> }> {
-  const { liveStats } = await import("@/lib/agent/manager");
+  const { liveStats, liveActivity } = await import("@/lib/agent/manager");
   const live = new Map(liveStats().details.filter((d) => d.sessionId).map((d) => [d.sessionId as string, d]));
+  const tiles = liveActivity();
   const day = readDay(date);
   const status: Record<string, ItemStatus> = {};
   let changed = false;
@@ -236,7 +260,8 @@ export async function reconcile(date: string): Promise<{ day: TodayDay; status: 
     if (!h?.sessionId) continue;
     const l = live.get(h.sessionId);
     const r = handoffReport(h.sessionId, [it.folder, h.cwd], !!l?.busy);
-    status[it.id] = { ...r, busy: !!l?.busy, live: !!l };
+    const need = tiles[h.sessionId]?.need;
+    status[it.id] = { ...r, busy: !!l?.busy, live: !!l, ...(need ? { need: { kind: need.kind, summary: need.summary } } : {}) };
     if (h.how !== "ask" && r.outcome?.state === "done" && !r.outcome.stale && !it.done && !it.manual) {
       it.done = true; it.done_at = new Date(r.outcome.at).toISOString(); it.done_by = "minami";
       it.done_evidence = `Minami's chat reported it done${r.outcome.why ? ` — ${r.outcome.why}` : ""}.`;

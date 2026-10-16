@@ -94,7 +94,7 @@ export default function AgentConfig({ agent, onChange }: { agent: AgentDef; onCh
             <button key={m.id} onClick={() => save({ permissionMode: m.id })} title={m.note}
               className={`rounded-md px-2 py-0.5 text-[11px] transition-colors ${
                 agent.permissionMode === m.id
-                  ? m.id === "bypassPermissions" ? "bg-green-500/20 text-green-400" : "bg-[var(--sakura)] text-white"
+                  ? m.id === "bypassPermissions" ? "bg-green-500/20 text-green-400" : "bg-[var(--accent-fill)] text-white"
                   : "text-neutral-400 hover:text-neutral-200"}`}>
               {m.label}
             </button>
@@ -127,7 +127,7 @@ export default function AgentConfig({ agent, onChange }: { agent: AgentDef; onCh
       <Field label="Remove" hint="Takes it off the roster. Its folder — the notes, the memory, the work — is never touched, so re-adopting the same path brings it back.">
         {confirmDelete ? (
           <div className="flex gap-1.5">
-            <button onClick={async () => { await removeAgent(agent.id); window.location.href = "/agents"; }}
+            <button onClick={async () => { await removeAgent(agent.id); window.location.href = "/crew"; }}
               className="rounded-lg bg-red-500/20 px-2.5 py-1 text-[11px] text-red-300">Remove {agent.name}</button>
             <button onClick={() => setConfirmDelete(false)} className="rounded-lg px-2.5 py-1 text-[11px] text-neutral-400">Cancel</button>
           </div>

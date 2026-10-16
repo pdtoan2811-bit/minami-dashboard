@@ -12,6 +12,7 @@ import Link from "next/link";
 import type { TodayDay, TodayTodo, TodayLoop, ItemStatus } from "@/lib/today";
 import { K, mix, EASE, hhmm, Inline, Ground, Sky, TopBar, Glass, Pills, Eyebrow, Title, PillButton, OptionPill, Chip, TextButton, Fold } from "./ui";
 import { answerInPlace, quickAnswerable, stateOf, useHandoffLive, type HandoffState, type LiveTile } from "./live";
+import { matchesProject, useProjectFilter } from "@/lib/project-filter";
 
 const FOCUS: Record<string, { label: string; color: string }> = {
   seo: { label: "SEO", color: K.accent2 }, video: { label: "Video", color: K.cat4 }, other: { label: "Other", color: K.faint },
@@ -47,6 +48,9 @@ export function Today() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   /** Per item id: what its hand-off came to (status line, drift), from the server's reconcile. */
   const [status, setStatus] = useState<Record<string, ItemStatus>>({});
+  // The shell's project filter (§30). A to-do belongs to a project through its folder; one with no
+  // folder yet (still being researched) belongs to none, so it hides under a filter — and the count says so.
+  const [pf, setPf] = useProjectFilter();
   const heroRef = useCallback((el: HTMLDivElement | null) => {
     if (!el) return;
     new IntersectionObserver(([e]) => setHeroGone(!e.isIntersecting), { threshold: 0 }).observe(el);
@@ -164,7 +168,9 @@ export function Today() {
   const go = (d?: string) => { if (!d) return; load(d).then((ok) => { if (ok) history.replaceState(null, "", d === today ? "/today" : `/today?date=${d}`); }); };
   const open = day.loops.filter((l) => !l.resolved && !l.handoff);
   const done = day.todos.filter((t) => t.done).length;
-  const shown = day.todos.filter((t) => filter === "all" || fkey(t.focus) === filter);
+  const inFocus = day.todos.filter((t) => filter === "all" || fkey(t.focus) === filter);
+  const shown = inFocus.filter((t) => matchesProject(pf, t.folder));
+  const hidden = inFocus.length - shown.length;
   const stalled = day.status === "running" && Date.now() - Date.parse(day.started_at || "0") > STALL_MS;
   // Not status: his first edit on a plan-less day flips "none" to "ready" with built_at still null, and
   // the hero must keep offering the build (minami-open.sh only checks that the file exists).
@@ -180,12 +186,11 @@ export function Today() {
 
   return (
     <Ground>
-      <TopBar right={<>
+      {/* Ideas / Board links went with §30: the shell's rail and phone bar are the way between pages. */}
+      <TopBar title="Today" right={<>
         <button onClick={() => go(days[idx + 1])} disabled={idx < 0 || !days[idx + 1]} aria-label="Previous day" className="px-1.5 disabled:opacity-25">‹</button>
         {!isToday && <button onClick={() => go(today)} className="hover:text-white">Today</button>}
         <button onClick={() => go(days[idx - 1])} disabled={idx <= 0} aria-label="Next day" className="px-1.5 disabled:opacity-25">›</button>
-        <Link href="/ideas" className="ml-2 hover:text-white">Ideas</Link>
-        <Link href="/" className="ml-2 hover:text-white">Board</Link>
       </>} />
 
       <main className="mx-auto flex w-full max-w-[620px] flex-col gap-4 px-4 pb-40 pt-2">
@@ -233,10 +238,14 @@ export function Today() {
         {filter !== "all" && day.focus.find((f) => f.id === filter) &&
           <p className="px-2 text-center text-[13px] leading-snug" style={{ color: K.muted }}><Inline text={day.focus.find((f) => f.id === filter)!.status} /></p>}
 
+        {pf && hidden > 0 && <p className="text-center text-[12.5px]" style={{ color: K.faint }}>
+          Filtered to <b style={{ color: K.muted }}>{pf}</b> · {hidden} hidden · <button onClick={() => setPf("")} className="underline hover:text-white">show all</button></p>}
+
         {/* to-dos */}
         {(day.todos.length > 0 || isToday) && (
           <Glass className="overflow-hidden">
             <ul>{shown.map((t, i) => <TodoRow key={t.id} t={t} first={i === 0} state={isToday ? states.get(t.id) : undefined} deps={unmet(day, t)}
+              chat={t.handoff ? chatState(t, status[t.id], live[t.handoff.sessionId], isToday) : undefined}
               onToggle={() => act({ op: "toggle", id: t.id, done: !t.done })} onRemove={() => act({ op: "remove", id: t.id })}
               onDo={(note) => handoff("todo", t.id, "do", note ? { note } : {})} onResearch={() => act({ op: "research", id: t.id })}
               onComment={(text) => act({ op: "comment", id: t.id, text })} />)}</ul>
@@ -284,9 +293,9 @@ export function Today() {
         </Fold>
       </main>
 
-      {/* phone: the one thing to do, always in reach */}
+      {/* phone: the one thing to do, always in reach — above the shell's 64px bottom bar (§30), not on it */}
       {open.length > 0 && !deciding && heroGone && (
-        <div className="fixed inset-x-0 bottom-0 z-20 p-3 sm:hidden" style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))", background: `linear-gradient(to top, ${K.bg}, transparent)` }}>
+        <div className="fixed inset-x-0 z-20 p-3 sm:hidden" style={{ bottom: "calc(64px + env(safe-area-inset-bottom))", background: `linear-gradient(to top, ${K.bg}, transparent)` }}>
           <PillButton tone="accent" cap onClick={() => setDeciding(true)}>{open.length === 1 ? "Answer 1 decision" : `Answer ${open.length} decisions`}</PillButton>
         </div>
       )}
@@ -479,7 +488,7 @@ function Done({ qs, outcome, onClose, onHandAll }: { qs: TodayLoop[]; outcome: R
 }
 
 // ── rows ─────────────────────────────────────────────────────────────────────────────────────────
-function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo, onResearch, onComment }: { t: TodayTodo; first: boolean; state?: TaskState; deps: TodayTodo[]; onToggle: () => void; onRemove: () => void; onDo: (note?: string) => Promise<{ ok?: boolean } | undefined>; onResearch: () => unknown; onComment: (text: string) => Promise<{ day?: unknown; error?: string } | undefined> }) {
+function TodoRow({ t, first, state, deps, chat, onToggle, onRemove, onDo, onResearch, onComment }: { t: TodayTodo; first: boolean; state?: TaskState; deps: TodayTodo[]; chat?: ChatState; onToggle: () => void; onRemove: () => void; onDo: (note?: string) => Promise<{ ok?: boolean } | undefined>; onResearch: () => unknown; onComment: (text: string) => Promise<{ day?: unknown; error?: string } | undefined> }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -499,8 +508,9 @@ function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo, onResearch, 
           <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: FOCUS[fkey(t.focus)].color }} />
           <span className={`min-w-0 flex-1 text-[15px] font-medium leading-snug ${t.done ? "line-through" : ""}`} style={{ color: t.done ? K.faint : K.ink, textDecorationColor: K.line2 }}>
             <Inline text={titleOf(t)} /></span>
-          {state && state.s !== "todo" && state.s !== "done" ? <TaskChip s={state.s} />
-            : t.handoff && !state ? <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.accent, 22), color: K.accentBright, fontFamily: "var(--today-mono)" }}>MINAMI</span> : null}
+          {/* A handed-off row's chat chip (beside this button) already says "working" / "waiting on you";
+              the task chip here carries only what the chat chip can't: your move, blocked, read the reply. */}
+          {state && state.s !== "todo" && state.s !== "done" && !(chat && (state.s === "needs" || state.s === "working")) ? <TaskChip s={state.s} /> : null}
           {looking && !t.handoff && <span className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: "rgba(255,255,255,.06)", color: K.muted, fontFamily: "var(--today-mono)" }}>◌ RESEARCHING</span>}
           {state?.drift && <span title={state.drift} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix("#ff8a8d", 16), color: "#ff8a8d", fontFamily: "var(--today-mono)" }}>⚠ DRIFT</span>}
           {t.done && t.done_by === "auto" && <span title={t.done_evidence} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.cat3, 22), color: "#f3c766", fontFamily: "var(--today-mono)" }}>AUTO</span>}
@@ -508,6 +518,8 @@ function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo, onResearch, 
           {t.est_min ? <span className="shrink-0 tabular-nums" style={{ color: K.faint, fontFamily: "var(--today-mono)", fontSize: 11 }}>{t.est_min}m</span> : null}
           <span className="shrink-0 text-[12px] transition-transform" style={{ color: K.faint, transform: open ? "rotate(90deg)" : "none" }}>›</span>
         </button>
+        {/* Outside the title button: a link can't sit inside a button. One tap from the list to the chat. */}
+        {t.handoff && chat && <ChatLink sid={t.handoff.sessionId} s={chat} />}
       </div>
       {/* The one line that says where this stands — visible without opening the row. */}
       {state?.why && !open && <p className="-mt-2 truncate pb-3 pl-[56px] pr-5 text-[12.5px] leading-snug" style={{ color: TASK[state.s].color }}>{state.why}</p>}
@@ -528,6 +540,7 @@ function TodoRow({ t, first, state, deps, onToggle, onRemove, onDo, onResearch, 
           <div className="flex flex-wrap items-center gap-2 text-[11.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
             {t.folder && <span className="rounded-full px-2.5 py-1" style={{ background: "rgba(255,255,255,.06)" }}>{t.folder}</span>}
             {t.source === "carried" && <span style={{ color: K.cat3 }}>from yesterday</span>}
+            {t.from && <Link href={t.from.href} className="hover:text-white" style={{ color: K.accentBright }}>from {t.from.label} →</Link>}
             {t.cmd && <button onClick={() => { navigator.clipboard?.writeText(t.cmd!); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
               className="max-w-full truncate rounded-full px-2.5 py-1 text-left hover:text-white" style={{ background: "rgba(255,255,255,.06)" }}>{copied ? "copied" : `$ ${t.cmd}`}</button>}
           </div>
@@ -587,8 +600,9 @@ function taskState(t: Tracked, day: TodayDay, st: ItemStatus | undefined, tile: 
   if (t.done) return { s: "done", why: t.done_by === "minami" ? "Minami reported it done" : t.done_by === "auto" ? t.done_evidence : undefined };
   const deps = unmet(day, t);
   if (deps.length && !t.handoff) return { s: "waiting", why: `after ${deps.map((x) => titleOf(x)).join(", ")}` };
-  if (tile?.need) return { s: "needs", why: tile.need.summary, drift };
-  if (tile?.busy) return { s: "working", drift };
+  const need = tile?.need ?? st?.need;
+  if (need) return { s: "needs", why: need.summary, drift };
+  if (tile ? tile.busy : st?.busy) return { s: "working", drift };
   const o = st?.outcome;
   if (o?.stale) return { s: "check", why: `Minami said "${o.state}${o.why ? ` — ${o.why}` : ""}", then wrote more — read the chat`, drift };
   if (o?.state === "yours") return { s: "yours", why: o.why || "Minami's part is done — over to you", drift };
@@ -614,6 +628,30 @@ function TaskChip({ s }: { s: TaskState["s"] }) {
   const v = TASK[s];
   return <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] ${s === "working" ? "animate-pulse" : ""}`}
     style={{ background: mix(v.color, 18), color: v.color, fontFamily: "var(--today-mono)" }}>{v.dot ? `${v.dot} ` : ""}{v.label}</span>;
+}
+
+/** The hand-off's CHAT at a glance (§26 "links"), separate from the task's state: is it working, is it
+ *  waiting on him, is it done, or is nobody running it. "Waiting" reads the live tile first and the
+ *  GET's `need` second, so it shows on first paint and survives a dropped /api/agent/live poll. */
+type ChatState = "waiting" | "working" | "done" | "idle" | "past";
+function chatState(t: TodayTodo, st: ItemStatus | undefined, tile: LiveTile | undefined, isToday: boolean): ChatState {
+  if (!isToday) return "past"; // a past day's chats aren't watched — just the way in
+  if (tile?.need || st?.need) return "waiting";
+  if (tile ? tile.busy : st?.busy) return "working";
+  if (t.done || (st?.outcome?.state === "done" && !st.outcome.stale)) return "done";
+  return "idle";
+}
+const CHAT: Record<ChatState, { label: string; color: string; dot: string }> = {
+  waiting: { label: "WAITING ON YOU", color: "#ffd27a", dot: "●" },
+  working: { label: "WORKING", color: K.accentBright, dot: "◌" },
+  done: { label: "DONE", color: "#8fe0b8", dot: "✓" },
+  idle: { label: "IDLE", color: K.faint, dot: "" },
+  past: { label: "CHAT", color: K.faint, dot: "" },
+};
+function ChatLink({ sid, s }: { sid: string; s: ChatState }) {
+  const v = CHAT[s];
+  return <Link href={`/?open=${sid}`} title="Open Minami's chat" className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] hover:brightness-125 ${s === "working" ? "animate-pulse" : ""}`}
+    style={{ background: mix(v.color, 18), color: v.color, fontFamily: "var(--today-mono)" }}>{v.dot ? `${v.dot} ` : ""}{v.label} →</Link>;
 }
 
 /** The day in one honest line: what's done, what's on him, what's stuck — not just a tick count. */

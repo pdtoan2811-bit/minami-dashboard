@@ -29,6 +29,9 @@
    plus emoji fallbacks so 🌸 & co. render. Set as Tailwind's --font-sans so every
    `font-sans` and the default body text picks it up. */
 @theme {
+  /* Not Inter, even though every app page is set in it since §30: the shell applies Inter to what it
+     frames (components/shell/AppShell.tsx). Changing it here would also restyle the bare routes, and
+     one of them is the meeting canvas a customer watches live. */
   --font-sans: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, "Inter",
     "Helvetica Neue", Arial, "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
 }
@@ -39,9 +42,24 @@
    component references these via `bg-[var(--sakura)]` / the `.bg-bento` utility, so
    there are no hard-coded colours to hunt down. */
 :root {
-  --sakura: #e8859b;
-  --bento-bg: radial-gradient(1100px 620px at 25% -12%, #1c1622, #0b0a0d 58%);
+  /* §30: one accent and one ground for the whole app. The accent is the Today material's (ecvision's
+     kit accent, K.accent in app/today/ui.tsx) where it used to be sakura pink, and the bento backdrop
+     is transparent because the shell paints the golden-hour sky behind every page. The variable keeps
+     its old name so the hundred-odd `var(--sakura)` call sites didn't all have to change at once. */
+  --sakura: #7aa2ff;
+  /* Two blues, not one (Thomas, 2026-10-16: "too hard to read"). #346aff was both the text colour on
+     the dark ground (4.3:1) and the fill behind white labels (4.5:1), and failed at small sizes either
+     way. --sakura is the light one for text, rings, dots and tints (7.8:1 on #0b0e12); --accent-fill
+     is the deep one for solid fills that carry white text (white on it is 6.2:1). */
+  --accent-fill: #2a56d6;
+  --bento-bg: transparent;
+  --shell-left: 0px;
+  --shell-top: 0px;
+  --shell-bottom: 0px;
+  --drawer-off: translateX(24px);
 }
+@media (max-width: 767px) { :root { --drawer-off: translateY(48px); } }
+@keyframes shell-rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 
 .bg-bento {
   background: var(--bento-bg);

@@ -1,21 +1,21 @@
 "use client";
-// The Goals page (§29): each autonomous goal, read top to bottom as — where it stands right now (one big number
-// per target query, against the target), the road to the deadline (one cell per day, coloured by that day's
-// reading), why the runner thinks so, what's left for Thomas today, what the runner did, and the rules it runs by.
-// Borrows /automations' look so the three pages (Today, Automations, Goals) read as one place.
+// The Goals section of /autopilot (§29, inside §30): each autonomous goal, read top to bottom as — where it stands
+// right now (one big number per target query, against the target), the road to the deadline (one cell per day,
+// coloured by that day's reading), why the runner thinks so, who works on it, what's left for Thomas today, what
+// the runner did, and the rules it runs by. It used to be its own page (/goals); it sits above the runners now
+// because a goal is the outcome and the automations are what produce it — reading one without the other was
+// half the picture.
 //
 // A failed check is never drawn as a result: "no reading" is hatched, "not on page 1" is a flat dim cell, and
 // only a measured position gets a colour — the same rule the runner's log keeps.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Goal, GoalAction, GoalRun, Position } from "@/lib/goals";
-import { inter, interVi, mono } from "../today/fonts";
+import type { Automation } from "@/lib/automations";
+import { K as TK, Glass } from "../today/ui";
+import { STATUS } from "./RunnersSection";
 
-const K = {
-  bg: "#0b0e12", paper: "#161b23", ink: "#ffffff", muted: "rgba(255,255,255,.68)", faint: "rgba(255,255,255,.45)",
-  line: "rgba(255,255,255,.12)", line2: "rgba(255,255,255,.22)", accent: "#346aff", accentBright: "#90aeff",
-  green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d",
-};
+const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
 const MONO = { fontFamily: "var(--today-mono)" } as const;
 const HATCH = `repeating-linear-gradient(135deg, ${K.line2} 0 2px, transparent 2px 5px)`;
@@ -35,7 +35,8 @@ const short = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString([], { 
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 const obsidian = (note: string) => `obsidian://open?vault=secondBrain&file=${encodeURIComponent(note)}`;
 
-export function Goals() {
+/** The goals feed, lifted out of the section so /autopilot can match goals to runners and apply the project filter. */
+export function useGoals() {
   const [goals, setGoals] = useState<Goal[] | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,33 +59,39 @@ export function Goals() {
     } finally { setBusy(false); }
   }, []);
 
+  return { goals, err, busy, runNow };
+}
+
+/** `goals` arrives already filtered; `total` is the unfiltered count, so "no goals" and "all filtered out" read differently. */
+export function GoalsSection({ goals, total, err, busy, runNow, runnersFor }: {
+  goals: Goal[] | null; total: number; err: string; busy: boolean; runNow: () => void; runnersFor: (g: Goal) => Automation[];
+}) {
   return (
-    <div className={`${inter.variable} ${interVi.variable} ${mono.variable} min-h-dvh`} style={{ fontFamily: "var(--today-sans), var(--today-sans-vi), ui-sans-serif, system-ui", color: K.ink, background: K.bg }}>
-      <div className="mx-auto max-w-[860px] px-5 pb-28 pt-10">
-        <div className="mb-1 text-[12px]" style={MONO}><Link href="/today" style={{ color: K.faint }}>← Today</Link></div>
-        <h1 className="text-[30px] font-semibold tracking-tight">Goals</h1>
-        <p className="mt-1 text-[14.5px]" style={{ color: K.muted }}>Targets an agent works on every morning at 06:45. Your part lands on Today.</p>
-        {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
-        {!goals && !err && <p className="pt-24 text-center text-sm" style={{ color: K.muted }}>Loading…</p>}
-        {goals?.length === 0 && (
-          <p className="mt-10 rounded-xl p-5 text-[14px] leading-relaxed" style={{ background: K.paper, color: K.muted }}>
+    <div>
+      {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
+      {!goals && !err && <p className="pt-16 text-center text-sm" style={{ color: K.muted }}>Loading…</p>}
+      {goals && total === 0 && (
+        <Glass className="mt-4 p-5 text-[14px] leading-relaxed">
+          <p style={{ color: K.muted }}>
             No goals yet. A goal is a <code style={MONO}>```json goal</code> block in a note in <code style={MONO}>10-19 Projects/</code> — see the
             note <b style={{ color: K.ink }}>Autonomous Goal Spec</b> in the vault.
           </p>
-        )}
-        {goals?.map((g) => <GoalCard key={g.spec.id} g={g} busy={busy || g.runner.running} onRun={runNow} />)}
-      </div>
+        </Glass>
+      )}
+      {goals?.map((g) => <GoalCard key={g.spec.id} g={g} busy={busy || g.runner.running} onRun={runNow} runners={runnersFor(g)} />)}
     </div>
   );
 }
 
-function GoalCard({ g, busy, onRun }: { g: Goal; busy: boolean; onRun: () => void }) {
+function GoalCard({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun: () => void; runners: Automation[] }) {
   const last = g.log.at(-1);
   const prev = g.log.at(-2);
   const behind = last && !last.decision.on_track;
   const [rules, setRules] = useState(false);
   return (
-    <section className="mt-8 rounded-2xl p-5 sm:p-6" style={{ background: K.paper, border: `1px solid ${K.line}` }}>
+    // The id is the shell's "Needs you" target (/autopilot#goal-<id>); Glass takes no id, hence the wrapper.
+    <div id={`goal-${g.spec.id}`} className="scroll-mt-6">
+    <Glass className="mt-4 p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
@@ -151,6 +158,7 @@ function GoalCard({ g, busy, onRun }: { g: Goal; busy: boolean; onRun: () => voi
         </div>
       )}
 
+      <WorkedOnBy runners={runners} />
       <YourPart g={g} />
       <Did log={g.log} />
 
@@ -171,7 +179,8 @@ function GoalCard({ g, busy, onRun }: { g: Goal; busy: boolean; onRun: () => voi
           </div>
         </div>
       )}
-    </section>
+    </Glass>
+    </div>
   );
 }
 
@@ -223,6 +232,34 @@ function Legend() {
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]" style={{ color: K.faint }}>
       {item(K.green, "#1")}{item(K.accentBright, "#2–3")}{item(K.amber, "#4+")}{item(K.line2, "not on page 1")}{item(HATCH, "no reading")}
+    </div>
+  );
+}
+
+// Who produces this goal's result: the goal runner (it serves every goal) plus any automation filed under the
+// goal's project. Each row is a link to its card in Runners below, so "why is this behind?" is one tap from
+// "because its runner failed last night".
+function WorkedOnBy({ runners }: { runners: Automation[] }) {
+  if (!runners.length) return null;
+  return (
+    <div className="mt-5">
+      <Label>Worked on by</Label>
+      <ul className="mt-2 flex flex-col gap-1.5">
+        {runners.map((a) => {
+          const st = STATUS[a.status];
+          return (
+            <li key={a.id}>
+              <a href={`#auto-${a.id}`} className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 rounded-lg px-3 py-2 text-[13.5px] hover:bg-white/5"
+                style={{ background: "rgba(0,0,0,.18)", border: `1px solid ${a.status === "failing" ? mix(K.red, 45) : K.line}` }}>
+                <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: st.color }} />
+                <span className="font-medium" style={{ color: K.ink }}>{a.name}</span>
+                <span className="text-[11px] uppercase tracking-[.05em]" style={{ ...MONO, color: st.color }}>{st.label}</span>
+                <span className="ml-auto text-[11.5px]" style={{ ...MONO, color: K.faint }}>{a.scheduleText}</span>
+              </a>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

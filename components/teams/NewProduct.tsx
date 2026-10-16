@@ -121,7 +121,7 @@ export default function NewProduct({
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-[12px] text-neutral-400 hover:text-neutral-100">Cancel</button>
           <button onClick={submit} disabled={!name.trim() || !templateId || busy}
-            className="rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-40">
+            className="rounded-lg bg-[var(--accent-fill)] px-3.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-40">
             {busy ? "Creating…" : "Create"}
           </button>
         </div>
@@ -138,7 +138,7 @@ export default function NewProduct({
 function Check({ on, set, label, desc }: { on: boolean; set: (v: boolean) => void; label: string; desc: string }) {
   return (
     <button onClick={() => set(!on)} className="flex w-full gap-2.5 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2 text-left hover:border-white/15">
-      <span className={`mt-0.5 grid h-3.5 w-3.5 shrink-0 place-items-center rounded border text-[9px] ${on ? "border-[var(--sakura)] bg-[var(--sakura)] text-white" : "border-white/25"}`}>{on ? "✓" : ""}</span>
+      <span className={`mt-0.5 grid h-3.5 w-3.5 shrink-0 place-items-center rounded border text-[9px] ${on ? "border-[var(--sakura)] bg-[var(--accent-fill)] text-white" : "border-white/25"}`}>{on ? "✓" : ""}</span>
       <span className="min-w-0">
         <span className="block text-[12px] text-neutral-200">{label}</span>
         <span className="mt-0.5 block text-[10.5px] leading-relaxed text-neutral-600">{desc}</span>

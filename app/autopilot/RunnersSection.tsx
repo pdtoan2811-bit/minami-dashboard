@@ -1,27 +1,24 @@
 "use client";
-// The Automations page (§27): every job that runs on this Mac without being asked, and the controls for it.
-// Borrows /today's look (same palette, same fonts) so the two pages read as one place.
+// The Runners section of /autopilot (§27, inside §30): every job that runs on this Mac without being asked, and
+// the controls for it. It used to be its own page (/automations); it sits under Goals now, split into the jobs
+// that serve a goal and "Housekeeping", because the question it gets opened with is usually "what is working on
+// that goal, and is it OK?" — the housekeeping jobs matter, but rarely first.
 //
 // Read top to bottom it answers, in order: what fires when (the day timeline), what's next (the countdown),
 // is anything wrong (the filter chips — red only when something failed), and then each job's own state.
 // The state is carried by colour + motion before words: the left stripe and the pill, a pulsing dot while a
 // process runs, a dimmed, hatched card when paused, and the last line the job wrote to its log.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import type { Automation, Schedule } from "@/lib/automations";
-import { inter, interVi, mono } from "../today/fonts";
+import { K as TK } from "../today/ui";
 
-const K = {
-  bg: "#0b0e12", paper: "#161b23", ink: "#ffffff", muted: "rgba(255,255,255,.68)", faint: "rgba(255,255,255,.45)",
-  line: "rgba(255,255,255,.12)", line2: "rgba(255,255,255,.22)", accent: "#346aff", accentBright: "#90aeff", accent2: "#6fe3ff",
-  green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d", pink: "#db6393", violet: "#a78bfa",
-};
+const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d", pink: "#db6393", violet: "#a78bfa" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
 const MONO = { fontFamily: "var(--today-mono)" } as const;
 const EASE = "cubic-bezier(.22,.61,.21,1)";
 
 type Status = Automation["status"];
-const STATUS: Record<Status, { label: string; color: string; hint: string }> = {
+export const STATUS: Record<Status, { label: string; color: string; hint: string }> = {
   running: { label: "Running", color: K.green, hint: "a process is up right now" },
   idle: { label: "On", color: K.accentBright, hint: "waiting for its next time" },
   paused: { label: "Paused", color: K.amber, hint: "won't run until you resume it" },
@@ -56,18 +53,15 @@ const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-d
 
 type Trash = { file: string; id: string; at: string };
 type Toast = { text: string; undo?: () => void; tone?: "bad" };
+type Act = (body: Record<string, unknown>, key: string) => Promise<{ items: Automation[]; trash: Trash[] } | { error: string } | null>;
 
-export function Automations() {
+/** The automations feed and its one write path, lifted out of the section so /autopilot can hand the same list
+ *  to the goal cards ("worked on by") without a second poll of launchctl. */
+export function useAutomations() {
   const [items, setItems] = useState<Automation[] | null>(null);
   const [bin, setBin] = useState<Trash[]>([]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [open, setOpen] = useState<{ id: string; mode: "edit" | "logs" } | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [filter, setFilter] = useState<Status | "all">("all");
-  const [flash, setFlash] = useState<string | null>(null);
-  const [toast, setToast] = useState<Toast | null>(null);
-  const [, tick] = useState(0);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/automations").then((r) => r.json()).catch((e) => ({ error: String(e) }));
@@ -76,19 +70,44 @@ export function Automations() {
   useEffect(() => {
     load();
     const poll = setInterval(() => { if (!document.hidden) load(); }, 15_000);
-    const clockT = setInterval(() => { if (!document.hidden) tick((n) => n + 1); }, 1_000); // countdowns stay true
-    return () => { clearInterval(poll); clearInterval(clockT); };
+    return () => clearInterval(poll);
   }, [load]);
-  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 7000); return () => clearTimeout(t); }, [toast]);
 
-  const act = useCallback(async (body: Record<string, unknown>, key: string) => {
+  // Returns { error } rather than toasting here: the toast belongs to the section that shows it.
+  const act: Act = useCallback(async (body, key) => {
     setBusy(key);
     try {
       const r = await fetch("/api/automations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
-      if (r.error) { setToast({ text: r.error, tone: "bad" }); return null; }
+      if (r.error) return { error: String(r.error) };
       setItems(r.items); setBin(r.trash); return r as { items: Automation[]; trash: Trash[] };
     } finally { setBusy(null); }
   }, []);
+
+  return { items, bin, err, busy, act };
+}
+export type AutomationsFeed = ReturnType<typeof useAutomations>;
+
+/** `items` arrives already project-filtered; `serving` is the set of ids that work on a visible goal. */
+export function RunnersSection({ feed, items, serving }: { feed: AutomationsFeed; items: Automation[] | null; serving: Set<string> }) {
+  const { bin, err, busy } = feed;
+  const [open, setOpen] = useState<{ id: string; mode: "edit" | "logs" } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [filter, setFilter] = useState<Status | "all">("all");
+  const [flash, setFlash] = useState<string | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
+  const [, tick] = useState(0);
+
+  useEffect(() => {
+    const clockT = setInterval(() => { if (!document.hidden) tick((n) => n + 1); }, 1_000); // countdowns stay true
+    return () => clearInterval(clockT);
+  }, []);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 7000); return () => clearTimeout(t); }, [toast]);
+
+  const act = useCallback(async (body: Record<string, unknown>, key: string) => {
+    const r = await feed.act(body, key);
+    if (r && "error" in r) { setToast({ text: r.error, tone: "bad" }); return null; }
+    return r;
+  }, [feed]);
 
   // Every action that changes state says what it did, and the reversible ones offer Undo.
   const run = useCallback(async (a: Automation, op: string, extra?: Record<string, unknown>) => {
@@ -109,90 +128,110 @@ export function Automations() {
     requestAnimationFrame(() => document.getElementById(`auto-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
     setFlash(id); setTimeout(() => setFlash(null), 1600);
   }, []);
+  // The goal cards' "worked on by" rows are plain #auto-<id> links (no prop drilling across sections); catch the
+  // hash here so the card is un-filtered and flashed, not just scrolled to — or not found, if a chip hid it.
+  useEffect(() => {
+    const onHash = () => { const m = location.hash.match(/^#auto-(.+)$/); if (m) jump(decodeURIComponent(m[1])); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [jump]);
 
   const counts = useMemo(() => {
     const c: Record<Status, number> = { running: 0, idle: 0, paused: 0, failing: 0, "not-loaded": 0 };
     for (const a of items ?? []) c[a.status]++;
     return c;
   }, [items]);
-  const groups = useMemo(() => {
-    const g = new Map<string, Automation[]>();
-    for (const a of items ?? []) if (filter === "all" || a.status === filter) { const k = a.project || "Other"; g.set(k, [...(g.get(k) ?? []), a]); }
-    return [...g.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [items, filter]);
+  // Two bands, each grouped by project: the jobs that serve a goal first, then everything else.
+  const bands = useMemo(() => {
+    const group = (list: Automation[]) => {
+      const g = new Map<string, Automation[]>();
+      for (const a of list) { const k = a.project || "Other"; g.set(k, [...(g.get(k) ?? []), a]); }
+      return [...g.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    };
+    const shown = (items ?? []).filter((a) => filter === "all" || a.status === filter);
+    return [
+      { key: "serving", label: "Serving a goal", groups: group(shown.filter((a) => serving.has(a.id))) },
+      { key: "housekeeping", label: "Housekeeping", groups: group(shown.filter((a) => !serving.has(a.id))) },
+    ].filter((b) => b.groups.length);
+  }, [items, filter, serving]);
 
   return (
-    <div className={`${inter.variable} ${interVi.variable} ${mono.variable} min-h-dvh`} style={{ fontFamily: "var(--today-sans), var(--today-sans-vi), ui-sans-serif, system-ui", color: K.ink, background: K.bg }}>
+    <div>
       <style>{`
         @keyframes auto-pulse { 0% { box-shadow: 0 0 0 0 ${mix(K.green, 60)} } 70% { box-shadow: 0 0 0 7px transparent } 100% { box-shadow: 0 0 0 0 transparent } }
         @keyframes auto-in { from { opacity: 0; transform: translate(-50%, 8px) } to { opacity: 1; transform: translate(-50%, 0) } }
         @keyframes auto-flash { 0%, 100% { box-shadow: 0 0 0 0 transparent } 30% { box-shadow: 0 0 0 2px ${K.accentBright} } }
         @media (prefers-reduced-motion: reduce) { .auto-anim { animation: none !important } }
       `}</style>
-      <div className="mx-auto max-w-[820px] px-5 pb-28 pt-10">
-        <div className="mb-1 text-[12px]" style={MONO}><Link href="/today" style={{ color: K.faint }}>← Today</Link></div>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-[30px] font-semibold tracking-tight">Automations</h1>
-            <p className="mt-1 text-[14.5px]" style={{ color: K.muted }}>Everything that runs on this Mac without being asked.</p>
-          </div>
-          <Btn onClick={() => setCreating((v) => !v)} primary>{creating ? "Cancel" : "+ New automation"}</Btn>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-[22px] font-semibold tracking-tight">Runners</h2>
+          <p className="mt-1 text-[14px]" style={{ color: K.muted }}>Everything that runs on this Mac without being asked.</p>
         </div>
-
-        {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
-        {creating && <div className="mt-4">
-          <Editor onCancel={() => setCreating(false)} busy={busy === "create"}
-            onSave={async (v) => { if (await act({ op: "create", ...v }, "create")) { setCreating(false); setToast({ text: `Created “${v.name}” — it's on` }); } }} />
-        </div>}
-
-        {!items && !err && <p className="pt-24 text-center text-sm" style={{ color: K.muted }}>Loading…</p>}
-        {items && <>
-          <NextUp items={items} onJump={jump} />
-          <Timeline items={items} onJump={jump} />
-          <div className="mt-6 flex flex-wrap gap-2">
-            <Chip on={filter === "all"} onClick={() => setFilter("all")} color={K.ink} n={items.length}>All</Chip>
-            {(["running", "idle", "paused", "failing", "not-loaded"] as Status[]).map((s) => (counts[s] || s === "failing") ? (
-              <Chip key={s} on={filter === s} onClick={() => setFilter(filter === s ? "all" : s)} color={STATUS[s].color} n={counts[s]} quiet={!counts[s]}>
-                {s === "failing" && !counts[s] ? "Nothing failed" : STATUS[s].label}
-              </Chip>
-            ) : null)}
-          </div>
-        </>}
-
-        {groups.map(([project, list]) => (
-          <section key={project} className="mt-8">
-            <h2 className="mb-2.5 flex items-center gap-2 text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: colorOf(project) }} />{project.toUpperCase()}
-              <span style={{ opacity: 0.6 }}>· {list.length}</span>
-            </h2>
-            <div className="flex flex-col gap-2.5">
-              {list.map((a) => (
-                <Card key={a.id} a={a} busy={busy} open={open?.id === a.id ? open.mode : null} flash={flash === a.id}
-                  toggle={(mode) => setOpen(open?.id === a.id && open.mode === mode ? null : { id: a.id, mode })}
-                  run={(op, extra) => run(a, op, extra)} />
-              ))}
-            </div>
-          </section>
-        ))}
-        {items && !groups.length && <p className="mt-10 text-center text-[14px]" style={{ color: K.muted }}>Nothing is {STATUS[filter as Status]?.label.toLowerCase()}.</p>}
-
-        {bin.length > 0 && (
-          <details className="mt-12 text-[13px]" style={{ color: K.muted }}>
-            <summary className="cursor-pointer" style={{ ...MONO, color: K.faint }}>DELETED · {bin.length} — restorable</summary>
-            <div className="mt-2 flex flex-col gap-1">
-              {bin.map((t) => (
-                <div key={t.file} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: K.paper }}>
-                  <span><span style={MONO}>{t.id.replace("com.thomas.", "")}</span> <span style={{ color: K.faint }}>· deleted {ago(t.at)}</span></span>
-                  <Btn onClick={async () => { if (await act({ op: "restore", file: t.file }, `restore:${t.file}`)) setToast({ text: "Restored — it's on again" }); }}>Restore</Btn>
-                </div>
-              ))}
-            </div>
-          </details>
-        )}
+        <Btn onClick={() => setCreating((v) => !v)} primary>{creating ? "Cancel" : "+ New automation"}</Btn>
       </div>
 
+      {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
+      {creating && <div className="mt-4">
+        <Editor onCancel={() => setCreating(false)} busy={busy === "create"}
+          onSave={async (v) => { if (await act({ op: "create", ...v }, "create")) { setCreating(false); setToast({ text: `Created “${v.name}” — it's on` }); } }} />
+      </div>}
+
+      {!items && !err && <p className="pt-16 text-center text-sm" style={{ color: K.muted }}>Loading…</p>}
+      {items && items.length > 0 && <>
+        <NextUp items={items} onJump={jump} />
+        <Timeline items={items} onJump={jump} />
+        <div className="mt-6 flex flex-wrap gap-2">
+          <Chip on={filter === "all"} onClick={() => setFilter("all")} color={K.ink} n={items.length}>All</Chip>
+          {(["running", "idle", "paused", "failing", "not-loaded"] as Status[]).map((s) => (counts[s] || s === "failing") ? (
+            <Chip key={s} on={filter === s} onClick={() => setFilter(filter === s ? "all" : s)} color={STATUS[s].color} n={counts[s]} quiet={!counts[s]}>
+              {s === "failing" && !counts[s] ? "Nothing failed" : STATUS[s].label}
+            </Chip>
+          ) : null)}
+        </div>
+      </>}
+
+      {bands.map((band) => (
+        <div key={band.key} className="mt-8">
+          <h3 className="text-[15px] font-semibold tracking-tight">{band.label}
+            <span className="ml-2 text-[11.5px] font-normal" style={{ ...MONO, color: K.faint }}>{band.groups.reduce((n, [, l]) => n + l.length, 0)}</span>
+          </h3>
+          {band.groups.map(([project, list]) => (
+            <section key={project} className="mt-4">
+              <h4 className="mb-2.5 flex items-center gap-2 text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: colorOf(project) }} />{project.toUpperCase()}
+                <span style={{ opacity: 0.6 }}>· {list.length}</span>
+              </h4>
+              <div className="flex flex-col gap-2.5">
+                {list.map((a) => (
+                  <Card key={a.id} a={a} busy={busy} open={open?.id === a.id ? open.mode : null} flash={flash === a.id}
+                    toggle={(mode) => setOpen(open?.id === a.id && open.mode === mode ? null : { id: a.id, mode })}
+                    run={(op, extra) => run(a, op, extra)} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      ))}
+      {items && items.length > 0 && !bands.length && <p className="mt-10 text-center text-[14px]" style={{ color: K.muted }}>Nothing is {STATUS[filter as Status]?.label.toLowerCase()}.</p>}
+
+      {bin.length > 0 && (
+        <details className="mt-12 text-[13px]" style={{ color: K.muted }}>
+          <summary className="cursor-pointer" style={{ ...MONO, color: K.faint }}>DELETED · {bin.length} — restorable</summary>
+          <div className="mt-2 flex flex-col gap-1">
+            {bin.map((t) => (
+              <div key={t.file} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: K.paper }}>
+                <span><span style={MONO}>{t.id.replace("com.thomas.", "")}</span> <span style={{ color: K.faint }}>· deleted {ago(t.at)}</span></span>
+                <Btn onClick={async () => { if (await act({ op: "restore", file: t.file }, `restore:${t.file}`)) setToast({ text: "Restored — it's on again" }); }}>Restore</Btn>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* bottom-24 on phones: the shell's fixed bottom bar (§30) would otherwise sit on top of the Undo. */}
       {toast && (
-        <div className="auto-anim fixed bottom-6 left-1/2 z-50 flex items-center gap-4 rounded-full px-5 py-2.5 text-[13.5px] shadow-2xl"
+        <div className="auto-anim fixed bottom-24 left-1/2 z-50 flex max-w-[calc(100vw-24px)] items-center gap-4 rounded-full px-5 py-2.5 text-[13.5px] shadow-2xl sm:bottom-6"
           style={{ transform: "translateX(-50%)", animation: `auto-in .25s ${EASE}`, background: toast.tone === "bad" ? "#3a1d22" : "#232b38", border: `1px solid ${toast.tone === "bad" ? mix(K.red, 50) : K.line2}`, color: toast.tone === "bad" ? K.red : K.ink }}>
           <span>{toast.text}</span>
           {toast.undo && <button type="button" onClick={() => { toast.undo!(); setToast(null); }} className="font-medium" style={{ color: K.accentBright }}>Undo</button>}
