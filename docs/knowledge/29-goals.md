@@ -51,3 +51,42 @@ jobs, but not the other way round. Each row links to `#auto-<id>` in Runners.
   to-dos, the ticks stop showing here while Today still has them.
 - The `seo-pr` lever stays off until ecvision's path-guard workflow (`seo-auto-guard.yml`, PR #319) is on
   `develop`; the runner checks `origin/develop` for the file on every run.
+
+## List + run ledger, and "Resolve with Minami" (2026-10-16)
+
+The card was redrawn from the `goals-console` pitch (version V1, Thomas's pick). The old card answered "where
+does it stand?" but not "is it working?". It had no run history in one place, no outcome per action and no
+cost. The runner's own failures also read the same as the goal being behind: on Oct 16 the path guard refused
+every SEO PR because `goal.mjs` called it the old way (fixed in the vault the same day).
+
+**What the card shows now:**
+- **A list of goals** beside the selected one. Goals with a runner issue come first, then goals that are behind.
+  The selection follows `#goal-<id>`, which is what the shell's drawer links to.
+- **Four numbers:** best position, pages indexed, days left, and money spent (the sum of `usd` over the log).
+- **The runner's health** (`health()`), on its own line and judged separately from the goal's status. From
+  worst to best:
+  - not loaded in launchd
+  - a refused or failed action in the last run
+  - a non-zero exit code
+  - no run in 30 hours (a missed day)
+  - healthy
+- **A ledger** with one row per run: positions, indexed pages, each action with an outcome chip, and cost. The
+  chip comes from `outcome()`:
+  - Refused or Failed when the action has `refused_by_guard` or `error`
+  - Merged, Waiting or Opened for PRs
+  - Skipped when the action has `skipped`
+  - Queued when it has `queued`
+  - Done when it has `note` (a draft)
+- **Your part** as a checklist with minute estimates. It's ticked on Today, where the heartbeat copied it.
+- **"Page 1 today · runners · rules"**, folded away at the bottom.
+
+**Resolve with Minami** sends `POST /api/goals {op:"resolve", id}`. That calls `resolveGoal()`, which starts a
+chat in the vault and opens it.
+- **What the chat gets** (`resolveContext()`): the spec, the last 6 runs with each action's outcome, the
+  runner's state and log paths, and Thomas's part.
+- **What it's told, in order:** fix broken machinery first, then unblock stuck actions, then do or prepare his
+  part.
+- **What it's told not to do:** kickstart the runner without asking (a run costs money and can open PRs), break
+  the never-list, or post as Thomas.
+- **One chat per goal per day** (key `goal:resolve:<id>:<date>`). A second click sends fresh context into the
+  same conversation instead of starting a parallel one.

@@ -1,39 +1,37 @@
 "use client";
-// The Goals section of /autopilot (§29, inside §30): each autonomous goal, read top to bottom as — where it stands
-// right now (one big number per target query, against the target), the road to the deadline (one cell per day,
-// coloured by that day's reading), why the runner thinks so, who works on it, what's left for Thomas today, what
-// the runner did, and the rules it runs by. It used to be its own page (/goals); it sits above the runners now
-// because a goal is the outcome and the automations are what produce it — reading one without the other was
-// half the picture.
+// The Goals section of /autopilot (§29, inside §30), as "list + run ledger" — the version Thomas picked from the
+// goals-console pitch (2026-10-16). The earlier card answered "where does it stand?" and left "is it working?"
+// to a paragraph: no run history in one place, no outcome per action, no cost, and the runner's own failures
+// (a guard that refused every PR) read the same as the goal simply being behind.
 //
-// A failed check is never drawn as a result: "no reading" is hatched, "not on page 1" is a flat dim cell, and
-// only a measured position gets a colour — the same rule the runner's log keeps.
+// So, per goal:
+//   • four numbers — position, indexed, days left, spent;
+//   • the RUNNER's health on its own line, apart from the goal's status: "behind" and "broken" are different news;
+//   • a ledger of every run: what it measured, each action with its outcome (done / queued / opened / refused…),
+//     and what it cost;
+//   • Thomas's part as a checklist (ticked on Today, where the heartbeat put it);
+//   • "Resolve with Minami", which hands all of the above to a vault chat that can fix what is broken.
+// Many goals = the list on the left, behind/broken first.
+//
+// A failed check is never drawn as a result: "no reading" is its own word, "not on page 1" is not a position.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Goal, GoalAction, GoalRun, Position } from "@/lib/goals";
 import type { Automation } from "@/lib/automations";
 import { K as TK, Glass } from "../today/ui";
 import { STATUS } from "./RunnersSection";
+import { useOpenChat } from "@/components/shell/Drawer";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
 const MONO = { fontFamily: "var(--today-mono)" } as const;
-const HATCH = `repeating-linear-gradient(135deg, ${K.line2} 0 2px, transparent 2px 5px)`;
 
-// #1 is the goal, page-one top three is close, the rest of page one is moving, off page one is flat.
-const posColor = (p: Position | undefined) =>
-  typeof p !== "number" ? null : p === 1 ? K.green : p <= 3 ? K.accentBright : K.amber;
-const posText = (p: Position | undefined) =>
-  p === undefined ? "—" : p === "no reading" ? "No reading" : p === null ? "Not on page 1" : `#${p}`;
-
-const dayList = (from: string, to: string) => {
-  const out: string[] = [];
-  for (let t = Date.parse(`${from}T12:00:00`); t <= Date.parse(`${to}T12:00:00`); t += 864e5) out.push(new Date(t).toLocaleDateString("en-CA"));
-  return out;
-};
+const posText = (p: Position | undefined) => (p === undefined ? "—" : p === "no reading" ? "No reading" : p === null ? "Not on p.1" : `#${p}`);
 const short = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short" });
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 const obsidian = (note: string) => `obsidian://open?vault=secondBrain&file=${encodeURIComponent(note)}`;
+const localDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
+const today = () => new Date().toLocaleDateString("en-CA");
 
 /** The goals feed, lifted out of the section so /autopilot can match goals to runners and apply the project filter. */
 export function useGoals() {
@@ -62,10 +60,52 @@ export function useGoals() {
   return { goals, err, busy, runNow };
 }
 
+// ── outcomes ──────────────────────────────────────────────────────────────────────────────────────────────
+type Tone = "ok" | "wait" | "bad" | "mute";
+const TONE: Record<Tone, string> = { ok: K.green, wait: K.amber, bad: K.red, mute: K.faint };
+function outcome(a: GoalAction): { label: string; tone: Tone; what: string; note?: string; href?: string } {
+  const gh = (u: string) => u.replace(/^https:\/\/github\.com\//, "");
+  if (a.refused_by_guard) return { label: "Refused", tone: "bad", what: lever(a), note: `refused by the path guard: ${a.refused_by_guard.trim()}` };
+  if (a.error) return { label: "Failed", tone: "bad", what: lever(a), note: a.error };
+  if (a.lever === "merge" && a.merged && a.pr) return { label: "Merged", tone: "ok", what: gh(a.pr), href: a.pr };
+  if (a.waiting) return { label: "Waiting", tone: "wait", what: a.pr ? gh(a.pr) : lever(a), note: a.waiting, href: a.pr };
+  if (a.opened) return { label: "Opened", tone: "ok", what: `PR ${gh(a.opened)}`, href: a.opened };
+  if (a.skipped) return { label: "Skipped", tone: "mute", what: lever(a), note: a.skipped };
+  if (a.queued) return { label: "Queued", tone: "wait", what: `article “${a.queued}”`, note: "in the content backlog" };
+  if (a.note) return { label: "Done", tone: "ok", what: `draft: ${a.note}`, href: obsidian(`10-19 Projects/goal-drafts/${a.note}`) };
+  return { label: "—", tone: "mute", what: lever(a) };
+}
+const LEVER: Record<string, string> = { "seo-pr": "SEO change (PR)", article: "article", draft: "draft for you", merge: "merge", todo: "to-do" };
+const lever = (a: GoalAction) => LEVER[a.lever] ?? a.lever;
+
+// The runner's health, judged apart from the goal's: a goal can be behind with a healthy runner (it is working,
+// the world is slow), or on track with a broken one (a lucky week). Worst first.
+function health(g: Goal): { tone: Tone; text: string } {
+  const last = g.log.at(-1);
+  if (!g.runner.loaded) return { tone: "bad", text: "The runner isn't loaded in launchd — nothing will run until it is." };
+  if (g.runner.running) return { tone: "wait", text: "Running now." };
+  const broke = last?.actions.filter((a) => a.error || a.refused_by_guard) ?? [];
+  if (broke.length) return { tone: "bad", text: `Last run: ${broke.map((a) => `${lever(a)} ${a.refused_by_guard ? "refused by the guard" : "failed"}`).join(", ")}. Nothing it tried landed.` };
+  if (g.runner.lastExit != null && g.runner.lastExit !== 0) return { tone: "bad", text: `The last run exited with code ${g.runner.lastExit}.` };
+  if (!last) return { tone: "mute", text: "Never run yet." };
+  if (Date.now() - Date.parse(last.at) > 30 * 3600e3) return { tone: "bad", text: `No run since ${short(localDay(last.at))} — the daily run was missed.` };
+  return { tone: "ok", text: `Ran ${localDay(last.at) === today() ? "today" : short(localDay(last.at))} at ${clock(last.at)}; ${last.actions.length ? "every action landed" : "measured only"}.` };
+}
+
+const rank = (g: Goal) => (health(g).tone === "bad" ? 0 : g.log.at(-1)?.decision.on_track === false ? 1 : 2);
+
 /** `goals` arrives already filtered; `total` is the unfiltered count, so "no goals" and "all filtered out" read differently. */
 export function GoalsSection({ goals, total, err, busy, runNow, runnersFor }: {
   goals: Goal[] | null; total: number; err: string; busy: boolean; runNow: () => void; runnersFor: (g: Goal) => Automation[];
 }) {
+  const sorted = useMemo(() => [...(goals ?? [])].sort((a, b) => rank(a) - rank(b)), [goals]);
+  // The selection follows #goal-<id> (the shell's drawer links there), else the most urgent goal.
+  const [sel, setSel] = useState<string | null>(null);
+  useEffect(() => {
+    const m = location.hash.match(/^#goal-(.+)$/);
+    if (m) setSel(decodeURIComponent(m[1]));
+  }, []);
+  const g = sorted.find((x) => x.spec.id === sel) ?? sorted[0];
   return (
     <div>
       {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
@@ -78,188 +118,162 @@ export function GoalsSection({ goals, total, err, busy, runNow, runnersFor }: {
           </p>
         </Glass>
       )}
-      {goals?.map((g) => <GoalCard key={g.spec.id} g={g} busy={busy || g.runner.running} onRun={runNow} runners={runnersFor(g)} />)}
+      {g && (
+        <div className="mt-4 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <ul className="space-y-2">
+            {sorted.map((x) => <GoalRow key={x.spec.id} g={x} on={x === g} onPick={() => { setSel(x.spec.id); history.replaceState(null, "", `#goal-${x.spec.id}`); }} />)}
+          </ul>
+          <GoalDetail key={g.spec.id} g={g} busy={busy || g.runner.running} onRun={runNow} runners={runnersFor(g)} />
+        </div>
+      )}
     </div>
   );
 }
 
-function GoalCard({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun: () => void; runners: Automation[] }) {
+function GoalRow({ g, on, onPick }: { g: Goal; on: boolean; onPick: () => void }) {
+  const last = g.log.at(-1), h = health(g);
+  const asks = g.today ? g.today.todos.filter((t) => !t.done).length + g.today.questions.length : 0;
+  return (
+    <li>
+      <button onClick={onPick} className="w-full rounded-2xl px-4 py-3 text-left transition-colors hover:bg-white/[0.06]"
+        style={{ background: on ? mix(K.accentBright, 9) : "rgba(255,255,255,.04)", border: `1px solid ${on ? K.accentBright : K.line}` }}>
+        <div className="flex items-center gap-2">
+          {last ? <Pill color={last.decision.on_track ? K.green : K.amber}>{last.decision.on_track ? "On track" : "Behind"}</Pill> : <Pill color={K.faint}>Not run</Pill>}
+          {h.tone === "bad" && <Pill color={K.red}>Runner issue</Pill>}
+          <span className="ml-auto text-[11.5px]" style={{ ...MONO, color: K.faint }}>{g.daysLeft >= 0 ? `${g.daysLeft}d left` : `${-g.daysLeft}d past`}</span>
+        </div>
+        <p className="mt-1.5 text-[13.5px] font-semibold leading-snug">{g.spec.goal}</p>
+        <p className="mt-1 text-[11.5px]" style={{ color: K.faint }}>{g.note}{asks ? <> · <span style={{ color: K.accentBright }}>{asks} for you</span></> : null}</p>
+      </button>
+    </li>
+  );
+}
+
+function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun: () => void; runners: Automation[] }) {
   const last = g.log.at(-1);
-  const prev = g.log.at(-2);
-  const behind = last && !last.decision.on_track;
-  const [rules, setRules] = useState(false);
+  const q = g.spec.target.queries;
+  const ranked = q.map((x) => last?.positions[x]).filter((p): p is number => typeof p === "number");
+  const spent = g.log.reduce((s, r) => s + (r.usd || 0), 0), paid = g.log.filter((r) => r.usd).length;
+  const h = health(g);
+  const openChat = useOpenChat();
+  const [resolving, setResolving] = useState(false);
+  const [rerr, setRerr] = useState("");
+  const [more, setMore] = useState(false);
+
+  const resolve = async () => {
+    setResolving(true); setRerr("");
+    try {
+      const r = await fetch("/api/goals", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "resolve", id: g.spec.id }) }).then((r) => r.json());
+      if (r.error) setRerr(r.error); else openChat(r.sessionId);
+    } catch { setRerr("Couldn't reach the dashboard."); }
+    finally { setResolving(false); }
+  };
+
   return (
     // The id is the shell's "Needs you" target (/autopilot#goal-<id>); Glass takes no id, hence the wrapper.
-    <div id={`goal-${g.spec.id}`} className="scroll-mt-6">
-    <Glass className="mt-4 p-5 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
-            <a href={obsidian(`10-19 Projects/${g.note}`)} style={{ color: K.faint }}>{g.note.toUpperCase()}</a>
-          </div>
-          <h2 className="mt-1 text-[20px] font-semibold leading-snug tracking-tight">{g.spec.goal}</h2>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[13px]" style={{ color: K.muted }}>
-            <span>Deadline {short(g.spec.deadline)} · <b style={{ color: K.ink }}>{g.daysLeft >= 0 ? `${g.daysLeft} days left` : `${-g.daysLeft} days past`}</b></span>
-            {last && <Pill color={behind ? K.amber : K.green}>{behind ? "Behind" : "On track"}</Pill>}
-            {g.runner.running && <Pill color={K.accentBright}>Running now</Pill>}
-            {!g.runner.loaded && <Pill color={K.red}>Runner not loaded</Pill>}
-          </div>
-        </div>
-        <div className="flex flex-col items-start gap-1 sm:items-end">
-          <button onClick={onRun} disabled={busy}
-            className="rounded-lg px-3 py-1.5 text-[13px] font-medium transition-opacity disabled:opacity-50"
-            style={{ background: K.accent, color: K.ink }}>{busy ? "Running…" : "Run now"}</button>
-          <span className="text-[11.5px]" style={{ ...MONO, color: K.faint }}>{last ? `last ${last.date === new Date().toLocaleDateString("en-CA") ? "" : `${short(last.date)} `}${clock(last.at)}` : "never run"} · next 06:45</span>
-        </div>
-      </div>
-
-      {/* Where it stands: one number per target query. */}
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {g.spec.target.queries.map((q) => {
-          const p = last?.positions[q];
-          const before = prev?.positions[q];
-          const gsc = last?.gsc?.[q];
-          const c = posColor(p);
-          return (
-            <div key={q} className="min-w-0 rounded-xl p-4" style={{ background: c ? mix(c, 9) : "rgba(255,255,255,.03)", border: `1px solid ${c ? mix(c, 35) : K.line}` }}>
-              <div className="text-[12px]" style={{ ...MONO, color: K.faint }}>Google · “{q}”</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className={typeof p === "number" ? "text-[34px] font-semibold tracking-tight" : "text-[20px] font-semibold"} style={{ color: c ?? K.ink }}>{posText(p)}</span>
-                <span className="text-[13px]" style={{ color: K.faint }}>target #{g.spec.target.value}</span>
-                <Trend now={p} before={before} />
-              </div>
-              <div className="mt-1 text-[12.5px]" style={{ color: K.muted }}>
-                {gsc ? `Search Console: avg #${gsc.position.toFixed(1)} · ${gsc.impressions} impressions · ${gsc.clicks} clicks` : "Search Console: no impressions yet"}
-              </div>
-              {last?.above?.[q]?.length ? (
-                <div className="mt-3 text-[12px]" style={{ color: K.faint }}>
-                  <div style={MONO}>{p === null ? "PAGE 1 WITHOUT US" : "ABOVE US"}</div>
-                  <ol className="mt-1 space-y-0.5">
-                    {last.above[q].slice(0, 3).map((a, i) => <li key={i} className="truncate" style={{ color: K.muted }}><span style={MONO}>{i + 1}.</span> {a}</li>)}
-                  </ol>
-                </div>
-              ) : null}
+    <div id={`goal-${g.spec.id}`} className="min-w-0 scroll-mt-6">
+      <Glass className="p-5 sm:p-6">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
+              <a href={obsidian(`10-19 Projects/${g.note}`)} style={{ color: K.faint }}>{g.note.toUpperCase()}</a>
+              {g.spec.started && <> · STARTED {short(g.spec.started).toUpperCase()}</>}
             </div>
-          );
-        })}
-      </div>
-
-      <Road g={g} />
-
-      {last && (
-        <div className="mt-5">
-          <Label>Where it stands</Label>
-          <p className="mt-1.5 text-[14px] leading-relaxed" style={{ color: K.muted }}>{last.decision.assessment}</p>
-          {last.index && (
-            <p className="mt-1.5 text-[12.5px]" style={{ ...MONO, color: K.faint }}>
-              Indexed {last.index.indexed} of {last.index.total} pages{last.index.failed ? ` · ${last.index.failed} check(s) failed` : ""}
-            </p>
-          )}
-        </div>
-      )}
-
-      <WorkedOnBy runners={runners} />
-      <YourPart g={g} />
-      <Did log={g.log} />
-
-      <button onClick={() => setRules((v) => !v)} className="mt-5 text-[12.5px]" style={{ ...MONO, color: K.faint }}>
-        {rules ? "▾" : "▸"} Rules it runs by
-      </button>
-      {rules && (
-        <div className="mt-2 grid gap-4 text-[13px] sm:grid-cols-2" style={{ color: K.muted }}>
-          <div>
-            <Label>May do</Label>
-            <ul className="mt-1.5 space-y-1.5">{Object.entries(g.spec.levers).map(([k, v]) => <li key={k}><b style={{ color: K.ink }}>{k}</b> — {v}</li>)}</ul>
+            <h2 className="mt-1 text-[19px] font-semibold leading-snug tracking-tight">{g.spec.goal}</h2>
+            <p className="mt-1 text-[12.5px]" style={{ color: K.faint }}>Done when: {g.spec.done_when}</p>
           </div>
-          <div>
-            <Label>Never</Label>
-            <ul className="mt-1.5 list-disc space-y-1 pl-4">{g.spec.never.map((n) => <li key={n}>{n}</li>)}</ul>
-            <div className="mt-3"><Label>Asks you when</Label></div>
-            <ul className="mt-1.5 list-disc space-y-1 pl-4">{g.spec.escalate.map((n) => <li key={n}>{n}</li>)}</ul>
+          <div className="flex flex-wrap gap-2">
+            {/* The chat is the way to ACT on what this card shows: the page can only say a goal is stuck. */}
+            <button onClick={resolve} disabled={resolving} title="Send this goal's runs, failures and your part to a Minami chat that fixes what it can"
+              className="rounded-full px-3.5 py-1.5 text-[13px] font-semibold transition-opacity disabled:opacity-50"
+              style={{ background: "rgba(255,255,255,.07)", border: `1px solid ${K.line2}`, color: K.ink }}>{resolving ? "Starting…" : "Resolve with Minami"}</button>
+            <button onClick={onRun} disabled={busy} className="rounded-full px-3.5 py-1.5 text-[13px] font-semibold text-white transition-opacity disabled:opacity-50"
+              style={{ background: K.accent }}>{busy ? "Running…" : "Run now"}</button>
           </div>
         </div>
-      )}
-    </Glass>
+        {rerr && <p className="mt-2 text-[12.5px]" style={{ color: K.red }}>{rerr}</p>}
+
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Stat k="Position" v={ranked.length ? `#${Math.min(...ranked)}` : last ? posText(last.positions[q[0]]) : "—"} s={`${q.length > 1 ? "best of " + q.length + " queries" : `“${q[0]}”`} · target #${g.spec.target.value}`} />
+          <Stat k="Indexed" v={last?.index ? `${last.index.indexed} / ${last.index.total}` : "—"} s="pages in Google" />
+          <Stat k="Days left" v={String(Math.max(0, g.daysLeft))} s={`deadline ${short(g.spec.deadline)}`} />
+          <Stat k="Spent" v={`$${spent.toFixed(2)}`} s={`${paid} paid run${paid === 1 ? "" : "s"}`} />
+        </div>
+
+        <div className="mt-3 flex items-start gap-2 rounded-xl px-3.5 py-2.5 text-[12.5px]"
+          style={{ background: mix(TONE[h.tone], 12), border: `1px solid ${mix(TONE[h.tone], 35)}` }}>
+          <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full" style={{ background: TONE[h.tone] }} />
+          <span><b>Runner:</b> <span style={{ color: K.muted }}>{h.text}</span></span>
+          {runners.length > 0 && <span className="ml-auto hidden shrink-0 sm:inline" style={{ ...MONO, color: K.faint }}>{runners.map((a) => a.scheduleText).join(" · ")}</span>}
+        </div>
+
+        {last && <p className="mt-4 text-[13.5px] leading-relaxed" style={{ color: K.muted }}>{last.decision.assessment}</p>}
+
+        <Ledger g={g} />
+        <YourPart g={g} />
+
+        <button onClick={() => setMore((v) => !v)} className="mt-5 text-[12.5px]" style={{ ...MONO, color: K.faint }}>
+          {more ? "▾" : "▸"} Page 1 today · runners · rules
+        </button>
+        {more && <More g={g} runners={runners} />}
+      </Glass>
     </div>
   );
 }
 
-// The road to the deadline: one cell per day per query, so a week of "not on page 1" reads as a flat line and
-// the first coloured cell is the moment it moved.
-function Road({ g }: { g: Goal }) {
-  const start = g.spec.started || g.log[0]?.date || new Date().toLocaleDateString("en-CA");
-  const days = useMemo(() => dayList(start, g.spec.deadline), [start, g.spec.deadline]);
-  const byDay = useMemo(() => { const m = new Map<string, GoalRun>(); for (const r of g.log) m.set(r.date, r); return m; }, [g.log]);
-  const today = new Date().toLocaleDateString("en-CA");
+function Stat({ k, v, s }: { k: string; v: string; s: string }) {
+  return (
+    <div className="rounded-2xl px-3.5 py-3" style={{ background: "rgba(255,255,255,.045)", border: `1px solid ${K.line}` }}>
+      <Label>{k}</Label>
+      <div className="mt-0.5 text-[20px] font-bold tabular-nums">{v}</div>
+      <div className="text-[11.5px]" style={{ color: K.faint }}>{s}</div>
+    </div>
+  );
+}
+
+// Every run, newest first: what it measured and what each action came to. On a phone the table scrolls inside
+// its own box rather than squeezing six columns into 360px.
+function Ledger({ g }: { g: Goal }) {
+  const q = g.spec.target.queries;
+  const runs: GoalRun[] = [...g.log].reverse().slice(0, 14);
+  if (!runs.length) return null;
   return (
     <div className="mt-5">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <Label>{`Road to ${short(g.spec.deadline)}`}</Label>
-        <Legend />
+      <Label>Runs</Label>
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full min-w-[580px] text-left text-[12.5px]">
+          <thead style={{ color: K.faint }}>
+            <tr className="[&>th]:pb-2 [&>th]:pr-3 [&>th]:font-medium">
+              <th>When</th>{q.map((x) => <th key={x}>“{x}”</th>)}<th>Indexed</th><th>What it did</th><th className="text-right">Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((r) => (
+              <tr key={r.at} className="align-top [&>td]:border-t [&>td]:border-white/10 [&>td]:py-2.5 [&>td]:pr-3">
+                <td className="whitespace-nowrap" style={MONO}>{short(localDay(r.at))} {clock(r.at)}</td>
+                {q.map((x) => <td key={x} style={{ color: typeof r.positions[x] === "number" ? K.ink : K.muted }}>{posText(r.positions[x])}</td>)}
+                <td style={MONO}>{r.index ? `${r.index.indexed}/${r.index.total}` : "—"}</td>
+                <td>
+                  {r.actions.length ? r.actions.map((a, i) => {
+                    const o = outcome(a);
+                    return (
+                      <div key={i} className="mb-1 flex items-start gap-2">
+                        <span className="shrink-0 rounded-full px-2 py-px text-[11px] font-semibold" style={{ background: mix(TONE[o.tone], 20), color: TONE[o.tone] }}>{o.label}</span>
+                        <span className="min-w-0">
+                          {o.href ? <a href={o.href} target="_blank" rel="noreferrer" className="underline decoration-white/20 underline-offset-2 hover:decoration-white/60" style={{ color: K.muted }}>{o.what}</a>
+                            : <span style={{ color: K.muted }}>{o.what}</span>}
+                          {o.note && <span className="block text-[11.5px]" style={{ color: K.faint }}>{o.note}</span>}
+                        </span>
+                      </div>
+                    );
+                  }) : <span style={{ color: K.faint }}>measured only</span>}
+                </td>
+                <td className="text-right" style={MONO}>{r.usd ? `$${r.usd.toFixed(2)}` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <div className="mt-2 space-y-1.5">
-        {g.spec.target.queries.map((q) => (
-          <div key={q} className="flex items-center gap-2">
-            <span className="w-[86px] shrink-0 truncate text-[11.5px]" style={{ ...MONO, color: K.faint }}>{q}</span>
-            <div className="grid flex-1 gap-[3px]" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
-              {days.map((d) => {
-                const r = byDay.get(d);
-                const p = r?.positions[q];
-                const c = posColor(p);
-                const future = d > today;
-                const bg = !r ? "transparent" : p === "no reading" ? HATCH : c ?? K.line2;
-                return (
-                  <div key={d} title={`${short(d)} — ${r ? posText(p) : future ? "to come" : "no run"}`}
-                    className="h-[18px] rounded-[4px]"
-                    style={{ background: bg, border: `1px solid ${d === today ? K.accentBright : future || !r ? K.line : "transparent"}` }} />
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-1 flex justify-between pl-[94px] text-[11px]" style={{ ...MONO, color: K.faint }}>
-        <span>{short(days[0])}</span><span>{short(days.at(-1)!)}</span>
-      </div>
-    </div>
-  );
-}
-
-function Legend() {
-  const item = (bg: string, label: string) => (
-    <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: bg }} />{label}</span>
-  );
-  return (
-    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]" style={{ color: K.faint }}>
-      {item(K.green, "#1")}{item(K.accentBright, "#2–3")}{item(K.amber, "#4+")}{item(K.line2, "not on page 1")}{item(HATCH, "no reading")}
-    </div>
-  );
-}
-
-// Who produces this goal's result: the goal runner (it serves every goal) plus any automation filed under the
-// goal's project. Each row is a link to its card in Runners below, so "why is this behind?" is one tap from
-// "because its runner failed last night".
-function WorkedOnBy({ runners }: { runners: Automation[] }) {
-  if (!runners.length) return null;
-  return (
-    <div className="mt-5">
-      <Label>Worked on by</Label>
-      <ul className="mt-2 flex flex-col gap-1.5">
-        {runners.map((a) => {
-          const st = STATUS[a.status];
-          return (
-            <li key={a.id}>
-              <a href={`#auto-${a.id}`} className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 rounded-lg px-3 py-2 text-[13.5px] hover:bg-white/5"
-                style={{ background: "rgba(0,0,0,.18)", border: `1px solid ${a.status === "failing" ? mix(K.red, 45) : K.line}` }}>
-                <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: st.color }} />
-                <span className="font-medium" style={{ color: K.ink }}>{a.name}</span>
-                <span className="text-[11px] uppercase tracking-[.05em]" style={{ ...MONO, color: st.color }}>{st.label}</span>
-                <span className="ml-auto text-[11.5px]" style={{ ...MONO, color: K.faint }}>{a.scheduleText}</span>
-              </a>
-            </li>
-          );
-        })}
-      </ul>
     </div>
   );
 }
@@ -267,26 +281,29 @@ function WorkedOnBy({ runners }: { runners: Automation[] }) {
 function YourPart({ g }: { g: Goal }) {
   const t = g.today;
   if (!t || (!t.todos.length && !t.questions.length)) return null;
+  const min = t.todos.filter((x) => !x.done).reduce((s, x) => s + (x.est_min || 0), 0);
   return (
     <div className="mt-5">
       <div className="flex items-baseline justify-between">
-        <Label>Your part today</Label>
-        <Link href="/today" className="text-[12px]" style={{ ...MONO, color: K.accentBright }}>Open Today →</Link>
+        <Label>{`Your part today${min ? ` · ${min} min` : ""}`}</Label>
+        {/* Ticked on Today: the heartbeat copied these there, and Today is where the tick is stored. */}
+        <Link href="/today" className="text-[12px]" style={{ ...MONO, color: K.accentBright }}>Tick on Today →</Link>
       </div>
       <ul className="mt-2 space-y-2">
         {t.todos.map((x) => (
-          <li key={x.text} className="flex gap-2.5 text-[14px] leading-snug">
-            <span className="mt-[3px] inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] text-[11px]"
+          <li key={x.text} className="flex gap-3 rounded-2xl px-4 py-3 text-[13.5px] leading-snug" style={{ background: "rgba(255,255,255,.04)", border: `1px solid ${K.line}` }}>
+            <span className="mt-[2px] inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] text-[11px]"
               style={{ border: `1.5px solid ${x.done ? K.green : K.line2}`, background: x.done ? mix(K.green, 25) : "transparent", color: K.green }}>{x.done ? "✓" : ""}</span>
-            <span style={{ color: x.done ? K.faint : K.ink, textDecoration: x.done ? "line-through" : undefined }}>
+            <span className="min-w-0 flex-1" style={{ color: x.done ? K.faint : K.ink, textDecoration: x.done ? "line-through" : undefined }}>
               {x.text}
-              {x.why && <span className="mt-0.5 block text-[12.5px]" style={{ color: K.faint, textDecoration: "none" }}>{x.why}</span>}
+              {x.why && <span className="mt-0.5 block text-[12px]" style={{ color: K.faint, textDecoration: "none" }}>{x.why}</span>}
             </span>
+            {x.est_min ? <span className="shrink-0 text-[12px]" style={{ color: K.faint }}>{x.est_min}m</span> : null}
           </li>
         ))}
-        {t.questions.map((q) => (
-          <li key={q.question} className="rounded-lg px-3 py-2 text-[13.5px]" style={{ background: mix(K.amber, 10), color: K.amber }}>
-            Question for you: {q.question} <span style={{ color: K.faint }}>— answer it on Today</span>
+        {t.questions.map((x) => (
+          <li key={x.question} className="rounded-2xl px-4 py-3 text-[13.5px]" style={{ background: mix(K.amber, 10), color: K.amber }}>
+            Question for you: {x.question} <span style={{ color: K.faint }}>— answer it on Today</span>
           </li>
         ))}
       </ul>
@@ -294,57 +311,41 @@ function YourPart({ g }: { g: Goal }) {
   );
 }
 
-function actionLine(a: GoalAction): { text: string; href?: string; quiet?: boolean; bad?: boolean } | null {
-  if (a.lever === "article" && a.queued) return { text: `Queued an article: “${a.queued}”` };
-  if (a.lever === "draft" && a.note) return { text: `Drafted for you: ${a.note}`, href: obsidian(`10-19 Projects/goal-drafts/${a.note}`) };
-  if (a.lever === "seo-pr" && a.opened) return { text: `Opened a PR: ${a.opened.replace(/^https:\/\/github\.com\//, "")}`, href: a.opened };
-  if (a.lever === "merge" && a.merged && a.pr) return { text: `Merged ${a.pr.replace(/^https:\/\/github\.com\//, "")}`, href: a.pr };
-  if (a.lever === "merge" && a.waiting && a.pr) return { text: `PR waiting — ${a.waiting}`, href: a.pr, quiet: true };
-  if (a.error || a.refused_by_guard) return { text: `${a.lever}: ${a.refused_by_guard ? "refused by the path guard" : a.error}`, bad: true };
-  if (a.skipped) return { text: `${a.lever} skipped — ${a.skipped}`, quiet: true };
-  return null;
-}
-
-function Did({ log }: { log: GoalRun[] }) {
-  if (!log.length) return null;
-  const runs = [...log].reverse().slice(0, 10);
-  const usdWeek = log.filter((r) => Date.now() - Date.parse(r.at) < 7 * 864e5).reduce((s, r) => s + (r.usd || 0), 0);
+// What the ledger leaves out: who is ahead on page 1, which automations serve the goal, and its rules.
+function More({ g, runners }: { g: Goal; runners: Automation[] }) {
+  const last = g.log.at(-1);
   return (
-    <div className="mt-5">
-      <div className="flex items-baseline justify-between">
-        <Label>What it did</Label>
-        <span className="text-[11.5px]" style={{ ...MONO, color: K.faint }}>measured spend, 7 days: ${usdWeek.toFixed(2)}</span>
+    <div className="mt-3 space-y-5 text-[13px]" style={{ color: K.muted }}>
+      {last?.above && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {g.spec.target.queries.map((q) => last.above?.[q]?.length ? (
+            <div key={q}>
+              <Label>{`“${q}” · ${last.positions[q] === null ? "page 1 without us" : "above us"}`}</Label>
+              <ol className="mt-1.5 space-y-0.5">{last.above[q].slice(0, 5).map((a, i) => <li key={i} className="truncate"><span style={MONO}>{i + 1}.</span> {a}</li>)}</ol>
+            </div>
+          ) : null)}
+        </div>
+      )}
+      {runners.length > 0 && (
+        <div>
+          <Label>Worked on by</Label>
+          <ul className="mt-1.5 flex flex-wrap gap-2">
+            {runners.map((a) => (
+              <li key={a.id}><a href={`#auto-${a.id}`} className="flex items-center gap-2 rounded-full px-3 py-1 hover:bg-white/5" style={{ border: `1px solid ${K.line}` }}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: STATUS[a.status].color }} />{a.name}</a></li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div><Label>May do</Label><ul className="mt-1.5 space-y-1.5">{Object.entries(g.spec.levers).map(([k, v]) => <li key={k}><b style={{ color: K.ink }}>{k}</b> — {v}</li>)}</ul></div>
+        <div>
+          <Label>Never</Label><ul className="mt-1.5 list-disc space-y-1 pl-4">{g.spec.never.map((n) => <li key={n}>{n}</li>)}</ul>
+          <div className="mt-3"><Label>Asks you when</Label></div><ul className="mt-1.5 list-disc space-y-1 pl-4">{g.spec.escalate.map((n) => <li key={n}>{n}</li>)}</ul>
+        </div>
       </div>
-      <ol className="mt-2 space-y-2.5">
-        {runs.map((r) => {
-          const lines = r.actions.map(actionLine).filter((x): x is NonNullable<ReturnType<typeof actionLine>> => !!x);
-          return (
-            <li key={r.at} className="flex gap-3 text-[13.5px]">
-              <span className="w-[54px] shrink-0 pt-px text-[12px]" style={{ ...MONO, color: K.faint }}>{short(r.date)}</span>
-              <div className="min-w-0 space-y-0.5">
-                {lines.length ? lines.map((l, i) => (
-                  <div key={i} style={{ color: l.bad ? K.red : l.quiet ? K.faint : K.muted }}>
-                    {l.href ? <a href={l.href} target="_blank" rel="noreferrer" className="underline decoration-white/20 underline-offset-2 hover:decoration-white/60">{l.text}</a> : l.text}
-                  </div>
-                )) : <div style={{ color: K.faint }}>Measured only.</div>}
-                {r.todos.length > 0 && <div style={{ color: K.faint }}>{r.todos.length} to-do{r.todos.length > 1 ? "s" : ""} for you</div>}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
     </div>
   );
-}
-
-function Trend({ now, before }: { now: Position | undefined; before: Position | undefined }) {
-  if (typeof now !== "number" && typeof before !== "number") return null;
-  if (typeof now === "number" && before === null) return <span className="text-[12.5px]" style={{ color: K.green }}>new on page 1</span>;
-  if (now === null && typeof before === "number") return <span className="text-[12.5px]" style={{ color: K.red }}>fell off page 1</span>;
-  if (typeof now !== "number" || typeof before !== "number" || now === before) return null;
-  return now < before
-    ? <span className="text-[12.5px]" style={{ color: K.green }}>▲ {before - now}</span>
-    : <span className="text-[12.5px]" style={{ color: K.red }}>▼ {now - before}</span>;
 }
 
 const Label = ({ children }: { children: React.ReactNode }) => (
