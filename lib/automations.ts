@@ -60,6 +60,7 @@ const KNOWN: Meta = {
   "com.thomas.secondbrain-sync": { name: "Vault sync", description: "Commits and pushes the Second Brain so every device has it.", project: "Second Brain" },
   "com.thomas.video-evening": { name: "Video topics — evening plan", description: "Learns from last night's taps, scans AI news, writes tomorrow's 5 topics for the Slack card.", project: "Video Studio" },
   "com.thomas.video-overnight": { name: "Videos — overnight runner", description: "Keeps the Mac awake, waits for the 00:30 lock, then writes, builds, voices and renders every locked video. Progress goes in the card's thread; the morning card comes at 07:00.", project: "Video Studio" },
+  "com.thomas.video-ideas-prune": { name: "Video ideas — weekly prune", description: "Sundays 19:00: drops expired news ideas and rejects older than 30 days from the idea store (harness/plans/ideas.jsonl), so the evening planner's pool stays small.", project: "Video Studio" },
 };
 const PROTECTED = new Set(["com.thomas.minami-bot", "com.thomas.secondbrain-sync"]);
 
