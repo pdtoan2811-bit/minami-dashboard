@@ -1,10 +1,9 @@
 "use client";
 // One product: its team, its runs, and the two settings that are genuinely settings.
 //
-// The team list links out to /agents rather than reimplementing an agent view here. A role IS an
+// The team list links out to /agents/<id> rather than reimplementing an agent view here. A role IS an
 // agent — the same brain, shared with every other product using that role — and giving it a second
 // home in this page would invite editing it in a place that doesn't know that.
-import { Nav } from "@/components/Nav";
 import NewRun from "@/components/teams/NewRun";
 import { StageDots } from "@/components/teams/StageRail";
 import { ago } from "@/lib/agents/client";
@@ -39,9 +38,9 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   useEffect(() => { load(); const h = setInterval(load, 4000); return () => clearInterval(h); }, [load]);
 
   return (
-    <div className="bg-bento min-h-dvh text-neutral-100">
+    <div className="min-h-dvh text-neutral-100">
       <header className="flex items-center gap-3 px-6 py-5">
-        <Link href="/teams" className="text-neutral-600 hover:text-neutral-300">←</Link>
+        <Link href="/crew#teams" className="shrink-0 text-[12px] text-neutral-500 hover:text-neutral-200">← Crew</Link>
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold tracking-tight">{product?.name || "Product"}</h1>
           <p className="truncate text-[10.5px] text-neutral-600">
@@ -55,11 +54,10 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
               New run
             </button>
           )}
-          <Nav />
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl space-y-6 px-6 pb-16">
+      <main className="mx-auto max-w-4xl space-y-6 px-6 pb-28 sm:pb-16">
         {err && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-[12px] text-red-300">{err}</p>}
 
         {product && (
@@ -150,7 +148,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
               <button
                 onClick={async () => {
                   const d = await removeProduct(product.id).catch(() => null);
-                  if (d) window.location.href = "/teams";
+                  if (d) window.location.href = "/crew#teams";
                 }}
                 className="rounded-lg border border-white/10 px-3 py-1.5 text-[11px] text-neutral-500 hover:border-red-400/40 hover:text-red-300">
                 Delete product

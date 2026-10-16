@@ -272,7 +272,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
       <span className={`min-w-0 flex-1 truncate ${sc.hint} text-neutral-300`} title={q.question}>{q.question}</span>
       {n > 1 && <span className={`shrink-0 ${sc.hint} tabular-nums text-neutral-500`}>{qi + 1}/{n}</span>}
       <button onClick={() => setFolded(false)}
-        className={`shrink-0 rounded-lg bg-[var(--sakura)] px-3 py-1 ${sc.button} font-medium text-white transition-opacity hover:opacity-90`}>
+        className={`shrink-0 rounded-lg bg-[var(--accent-fill)] px-3 py-1 ${sc.button} font-medium text-white transition-opacity hover:opacity-90`}>
         Answer ▴
       </button>
     </div>
@@ -406,7 +406,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
       <div className="mt-2.5 flex shrink-0 flex-wrap items-center gap-2">
         {qi > 0 && <button onClick={back} className={`rounded-lg border border-white/15 px-3 py-1.5 pointer-coarse:min-h-11 ${sc.button} text-neutral-300 transition-colors hover:bg-white/10`}>← Back</button>}
         <button onClick={next} onPointerDown={keepFocus} disabled={!answered || sending}
-          className={`rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-5 ${sc.button} font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40 ${sending ? "animate-pulse" : ""}`}>
+          className={`rounded-lg bg-[var(--accent-fill)] px-3.5 py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-5 ${sc.button} font-medium text-white transition-opacity enabled:hover:opacity-90 disabled:opacity-40 ${sending ? "animate-pulse" : ""}`}>
           {sending ? "Sending…" : isLast ? "Send answer" : "Next →"}
         </button>
         <button onClick={guardedSkipOne} disabled={sending} className={`pointer-coarse:min-h-11 pointer-coarse:px-2 ${sc.skip} ${armed === "empty" ? "font-medium text-[#f0a868]" : "text-neutral-500"} transition-colors hover:text-neutral-300 hover:underline disabled:opacity-40`}>
@@ -446,7 +446,7 @@ function Row({ sc, multi, on, onClick, label, description, preview, previewOpen,
       <div className="flex items-start gap-2">
         <span className={`mt-[3px] flex ${sc.mark} shrink-0 items-center justify-center border leading-none ${
           multi ? "rounded-[4px]" : "rounded-full"} ${
-          on ? "border-[var(--sakura)] bg-[var(--sakura)] text-white" : "border-white/30"}`}>
+          on ? "border-[var(--sakura)] bg-[var(--accent-fill)] text-white" : "border-white/30"}`}>
           {on && (multi ? "✓" : <span className="h-1.5 w-1.5 rounded-full bg-white" />)}
         </span>
         <span className="min-w-0 flex-1">

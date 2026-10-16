@@ -138,7 +138,7 @@ export default function NewAgent({ onClose, onCreated }: { onClose: () => void; 
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-[12px] text-neutral-400 hover:text-neutral-200">Cancel</button>
           <button onClick={submit} disabled={!ready}
-            className="rounded-lg bg-[var(--sakura)] px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-40">
+            className="rounded-lg bg-[var(--accent-fill)] px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-40">
             {busy ? "Creating…" : adopting ? "Adopt folder" : "Create agent"}
           </button>
         </div>

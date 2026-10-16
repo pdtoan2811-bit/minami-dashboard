@@ -131,3 +131,23 @@ messages. **Not yet exercised: a real Slack DM**, including a file download thro
   removes it.
 - **Then "thread jobs"** (queued in the vault's Minami note): @minami under a teammate's file → a
   dashboard chat does the heavy work → the result is posted back to the thread.
+
+## Links to Today and Video Studio (2026-10-16, §30 nav revamp)
+
+- **→ Today** posts `{op:"add", text, from:{href:"/ideas#<id>"}}` to `/api/today`, then marks the idea
+  `sent.today` — only after the to-do landed, so a failed add never reads "On Today". `/ideas#<id>`
+  opens and scrolls to that card and switches to "By day" so a cold item isn't hidden.
+- **Make a video → Video Studio's own intake.** Video Studio (`~/tiktok-studio`) plans tomorrow's 5
+  topics in the evening (`scripts/topic-plan.mjs`, launchd `com.thomas.video-evening`) from story
+  cards in `harness/cards/<date>/<slug>/card.json` — the last two days' cards no locked plan has used.
+  One story becomes a card with `node scripts/story-card.mjs card "<story or url>"`. So
+  `POST /api/ideas/video {id}` (`lib/ideas.ts toVideo`) spawns exactly that, detached, seeded with the
+  idea's first link (else title — gist), logs to `~/.minami/ideas-video.log`, and marks `sent.video`
+  (the button becomes "Sent to studio"; a second tap is a no-op, so it never pays for two write-ups).
+  It does **not** write the plan file: that file is shared with the Slack card's clock
+  (`~/Minami/src/videoPlan.js`), and a hand-made slot would have no evidence behind it. The card
+  competes on score with the night's news — it is a candidate, not a guaranteed slot.
+  `VIDEO_STUDIO_DIR` overrides the checkout.
+- **The shell's project filter** matches an idea's tags and the words of its `why` (ideas have no
+  project field; the tagger names the project there).
+- The page's own Today / Board links are gone (the shell's rail does that); `pb-28` clears the phone bar.

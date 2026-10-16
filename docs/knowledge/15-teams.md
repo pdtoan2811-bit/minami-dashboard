@@ -211,14 +211,18 @@ wraps every assigned task with that, and the `dossier` skill says it again in th
 
 ## 15.6 The view, and the mode
 
-`/teams` (products + recent runs) → `/teams/<id>` (team, record, runs) → `/teams/run/<runId>` (stage
+`/crew#teams` (products + recent runs, below the roster) → `/teams/<id>` (team, record, runs) → `/teams/run/<runId>` (stage
 rail + the dossier rendered).
 
+- **Products render under the roster at `/crew` (§30); `/teams` redirects to `/crew#teams`.** A team
+  is agents with a template, so a separate top-level tab over-split one idea. The body is
+  `components/teams/Products.tsx`; the shell's project filter narrows it by product name or workspace
+  (a GTM-only product has no workspace, so the name has to count too).
 - **The dossier is the page.** Everything else is navigation around it. A UI that summarised the
   dossier would be a second, worse account of a document already meant to be read.
 - **The run page polls only while the run is live.** A finished run is a static file; re-fetching it
   every 4s on every tab left open on last week's run is pure waste.
-- **Both nav entries sit behind Agent view.** Teams is built *on* the agent layer — a product's roles
+- **The nav entry (Crew, formerly both Agents and Teams) sits behind Agent view.** Teams is built *on* the agent layer — a product's roles
   are agents — so showing Teams while Agents is hidden would offer a view whose every link leads
   somewhere hidden. `localStorage`, client-only: runs already in flight keep going with it off, and
   the server's registry doesn't care what one browser shows.
@@ -242,6 +246,6 @@ rail + the dossier rendered).
 | `lib/teams/repo-hook.ts` | the marker-bounded team block in a workspace's `CLAUDE.md` |
 | `lib/teams/client.ts` | browser-side types and fetchers (imports no server module) |
 | `app/api/teams/**` | products · runs |
-| `app/teams/**` | products page, product page, run page |
-| `components/teams/*` | new product, new run, stage rail |
+| `app/teams/**` | `/teams` → `/crew#teams` redirect, product page, run page |
+| `components/teams/*` | products list, new product, new run, stage rail |
 | `bin/team.mjs` | the CLI the repo block names |

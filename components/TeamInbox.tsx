@@ -47,7 +47,7 @@ export function TeamButton({ waiting, onOpen }: { waiting: number; onOpen: () =>
     <button onClick={onOpen} title={waiting ? `${waiting} from the team` : "From the team — nothing waiting"} aria-label="From the team"
       className={`relative rounded-lg border px-2 py-1 text-xs leading-none ${waiting ? "border-[var(--sakura)]/40 text-[var(--sakura)]" : "border-white/10 text-neutral-500 hover:text-neutral-300"}`}>
       <Users className="h-3.5 w-3.5" />
-      {waiting > 0 && <span className="absolute -right-1 -top-1 min-w-[15px] rounded-full bg-[var(--sakura)] px-1 text-[9px] font-semibold leading-[15px] text-white">{waiting > 9 ? "9+" : waiting}</span>}
+      {waiting > 0 && <span className="absolute -right-1 -top-1 min-w-[15px] rounded-full bg-[var(--accent-fill)] px-1 text-[9px] font-semibold leading-[15px] text-white">{waiting > 9 ? "9+" : waiting}</span>}
     </button>
   );
 }
@@ -280,7 +280,7 @@ function CardView({ card, reload, onExplain, explaining, explainErr }: { card: T
             className="mt-5 w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2.5 text-[15px] text-neutral-100 placeholder:text-neutral-600 focus:border-white/30 focus:outline-none" />
           {/* Pinned to the bottom of the scroller: on a folded phone a long card put Send screens away. */}
           <div className="sticky bottom-0 -mx-4 mt-3 flex flex-col gap-2 border-t border-white/[0.07] bg-neutral-950/95 px-4 py-3 backdrop-blur sm:flex-row-reverse md:-mx-5 md:px-5">
-            <button onClick={send} disabled={sending || missing > 0} className="min-h-[44px] flex-1 rounded-xl bg-[var(--sakura)] px-4 text-[15px] font-semibold text-white disabled:opacity-50">
+            <button onClick={send} disabled={sending || missing > 0} className="min-h-[44px] flex-1 rounded-xl bg-[var(--accent-fill)] px-4 text-[15px] font-semibold text-white disabled:opacity-50">
               {sending ? "Sending…" : missing ? `Answer ${missing === card.questions.length && missing === 1 ? "the question" : `${missing} more`} to send` : `Send to ${card.asker}`}
             </button>
             <ExplainButton ts={card.ts} onExplain={onExplain} explaining={explaining} />
@@ -318,7 +318,7 @@ function DmView({ dm, gate, reload, onExplain, explaining, explainErr }: { dm: T
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder={`Reply to ${dm.from}`}
         className="mt-5 w-full resize-y rounded-xl border border-white/10 bg-transparent px-3 py-2.5 text-[15px] text-neutral-100 placeholder:text-neutral-600 focus:border-white/30 focus:outline-none" />
       <div className="mt-3 flex flex-col gap-2 sm:flex-row-reverse">
-        <button onClick={send} disabled={!text.trim() || state === "sending"} className="min-h-[44px] flex-1 rounded-xl bg-[var(--sakura)] px-4 text-[15px] font-semibold text-white disabled:opacity-50">{state === "sending" ? "Sending…" : state === "sent" ? "Sent ✓" : "Send reply"}</button>
+        <button onClick={send} disabled={!text.trim() || state === "sending"} className="min-h-[44px] flex-1 rounded-xl bg-[var(--accent-fill)] px-4 text-[15px] font-semibold text-white disabled:opacity-50">{state === "sending" ? "Sending…" : state === "sent" ? "Sent ✓" : "Send reply"}</button>
         <ExplainButton ts={dm.ts} onExplain={onExplain} explaining={explaining} />
       </div>
       {(err || explainErr) && <p className="mt-2 text-[13px] text-[#ef7c7c]">{err || explainErr}</p>}

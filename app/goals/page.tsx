@@ -1,10 +1,7 @@
-import type { Metadata } from "next";
-import { Goals } from "./Goals";
+import { redirect } from "next/navigation";
 
-// Every autonomous goal the goal runner works on each morning — where it stands against its deadline, what the
-// runner did, and Thomas's part today (§29).
-export const metadata: Metadata = { title: "Minami — goals" };
-
+// /goals merged into /autopilot (§30): a goal and the runners that work on it read as one page now.
+// Kept as a redirect so bookmarks, Slack links and the Today plan's old links still land somewhere.
 export default function GoalsPage() {
-  return <Goals />;
+  redirect("/autopilot");
 }

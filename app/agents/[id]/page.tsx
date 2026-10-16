@@ -9,7 +9,6 @@ import AgentChat from "@/components/agents/AgentChat";
 import AgentConfig from "@/components/agents/AgentConfig";
 import AgentHistory from "@/components/agents/AgentHistory";
 import AgentTasks from "@/components/agents/AgentTasks";
-import { Nav } from "@/components/Nav";
 import { PanelTabs } from "@/components/PanelTabs";
 import { fetchAgent, fetchAgents, shortPath, startOnboarding, type AgentDef, type AgentRow } from "@/lib/agents/client";
 import Link from "next/link";
@@ -46,13 +45,13 @@ export default function AgentDetail() {
     return () => clearInterval(h);
   }, [id]);
 
-  if (err) return <div className="bg-bento min-h-dvh p-6 text-[13px] text-red-300">{err}</div>;
-  if (!agent) return <div className="bg-bento min-h-dvh p-6 text-[13px] text-neutral-500">Loading…</div>;
+  if (err) return <div className="min-h-dvh p-6 text-[13px] text-red-300">{err}</div>;
+  if (!agent) return <div className="min-h-dvh p-6 text-[13px] text-neutral-500">Loading…</div>;
 
   return (
-    <div className="bg-bento flex h-dvh flex-col text-neutral-100">
+    <div className="flex h-dvh flex-col pb-20 text-neutral-100 sm:pb-0">
       <header className="flex shrink-0 items-center gap-3 px-6 py-4">
-        <Link href="/agents" className="text-neutral-600 hover:text-neutral-300">←</Link>
+        <Link href="/crew" className="shrink-0 text-[12px] text-neutral-500 hover:text-neutral-200">← Crew</Link>
         <span className="text-xl">{agent.icon}</span>
         <div className="min-w-0">
           <h1 className="flex items-center gap-1.5 text-base font-semibold tracking-tight">
@@ -68,7 +67,6 @@ export default function AgentDetail() {
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--sakura)]" />{live.label || live.phase}
           </span>
         )}
-        <div className="ml-auto"><Nav /></div>
       </header>
 
       {!agent.onboardedAt && (
@@ -84,7 +82,7 @@ export default function AgentDetail() {
         </div>
       )}
 
-      <div className="mx-6 mb-6 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+      <div className="mx-6 mb-6 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06]">
         <PanelTabs
           active={tab}
           onPick={(k) => setTab(k as Tab)}

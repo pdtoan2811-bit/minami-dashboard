@@ -28,7 +28,7 @@ const SIZE = {
 } as const;
 
 const ON: Record<SegTone, string> = {
-  accent: "bg-[var(--sakura)] text-white",
+  accent: "bg-[var(--accent-fill)] text-white",
   good: "bg-green-500/20 text-green-400",
 };
 

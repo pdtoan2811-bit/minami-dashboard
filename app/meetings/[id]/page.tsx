@@ -23,6 +23,7 @@
 import { useEffect, useMemo, useState, use } from "react";
 import Link from "next/link";
 import { GraphCanvas } from "@/components/canvas/GraphCanvas";
+import { SendTo } from "../SendTo";
 
 type Node = { id: string; kind: string; label: string; detail?: string; parent?: string };
 type Meeting = {
@@ -166,7 +167,9 @@ export default function MeetingPage({ params }: { params: Promise<{ id: string }
                     {n.kind !== "topic" ? (
                       <span className="shrink-0 text-[10px] uppercase tracking-wide" style={{ color: KIND_TINT[n.kind] ?? "#78716c" }}>{n.kind}</span>
                     ) : null}
-                    <span className={n.kind === "topic" ? "text-[13px] font-semibold text-neutral-700" : "text-[13.5px] text-neutral-900"}>{n.label}</span>
+                    <span className={n.kind === "topic" ? "text-[13px] font-semibold text-neutral-700" : "min-w-0 flex-1 text-[13.5px] text-neutral-900"}>{n.label}</span>
+                    {/* Action items and decisions can leave the board: → Today / → Ideas, linked back here. */}
+                    {n.kind === "action" || n.kind === "decision" ? <SendTo meeting={m} card={n} compact /> : null}
                   </div>
                   {n.detail ? <p className="mt-1 text-[12.5px] leading-5 text-neutral-500">{n.detail}</p> : null}
                 </div>

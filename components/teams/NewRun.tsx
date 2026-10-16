@@ -62,7 +62,7 @@ export default function NewRun({
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-[12px] text-neutral-400 hover:text-neutral-100">Cancel</button>
           <button onClick={submit} disabled={!brief.trim() || busy}
-            className="rounded-lg bg-[var(--sakura)] px-3.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-40">
+            className="rounded-lg bg-[var(--accent-fill)] px-3.5 py-1.5 text-[12px] font-medium text-white disabled:opacity-40">
             {busy ? "Starting…" : "Start run"}
           </button>
         </div>

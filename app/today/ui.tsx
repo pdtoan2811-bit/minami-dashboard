@@ -7,9 +7,11 @@ import Link from "next/link";
 import { inter, interVi, mono } from "./fonts";
 
 // ── tokens (kit.css: [data-ground="dark"] + [data-brand="ecvision"] dark) ───────────────────────────
+// `accent` is deepened from the kit's #346aff to #2a56d6: it is the fill behind white labels, and white
+// on it is 6.2:1 where #346aff gave 4.5 ("too hard to read", 2026-10-16). Accent TEXT uses accentBright.
 export const K = {
   bg: "#0b0e12", paper: "#161b23", ink: "#ffffff", muted: "rgba(255,255,255,.68)", faint: "rgba(255,255,255,.45)",
-  line: "rgba(255,255,255,.12)", line2: "rgba(255,255,255,.22)", accent: "#346aff", accentBright: "#90aeff", accent2: "#6fe3ff",
+  line: "rgba(255,255,255,.12)", line2: "rgba(255,255,255,.22)", accent: "#2a56d6", accentBright: "#90aeff", accent2: "#6fe3ff",
   cat1: "#2985f0", cat3: "#c38400", cat4: "#db6393", cat6: "#ec3a3e",
 };
 export const mix = (c: string, p: number, onto = "transparent") => `color-mix(in srgb, ${c} ${p}%, ${onto})`;
@@ -22,10 +24,12 @@ export function Inline({ text }: { text: string }) {
     ? <code key={i} className="rounded px-1 py-px text-[0.88em]" style={{ fontFamily: "var(--today-mono)", background: "rgba(255,255,255,.08)" }}>{p.slice(1, -1)}</code> : p)}</>;
 }
 
+// Since §30 the app shell owns the ground (the sky, the fonts, the base colour) for every page, so
+// this no longer paints a sky of its own: two fixed skies stacked is twice the compositing for one
+// picture. It stays as the wrapper these pages already use, in case the shell is ever bypassed.
 export function Ground({ children }: { children: React.ReactNode }) {
   return (
-    <div className={`${inter.variable} ${interVi.variable} ${mono.variable} relative min-h-dvh`} style={{ fontFamily: "var(--today-sans), var(--today-sans-vi), ui-sans-serif, system-ui", color: K.ink, background: K.bg }}>
-      <Sky fixed />
+    <div className={`${inter.variable} ${interVi.variable} ${mono.variable} relative min-h-dvh`} style={{ fontFamily: "var(--today-sans), var(--today-sans-vi), ui-sans-serif, system-ui", color: K.ink }}>
       <div className="relative">{children}</div>
     </div>
   );
@@ -34,29 +38,34 @@ export function Ground({ children }: { children: React.ReactNode }) {
 // The onboarding's golden-hour sky, reduced to what reads at a glance: the base gradient (cat-1 over
 // cat-6 on the dark ground), an afterglow, three receding glass panes and film grain.
 const GRAIN = `url("data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .55 0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>')}")`;
-export function Sky({ fixed }: { fixed?: boolean }) {
+// `panes`: the three receding glass panes are Today's signature and read well behind one centred card;
+// behind a dense grid (Bento, Autopilot) they cut across the tiles and made the content look washed
+// out, so the shell (§30) draws them on Today only and the plain sky everywhere else.
+export function Sky({ fixed, panes: withPanes = true }: { fixed?: boolean; panes?: boolean }) {
   const panes = useMemo(() => [
     { inset: "14% 9% 9% 11%", rot: -1.6, o: 1 }, { inset: "20% 7% 21% 27%", rot: -0.8, o: .85 }, { inset: "24% 6% 28% 33%", rot: 0, o: .7 },
   ], []);
   return (
     <div aria-hidden className={`${fixed ? "fixed" : "absolute"} inset-0 overflow-hidden`} style={{ background: `linear-gradient(to bottom, ${mix(K.cat1, 24, K.bg)}, ${mix(K.cat6, 16, K.bg)})` }}>
       <div className="absolute inset-x-0 bottom-0 h-[60%]" style={{ background: `radial-gradient(ellipse 50% 50% at 50% 100%, ${mix(K.cat3, 18)} 0%, ${mix(K.cat6, 12)} 40%, transparent 80%)` }} />
-      <div className="absolute inset-0 hidden sm:block" style={{ perspective: 1400 }}>
+      {withPanes && <div className="absolute inset-0 hidden sm:block" style={{ perspective: 1400 }}>
         {panes.map((p, i) => (
           <div key={i} className="absolute rounded-[34px]" style={{ inset: p.inset, opacity: p.o, transform: `rotateY(-9deg) rotateZ(${p.rot}deg)`,
             background: `linear-gradient(155deg, ${mix(K.ink, 12)} 0%, ${mix(K.cat3, 6)} 34%, ${mix(K.cat4, 7)} 62%, ${mix(K.cat1, 8)} 100%)`,
             border: `1px solid ${mix(K.ink, 22)}`, boxShadow: `0 30px 80px rgba(0,0,0,.45)` }} />
         ))}
-      </div>
+      </div>}
       <div className="absolute inset-0" style={{ backgroundImage: GRAIN, opacity: .08 }} />
     </div>
   );
 }
 
-export function TopBar({ right }: { right?: React.ReactNode }) {
+// The brand mark lives in the shell's rail now (§30); a page's top bar carries only its title and
+// its own controls, so the name isn't printed twice a few pixels apart.
+export function TopBar({ right, title }: { right?: React.ReactNode; title?: React.ReactNode }) {
   return (
     <div className="relative z-10 flex items-center px-5 pb-4 pt-5 sm:px-11 sm:pt-9">
-      <Link href="/today" className="text-[17px] font-semibold tracking-tight">Minami</Link>
+      {title && <span className="text-[17px] font-semibold tracking-tight">{title}</span>}
       <div className="ml-auto flex items-center gap-1 text-[14px]" style={{ color: K.muted }}>{right}</div>
     </div>
   );

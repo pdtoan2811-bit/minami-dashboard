@@ -11,7 +11,6 @@
 // and offering "resume" from here would give one agent two live panes onto the same transcript —
 // exactly the two-writers case manager.ts refuses.
 import Markdown from "@/components/Markdown";
-import { Nav } from "@/components/Nav";
 import { activityLabel } from "@/lib/use-agent";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -46,7 +45,7 @@ export default function AgentSession() {
   }, [sid, id]);
 
   return (
-    <div className="bg-bento min-h-dvh text-neutral-100">
+    <div className="min-h-dvh text-neutral-100">
       <header className="flex items-center gap-3 px-6 py-4">
         <Link href={`/agents/${id}?tab=history`} className="text-neutral-600 hover:text-neutral-300">←</Link>
         <div className="min-w-0">
@@ -55,10 +54,9 @@ export default function AgentSession() {
             {meta ? `${meta.cwd} · ${meta.tier} · ${meta.messages} messages · $${meta.cost.toFixed(2)}` : sid}
           </p>
         </div>
-        <div className="ml-auto"><Nav /></div>
       </header>
 
-      <main className="mx-auto max-w-3xl space-y-4 px-6 pb-16">
+      <main className="mx-auto max-w-3xl space-y-4 px-6 pb-28 sm:pb-16">
         {err && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-[12px] text-red-300">{err}</p>}
         {!turns && !err && <p className="text-[12px] text-neutral-600">Reading the transcript…</p>}
         {turns?.length === 0 && <p className="text-[12px] text-neutral-600">No transcript with that id — it may have been deleted.</p>}

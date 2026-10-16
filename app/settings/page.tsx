@@ -1,6 +1,5 @@
 "use client";
 
-import { Nav } from "@/components/Nav";
 import { Segmented } from "@/components/ui/Segmented";
 import { useSetting } from "@/lib/use-settings";
 import AutopilotPanel from "@/components/AutopilotPanel";
@@ -44,16 +43,14 @@ export default function Settings() {
   // starts from, not a retroactive change to sessions already running.
   const [permDefault, setPermDefault] = useSetting<"default" | "acceptEdits" | "bypassPermissions">("permMode", "bypassPermissions");
   const [defaultWindow, setDefaultWindow] = useSetting<number | null>("defaultWindow", 3);
-  // Same key the Nav reads. Client-only: it decides what this browser shows, not what the server runs
+  // Same key the shell's rail reads (lib/nav.ts, §30). Client-only: it decides what this browser shows, not what the server runs
   // — agents already on the roster keep working with this off.
   const [agentMode, setAgentMode] = useSetting<boolean>("agentMode", false);
 
   return (
-    <div className="bg-bento min-h-dvh text-neutral-100">
-      <header className="flex items-center gap-3 px-6 py-5">
-        <span className="text-xl">⚙</span>
-        <h1 className="text-base font-semibold tracking-tight">Settings</h1>
-        <div className="ml-auto"><Nav /></div>
+    <div className="min-h-dvh text-neutral-100">
+      <header className="flex items-center gap-3 px-5 pb-4 pt-5 sm:px-11 sm:pt-9">
+        <h1 className="text-[17px] font-semibold tracking-tight">Settings</h1>
       </header>
       <main className="mx-auto max-w-2xl space-y-6 px-6 pb-16">
         <section>
@@ -75,10 +72,10 @@ export default function Settings() {
             </Row>
             {agentMode && (
               <>
-                <a href="/agents" className="block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[11px] text-neutral-400 hover:border-[var(--sakura)]/40">
+                <a href="/crew" className="block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[11px] text-neutral-400 hover:border-[var(--sakura)]/40">
                   Open the roster →
                 </a>
-                <a href="/teams" className="block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[11px] text-neutral-400 hover:border-[var(--sakura)]/40">
+                <a href="/crew#teams" className="block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[11px] text-neutral-400 hover:border-[var(--sakura)]/40">
                   Open Teams — products, templates and runs →
                 </a>
               </>
@@ -113,6 +110,23 @@ export default function Settings() {
         </section>
         <PreferredAccountPanel />
         <AutopilotPanel />
+
+        {/* §30: the machine's own maps moved here from the nav, which is kept for the work itself. */}
+        <section>
+          <h2 className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-neutral-500">About this machine</h2>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {[
+              { href: "/architecture", label: "Architecture", hint: "The live module graph: what calls what." },
+              { href: "/architecture.html", label: "How it's built", hint: "The written explainer of the three pipelines." },
+              { href: "/kb/index.html", label: "Knowledge base", hint: "Why each subsystem is built the way it is." },
+            ].map((l) => (
+              <a key={l.href} href={l.href} className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 transition-colors hover:border-white/25">
+                <span className="block text-sm font-medium">{l.label}</span>
+                <span className="block text-[12px] text-neutral-500">{l.hint}</span>
+              </a>
+            ))}
+          </div>
+        </section>
 
         <p className="px-1 text-[11px] text-neutral-600">
           Settings are stored locally in this browser. Bento reads them live. Autopilot, the

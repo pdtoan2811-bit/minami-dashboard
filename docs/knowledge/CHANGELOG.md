@@ -8,6 +8,22 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-16
+- **App shell and nav revamp** (§30; new `lib/nav.ts`, `components/shell/*`, `app/api/shell`, `lib/project-filter.ts`, `/autopilot`, `/crew`).
+  One grouped, collapsible rail on every page (Work · Day · Autopilot · Library, with Metrics and
+  Settings in the footer). On a phone: a top strip plus a Chats · Today · Autopilot · Ideas · More bar.
+  A bell drawer counts chat asks, goal asks and failing automations, and holds the update log. One +
+  captures an idea, a to-do or a goal. A project filter applies across pages. Bento gets a Day strip.
+  Goals + Automations → `/autopilot`, Agents + Teams → `/crew`, and the old routes redirect.
+  Architecture and the KB moved into Settings. The Today material (sky, Inter, blue accent) is now
+  the whole app's look. Removed `Nav.tsx`, `NeedsYou.tsx` and `NotificationBell.tsx`.
+  *Requested by user: "revamp and improve on Minami dashboard navigation and use cases … concrete and not chắp vá".*
+- **Pages link to each other** (§30 nav revamp). Today's handed-off rows show their chat's state as a
+  link (`need` from `liveActivity()` in the GET); meetings' action items and decisions go → Today / →
+  Ideas with a link back; ideas go → Today and → Video Studio (`/api/ideas/video` runs
+  `~/tiktok-studio/scripts/story-card.mjs card`). Today and Ideas honour the shell's project filter.
+  §26, §28, §17.
+
 ### 2026-10-15
 - **Goals page** (§29, `app/goals/*`, `lib/goals.ts`, `/api/goals`, nav ◎). Shows each autonomous goal the vault goal runner (`70-79 Toolshed/tools/goals`, launchd `com.thomas.goal-runner` 06:45) works on: position per query vs target, a day-by-day road to the deadline, the runner's assessment, Thomas's part with Today's ticks, what it did, its rules, and Run now. Read-only; to-dos reach Today through the heartbeat's `withGoals()`.
 

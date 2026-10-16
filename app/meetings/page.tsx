@@ -17,12 +17,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { SendTo, type ActionCard } from "./SendTo";
 
 type Hit = { kind: string; text: string };
 type Meeting = {
   id: string; date: string; time: string; title: string;
   minutes: number; cost: number; cards: number; topics: string[];
-  score?: number; cardHits?: Hit[]; lineHits?: string[];
+  score?: number; cardHits?: Hit[]; lineHits?: string[]; actions?: ActionCard[];
 };
 
 const KIND_TINT: Record<string, string> = {
@@ -54,12 +55,11 @@ export default function MeetingsPage() {
 
   return (
     <div className="min-h-dvh bg-[#f7f7f5]">
-      <div className="mx-auto w-full max-w-[940px] px-6 py-10">
-        {/* Navigation, because a page you can only reach by typing a URL is not part of an app. */}
+      {/* pb-28 on phones: the shell's fixed bottom bar (§30) would cover the last row otherwise. */}
+      <div className="mx-auto w-full max-w-[940px] px-6 pb-28 pt-10 sm:pb-10">
+        {/* The way between pages is the shell's rail now (§30), so no brand / breadcrumb here — only the
+            one link this page owns. */}
         <nav className="mb-7 flex items-center gap-4 text-[13px]">
-          <span className="font-semibold tracking-[-0.01em] text-neutral-800">Minami</span>
-          <span className="text-neutral-300">/</span>
-          <span className="text-neutral-600">Meetings</span>
           <span className="flex-1" />
           <Link href="/canvas?present=1" className="rounded-lg border border-neutral-200 px-2.5 py-1 text-neutral-500 transition-colors hover:border-neutral-400 hover:text-neutral-800">
             Live canvas →
@@ -99,10 +99,10 @@ export default function MeetingsPage() {
 
         <ul className="space-y-2.5">
           {rows.map((m) => (
-            <li key={m.id}>
+            <li key={m.id} className="overflow-hidden rounded-xl border border-neutral-200 bg-white transition-colors hover:border-neutral-400">
               <Link
                 href={`/meetings/${encodeURIComponent(m.id)}`}
-                className="block rounded-xl border border-neutral-200 bg-white px-4 py-3 transition-colors hover:border-neutral-400 hover:bg-neutral-50"
+                className="block px-4 py-3 transition-colors hover:bg-neutral-50"
               >
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                   <span className="text-[15.5px] font-semibold tracking-[-0.01em] text-neutral-900">{m.title}</span>
@@ -143,6 +143,23 @@ export default function MeetingsPage() {
                   </div>
                 ) : null}
               </Link>
+              {/* Outside the Link: these are buttons, and a button inside an <a> both navigates and
+                  fires. Action items and decisions only — notes and quotes are the record, not work. */}
+              {m.actions?.length ? (
+                <div className="space-y-1 border-t border-neutral-100 px-4 py-2.5">
+                  {m.actions.slice(0, 4).map((a) => (
+                    <div key={a.id} className="flex items-baseline gap-2 text-[12.5px] text-neutral-700">
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide" style={{ color: KIND_TINT[a.kind] ?? "#a8a29e" }}>{a.kind}</span>
+                      <span className="min-w-0 flex-1 truncate">{a.label}</span>
+                      <SendTo meeting={m} card={a} />
+                    </div>
+                  ))}
+                  {m.actions.length > 4 ? (
+                    <Link href={`/meetings/${encodeURIComponent(m.id)}`} className="block text-[12px] text-neutral-400 hover:text-neutral-700">
+                      +{m.actions.length - 4} more in the meeting →</Link>
+                  ) : null}
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>

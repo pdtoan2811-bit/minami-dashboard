@@ -1,8 +1,8 @@
 import localFont from "next/font/local";
 
 // The Today page borrows ecvision's onboarding look (§26), and that look is set in Inter + JetBrains
-// Mono (the kit's --k-font-sans / --k-font-mono). Scoped to this route so the rest of the dashboard
-// keeps its system stack.
+// Mono (the kit's --k-font-sans / --k-font-mono). Since §30 the root layout loads them for every page:
+// the shell gives the whole app this material, so the font stopped being a Today-only choice.
 //
 // Local files, not next/font/google: a page's font must never make a deploy of the live dashboard
 // depend on the network. `next build` replaces .next under the running server, so a failed Google

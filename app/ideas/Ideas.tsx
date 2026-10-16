@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { RankedIdea, Theme } from "@/lib/ideas";
+import { matchesProject, useProjectFilter } from "@/lib/project-filter";
 import { K, mix, hhmm, Ground, TopBar, Glass, Eyebrow, Title, PillButton, Chip, TextButton } from "../today/ui";
 
 type Data = { items: RankedIdea[]; themes: Theme[]; removed: number };
@@ -15,6 +16,9 @@ const KIND: Record<string, string> = { news: "#6fe3ff", meme: "#f3c766", tool: "
 const ARROW = { up: "↑", flat: "·", down: "↓" } as const;
 const IMG = /^image\//;
 const localDate = (d = new Date()) => d.toLocaleDateString("en-CA");
+/** An idea has no project field; the tagger's tags and its `why` ("for QSortby's sort page…") are where
+ *  a project shows up, so those are what the shell's filter (§30) matches against. */
+const projectNames = (x: RankedIdea) => [...(x.tags ?? []), ...(x.why ?? "").split(/\s+/)];
 function dayLabel(d: string) {
   const t = localDate(), y = localDate(new Date(Date.now() - 86400e3));
   return d === t ? "Today" : d === y ? "Yesterday" : new Date(d + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
@@ -26,6 +30,11 @@ export function Ideas() {
   const [view, setView] = useState<View>("hot");
   const [tag, setTag] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [pf, setPf] = useProjectFilter();
+  // /ideas#<id> is the link a to-do made from an idea carries back (§28 "links"): open that card, and
+  // show every day so a cold one isn't hidden behind "Hot & warm".
+  const [target, setTarget] = useState<string | null>(null);
+  useEffect(() => { const h = location.hash.slice(1); if (h) { setTarget(h); setView("days"); } }, []);
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -57,26 +66,29 @@ export function Ideas() {
 
   const items = data?.items ?? [];
   const today = localDate();
+  const inProject = useMemo(() => items.filter((x) => matchesProject(pf, ...projectNames(x))), [items, pf]);
+  const hiddenByProject = items.length - inProject.length;
   const shown = useMemo(() => {
-    const byTag = tag ? items.filter((x) => x.tags?.includes(tag)) : items;
+    const byTag = tag ? inProject.filter((x) => x.tags?.includes(tag)) : inProject;
     if (view === "hot") return byTag.filter((x) => x.heat !== "cold");
     if (view === "cold") return byTag.filter((x) => x.heat === "cold");
     return byTag;
-  }, [items, view, tag]);
+  }, [inProject, view, tag]);
   const days = useMemo(() => {
     const m = new Map<string, RankedIdea[]>();
     for (const x of [...shown].sort((a, b) => b.at.localeCompare(a.at))) m.set(x.date, [...(m.get(x.date) ?? []), x]);
     return [...m.entries()];
   }, [shown]);
 
-  if (!data) return <Ground><TopBar right={<Nav />} /><p className="pt-24 text-center text-sm" style={{ color: K.muted }}>{err ?? "Loading…"}</p></Ground>;
+  if (!data) return <Ground><TopBar title="Ideas" /><p className="pt-24 text-center text-sm" style={{ color: K.muted }}>{err ?? "Loading…"}</p></Ground>;
 
   const hot = items.filter((x) => x.heat === "hot").length, cold = items.filter((x) => x.heat === "cold").length;
   const rising = data.themes.filter((t) => t.trend === "up").slice(0, 3);
   return (
     <Ground>
-      <TopBar right={<Nav />} />
-      <main className="mx-auto flex w-full max-w-[640px] flex-col gap-4 px-4 pb-24 sm:px-0">
+      {/* No page links up here since §30: the shell's rail / phone bar does that. pb-28 clears its bar. */}
+      <TopBar title="Ideas" />
+      <main className="mx-auto flex w-full max-w-[640px] flex-col gap-4 px-4 pb-28 sm:px-0">
         <Glass elevated className="flex flex-col items-center gap-3 px-6 py-8 text-center">
           <Eyebrow>IDEAS · {items.length} SAVED · {items.filter((x) => x.date === today).length} TODAY</Eyebrow>
           <Title size="m">{hot ? `${hot} hot right now` : items.length ? "Nothing hot — send Minami something" : "Send Minami anything"}</Title>
@@ -94,24 +106,22 @@ export function Ideas() {
           <Chip on={view === "themes"} onClick={() => setView("themes")}>Themes <span style={{ color: K.faint }}>{data.themes.length}</span></Chip>
           <Chip on={view === "cold"} onClick={() => setView("cold")}>Cold <span style={{ color: K.faint }}>{cold}</span></Chip>
         </div>
+        {pf && hiddenByProject > 0 && <div className="flex items-center gap-2 text-[13px]" style={{ color: K.muted }}>
+          Filtered to <b style={{ color: K.ink }}>{pf}</b> · {hiddenByProject} hidden<TextButton onClick={() => setPf("")}>show all</TextButton></div>}
         {tag && <div className="flex items-center gap-2 text-[13px]" style={{ color: K.muted }}>Only <b style={{ color: K.ink }}>#{tag}</b><TextButton onClick={() => setTag(null)}>✕ clear</TextButton></div>}
 
         {view === "themes" ? <Themes themes={data.themes} onPick={(t) => { setTag(t); setView("days"); }} />
           : view === "days" ? days.map(([d, xs]) => (
               <section key={d} className="flex flex-col gap-2">
                 <Eyebrow>{dayLabel(d).toUpperCase()} · {xs.length}</Eyebrow>
-                {xs.map((x) => <Card key={x.id} x={x} act={act} />)}
+                {xs.map((x) => <Card key={x.id} x={x} act={act} toast={setToast} reload={load} target={target === x.id} />)}
               </section>))
-          : shown.length ? shown.map((x) => <Card key={x.id} x={x} act={act} />)
+          : shown.length ? shown.map((x) => <Card key={x.id} x={x} act={act} toast={setToast} reload={load} target={target === x.id} />)
           : <p className="py-10 text-center text-[13.5px]" style={{ color: K.faint }}>{view === "cold" ? "Nothing cold yet — items cool off after about two weeks untouched." : "Nothing here yet."}</p>}
       </main>
-      {toast && <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4"><div className="rounded-full px-4 py-2.5 text-[13.5px]" style={{ background: K.paper, border: `1px solid ${K.line2}` }}>{toast}</div></div>}
+      {toast && <div className="fixed inset-x-0 bottom-24 z-50 sm:bottom-6 flex justify-center px-4"><div className="rounded-full px-4 py-2.5 text-[13.5px]" style={{ background: K.paper, border: `1px solid ${K.line2}` }}>{toast}</div></div>}
     </Ground>
   );
-}
-
-function Nav() {
-  return <><Link href="/today" className="rounded-full px-3 py-1.5 hover:text-white">Today</Link><Link href="/" className="rounded-full px-3 py-1.5 hover:text-white">Board</Link></>;
 }
 
 /** Paste, drag or type. Images pasted from the clipboard (a screenshot) count as files. */
@@ -155,15 +165,38 @@ function Drop({ onSaved, onError }: { onSaved: () => void; onError: (e: string) 
   );
 }
 
-function Card({ x, act }: { x: RankedIdea; act: (b: Record<string, unknown>) => Promise<unknown> }) {
-  const [open, setOpen] = useState(false);
+function Card({ x, act, toast, reload, target }: { x: RankedIdea; act: (b: Record<string, unknown>) => Promise<unknown>; toast: (t: string) => void; reload: () => unknown; target?: boolean }) {
+  const [open, setOpen] = useState(!!target);
   const [note, setNote] = useState("");
+  const [busy, setBusy] = useState<"today" | "video" | null>(null);
+  const el = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (target) { setOpen(true); el.current?.scrollIntoView({ block: "center" }); } }, [target]);
+  const name = (x.title || x.note || x.links[0]?.url || "an idea").slice(0, 60);
+  // → Today: the to-do carries `from` (a link back here, rendered by Today as "from idea: …"); the idea
+  // is marked only after the to-do landed, so a failed add never shows "On Today".
+  const toToday = async () => {
+    setBusy("today");
+    const text = [x.title || x.note, x.gist, x.links[0]?.url].filter(Boolean).join("\n");
+    const r = await fetch("/api/today", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "add", text: text || name, from: { href: `/ideas#${x.id}`, label: `idea: ${name}` } }) })
+      .then((r) => r.json()).catch(() => ({ error: "Couldn't reach Today." }));
+    if (r.error) { toast(r.error); setBusy(null); return; }
+    await act({ op: "sent-today", id: x.id, date: r.day?.date });
+    toast("On Today — Minami is researching it."); setBusy(null);
+  };
+  const toVideo = async () => {
+    setBusy("video");
+    const r = await fetch("/api/ideas/video", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: x.id }) })
+      .then((r) => r.json()).catch(() => ({ error: "Couldn't reach the dashboard." }));
+    toast(r.error || "Sent to Video Studio — it becomes a story card for tonight's topic plan.");
+    await reload(); setBusy(null);
+  };
   const img = x.files.findIndex((f) => f.path && IMG.test(f.mime || ""));
   const link = x.links[0];
   const thumb = img >= 0 ? `/api/ideas/media/${x.id}/${img}` : link?.image || null;
   const color = KIND[x.kind || ""] || K.faint;
   return (
-    <Glass className="overflow-hidden">
+    <div ref={el} id={x.id} className="scroll-mt-24"><Glass className="overflow-hidden">
       <div className="flex gap-3.5 p-3.5">
         {thumb && <button onClick={() => setOpen(!open)} className="shrink-0">
           {/* eslint-disable-next-line @next/next/no-img-element -- local media and arbitrary og:images; next/image would need every host allow-listed */}
@@ -175,6 +208,8 @@ function Card({ x, act }: { x: RankedIdea; act: (b: Record<string, unknown>) => 
             {x.heat === "hot" && <span style={{ color: "#ff9a6b" }}>HOT</span>}
             {x.cameBack && <span style={{ color: K.accent2 }}>CAME BACK</span>}
             {x.starred && <span>🔥</span>}
+            {x.sent?.today && <span style={{ color: K.accentBright }}>ON TODAY</span>}
+            {x.sent?.video && <span style={{ color: KIND.video }}>IN STUDIO</span>}
           </div>
           <button onClick={() => setOpen(!open)} className="text-left text-[15px] font-semibold leading-snug" style={{ color: K.ink }}>
             {x.status === "enriching" ? (x.note || link?.url || "Reading…") : x.title}</button>
@@ -196,13 +231,19 @@ function Card({ x, act }: { x: RankedIdea; act: (b: Record<string, unknown>) => 
           <form onSubmit={async (e) => { e.preventDefault(); if (!note.trim()) return; await act({ op: "comment", id: x.id, text: note }); setNote(""); }} className="flex items-center gap-2">
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a thought…" className="min-w-0 flex-1 rounded-full bg-transparent px-3.5 py-2 text-[13.5px] outline-none placeholder:text-white/35" style={{ border: `1px solid ${K.line2}` }} />
           </form>
-          <div className="flex items-center gap-3 text-[13px]">
+          <div className="flex flex-wrap items-center gap-2 text-[13px]">
             <PillButton tone={x.starred ? "accent" : "paper"} small onClick={() => act({ op: "star", id: x.id, on: !x.starred })}>🔥 {x.starred ? "Hot" : "Mark hot"}</PillButton>
+            {x.sent?.today
+              ? <Link href="/today" className="rounded-full px-3 py-1.5 hover:text-white" style={{ color: K.accentBright }}>On Today →</Link>
+              : <PillButton tone="paper" small disabled={!!busy || x.status === "enriching"} onClick={toToday}>{busy === "today" ? "Adding…" : "→ Today"}</PillButton>}
+            {x.sent?.video
+              ? <span className="px-2" style={{ color: K.faint }}>Sent to studio</span>
+              : <PillButton tone="paper" small disabled={!!busy || x.status === "enriching"} onClick={toVideo}>{busy === "video" ? "Sending…" : "Make a video"}</PillButton>}
             <button onClick={() => act({ op: "remove", id: x.id })} className="ml-auto hover:text-white" style={{ color: K.faint }}>Remove</button>
           </div>
         </div>
       )}
-    </Glass>
+    </Glass></div>
   );
 }
 

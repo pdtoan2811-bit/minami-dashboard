@@ -329,6 +329,13 @@ detail view, `useAgent` (§3) for the chat, `FolderPicker` (§5d) for home and w
 - **The roster is one request.** The "Recent work" strip used to re-fetch every agent's tasks on each
   4s tick — an N+1 that grows with the roster (eleven agents measured ~24 requests per nine seconds,
   each re-reading the whole task file). `/api/agents` already had them in hand and now returns them.
+- **The roster lives at `/crew` (§30), above the teams.** `/agents` is now a redirect. A team is
+  agents with a template — its roles *are* roster agents — so two top-level tabs over-split one idea
+  and sent you between them to answer "who is working on what". The body moved into
+  `components/agents/Roster.tsx` (its own poll and dialog) and `/crew` stacks it over
+  `components/teams/Products.tsx`. Detail routes stay at `/agents/<id>`, with a "← Crew" back link.
+  The shell's project filter narrows the roster by home folder or workspace (HQ always stays — it
+  routes into every project) and "Recent work" by task `cwd`.
 - The Settings toggle is `localStorage` (`bento:agentMode`) and hides the nav entry only. Agents on
   the roster keep working with it off — the server's roster doesn't care what one browser shows.
 
@@ -348,6 +355,7 @@ detail view, `useAgent` (§3) for the chat, `FolderPicker` (§5d) for home and w
 | `lib/agents/client.ts` | browser-side types and fetchers (imports no server module) |
 | `lib/model-catalog.ts` | the model menu, re-exported from `model-pins.ts` |
 | `app/api/agents/**` | roster · create · patch · delete · inspect · onboard · tasks |
-| `app/agents/**` | roster page, detail page |
-| `components/agents/*` | tile, chat, config, history, tasks, create dialog |
+| `app/agents/**` | `/agents` → `/crew` redirect, detail page, session transcript |
+| `app/crew/page.tsx` | roster + teams on one page (§30) |
+| `components/agents/*` | roster, tile, chat, config, history, tasks, create dialog |
 | `bin/agent.mjs` | the CLI HQ delegates with |

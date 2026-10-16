@@ -61,6 +61,25 @@ The server side added three fields per job:
 - `upSec`: from `ps -o etime`.
 - `lastLine`: read from the last 4 KB of the log only.
 
+## Inside /autopilot (§30, 2026-10-16)
+
+`/automations` now redirects to `/autopilot#runners`. The page became `RunnersSection` in
+`app/autopilot/RunnersSection.tsx`, rendered under the Goals section. Why: a goal is the outcome and these
+jobs are the runners that produce it. "Is the goal moving?" and "did its job run last night?" used to be a
+tab apart.
+
+- The list is split in two bands, each still grouped by project: **Serving a goal** (the goal runner
+  `com.thomas.goal-runner`, plus any job whose `project` matches a visible goal's note through
+  `matchesProject`) and **Housekeeping** (everything else). Every control is unchanged.
+- The fetch and the POST path moved into `useAutomations()`, so `/autopilot` hands one list to both the
+  goal cards ("Worked on by") and this section. There is no second poll of launchctl.
+- The shell's project filter hides jobs from other projects, but a job that serves a visible goal stays.
+  Without that, filtering to a goal's project would name the goal runner on the goal card and then hide
+  its card.
+- `#auto-<id>` links (the goal cards' rows) are caught on `hashchange`, which clears the status chip
+  and flashes the card. The toast sits at `bottom-24` on phones so the shell's bottom bar doesn't cover
+  Undo.
+
 ## Gotchas
 
 - **Status `NOT LOADED` is real, not a bug.** On 2026-10-14, `minami-login` was not loaded in the GUI

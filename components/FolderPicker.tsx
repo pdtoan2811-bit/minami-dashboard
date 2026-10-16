@@ -184,7 +184,7 @@ export default function FolderPicker({ onPick, onClose, pickFiles = false, start
                   <p className="mt-1 break-all font-mono text-[10px] text-neutral-500">{data.path}</p>
                   {/^ENOENT/.test(data.error || "") && !pickFiles && (
                     <button onClick={() => createFolder(data.path)} disabled={busy}
-                      className="mt-2 rounded-md bg-[var(--sakura)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
+                      className="mt-2 rounded-md bg-[var(--accent-fill)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
                       {busy ? "Creating…" : "Create this folder"}
                     </button>
                   )}
@@ -204,7 +204,7 @@ export default function FolderPicker({ onPick, onClose, pickFiles = false, start
             <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-neutral-500">{data?.path || "…"}</span>
             <button onClick={() => canStart && onPick(data!.path)} disabled={!canStart}
               title={missing ? "That folder doesn’t exist yet — create it first" : "Start a chat in this folder"}
-              className="shrink-0 rounded-lg bg-[var(--sakura)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40">Start chat here</button>
+              className="shrink-0 rounded-lg bg-[var(--accent-fill)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40">Start chat here</button>
           </div>
         )}
         </>)}

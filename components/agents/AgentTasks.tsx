@@ -71,7 +71,7 @@ export default function AgentTasks({ agent, peers }: { agent: AgentDef; peers: A
           )}
 
           <button onClick={submit} disabled={busy || !brief.trim()}
-            className="ml-auto rounded-lg bg-[var(--sakura)] px-3 py-1 text-[11.5px] font-medium text-white disabled:opacity-40">
+            className="ml-auto rounded-lg bg-[var(--accent-fill)] px-3 py-1 text-[11.5px] font-medium text-white disabled:opacity-40">
             {busy ? "Assigning…" : "Assign"}
           </button>
         </div>

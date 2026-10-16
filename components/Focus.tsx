@@ -252,7 +252,7 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
             {count("running") > 0 && <> · {count("running")} working</>}
           </p>
           <button onClick={() => { setEdit((v) => !v); setSwapFor(null); }}
-            className={`h-11 shrink-0 rounded-xl px-3 text-[13px] ${edit ? "bg-[var(--sakura)] font-semibold text-white" : "border border-white/10 text-neutral-300"}`}>{edit ? "Done" : "Edit pins"}</button>
+            className={`h-11 shrink-0 rounded-xl px-3 text-[13px] ${edit ? "bg-[var(--accent-fill)] font-semibold text-white" : "border border-white/10 text-neutral-300"}`}>{edit ? "Done" : "Edit pins"}</button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2">
           {(pins.length > 0 || edit) && head(pins.length > FOCUS_MAX ? `Pinned · ${pins.length} · limit ${FOCUS_MAX}` : `Pinned · ${pins.length} of ${FOCUS_MAX}`, "text-[var(--sakura)]")}

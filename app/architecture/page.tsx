@@ -1,5 +1,4 @@
 import { ModuleGraph } from "@/components/ModuleGraph";
-import { Nav } from "@/components/Nav";
 import { LAYERS } from "@/lib/module-graph";
 
 export const metadata = {
@@ -9,7 +8,7 @@ export const metadata = {
 
 export default function ArchitecturePage() {
   return (
-    <main className="flex h-dvh flex-col bg-neutral-950 text-neutral-100">
+    <main className="flex flex-col text-neutral-100" style={{ height: "calc(100dvh - var(--shell-top) - var(--shell-bottom))" }}>
       <header className="flex flex-wrap items-center gap-3 border-b border-white/10 px-4 py-3">
         <div className="min-w-0">
           <h1 className="text-sm font-semibold">Architecture</h1>
@@ -28,7 +27,6 @@ export default function ArchitecturePage() {
               <span key={l.id} title={l.hint}>{l.label}</span>
             ))}
           </div>
-          <Nav />
         </div>
       </header>
       <div className="min-h-0 flex-1">

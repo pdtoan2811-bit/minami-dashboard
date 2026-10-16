@@ -5,7 +5,6 @@
 // a run actually produces, and a UI that summarised it would be a second, worse account of a document
 // that is already meant to be read.
 import Markdown from "@/components/Markdown";
-import { Nav } from "@/components/Nav";
 import StageRail from "@/components/teams/StageRail";
 import { ago } from "@/lib/agents/client";
 import { fetchRun, shortPath, stopRun, type TeamRun } from "@/lib/teams/client";
@@ -44,9 +43,9 @@ export default function RunPage({ params }: { params: Promise<{ runId: string }>
   }, [load]);
 
   return (
-    <div className="bg-bento min-h-dvh text-neutral-100">
+    <div className="min-h-dvh text-neutral-100">
       <header className="flex items-center gap-3 px-6 py-5">
-        <Link href="/teams" className="text-neutral-600 hover:text-neutral-300">←</Link>
+        <Link href="/crew#teams" className="shrink-0 text-[12px] text-neutral-500 hover:text-neutral-200">← Crew</Link>
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold tracking-tight">{run?.title || "Run"}</h1>
           {run && (
@@ -64,11 +63,10 @@ export default function RunPage({ params }: { params: Promise<{ runId: string }>
               {stopping ? "Stopping…" : "Stop"}
             </button>
           )}
-          <Nav />
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl space-y-4 px-6 pb-16">
+      <main className="mx-auto max-w-4xl space-y-4 px-6 pb-28 sm:pb-16">
         {err && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-[12px] text-red-300">{err}</p>}
 
         {run && (
@@ -86,7 +84,7 @@ export default function RunPage({ params }: { params: Promise<{ runId: string }>
 
             <section>
               <h2 className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-neutral-500">Dossier</h2>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 text-[13px]">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.06] px-5 py-4 text-[13px]">
                 {dossier ? <Markdown text={dossier} /> : <p className="text-[11.5px] text-neutral-600">Nothing written yet.</p>}
               </div>
             </section>
