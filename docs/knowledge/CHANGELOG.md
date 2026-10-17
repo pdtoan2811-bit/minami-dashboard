@@ -8,6 +8,11 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-17
+- **Automations: the design kit's weekly harness has a name** (§27, `lib/automations.ts` KNOWN). The launchd job
+  `com.thomas.design-kit-harness` (Sundays 15:00) already showed up on its own, since launchd is the source of truth;
+  the KNOWN line only gives it a readable name, description and the "Design Kit" project.
+
 ### 2026-10-16
 - **Goals: list + run ledger, and "Resolve with Minami"** (§29, `app/autopilot/GoalsSection.tsx`, `lib/goals.ts`
   `resolveGoal`, `/api/goals {op:"resolve"}`). Built from pitch `goals-console` V1, Thomas's pick. A list of
