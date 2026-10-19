@@ -161,6 +161,8 @@ export const NODES: ModuleNode[] = [
   { id: "l/techattach", label: "tech-attach.ts", sub: "repo sniffing", layer: "core", row: 9 },
   { id: "l/settings", label: "use-settings.ts", sub: "localStorage", layer: "core", row: 10 },
   { id: "l/preferredacct", label: "preferred-account.ts", sub: "~/.minami/account.json", layer: "core", row: 12 },
+  { id: "l/failover", label: "account-failover.ts", sub: "usage limit → switch + continue\n(§6b)", layer: "core", row: 37 },
+  { id: "l/tokslayer", label: "token-slayer.ts", sub: "execFile bridge to tok", layer: "core", row: 38 },
   { id: "l/notify", label: "use-notify.ts", sub: "away-tab alerts", layer: "core", row: 11 },
   { id: "l/useevents", label: "use-events.ts", sub: "poll + two-cursor unread", layer: "core", row: 13 },
   { id: "l/events", label: "events.ts", sub: "reads the alert log\n(never writes it)", layer: "core", row: 14 },
@@ -515,7 +517,13 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/sessions", to: "x/jsonl", kind: "http", label: "reads" },
   { from: "l/sessions", to: "x/bentocache", kind: "http" },
   { from: "l/enrich", to: "x/bentocache", kind: "http" },
-  { from: "r/accounts", to: "x/slayer", kind: "http", label: "execFile" },
+  { from: "r/accounts", to: "l/tokslayer", kind: "import" },
+  { from: "r/accounts", to: "l/failover", kind: "import" },
+  { from: "l/manager", to: "l/failover", kind: "import" },
+  { from: "l/manager", to: "l/preferredacct", kind: "import" },
+  { from: "l/failover", to: "l/preferredacct", kind: "import" },
+  { from: "l/failover", to: "l/tokslayer", kind: "import" },
+  { from: "l/tokslayer", to: "x/slayer", kind: "http", label: "execFile" },
 
   // File preview. The panel fetches CONTENT from the route rather than reading it out of the
   // transcript, because a transcript records that a file was written, not what is in it now.

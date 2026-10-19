@@ -1,59 +1,19 @@
-import { execFile } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { checkModelPins } from "@/lib/model-pins";
 import { liveModels } from "@/lib/agent/manager";
-import { readPreferred, writePreferred, isPinned } from "@/lib/preferred-account";
+import { readPreferred, writePreferred, isPinned, readOnLimit, writeOnLimit, liveIdentity } from "@/lib/preferred-account";
+import { lastFailover } from "@/lib/account-failover";
+import { runTok as run } from "@/lib/token-slayer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Local-only bridge to the `token-slayer` CLI (Claude Max account-slot switcher). Prefers the venv
-// binary it installs itself; falls back to whatever `token-slayer` resolves to on PATH.
-const VENV_BIN = path.join(os.homedir(), ".config", "token_slayer", "venv", "bin", "token-slayer");
-const BIN = fs.existsSync(VENV_BIN) ? VENV_BIN : "token-slayer";
-
-function run(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile(BIN, args, { timeout: 20_000 }, (err, stdout, stderr) => {
-      resolve({ ok: !err, stdout: stdout || "", stderr: stderr || String(err?.message || "") });
-    });
-  });
-}
-
-// The account we WANT to be running on. Falling off it is what the alert exists to catch.
-// Chosen in Settings and stored on disk — see lib/preferred-account.ts for why it can't be a
-// `useSetting`. Read per-request so a change in the UI lands on the next 30s poll.
-
-// Ground truth for "which account is Claude Code ACTUALLY authenticated as".
-//
-// This is deliberately NOT `token-slayer status`'s `active` field: that only echoes `active_slot`
-// from ~/.config/token_slayer/state.json, which is a label token-slayer writes when you ask it to
-// switch — not proof the switch took. Verified 2026-07-29: state.json named one pooled account
-// while the real OS-keychain credential belonged to a different one, so every session was
-// silently billing the wrong account while the CLI's banner claimed otherwise. ~/.claude.json's
-// `oauthAccount` block is written by Claude Code itself from the credential it actually logged in
-// with, so it can't drift the same way. See the vault's [[Token Slayer]] note.
-function liveIdentity(): { email: string | null; orgUuid: string | null; displayName: string | null } {
-  try {
-    const raw = fs.readFileSync(path.join(os.homedir(), ".claude.json"), "utf8");
-    const o = JSON.parse(raw)?.oauthAccount ?? {};
-    return {
-      email: o.emailAddress ?? null,
-      orgUuid: o.organizationUuid ?? null,
-      // NB: displayName is cosmetic and demonstrably goes stale across switches (observed reading
-      // the PREVIOUS account's name while every UUID said the new one) — never key logic off it,
-      // it's here for display only.
-      displayName: o.displayName ?? null,
-    };
-  } catch {
-    return { email: null, orgUuid: null, displayName: null };
-  }
-}
+// The account we WANT to be running on is chosen in Settings and stored on disk — see
+// lib/preferred-account.ts for why it can't be a `useSetting`. Read per-request so a change in the UI
+// lands on the next 30s poll. The live identity comes from ~/.claude.json, not token-slayer's
+// `active` label; liveIdentity() in the same file says why.
 
 // GET /api/accounts → the account pool + live usage, straight from `token-slayer status --json`,
-// plus a `live` block carrying the real authenticated identity (see liveIdentity above) and the
+// plus a `live` block carrying the real authenticated identity (liveIdentity, lib/preferred-account.ts) and the
 // model-pin drift check.
 //
 // Both drift signals ride this one route on purpose: the alert component polls it every 30s, and
@@ -81,6 +41,10 @@ export async function GET() {
         // being off it. Without this guard a fresh clone alerts forever against "", which reads as
         // "you are on the wrong account" to someone who has not yet been asked which account is right.
         offPreferred: preferred !== "" && live.email != null && live.email !== preferred,
+        // §6b. The account a usage limit switches to ("" = off), and the newest failover attempt in
+        // the last 12h — including the ones that could not switch, which are the ones to show.
+        onLimit: readOnLimit(),
+        failover: lastFailover(),
         // The CLI's own banner disagreeing with reality — worth surfacing separately, because it
         // means "just switch back" may report success without actually changing anything.
         claimsMismatch: live.email != null && typeof doc?.active === "string" && doc.active !== live.email,
@@ -112,16 +76,21 @@ export async function POST(req: Request) {
 }
 
 // PUT /api/accounts { preferred } → change which account the alert measures against.
+// PUT /api/accounts { onLimit }   → change which account a usage limit switches to ("" = off, §6b).
 //
 // Deliberately separate from POST: POST *switches the live credential* (a side effect that kills
 // every running `claude` on the box), PUT only records an intention. Conflating them would mean
 // picking a target in Settings silently rewrote the Keychain and dropped your sessions.
 export async function PUT(req: Request) {
-  let preferred = "";
-  try { ({ preferred } = await req.json()); } catch { /* bad body */ }
-  if (!preferred || typeof preferred !== "string") {
-    return Response.json({ error: "missing preferred" }, { status: 400 });
+  let preferred: unknown;
+  let onLimit: unknown;
+  try { ({ preferred, onLimit } = await req.json()); } catch { /* bad body */ }
+  // `onLimit` may be "" — that is how the failover is turned off.
+  const settingOnLimit = typeof onLimit === "string";
+  if (!settingOnLimit && (!preferred || typeof preferred !== "string")) {
+    return Response.json({ error: "missing preferred or onLimit" }, { status: 400 });
   }
+  const wanted = settingOnLimit ? (onLimit as string).trim() : (preferred as string);
 
   // Only accept an account token-slayer actually manages. A typo'd address would otherwise pin
   // the alert to an account that can never be live, leaving it stuck red with no way to read why.
@@ -132,9 +101,9 @@ export async function PUT(req: Request) {
       const pool: string[] = (doc?.accounts ?? [])
         .map((a: { email?: string; name?: string }) => a.email || a.name)
         .filter((e: unknown): e is string => typeof e === "string" && e.length > 0);
-      if (pool.length && !pool.includes(preferred)) {
+      if (wanted && pool.length && !pool.includes(wanted)) {
         return Response.json(
-          { error: `"${preferred}" is not in the token-slayer pool`, pool },
+          { error: `"${wanted}" is not in the token-slayer pool — add it first: tok add ${wanted} --login`, pool },
           { status: 400 }
         );
       }
@@ -142,9 +111,10 @@ export async function PUT(req: Request) {
   }
 
   try {
-    writePreferred(preferred);
+    if (settingOnLimit) writeOnLimit(wanted);
+    else writePreferred(wanted);
   } catch (e) {
     return Response.json({ error: (e as Error).message }, { status: 500 });
   }
-  return Response.json({ ok: true, preferred: readPreferred(), preferredPinned: isPinned() });
+  return Response.json({ ok: true, preferred: readPreferred(), preferredPinned: isPinned(), onLimit: readOnLimit() });
 }

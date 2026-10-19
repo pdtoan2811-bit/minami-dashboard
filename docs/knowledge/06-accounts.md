@@ -138,3 +138,60 @@ someone else's conversation mid-thought.
 > disagreeing with the server. Both say the same thing — its state file records intent, not outcome.
 
 ---
+
+## 6b. Limit failover — `lib/account-failover.ts`
+
+When a live pane runs out of its account's usage (5-hour or weekly), the dashboard switches the box to
+the account chosen in Settings → *When a usage limit is hit, switch to*, rebirths that pane, and sends it
+`continue`. Stored as `onLimit` in `~/.minami/account.json`, next to `preferred`; absent or `""` = off.
+There is no env seed and no default, because the action rewrites the shared Keychain credential.
+
+### Why the dashboard does it, not token-slayer
+token-slayer 1.2.3 has its own auto-switch (`auto_switch_on_rate_limit`, `tok config show`), but it only
+covers a `claude` launched through **`tok run`**: the wrapper owns the child, listens on a hook signal bus
+(`TS_WRAPPED` / `TS_WRAPPER_PID`) and relaunches with `--resume`. Dashboard panes are Agent SDK children
+of next-server and the Minami bot spawns `claude -p` directly, so neither ever reaches that wrapper.
+token-slayer still performs the switch itself: `tok switch`, never `force-switch`, because `switch`
+captures the rotated refresh token of the slot being left.
+
+### The path
+1. **Detect** (`lib/agent/manager.ts`). Two conditions, because each alone misfires: the turn fails
+   with a top-level `error: "rate_limit"` (which alone also covers a transient 429), AND either this
+   turn's `rate_limit_event` said `rejected` (which alone can arrive while overage credits still let the
+   request through) or the synthetic reply matches `LIMIT_TEXT` ("You've hit your weekly limit · resets
+   …"). The event supplies the window and reset time; it is cleared at every `result`.
+2. **Decide** at the turn's `result`, idle branch only, before auto-compact and placement (a session
+   about to be reborn should not be compacted or moved). `decide()` is pure; the table is in
+   `scripts/failover-test.mjs`:
+   - target not set → nothing;
+   - the pane was born on the target → nothing (one hop only, never walk the pool);
+   - the live account already differs from the one the pane was born on → `respawn` only;
+   - target not in the pool / `reauth` / token expired / either window ≥ 100 → nothing, with the reason;
+   - otherwise → `switch`.
+3. **Switch** with single flight: concurrent hits queue behind the one in flight and re-decide, so five
+   panes running out together make one Keychain write. Success is `~/.claude.json`'s `oauthAccount`
+   reaching the target within 10s, not exit 0 (§6). `tok switch` patches that file itself.
+4. **Rebirth and continue.** `respawnKeepingSubs()` (shared with setModel/setFanout/setBlacksmith) then
+   `sendMessage("continue", resume)`, and a `limit` notice: *"weekly limit on A — switched to B and
+   continuing"*. Skipped when the pane closed or got a new message meanwhile. At most one auto-continue
+   per conversation per 10 minutes.
+
+`Session.account` is read from `~/.claude.json` at birth. A warm `query()` keeps its in-memory credential
+across a Keychain switch, so the account a limit is charged to is the one the pane was born on, not the
+box's current one. That is also why the rebirth is required.
+
+### What it does not cover
+- Panes born on the exhausted account that are idle stay on it until they next send and hit the limit.
+  They then take the `respawn` branch. Nothing idle is torn down pre-emptively.
+- A limit hit by the Minami bot or a terminal `claude` does not trigger anything. They do pick up the
+  new account on their next spawn once a pane has switched the box.
+- No automatic switch back to `preferred` when its window resets. The alert card names the reset time and
+  keeps its "switch to <preferred>" button.
+
+### The alert
+`/api/accounts` adds `live.onLimit` and `live.failover` (newest `~/.minami/failover.jsonl` record within
+12h that isn't a `respawn`). `AccountStatus` titles a failover-caused drift "Switched after a usage limit"
+with the window and reset time, and raises a separate warn episode, "Usage limit hit — couldn't switch",
+with the reason, until the window resets (6h when no reset time is known).
+
+---

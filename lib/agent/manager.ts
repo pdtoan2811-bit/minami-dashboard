@@ -31,6 +31,8 @@ import { sdkClaudeVersion } from "../runtime-version";
 import { cachedRepoState, repoBriefing, repoNotice } from "../repo-state";
 import { closedReadyBlocks } from "../preview-block";
 import { progressOf, type PlanStatus, type PlanStep, type TaskProgress } from "../task-progress";
+import { LIMIT_TEXT, onLimitHit, type LimitHit } from "../account-failover";
+import { liveIdentity } from "../preferred-account";
 
 // Default model/effort for every dashboard-driven session (anh, 2026-07-29: "go on Opus 5 default
 // effort"). Opus 5 is the current top-tier model (see the claude-api skill's model table); "default
@@ -505,6 +507,16 @@ type Session = {
    *  `text` is the opening of the final assistant reply, so a row can say what it did without
    *  the chat being opened. */
   ended: { at: number; ok: boolean; text?: string; error?: string; turnMs?: number } | null;
+  /** The Claude account this session's subprocess authenticated with, read from ~/.claude.json at
+   *  birth. A warm `query()` keeps its in-memory credential across a Keychain switch, so this — not the
+   *  box's live account — is what a limit hit is charged to (§6b). */
+  account: string | null;
+  /** The window and reset time from the latest `rejected` rate_limit_event. Not a trigger on its own:
+   *  with overage enabled the request can still go through. Folded into `limitHit` when the turn
+   *  actually fails with `rate_limit` (§6b). */
+  limitInfo: Omit<LimitHit, "hitOn" | "text"> | null;
+  /** Set when this turn failed on an account usage limit; consumed at the turn's `result` (§6b). */
+  limitHit: Omit<LimitHit, "hitOn"> | null;
   /** The newest top-level assistant text this turn — what becomes `ended.text`. */
   lastText: string;
   /** The live ASK's plan, as TodoWrite/TaskCreate/TaskUpdate calls stream in — the source of
@@ -860,6 +872,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
     smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), settledTasks: new Map(), askTeam: null,
     toolBufs: new Map(),
+    account: liveIdentity().email, limitInfo: null, limitHit: null,
   };
   store.set(key, s);
   // Stake the worktree the moment the session exists, not on its first turn. `liveActivity()` — the
@@ -1100,6 +1113,13 @@ function handleMessage(s: Session, m: any) {
     case "command_lifecycle":
       handleCommandLifecycle(s, m);
       break;
+    case "rate_limit_event": {
+      // `rejected` is the account being out of usage for a window; `allowed_warning` is only the
+      // approach to it and is left alone. Recorded now, acted on at the turn's `result` (§6b).
+      const info = m.rate_limit_info;
+      if (info?.status === "rejected") s.limitInfo = { type: info.rateLimitType, resetsAt: info.resetsAt };
+      break;
+    }
     case "stream_event": {
       const ev = m.event;
       if (!s.toolBufs) s.toolBufs = new Map(); // guard sessions created before this field existed (hot-reload)
@@ -1230,6 +1250,13 @@ function handleMessage(s: Session, m: any) {
       // `max_output_tokens` / an interrupt truncate the reply mid-word — otherwise it just looks
       // like Claude stopped talking for no reason.
       if (m.error === "max_output_tokens") broadcast(s, { t: "notice", kind: "limit", text: "hit the output-token limit — the reply was cut short" });
+      // The turn failed on the account's usage limit. Two conditions, because each alone misfires:
+      // `error: "rate_limit"` also covers a transient 429, and a `rejected` rate_limit_event can come
+      // while overage credits still let the request through. So: the turn failed, AND either the
+      // event said this window is out or the CLI's synthetic reply says so in words.
+      if (m.error === "rate_limit" && !parentId && !s.limitHit && (s.limitInfo || LIMIT_TEXT.test(s.lastText))) {
+        s.limitHit = { ...s.limitInfo, text: s.lastText };
+      }
       if (m.aborted) broadcast(s, { t: "notice", kind: "aborted", text: "the turn was interrupted" });
       break;
     }
@@ -1261,6 +1288,8 @@ function handleMessage(s: Session, m: any) {
       break;
     }
     case "result": {
+      // Per turn: an event from this turn must not arm the next one, which may fail on a plain 429.
+      s.limitInfo = null;
       s.partial = "";
       s.partialThinking = "";
       if (Array.isArray(m.permission_denials) && m.permission_denials.length) {
@@ -1318,6 +1347,14 @@ function handleMessage(s: Session, m: any) {
       // we rely on. At an idle turn end past the line, inject the user-side /compact the CLI
       // demonstrably honours (verified on-disk 2026-09-03). Before placementPass on purpose: its
       // send occupies the queue, and the pass's own guards then stand down for this boundary.
+      // Out of usage on this account: switch and continue instead of compacting or relocating a
+      // session that is about to be reborn anyway (§6b).
+      if (s.limitHit) {
+        const hit = s.limitHit;
+        s.limitHit = null;
+        void recoverFromLimit(s, hit).catch(() => { /* logged in failover.jsonl; the pane already shows the limit */ });
+        break;
+      }
       maybeAutoCompact(s);
       // The one moment a chat can change folders: the turn is over, nothing is queued, nothing is
       // parked. Fire-and-forget — the pass re-checks those guards after its own awaits.
@@ -1910,13 +1947,7 @@ export function setModel(key: string, model?: string): { ok: boolean; respawned?
   // so without this handover every pane watching this key goes silent until it is reloaded, which
   // looks exactly like the swap having hung. `waiting` is precisely the parking lot for subscribers
   // that exist before their session does, which is what these become for the next few hundred ms.
-  const orphans = new Set(s.subs);
-  closeSession(key);
-  if (orphans.size) {
-    const set = waiting.get(key) || new Set<Sub>();
-    for (const sub of orphans) set.add(sub);
-    waiting.set(key, set);
-  }
+  respawnKeepingSubs(key);
   return { ok: true, respawned: true };
 }
 
@@ -1935,13 +1966,7 @@ export function setFanout(key: string, fanout: boolean): { ok: boolean; respawne
   // pick and move on; it takes effect on the respawn that turns Blacksmith off.
   if (s.blacksmith) { s.fanout = fanout; return { ok: true }; }
   // Same subscriber handover as setModel — see the comment there for why `waiting` is the parking lot.
-  const orphans = new Set(s.subs);
-  closeSession(key);
-  if (orphans.size) {
-    const set = waiting.get(key) || new Set<Sub>();
-    for (const sub of orphans) set.add(sub);
-    waiting.set(key, set);
-  }
+  respawnKeepingSubs(key);
   return { ok: true, respawned: true };
 }
 
@@ -1958,13 +1983,7 @@ export function setBlacksmith(key: string, blacksmith: boolean): { ok: boolean; 
   if (!s || s.closed) return { ok: true }; // no live session — the flag just applies at the next send
   if (s.busy) return { ok: false, reason: "a turn is in flight — stop it before switching Blacksmith mode" };
   if (s.blacksmith === blacksmith) return { ok: true };
-  const orphans = new Set(s.subs);
-  closeSession(key);
-  if (orphans.size) {
-    const set = waiting.get(key) || new Set<Sub>();
-    for (const sub of orphans) set.add(sub);
-    waiting.set(key, set);
-  }
+  respawnKeepingSubs(key);
   return { ok: true, respawned: true };
 }
 
@@ -2306,6 +2325,67 @@ export async function drainForRestart(timeoutMs = 60_000): Promise<{ drained: bo
     await new Promise((r) => setTimeout(r, 250));
   }
   return { drained: false, stillBusy: eachSession().filter((s) => s.busy).length, waitedMs: Date.now() - startedAt };
+}
+
+/** Close a session but keep the panes watching it: its SSE subscribers are parked in `waiting`, which
+ *  the next ensureSession() for this key adopts. See setModel for why the hand-over is needed. */
+function respawnKeepingSubs(key: string): void {
+  const s = store.get(key);
+  if (!s) return;
+  const orphans = new Set(s.subs);
+  closeSession(key);
+  if (orphans.size) {
+    const set = waiting.get(key) || new Set<Sub>();
+    for (const sub of orphans) set.add(sub);
+    waiting.set(key, set);
+  }
+}
+
+/** What the reborn pane is sent. The same word token-slayer's own wrapper uses (`auto_message`). */
+const LIMIT_CONTINUE = "continue";
+/** sessionId → when it was last auto-continued. Module-level because the Session object is replaced
+ *  on every respawn. One auto-continue per conversation per window, so a limit that is still in force
+ *  after the switch (the box moved back, the fallback ran out too) can't loop. */
+const autoContinuedAt = new Map<string, number>();
+const AUTO_CONTINUE_EVERY_MS = 10 * 60_000;
+
+/**
+ * §6b: the turn that just ended hit this session's account usage limit. Ask the failover to move the
+ * box to the fallback account, then rebirth this pane and send it "continue".
+ *
+ * Rebirth is required, not tidiness: a warm `query()` holds the credential it was spawned with in
+ * memory and keeps sending it after the Keychain changes, so it would stay on the exhausted account
+ * forever. The teardown-and-resume is the same one setModel uses, and context survives on disk.
+ *
+ * Other panes born on the same account are left alone until they hit the limit themselves; they then
+ * take the failover's `respawn` branch (the box has already moved) and are continued the same way.
+ * Idle panes are never touched.
+ */
+async function recoverFromLimit(s: Session, hit: Omit<LimitHit, "hitOn">): Promise<void> {
+  const out = await onLimitHit({ ...hit, hitOn: s.account });
+  if (!out.ok) return;
+  // The world may have moved during the switch: the pane closed, or the user already sent something.
+  // Then leave it. A message sent into the old session hits the limit again and comes back here, where
+  // the box has already moved, so it takes the `respawn` branch.
+  const cur = store.get(s.key);
+  if (cur !== s || s.closed || s.busy || !s.sessionId) return;
+  const { key, cwd, sessionId, mode, model, fanout, blacksmith, hold } = s;
+  respawnKeepingSubs(key);
+  const last = autoContinuedAt.get(sessionId) ?? 0;
+  if (Date.now() - last < AUTO_CONTINUE_EVERY_MS) return;
+  autoContinuedAt.set(sessionId, Date.now());
+  try {
+    sendMessage({ key, cwd, message: LIMIT_CONTINUE, resume: sessionId, mode, model, fanout, blacksmith, hold });
+  } catch {
+    return; // the conversation went live in another pane meanwhile — leave it to that pane
+  }
+  const ns = store.get(key);
+  if (!ns) return;
+  const d = out.decision;
+  const to = d.action === "switch" ? d.to : ns.account;
+  const short = (e: string | null) => (e ? e.split("@")[0] : "another account");
+  const window = hit.type === "five_hour" ? "5-hour" : hit.type?.startsWith("seven_day") ? "weekly" : "usage";
+  broadcast(ns, { t: "notice", kind: "limit", text: `${window} limit on ${short(s.account)} — switched to ${short(to)} and continuing` });
 }
 
 export function closeSession(key: string): void {

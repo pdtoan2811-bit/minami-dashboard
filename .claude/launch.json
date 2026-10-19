@@ -4,8 +4,20 @@
     {
       "name": "minami-dashboard",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000
+    },
+    {
+      "name": "minami-iterate",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:iterate"
+      ],
+      "port": 3001
     }
   ]
 }

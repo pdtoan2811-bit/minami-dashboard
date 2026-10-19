@@ -8,6 +8,16 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-19
+- **Limit failover** (§6b; new `lib/account-failover.ts`, `lib/token-slayer.ts`; `lib/agent/manager.ts`,
+  `lib/preferred-account.ts`, `/api/accounts`, `AccountStatus`, `PreferredAccountPanel`). When a pane hits
+  its account's 5-hour or weekly limit, the box switches to the account chosen under Settings → *When a
+  usage limit is hit, switch to* (`onLimit` in `~/.minami/account.json`), rebirths the pane and sends
+  `continue`. One hop, single flight, verified against `~/.claude.json`. Every attempt is logged to
+  `~/.minami/failover.jsonl`. `writePreferred` now merges instead of replacing the file.
+  Tests: `node scripts/failover-test.mjs`.
+  *Requested by user: "I want to have a auto switch to this account when the limit is hit on token slayer" — the actual aff.acc@micace.com.*
+
 ### 2026-10-17
 - **Automations: the design kit's weekly harness has a name** (§27, `lib/automations.ts` KNOWN). The launchd job
   `com.thomas.design-kit-harness` (Sundays 15:00) already showed up on its own, since launchd is the source of truth;

@@ -30,7 +30,31 @@ export const CONFIG_FILE =
  */
 export const FALLBACK = "";
 
-type Stored = { preferred?: string };
+/** `onLimit` is the account the limit failover switches to (lib/account-failover.ts). Absent or
+ *  empty = the failover is off. Lives in the same file because it is the same kind of fact — a
+ *  personal answer about which account this box should be on — and Settings edits both. */
+type Stored = { preferred?: string; onLimit?: string };
+
+function readStored(): Stored {
+  try {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    return raw && typeof raw === "object" ? (raw as Stored) : {};
+  } catch {
+    return {};
+  }
+}
+
+// Merge, never replace: the file holds two independent choices, and saving one from Settings must
+// not silently erase the other. Write-then-rename so an interrupted write can't leave a truncated
+// file that reads as "nothing chosen" and silently reverts the alert to the fallback account.
+function writeStored(patch: Stored): void {
+  const next: Stored = { ...readStored(), ...patch };
+  for (const k of Object.keys(next) as (keyof Stored)[]) if (!next[k]) delete next[k];
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  const tmp = `${CONFIG_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
+  fs.renameSync(tmp, CONFIG_FILE);
+}
 
 /**
  * Precedence: the file wins, then `MINAMI_PREFERRED_ACCOUNT`, then the fallback.
@@ -65,10 +89,44 @@ export function isPinned(): boolean {
 export function writePreferred(email: string): void {
   const preferred = email.trim();
   if (!preferred) throw new Error("preferred account must not be empty");
-  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-  // Write-then-rename so an interrupted write can't leave a truncated file that reads as
-  // "nothing chosen" and silently reverts the alert to the fallback account.
-  const tmp = `${CONFIG_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ preferred }, null, 2) + "\n", "utf8");
-  fs.renameSync(tmp, CONFIG_FILE);
+  writeStored({ preferred });
+}
+
+/** The account to switch to when a usage limit is hit, or "" when the failover is off. No env
+ *  seed and no fallback, on purpose: this rewrites the shared Keychain credential, so it only ever
+ *  runs because someone chose it. */
+export function readOnLimit(): string {
+  const v = readStored().onLimit;
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/** "" turns the failover off. */
+export function writeOnLimit(email: string): void {
+  writeStored({ onLimit: email.trim() });
+}
+
+// Ground truth for "which account is Claude Code ACTUALLY authenticated as".
+//
+// This is deliberately NOT `token-slayer status`'s `active` field: that only echoes `active_slot`
+// from ~/.config/token_slayer/state.json, which is a label token-slayer writes when you ask it to
+// switch — not proof the switch took. Verified 2026-07-29: state.json named one pooled account
+// while the real OS-keychain credential belonged to a different one, so every session was
+// silently billing the wrong account while the CLI's banner claimed otherwise. ~/.claude.json's
+// `oauthAccount` block is written by Claude Code itself from the credential it actually logged in
+// with, so it can't drift the same way. See the vault's [[Token Slayer]] note.
+export function liveIdentity(): { email: string | null; orgUuid: string | null; displayName: string | null } {
+  try {
+    const raw = fs.readFileSync(path.join(os.homedir(), ".claude.json"), "utf8");
+    const o = JSON.parse(raw)?.oauthAccount ?? {};
+    return {
+      email: o.emailAddress ?? null,
+      orgUuid: o.organizationUuid ?? null,
+      // NB: displayName is cosmetic and demonstrably goes stale across switches (observed reading
+      // the PREVIOUS account's name while every UUID said the new one) — never key logic off it,
+      // it's here for display only.
+      displayName: o.displayName ?? null,
+    };
+  } catch {
+    return { email: null, orgUuid: null, displayName: null };
+  }
 }

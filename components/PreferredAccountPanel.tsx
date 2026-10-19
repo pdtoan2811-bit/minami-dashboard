@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 type Account = { name?: string; email?: string; state?: string; active?: boolean };
-type Live = { email: string | null; preferred: string; preferredPinned?: boolean; offPreferred?: boolean };
+type Live = { email: string | null; preferred: string; preferredPinned?: boolean; offPreferred?: boolean; onLimit?: string };
 
 export default function PreferredAccountPanel() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -43,13 +43,23 @@ export default function PreferredAccountPanel() {
 
   async function choose(email: string) {
     if (email === live?.preferred) return;
-    setSaving(email);
+    await put({ preferred: email }, email);
+  }
+
+  // "" turns the failover off.
+  async function chooseOnLimit(email: string) {
+    if (email === (live?.onLimit ?? "")) return;
+    await put({ onLimit: email }, `limit:${email}`);
+  }
+
+  async function put(body: { preferred?: string; onLimit?: string }, savingKey: string) {
+    setSaving(savingKey);
     setError(null);
     try {
       const r = await fetch("/api/accounts", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ preferred: email }),
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "could not save");
@@ -157,6 +167,58 @@ export default function PreferredAccountPanel() {
             </p>
           )}
         </div>
+
+        {/* §6b. Separate card because it is a different kind of choice: the one above only records a
+            target, this one authorises the server to rewrite the Keychain on its own when a pane runs
+            out of usage. Off is a real option, listed first, and the default. */}
+        {loaded && emails.length > 0 && (
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+            <p className="text-sm font-medium">When a usage limit is hit, switch to</p>
+            <p className="text-xs text-neutral-500">
+              A pane that runs out of its account&rsquo;s 5-hour or weekly limit moves the box to this account,
+              then picks up where it stopped. One hop only: if this account is out too, nothing switches and
+              the alert says so.
+            </p>
+            <div className="mt-3 space-y-1.5">
+              {["", ...emails].map((email) => {
+                const picked = (live?.onLimit ?? "") === email;
+                return (
+                  <button
+                    key={email || "off"}
+                    onClick={() => chooseOnLimit(email)}
+                    disabled={saving !== null}
+                    className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50 ${
+                      picked
+                        ? "border-[var(--sakura)]/50 bg-[var(--sakura)]/10"
+                        : "border-white/10 hover:border-white/20 hover:bg-white/[0.04]"
+                    }`}
+                  >
+                    <span
+                      className={`h-3.5 w-3.5 shrink-0 rounded-full border ${
+                        picked ? "border-[var(--sakura)] bg-[var(--sakura)]" : "border-white/25"
+                      }`}
+                    />
+                    <span className={`min-w-0 flex-1 truncate text-xs ${email ? "font-mono" : ""}`}>
+                      {email || "Off — don’t switch"}
+                    </span>
+                    {saving === `limit:${email}` && (
+                      <span className="shrink-0 text-[10px] text-neutral-400">saving…</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Chosen by hand in account.json but not in the pool yet: say what to run, since adding an
+                account is an interactive sign-in nobody else can do for you. */}
+            {live?.onLimit && !emails.includes(live.onLimit) && (
+              <p className="mt-3 text-[11px] text-amber-400">
+                <span className="font-mono">{live.onLimit}</span> is set but isn&rsquo;t in the token-slayer pool,
+                so nothing will switch yet. Run{" "}
+                <code className="font-mono">tok add {live.onLimit} --login</code>.
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );

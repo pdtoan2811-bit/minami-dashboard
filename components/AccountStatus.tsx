@@ -66,7 +66,41 @@ type Live = {
   // "nothing to report" rather than "no drift" — absent evidence isn't evidence.
   models?: ModelPins;
   premiumSessions?: PremiumSession[];
+  // §6b. Optional for the same reason as `models`: an older build doesn't send them.
+  onLimit?: string;
+  failover?: Failover | null;
 };
+
+/** The newest limit-failover attempt (lib/account-failover.ts), switched or not. */
+type Failover = {
+  at: number;
+  hitOn: string | null;
+  type?: string;
+  resetsAt?: number;
+  action: "switch" | "respawn" | "none";
+  to?: string;
+  ok: boolean;
+  reason: string;
+};
+
+// A limit hit that could NOT be switched away from — nowhere to go, or the switch didn't take. It is
+// news until the window resets (or for 6h when the CLI didn't say when), then it retires itself.
+const limitStuck = (l: Live | null): Failover | null => {
+  const f = l?.failover;
+  if (!f || f.ok) return null;
+  return Date.now() < (f.resetsAt ? f.resetsAt * 1000 : f.at + 6 * 3600_000) ? f : null;
+};
+
+// On the fallback BECAUSE the failover put us there — still account drift (it is billing a different
+// account), but the card should say why rather than reading as an unexplained wrong account.
+const onLimitFallback = (l: Live | null): Failover | null => {
+  const f = l?.failover;
+  return f && f.ok && f.action === "switch" && l?.email === f.to ? f : null;
+};
+
+const windowName = (t?: string) => (t === "five_hour" ? "5-hour" : t?.startsWith("seven_day") ? "weekly" : "usage");
+const resetTime = (sec?: number) =>
+  sec ? new Date(sec * 1000).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }) : null;
 
 type Level = "ok" | "warn" | "critical";
 
@@ -85,7 +119,8 @@ const episodeKey = (l: Live): string => {
   // Keyed by cwd+model, not by count: a second pane joining an existing Fable episode is new
   // information and should re-expand a card you had collapsed.
   const premium = premiumSessions(l).map((p) => `${p.cwd}=${p.model}`).sort().join(",");
-  return [account, models ? `model:${models}` : "", premium ? `live:${premium}` : ""].filter(Boolean).join("|");
+  const stuck = limitStuck(l);
+  return [account, models ? `model:${models}` : "", premium ? `live:${premium}` : "", stuck ? `limit:${stuck.at}` : ""].filter(Boolean).join("|");
 };
 
 const driftedSpawners = (l: Live | null): SpawnerPin[] =>
@@ -194,6 +229,8 @@ export function AccountStatus() {
   const premium = premiumSessions(live);
   // A pane that is mid-turn on Fable is spending at 2× right now. A merely-open one isn't yet.
   const premiumBurning = premium.some((p) => p.busy);
+  const stuck = limitStuck(live);
+  const fallback = onLimitFallback(live);
 
   // Account drift outranks model drift for severity: the credential failure modes (a switch that
   // silently no-ops, a banner that lies) are the ones with no one-click fix. A model that fell off
@@ -356,7 +393,9 @@ export function AccountStatus() {
   // reads as a config nit you can look at later, and this one is billing now.
   const chipLabel = accountDrift
     ? shortName(live.email ?? "unknown")
-    : premium.length
+    : stuck
+      ? "limit hit"
+      : premium.length
       ? `${premium.length} on ${premium[0].model.replace(/^claude-/, "")}`
       : "model pin";
 
@@ -429,8 +468,10 @@ export function AccountStatus() {
               : level === "critical"
                 ? "Stuck on the fallback account"
                 : accountDrift
-                  ? "Running on the fallback account"
-                  : "Off the model pin"}
+                  ? fallback ? "Switched after a usage limit" : "Running on the fallback account"
+                  : stuck
+                    ? "Usage limit hit — couldn't switch"
+                    : "Off the model pin"}
           </p>
 
           {/* Recovery names what was actually fixed — a generic all-clear after a model-only
@@ -456,8 +497,25 @@ export function AccountStatus() {
               Claude Code is authenticated as{" "}
               <span className="font-medium tabular-nums">{live.email}</span>, not{" "}
               <span className="font-medium tabular-nums">{live.preferred}</span>.
+              {fallback && (
+                <>
+                  {" "}Moved here automatically when {fallback.hitOn ? shortName(fallback.hitOn) : "it"} hit its{" "}
+                  {windowName(fallback.type)} limit
+                  {resetTime(fallback.resetsAt) ? <> — that resets {resetTime(fallback.resetsAt)}</> : null}.
+                </>
+              )}
             </p>
           ) : null}
+
+          {/* A limit with nowhere to go. Names the fix, which is usually one command Thomas has to run
+              himself (an interactive sign-in), so there is no button for it. */}
+          {!isRecovery && stuck && (
+            <p className={`mt-1 text-[11px] leading-relaxed ${s.body}`}>
+              <span className="font-medium tabular-nums">{stuck.hitOn ?? "The live account"}</span> hit its{" "}
+              {windowName(stuck.type)} limit
+              {resetTime(stuck.resetsAt) ? <> (resets {resetTime(stuck.resetsAt)})</> : null}. {stuck.reason}.
+            </p>
+          )}
 
           {/* Model drift. Names the file to edit rather than offering a button: unlike an account
               switch there is no safe one-click fix — the pin lives in source, and silently
