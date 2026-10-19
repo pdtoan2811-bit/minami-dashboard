@@ -55,6 +55,13 @@ answered question can also be handed over afterwards ("Hand all N to Minami" on 
 session id is stored on the item as `handoff`, so the button becomes "Open Minami's chat" (`/?open=`).
 A teammate's answer comes back through team-ask, not this page — the next heartbeat doesn't read it yet.
 
+> 🐛 **Every "Open chat →" on Today opened the wrong chat (2026-10-19).** The board read `?open=` in a
+> `useRef` initializer, i.e. during render. On a full page load that is the real URL; on an in-app
+> `<Link>` from /today the App Router renders the board BEFORE it writes the new URL, so
+> `location.search` was still /today's, no `open` was seen, and the board showed whatever topic it
+> remembered. Notifications and the glance view load the page fresh, which is why only Today's links
+> broke. Fix in `app/page.tsx`: a mount effect reads the param again once the router has committed.
+
 **Where a hand-off runs, and what it's called (2026-10-12).** `handoff()` now places the chat the way
 a pane is placed: `isolate(folder, "today-<slug>", "birth")` honours the repo's `minami.isolate`.
 An eager repo gives every hand-off its own worktree, and `handoff.cwd` records where the chat

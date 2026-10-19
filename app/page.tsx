@@ -893,6 +893,12 @@ export default function BentoHome() {
   // `/?open=<sessionId>` — where a notification, the cover-screen glance or a link lands. Honoured once,
   // as soon as the sessions it names have loaded, then removed so a reload doesn't re-open it.
   const openParam = useRef<string | null>(typeof window !== "undefined" ? new URLSearchParams(location.search).get("open") : null);
+  // Read it again once mounted. On an in-app <Link> (Today's "Open chat →", the blocked-task card) the
+  // board renders BEFORE the App Router writes the new URL — `location.search` during render is still
+  // /today's, so the initializer above saw no `open` and the board showed whatever topic it remembered
+  // (2026-10-19). By the first effect the router's history update has committed. Declared before the
+  // consumer below so it runs first.
+  useEffect(() => { openParam.current ??= new URLSearchParams(location.search).get("open"); }, []);
   useEffect(() => {
     const sid = openParam.current;
     if (!sid || !sessions.some((x) => x.id === sid)) return;
