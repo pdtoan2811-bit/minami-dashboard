@@ -554,6 +554,8 @@ type Session = {
   /** Latest known context size in tokens (input + cache reads/writes of the newest API call) — what
    *  the meter renders. 0 until the first assistant message of the first live turn. */
   ctxUsed: number;
+  /** A compact_boundary arrived during the current turn — read at turn end, see compactOnly. */
+  compactedInTurn: boolean;
   /** Context size at the last server-triggered auto-compact, the re-fire guard: try again only once
    *  the context has GROWN past this — new evidence, not the same evidence louder. */
   lastAutoCompactCtx: number;
@@ -882,7 +884,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, ended: null, lastText: "", plan: [], askStartedAt: null, planPending: new Map(), paceHist: [], writePaths: [], ctxUsed: 0, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
+    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, ended: null, lastText: "", plan: [], askStartedAt: null, planPending: new Map(), paceHist: [], writePaths: [], ctxUsed: 0, compactedInTurn: false, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
     smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), settledTasks: new Map(), askTeam: null,
     toolBufs: new Map(),
@@ -1329,9 +1331,18 @@ function handleMessage(s: Session, m: any) {
       retitleSoon(s.sessionId);
       {
         const ok = m.subtype === "success";
-        s.ended = { at: Date.now(), ok, ...(s.lastText ? { text: s.lastText } : {}), ...(ok ? {} : { error: String(m.subtype) }), ...(s.turnStartedAt ? { turnMs: Date.now() - s.turnStartedAt } : {}) };
+        // A turn that was ONLY a compaction (the auto `/compact`, or one typed by hand) has no reply.
+        // Recording it as the chat's ending blanked the last answer everywhere `ended` is read —
+        // the tile, Today's hand-off status, notifications — so the chat looked like it had stopped
+        // with nothing to say, when its real last reply (usually a question) was one turn up. Keep
+        // that ending and don't announce a new one.
+        const compactOnly = s.compactedInTurn && !s.lastText && ok && !!s.ended;
+        s.compactedInTurn = false;
+        if (!compactOnly) {
+          s.ended = { at: Date.now(), ok, ...(s.lastText ? { text: s.lastText } : {}), ...(ok ? {} : { error: String(m.subtype) }), ...(s.turnStartedAt ? { turnMs: Date.now() - s.turnStartedAt } : {}) };
+          if (s.sessionId) liveEvents.emit("ended", { sessionId: s.sessionId, cwd: s.cwd, ended: s.ended });
+        }
         s.lastText = "";
-        if (s.sessionId) liveEvents.emit("ended", { sessionId: s.sessionId, cwd: s.cwd, ended: s.ended });
       }
       if (handover) {
         // Phase, not idle: the pane should read as still working, because it is.
@@ -1531,6 +1542,14 @@ function handleSystem(s: Session, m: any) {
       const pre = md.pre_tokens ? `${Math.round(md.pre_tokens / 1000)}k` : "?";
       const post = md.post_tokens ? `${Math.round(md.post_tokens / 1000)}k` : "?";
       broadcast(s, { t: "notice", kind: "compact", text: `context compacted (${md.trigger === "auto" ? "auto" : "manual"}) ${pre} → ${post}` });
+      // The meter is fed only by assistant usage, and a `/compact` turn has no assistant message — so
+      // after one the pane kept showing the pre-compaction fill (32% on a chat now at ~10k) until the
+      // next reply. Reset it here. And re-arm the growth guard: it held the pre-compaction peak, so a
+      // chat that grew back past the line wouldn't compact again until it passed its OLD size.
+      s.ctxUsed = md.post_tokens || 0;
+      s.lastAutoCompactCtx = 0;
+      broadcast(s, { t: "ctx", used: s.ctxUsed });
+      s.compactedInTurn = true;
       // Compaction happens mid-turn and can take a while; show it, then hand back to whatever's live.
       touch(s, "compacting", `compacting context ${pre} → ${post}`);
       settle(s);

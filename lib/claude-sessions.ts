@@ -110,7 +110,7 @@ export type SessionMeta = {
   review?: boolean;  // LLM-decided: does this session need the user's attention?
 };
 
-type Row = { type?: string; message?: any; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string;
+type Row = { type?: string; message?: any; isCompactSummary?: boolean; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string;
   /** Only on `type: "attachment"`. `queued_command` is a follow-up the CLI folded into a running
    *  turn instead of giving it its own — see parseLines, and §5f-bis. */
   attachment?: { type?: string; prompt?: string } };
@@ -173,7 +173,9 @@ const META_DERIVATION_VERSION = 5;
 // appear in sessions that happen to receive another message.
 // v3: `asks` / `askCount` (§5h, the rolling title). Without the bump every open chat would start
 // counting at zero and keep its opening title for three more messages — the exact complaint.
-const PARSE_VERSION = 3;
+// v4: `/compact` bookkeeping rows (caveat, summary, stdout) are dropped and `<command-name>` shows as the
+// bare command — without the bump a chat that already compacted keeps its markup bubbles.
+const PARSE_VERSION = 4;
 
 // Fingerprint of a file's first `len` bytes — cheap (len is capped small) and used ONLY to tell "this
 // file was purely appended to" apart from "this file was truncated and rewritten, but happens to have
@@ -670,6 +672,17 @@ function parseLines(lines: string[], startOff: number, turns: Turn[], toolIndex:
           if (rec) { rec.output = summarizeToolResult(b.content); rec.ok = !b.is_error; }
         }
       }
+    }
+    // ── a slash command's bookkeeping ───────────────────────────────────────────────────────────
+    // `/compact` (the server's auto-compact, or typed) writes four user rows: the CLI's caveat, the
+    // command as `<command-name>` markup, the multi-page summary the next turn starts from, and
+    // `<local-command-stdout>Compacted`. Rendered as-is they filled the bottom of the pane with
+    // markup and pushed the chat's real last reply off screen, so a chat that had finished and was
+    // waiting on a question read as frozen (2026-10-19). Keep only the command, as typed.
+    if (r.type === "user") {
+      if (r.isCompactSummary || /^\s*<local-command-(caveat|stdout|stderr)>/.test(text)) continue;
+      const cmd = text.match(/^\s*<command-name>\s*([^<]*)<\/command-name>/);
+      if (cmd) text = cmd[1].trim();
     }
     if (text.trim() || toolz.length) {
       const u = r.message?.usage;

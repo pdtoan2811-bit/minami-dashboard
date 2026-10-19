@@ -439,6 +439,18 @@ append at all. Now the append is unconditional and only its pieces are gated:
   late rather than crying early). Amber at 45%, red at 80%; clicking sends `/compact`, the CLI's own
   manual compaction, whose `compact_boundary` the pane already narrates.
 
+  > 🐛 **"The chat froze after compacting" (2026-10-19).** Nothing was frozen: the auto `/compact` only
+  > fires at an idle turn end, so the chat had already replied (usually with a question) and was
+  > waiting. Three things made it look stopped. (1) The transcript parser rendered the compact's
+  > bookkeeping rows (caveat, `<command-name>` markup, the summary, `Compacted`) as user bubbles that
+  > pushed the real last reply off screen; `parseLines` now drops them and shows the bare command
+  > (`PARSE_VERSION` 4). (2) The compact turn has no reply, but turn end overwrote `s.ended` with an
+  > empty one, blanking the last answer on tiles, Today and notifications; a compact-only turn
+  > (`compactedInTurn`, no text) now keeps the previous `ended` and emits nothing. (3) The meter is
+  > fed only by assistant usage, so it kept the pre-compaction fill (32% on a ~10k chat) until the next
+  > reply; `compact_boundary` now resets `ctxUsed` to `post_tokens` and re-arms `lastAutoCompactCtx`,
+  > which had held the old peak so a chat growing back past the line would not compact again.
+
 `fanout` and `blacksmith` ride on every send like `model` and are creation-only for the same reason:
 an append can't be edited on a warm query. Mid-chat toggles go through `POST /api/agent/fanout` →
 `setFanout()` and `POST /api/agent/blacksmith` → `setBlacksmith()`, both `setModel()`'s twins —
