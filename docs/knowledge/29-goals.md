@@ -90,3 +90,7 @@ chat in the vault and opens it.
   the never-list, or post as Thomas.
 - **One chat per goal per day** (key `goal:resolve:<id>:<date>`). A second click sends fresh context into the
   same conversation instead of starting a parallel one.
+- **`request-indexing` actions come one per page** (`url`, `result`: requested · already indexed · quota · timeout ·
+  rejected). The runner clicks Search Console's *Request indexing* in the harness browser as thomas@ecvision.ai
+  (`gsc-request.mjs`, ≤10 a day, never the same page within 7 days). The ledger shows each as its own row; a
+  `quota` row is amber, not red — it is Google's daily cap, not a failure.

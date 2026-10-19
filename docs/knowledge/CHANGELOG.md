@@ -9,6 +9,9 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-19
+- **Goals ledger shows indexing requests** (§29, `app/autopilot/GoalsSection.tsx`). The goal runner now clicks *Request indexing* in Search Console each morning; each page is a row (Requested · Indexed · Waiting for quota · Failed).
+
+### 2026-10-19
 - **Limit failover** (§6b; new `lib/account-failover.ts`, `lib/token-slayer.ts`; `lib/agent/manager.ts`,
   `lib/preferred-account.ts`, `/api/accounts`, `AccountStatus`, `PreferredAccountPanel`). When a pane hits
   its account's 5-hour or weekly limit, the box switches to the account chosen under Settings → *When a

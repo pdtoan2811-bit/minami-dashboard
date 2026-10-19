@@ -67,6 +67,14 @@ function outcome(a: GoalAction): { label: string; tone: Tone; what: string; note
   const gh = (u: string) => u.replace(/^https:\/\/github\.com\//, "");
   if (a.refused_by_guard) return { label: "Refused", tone: "bad", what: lever(a), note: `refused by the path guard: ${a.refused_by_guard.trim()}` };
   if (a.error) return { label: "Failed", tone: "bad", what: lever(a), note: a.error };
+  // request-indexing: one row per page, what Search Console answered after the click (gsc-request.mjs).
+  if (a.lever === "request-indexing" && a.result) {
+    const page = (a.url || "").replace(/^https?:\/\/[^/]+/, "") || "/";
+    if (a.result === "requested") return { label: "Requested", tone: "ok", what: `indexing ${page}`, note: "in Google's priority crawl queue" };
+    if (a.result === "already indexed") return { label: "Indexed", tone: "mute", what: `indexing ${page}`, note: "already on Google" };
+    if (a.result === "quota") return { label: "Waiting", tone: "wait", what: `indexing ${page}`, note: "today's Search Console quota is used" };
+    return { label: "Failed", tone: "bad", what: `indexing ${page}`, note: a.result };
+  }
   if (a.lever === "merge" && a.merged && a.pr) return { label: "Merged", tone: "ok", what: gh(a.pr), href: a.pr };
   if (a.waiting) return { label: "Waiting", tone: "wait", what: a.pr ? gh(a.pr) : lever(a), note: a.waiting, href: a.pr };
   if (a.opened) return { label: "Opened", tone: "ok", what: `PR ${gh(a.opened)}`, href: a.opened };
@@ -75,7 +83,7 @@ function outcome(a: GoalAction): { label: string; tone: Tone; what: string; note
   if (a.note) return { label: "Done", tone: "ok", what: `draft: ${a.note}`, href: obsidian(`10-19 Projects/goal-drafts/${a.note}`) };
   return { label: "—", tone: "mute", what: lever(a) };
 }
-const LEVER: Record<string, string> = { "seo-pr": "SEO change (PR)", article: "article", draft: "draft for you", merge: "merge", todo: "to-do" };
+const LEVER: Record<string, string> = { "request-indexing": "indexing request", "seo-pr": "SEO change (PR)", article: "article", draft: "draft for you", merge: "merge", todo: "to-do" };
 const lever = (a: GoalAction) => LEVER[a.lever] ?? a.lever;
 
 // The runner's health, judged apart from the goal's: a goal can be behind with a healthy runner (it is working,
