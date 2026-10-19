@@ -8,7 +8,7 @@ which `§` ids live where. Section numbers are stable: code comments cite them.
 ## 3. Live sessions — `lib/agent/manager.ts`
 
 **Model defaults:** `claude-opus-5-5` (pinned 2026-09-23), effort deliberately **unset** (the
-SDK/model default — which on Opus 5.5 is `medium`), autocompact at 60%. All three overridable via `MINAMI_DASHBOARD_MODEL` / `_EFFORT` / `_AUTOCOMPACT_PCT`.
+SDK/model default — which on Opus 5.5 is `medium`), autocompact at 300k tokens for main chat panes and at 60% for agent and team-stage sessions (`agent:` keys). Overridable via `MINAMI_DASHBOARD_MODEL` / `_EFFORT` / `_MAIN_AUTOCOMPACT_TOKENS` / `_AUTOCOMPACT_PCT`.
 Deliberately *not* pinned to `--effort high` the way Minami's cloud brain is — that's a
 weekly-subscription-limit lever the dashboard doesn't need.
 
@@ -424,7 +424,7 @@ append at all. Now the append is unconditional and only its pieces are gated:
   > override at 60%, and zero `compact_boundary` rows in any transcript on the box — the settings
   > were correct and irrelevant. Fix in the house style (`canUseTool` enforces permission modes the
   > SDK is told about but not trusted with): **`maybeAutoCompact()` makes the server the enforcer.**
-  > At an idle turn end past `AUTOCOMPACT_PCT`% of the model's window it injects the user-side
+  > At an idle turn end past `autocompactThreshold()` (300k tokens for a main chat, `AUTOCOMPACT_PCT`% of the window for an `agent:` session; 2026-10-19) it injects the user-side
   > `/compact` the CLI demonstrably honours, with a notice first. The re-fire guard is
   > `lastAutoCompactCtx`: try again only once the context has GROWN past the last attempt — new
   > evidence, not the same evidence louder. Runs before `placementPass` so its send occupies the
