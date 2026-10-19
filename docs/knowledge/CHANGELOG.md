@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-19
+- **Main chats compact at 300k tokens; agents keep 60%** (§3, `lib/agent/manager.ts`). `maybeAutoCompact()` now reads `autocompactThreshold(key)`: main panes compact at `MINAMI_DASHBOARD_MAIN_AUTOCOMPACT_TOKENS` (300k, capped at the percentage line), `agent:` sessions — agent tasks and team stages — stay at `AUTOCOMPACT_PCT`. The context prompt names the line each session actually uses.
 - **Goals ledger shows indexing requests** (§29, `app/autopilot/GoalsSection.tsx`). The goal runner now clicks *Request indexing* in Search Console each morning; each page is a row (Requested · Indexed · Waiting for quota · Failed).
 
 ### 2026-10-19

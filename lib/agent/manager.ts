@@ -53,6 +53,20 @@ const DEFAULT_EFFORT = process.env.MINAMI_DASHBOARD_EFFORT as EffortLevel | unde
 // (currently 60 there too). Set explicitly here rather than relying on inheriting the host's
 // global settings, so the dashboard's behavior doesn't depend on which machine happens to run it.
 const AUTOCOMPACT_PCT = process.env.MINAMI_DASHBOARD_AUTOCOMPACT_PCT || "60";
+// Main chat panes compact at a fixed token count instead (Thomas, 2026-10-19): on a 1M window, 60% is
+// 600k of history re-read on every call, and a conversation he is steering by hand rarely needs that
+// much of its past verbatim. Agent and team-stage sessions (`agent:` keys, see lib/agents/runner.ts)
+// keep the percentage — a task run is long, unattended and loses more from a summary mid-task. Capped
+// at the percentage line, so on a window smaller than this the main chat still compacts.
+const MAIN_AUTOCOMPACT_TOKENS = Number(process.env.MINAMI_DASHBOARD_MAIN_AUTOCOMPACT_TOKENS) || 300_000;
+const isAgentSessionKey = (key: string) => key.startsWith("agent:");
+function autocompactThreshold(key: string, window: number): number {
+  const pct = (Number(AUTOCOMPACT_PCT) / 100) * window;
+  return isAgentSessionKey(key) ? pct : Math.min(MAIN_AUTOCOMPACT_TOKENS, pct);
+}
+function autocompactLabel(key: string): string {
+  return isAgentSessionKey(key) ? `${AUTOCOMPACT_PCT}%` : `${Math.round(MAIN_AUTOCOMPACT_TOKENS / 1000)}k tokens`;
+}
 
 // The browser tool (Playwright MCP), given to every session unless explicitly disabled. MCP tools are
 // deferred behind tool search by default, so a chat that never touches the browser pays ~nothing extra
@@ -305,7 +319,7 @@ function noteSmithTouch(s: Session, name: string, input: unknown, topLevel: bool
 // carried two vault-compaction commits born exactly this way, and another session answered a task
 // with "it's a fresh session with the spec" rather than keep working. Context pressure is the
 // HARNESS's problem; say so.
-const CONTEXT_PROMPT = `Never estimate your own remaining context — you cannot measure it and such guesses run far too low (a session here declared "I'm near the end of my context" at a MEASURED 8% of its 1M-token window). The user sees the real fill as a meter; the harness auto-compacts the conversation at ${AUTOCOMPACT_PCT}%. So if the context feels short mid-task: keep working. It is never a reason to stop, hand off to "a fresh session", ration your replies, or run any file-level compaction. In particular, NEVER respond to context pressure by compacting or reorganising the user's vault/notes (secondBrain consolidation, memory compaction skills, or similar) — those rewrite his knowledge base and run only when he explicitly asks. If the user explicitly asks to compact THIS CONVERSATION, never refuse — you cannot run it yourself (/compact is a user-side command), so tell them: the dashboard compacts automatically past ${AUTOCOMPACT_PCT}%, and they can click the "% ctx" meter or type /compact to do it now.`;
+const contextPrompt = (at: string) => `Never estimate your own remaining context — you cannot measure it and such guesses run far too low (a session here declared "I'm near the end of my context" at a MEASURED 8% of its 1M-token window). The user sees the real fill as a meter; the harness auto-compacts the conversation at ${at}. So if the context feels short mid-task: keep working. It is never a reason to stop, hand off to "a fresh session", ration your replies, or run any file-level compaction. In particular, NEVER respond to context pressure by compacting or reorganising the user's vault/notes (secondBrain consolidation, memory compaction skills, or similar) — those rewrite his knowledge base and run only when he explicitly asks. If the user explicitly asks to compact THIS CONVERSATION, never refuse — you cannot run it yourself (/compact is a user-side command), so tell them: the dashboard compacts automatically past ${at}, and they can click the "% ctx" meter or type /compact to do it now.`;
 
 // "bypassPermissions" auto-approves every tool with no prompt — powerful, and the configured default
 // on this box (Thomas's explicit call: every prompt on a local, single-user machine is friction he
@@ -1006,7 +1020,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       systemPrompt: {
         type: "preset", preset: "claude_code",
         append: [
-          PREVIEW_PROMPT, CONTEXT_PROMPT,
+          PREVIEW_PROMPT, contextPrompt(autocompactLabel(key)),
           ...(PROGRESS_ENABLED ? [PROGRESS_PROMPT] : []),
           // Measured facts about the checkout, ahead of the behavioural rules — the model can't be
           // told to distrust a working tree that renders, so it is handed the answer instead.
@@ -2059,10 +2073,10 @@ function relocate(s: Session, newCwd: string, text: string) {
 function maybeAutoCompact(s: Session) {
   if (s.closed || s.busy || s.pending.size || s.queued.length || s.queue.length || !s.ctxUsed) return;
   const window = contextWindowFor(s.model);
-  const threshold = (Number(AUTOCOMPACT_PCT) / 100) * window;
+  const threshold = autocompactThreshold(s.key, window);
   if (s.ctxUsed <= threshold || s.ctxUsed <= s.lastAutoCompactCtx) return;
   s.lastAutoCompactCtx = s.ctxUsed;
-  broadcast(s, { t: "notice", kind: "compact", text: `context at ${Math.round((s.ctxUsed / window) * 100)}% — compacting automatically` });
+  broadcast(s, { t: "notice", kind: "compact", text: `context at ${Math.round(s.ctxUsed / 1000)}k (${Math.round((s.ctxUsed / window) * 100)}%) — compacting automatically` });
   try { sendMessage({ key: s.key, cwd: s.cwd, message: "/compact", mode: s.mode }); }
   catch { /* the growth guard lets the next turn end retry */ }
 }
