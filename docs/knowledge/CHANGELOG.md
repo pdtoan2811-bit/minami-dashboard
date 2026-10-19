@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-19
+- **Compaction no longer looks like a freeze** (§3, `lib/agent/manager.ts`, `lib/claude-sessions.ts`). The `/compact` bookkeeping rows are hidden in the pane, a compact-only turn keeps the chat's last reply as its ending, and the context meter and re-compact guard reset at the boundary.
 - **Today's "Open chat →" links open the right chat** (§26, `app/page.tsx`). `?open=` was read during render, before the App Router wrote the URL on an in-app link; now it is re-read in a mount effect.
 - **Main chats compact at 300k tokens; agents keep 60%** (§3, `lib/agent/manager.ts`). `maybeAutoCompact()` now reads `autocompactThreshold(key)`: main panes compact at `MINAMI_DASHBOARD_MAIN_AUTOCOMPACT_TOKENS` (300k, capped at the percentage line), `agent:` sessions — agent tasks and team stages — stay at `AUTOCOMPACT_PCT`. The context prompt names the line each session actually uses.
 - **Goals ledger shows indexing requests** (§29, `app/autopilot/GoalsSection.tsx`). The goal runner now clicks *Request indexing* in Search Console each morning; each page is a row (Requested · Indexed · Waiting for quota · Failed).
