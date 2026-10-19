@@ -26,7 +26,7 @@ const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
 const MONO = { fontFamily: "var(--today-mono)" } as const;
 
-const posText = (p: Position | undefined) => (p === undefined ? "—" : p === "no reading" ? "No reading" : p === null ? "Not on p.1" : `#${p}`);
+const posText = (p: Position | undefined, depth = 10) => (p === undefined ? "—" : p === "no reading" ? "No reading" : p === null ? `Not in top ${depth}` : `#${p}`);
 const short = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short" });
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 const obsidian = (note: string) => `obsidian://open?vault=secondBrain&file=${encodeURIComponent(note)}`;
@@ -202,7 +202,7 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
         {rerr && <p className="mt-2 text-[12.5px]" style={{ color: K.red }}>{rerr}</p>}
 
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat k="Position" v={ranked.length ? `#${Math.min(...ranked)}` : last ? posText(last.positions[q[0]]) : "—"} s={`${q.length > 1 ? "best of " + q.length + " queries" : `“${q[0]}”`} · target #${g.spec.target.value}`} />
+          <Stat k="Position" v={ranked.length ? `#${Math.min(...ranked)}` : last ? posText(last.positions[q[0]], last.depth?.[q[0]]) : "—"} s={`${q.length > 1 ? "best of " + q.length + " queries" : `“${q[0]}”`} · target #${g.spec.target.value}`} />
           <Stat k="Indexed" v={last?.index ? `${last.index.indexed} / ${last.index.total}` : "—"} s="pages in Google" />
           <Stat k="Days left" v={String(Math.max(0, g.daysLeft))} s={`deadline ${short(g.spec.deadline)}`} />
           <Stat k="Spent" v={`$${spent.toFixed(2)}`} s={`${paid} paid run${paid === 1 ? "" : "s"}`} />
@@ -259,7 +259,7 @@ function Ledger({ g }: { g: Goal }) {
             {runs.map((r) => (
               <tr key={r.at} className="align-top [&>td]:border-t [&>td]:border-white/10 [&>td]:py-2.5 [&>td]:pr-3">
                 <td className="whitespace-nowrap" style={MONO}>{short(localDay(r.at))} {clock(r.at)}</td>
-                {q.map((x) => <td key={x} style={{ color: typeof r.positions[x] === "number" ? K.ink : K.muted }}>{posText(r.positions[x])}</td>)}
+                {q.map((x) => <td key={x} style={{ color: typeof r.positions[x] === "number" ? K.ink : K.muted }}>{posText(r.positions[x], r.depth?.[x])}</td>)}
                 <td style={MONO}>{r.index ? `${r.index.indexed}/${r.index.total}` : "—"}</td>
                 <td>
                   {r.actions.length ? r.actions.map((a, i) => {
@@ -328,7 +328,7 @@ function More({ g, runners }: { g: Goal; runners: Automation[] }) {
         <div className="grid gap-3 sm:grid-cols-2">
           {g.spec.target.queries.map((q) => last.above?.[q]?.length ? (
             <div key={q}>
-              <Label>{`“${q}” · ${last.positions[q] === null ? "page 1 without us" : "above us"}`}</Label>
+              <Label>{`“${q}” · ${last.positions[q] === null ? "page 1 without us" : "page 1 above us"}`}</Label>
               <ol className="mt-1.5 space-y-0.5">{last.above[q].slice(0, 5).map((a, i) => <li key={i} className="truncate"><span style={MONO}>{i + 1}.</span> {a}</li>)}</ol>
             </div>
           ) : null)}
