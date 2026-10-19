@@ -49,8 +49,8 @@ jobs, but not the other way round. Each row links to `#auto-<id>` in Runners.
   which file.
 - The tick on "Your part today" is matched on the exact to-do text. If the heartbeat ever starts rewording goal
   to-dos, the ticks stop showing here while Today still has them.
-- The `seo-pr` lever stays off until ecvision's path-guard workflow (`seo-auto-guard.yml`, PR #319) is on
-  `develop`; the runner checks `origin/develop` for the file on every run.
+- The `seo-pr` lever needs ecvision's path-guard workflow (`seo-auto-guard.yml`) on `develop` (merged as PR #319); the
+  runner checks `origin/develop` for it on every run. The agent only edits; the runner runs every gate itself.
 
 ## List + run ledger, and "Resolve with Minami" (2026-10-16)
 
