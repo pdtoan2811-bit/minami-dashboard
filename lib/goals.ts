@@ -27,7 +27,7 @@ export type GoalSpec = {
   levers: Record<string, string>; never: string[]; escalate: string[];
   facts?: Record<string, unknown>; context?: string[];
 };
-/** A position: a number, null = Google showed the page and we weren't on it, "no reading" = the check failed. */
+/** A position: a number, null = not in the top `depth` results the check read, "no reading" = the check failed. */
 export type Position = number | null | "no reading";
 export type GoalAction = {
   lever: string; queued?: string; opened?: string; merged?: boolean; pr?: string; note?: string;
@@ -37,6 +37,8 @@ export type GoalAction = {
 };
 export type GoalRun = {
   date: string; at: string; positions: Record<string, Position>;
+  /** How many results each query's check read (5 pages since 2026-10-19). Absent on older runs = page 1 only (10). */
+  depth?: Record<string, number>;
   gsc: Record<string, { position: number; impressions: number; clicks: number } | null>;
   index: { indexed: number; total: number; failed?: number } | null;
   above?: Record<string, string[]>;
@@ -127,7 +129,7 @@ function outcomeOf(a: GoalAction): string {
 export function resolveContext(g: Goal): string {
   const q = g.spec.target.queries;
   const runs = g.log.slice(-6).map((r) => {
-    const pos = q.map((x) => `"${x}" ${r.positions[x] == null ? "not on page 1" : r.positions[x]}`).join(", ");
+    const pos = q.map((x) => `"${x}" ${r.positions[x] == null ? `not in the top ${r.depth?.[x] ?? 10}` : r.positions[x]}`).join(", ");
     const acts = r.actions.length ? r.actions.map((a) => `    - ${a.lever}: ${outcomeOf(a)}${a.usd ? ` ($${a.usd.toFixed(2)})` : ""}`).join("\n") : "    - measured only";
     return `- ${r.date} ${r.at}: ${pos}; indexed ${r.index ? `${r.index.indexed}/${r.index.total}` : "?"}; ${r.decision.on_track ? "on track" : "behind"}\n${acts}`;
   }).join("\n");
