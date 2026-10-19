@@ -32,6 +32,8 @@ export type Position = number | null | "no reading";
 export type GoalAction = {
   lever: string; queued?: string; opened?: string; merged?: boolean; pr?: string; note?: string;
   skipped?: string; waiting?: string; error?: string; refused_by_guard?: string; usd?: number | null;
+  /** request-indexing: one action per page — the URL and what Search Console answered (requested · quota · …). */
+  url?: string; result?: string;
 };
 export type GoalRun = {
   date: string; at: string; positions: Record<string, Position>;
