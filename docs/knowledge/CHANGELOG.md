@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-20
+- **Phone: text no longer crushed beside its buttons** (§23; `app/autopilot/GoalsSection.tsx`, `app/autopilot/RunnersSection.tsx`, `app/today/Today.tsx`, `app/meetings/page.tsx`). Below 640px the goal header, Today rows, runner cards and meeting action lines put the text on its own full-width line with the controls under it; the goal Runs table becomes stacked cards, the 24-hour timeline's key goes under its title and the lane labels shrink to 88px, and Today's chat chip is a 32px tap target. Desktop unchanged.
+
 ### 2026-10-19
 - **Compaction no longer looks like a freeze** (§3, `lib/agent/manager.ts`, `lib/claude-sessions.ts`). The `/compact` bookkeeping rows are hidden in the pane, a compact-only turn keeps the chat's last reply as its ending, and the context meter and re-compact guard reset at the boundary.
 - **Today's "Open chat →" links open the right chat** (§26, `app/page.tsx`). `?open=` was read during render, before the App Router wrote the URL on an in-app link; now it is re-read in a mount effect.

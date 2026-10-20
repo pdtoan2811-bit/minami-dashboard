@@ -182,7 +182,9 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
     <div id={`goal-${g.spec.id}`} className="min-w-0 scroll-mt-6">
       <Glass className="p-5 sm:p-6">
         <div className="flex flex-wrap items-start gap-3">
-          <div className="min-w-0 flex-1">
+          {/* basis-full below sm: a flex-1 item has a zero basis, so it never pushes the buttons to the next
+              line, flex-wrap or not; it just shrinks to one word per line beside them on a phone. */}
+          <div className="min-w-0 flex-1 basis-full sm:basis-0">
             <div className="text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
               <a href={obsidian(`10-19 Projects/${g.note}`)} style={{ color: K.faint }}>{g.note.toUpperCase()}</a>
               {g.spec.started && <> · STARTED {short(g.spec.started).toUpperCase()}</>}
@@ -248,7 +250,24 @@ function Ledger({ g }: { g: Goal }) {
   return (
     <div className="mt-5">
       <Label>Runs</Label>
-      <div className="mt-2 overflow-x-auto">
+      {/* Below sm the 580px table scrolls "What it did" off a phone screen: same runs, stacked as cards. */}
+      <ul className="mt-2 space-y-2 sm:hidden">
+        {runs.map((r) => (
+          <li key={r.at} className="rounded-lg px-3 py-2.5 text-[12.5px]" style={{ border: `1px solid ${K.line}` }}>
+            <div className="flex items-baseline justify-between gap-3" style={MONO}>
+              <span>{short(localDay(r.at))} {clock(r.at)}</span>
+              <span style={{ color: K.faint }}>{r.index ? `${r.index.indexed}/${r.index.total} indexed · ` : ""}{r.usd ? `$${r.usd.toFixed(2)}` : "—"}</span>
+            </div>
+            {q.length ? (
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                {q.map((x) => <span key={x} style={{ color: typeof r.positions[x] === "number" ? K.ink : K.muted }}><span style={{ color: K.faint }}>“{x}”</span> {posText(r.positions[x], r.depth?.[x])}</span>)}
+              </div>
+            ) : null}
+            <div className="mt-2"><RunActions r={r} /></div>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-2 hidden overflow-x-auto sm:block">
         <table className="w-full min-w-[580px] text-left text-[12.5px]">
           <thead style={{ color: K.faint }}>
             <tr className="[&>th]:pb-2 [&>th]:pr-3 [&>th]:font-medium">
@@ -261,21 +280,7 @@ function Ledger({ g }: { g: Goal }) {
                 <td className="whitespace-nowrap" style={MONO}>{short(localDay(r.at))} {clock(r.at)}</td>
                 {q.map((x) => <td key={x} style={{ color: typeof r.positions[x] === "number" ? K.ink : K.muted }}>{posText(r.positions[x], r.depth?.[x])}</td>)}
                 <td style={MONO}>{r.index ? `${r.index.indexed}/${r.index.total}` : "—"}</td>
-                <td>
-                  {r.actions.length ? r.actions.map((a, i) => {
-                    const o = outcome(a);
-                    return (
-                      <div key={i} className="mb-1 flex items-start gap-2">
-                        <span className="shrink-0 rounded-full px-2 py-px text-[11px] font-semibold" style={{ background: mix(TONE[o.tone], 20), color: TONE[o.tone] }}>{o.label}</span>
-                        <span className="min-w-0">
-                          {o.href ? <a href={o.href} target="_blank" rel="noreferrer" className="underline decoration-white/20 underline-offset-2 hover:decoration-white/60" style={{ color: K.muted }}>{o.what}</a>
-                            : <span style={{ color: K.muted }}>{o.what}</span>}
-                          {o.note && <span className="block text-[11.5px]" style={{ color: K.faint }}>{o.note}</span>}
-                        </span>
-                      </div>
-                    );
-                  }) : <span style={{ color: K.faint }}>measured only</span>}
-                </td>
+                <td><RunActions r={r} /></td>
                 <td className="text-right" style={MONO}>{r.usd ? `$${r.usd.toFixed(2)}` : "—"}</td>
               </tr>
             ))}
@@ -284,6 +289,23 @@ function Ledger({ g }: { g: Goal }) {
       </div>
     </div>
   );
+}
+
+function RunActions({ r }: { r: GoalRun }) {
+  if (!r.actions.length) return <span style={{ color: K.faint }}>measured only</span>;
+  return <>{r.actions.map((a, i) => {
+    const o = outcome(a);
+    return (
+      <div key={i} className="mb-1 flex items-start gap-2">
+        <span className="shrink-0 rounded-full px-2 py-px text-[11px] font-semibold" style={{ background: mix(TONE[o.tone], 20), color: TONE[o.tone] }}>{o.label}</span>
+        <span className="min-w-0">
+          {o.href ? <a href={o.href} target="_blank" rel="noreferrer" className="underline decoration-white/20 underline-offset-2 hover:decoration-white/60" style={{ color: K.muted }}>{o.what}</a>
+            : <span style={{ color: K.muted }}>{o.what}</span>}
+          {o.note && <span className="block text-[11.5px]" style={{ color: K.faint }}>{o.note}</span>}
+        </span>
+      </div>
+    );
+  })}</>;
 }
 
 function YourPart({ g }: { g: Goal }) {

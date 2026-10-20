@@ -148,9 +148,10 @@ export default function MeetingsPage() {
               {m.actions?.length ? (
                 <div className="space-y-1 border-t border-neutral-100 px-4 py-2.5">
                   {m.actions.slice(0, 4).map((a) => (
-                    <div key={a.id} className="flex items-baseline gap-2 text-[12.5px] text-neutral-700">
+                    <div key={a.id} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[12.5px] text-neutral-700 sm:flex-nowrap">
                       <span className="shrink-0 text-[10px] uppercase tracking-wide" style={{ color: KIND_TINT[a.kind] ?? "#a8a29e" }}>{a.kind}</span>
-                      <span className="min-w-0 flex-1 truncate">{a.label}</span>
+                      {/* Phone: the label keeps the line and the send buttons go under it, or it truncates to ~15 chars. */}
+                      <span className="min-w-0 flex-1 basis-[calc(100%-5rem)] truncate sm:basis-0">{a.label}</span>
                       <SendTo meeting={m} card={a} />
                     </div>
                   ))}
