@@ -13,6 +13,8 @@ import { matchesProject, projectKey, useProjectFilter } from "@/lib/project-filt
 import { Ground, TopBar, K } from "../today/ui";
 import { GoalsSection, useGoals } from "./GoalsSection";
 import { RunnersSection, useAutomations } from "./RunnersSection";
+import { PhoneAutopilot } from "./PhoneAutopilot";
+import { useCompact } from "@/lib/use-media";
 
 // The vault's goal runner measures and acts on every goal, whatever project the goal belongs to (lib/goals.ts).
 const GOAL_RUNNER = "com.thomas.goal-runner";
@@ -24,6 +26,7 @@ const serves = (a: Automation, g: Goal) => a.id === GOAL_RUNNER || (!!projectKey
 
 export function Autopilot() {
   const [pf] = useProjectFilter();
+  const compact = useCompact();
   const g = useGoals();
   const feed = useAutomations();
 
@@ -55,6 +58,8 @@ export function Autopilot() {
     <Ground>
       <TopBar title="Autopilot" />
       {/* Wider than the runners below: the goals are a list beside a run ledger (§29), the runners one column. */}
+      {/* On a phone the stacked cards made an 8,918px page; the phone gets its own view (PhoneAutopilot.tsx). */}
+      {compact ? <PhoneAutopilot goals={goals} runners={items} feed={feed} /> : (
       <div className="mx-auto max-w-[1160px] px-5 pb-28 pt-2 sm:pb-16">
         {pf && (
           <p className="mb-4 text-[12.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
@@ -73,6 +78,7 @@ export function Autopilot() {
           <RunnersSection feed={feed} items={items} serving={serving} />
         </section>
       </div>
+      )}
     </Ground>
   );
 }
