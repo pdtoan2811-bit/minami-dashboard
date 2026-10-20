@@ -93,14 +93,17 @@ function useTasks(ctx: Ctx) {
 }
 
 // ── the dock ──────────────────────────────────────────────────────────────────────────────────────
-export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden, onOpen, onSheet, onSwipe }: {
+export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden, onOpen, onSheet, onTopic, onSwipe }: {
   ctx: Ctx;
-  current: { id: string | null; title: string; project?: string };
+  /** `pos`: where this chat sits among its topic's chats — what the ‹ › and the swipe step through. */
+  current: { id: string | null; title: string; project?: string; pos?: { i: number; n: number } };
   /** Fallback while nothing is pinned yet: recently visited chats, so a new user's dock isn't empty. */
   recent: string[];
   hidden?: boolean;
   onOpen: (id: string) => void;
   onSheet: () => void;
+  /** The current chip opens this topic's chats; ☰ still opens every chat. */
+  onTopic?: () => void;
   onSwipe: (e: TouchEvent<HTMLDivElement>) => void;
 }) {
   const { groups, tasks, pinned, ofSession } = useTasks(ctx);
@@ -136,12 +139,13 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
             was this chip cut to "Ecvision: Fix pinn…", with no state). Two lines — project · state over
             the title — and wider. Keyed by chat so a swipe that lands somewhere new visibly slides in;
             the ‹ › are the swipe's only affordance. */}
-        <button key={current.id || "new"} onClick={onSheet} aria-label={`${current.title} — all chats`}
+        <button key={current.id || "new"} onClick={onTopic ?? onSheet} aria-label={`${current.title} — ${onTopic ? "chats in this topic" : "all chats"}`}
           className="flex h-11 min-w-0 max-w-[62%] shrink animate-[slidein_.25s_ease] items-center gap-1.5 rounded-xl border border-[var(--sakura)]/50 bg-[var(--sakura)]/10 pl-1.5 pr-3 text-left">
           <span aria-hidden className="text-[12px] text-neutral-600">‹</span>
           <span className="min-w-0 leading-tight">
             <span className="flex items-center gap-1 text-[11px] text-neutral-400">
               {current.project && <span className="truncate">{projectLabel(current.project)}</span>}
+              {current.pos && current.pos.n > 1 && <span className="shrink-0 tabular-nums text-neutral-500">· {current.pos.i + 1} of {current.pos.n} ▾</span>}
               {curG && <span className={`shrink-0 ${STATE_TINT[curG]}`}>· {STATE_WORD[curG]}</span>}
             </span>
             <span className="block truncate text-[14px] font-medium">{current.title}</span>
@@ -286,9 +290,11 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
 
 /** One task: state ring, title, what it needs or is doing; "N sessions" with a chevron that lists the
  *  older ones, each openable. */
-function TaskRow({ t, l: live, icon, on, currentId, onOpen, action }: {
+function TaskRow({ t, l: live, icon, on, currentId, onOpen, action, bare }: {
   t: Task; l: Record<string, FocusLive>; icon?: string; on: boolean; currentId: string | null;
   onOpen: (id: string) => void; action?: { label: string; run: () => void };
+  /** Inside one topic's sheet: the "Project:" prefix on every row only crowds out the titles. */
+  bare?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const s = t.rep, g = t.g, l = live[s.id];
@@ -303,7 +309,7 @@ function TaskRow({ t, l: live, icon, on, currentId, onOpen, action }: {
         <button onClick={() => onOpen(s.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
           <span className="relative shrink-0"><ProjectIcon name={s.project} icon={icon} /><Ring g={g} /></span>
           <span className="min-w-0 flex-1">
-            <span className={`block truncate text-[15px] ${g === "idle" ? "text-neutral-300" : "font-medium text-neutral-50"}`}><ChatName project={s.project} title={s.title} /></span>
+            <span className={`block truncate text-[15px] ${g === "idle" ? "text-neutral-300" : "font-medium text-neutral-50"}`}>{bare ? s.title : <ChatName project={s.project} title={s.title} />}</span>
             <span className={`block truncate text-[13px] ${g === "failed" ? "text-[#ef7c7c]" : g === "need" ? "text-[#4ade80]" : "text-neutral-500"} ${g === "running" && !l?.progress ? "italic" : ""}`}>{line}</span>
             {g === "running" && l?.progress && <span className="mt-1.5 block"><Segments p={l.progress} /></span>}
           </span>
@@ -328,6 +334,61 @@ function TaskRow({ t, l: live, icon, on, currentId, onOpen, action }: {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── one topic's chats ─────────────────────────────────────────────────────────────────────────────
+// A topic can hold a dozen chats, most of them Today hand-offs (ecvisionContent: 12 on 2026-10-20),
+// and the only ways between them were the all-chats sheet (every topic, by urgency) or a swipe through
+// recently VISITED chats — neither answers "which other chats are in this topic?". This sheet does: the
+// topic's own chats by urgency, with Today hand-offs folded under one row unless you're in one.
+export function TopicSheet({ side, ctx, project, currentId, onOpen, onAll, onDismiss }: {
+  side?: boolean;
+  ctx: Ctx;
+  project: string;
+  currentId: string | null;
+  onOpen: (id: string) => void;
+  /** To the all-chats sheet. */
+  onAll: () => void;
+  onDismiss: () => void;
+}) {
+  const scoped = useMemo(() => ({ ...ctx, sessions: ctx.sessions.filter((s) => s.project === project) }), [ctx, project]);
+  const { tasks, ofSession } = useTasks(scoped);
+  const current = currentId ? ofSession.get(currentId) : undefined;
+  const sorted = [...tasks].sort(byUrgency);
+  // A Today chat that needs you or failed is not folded away — same rule as the inbox.
+  const loud = (t: Task) => t.g === "need" || t.g === "failed";
+  const main = sorted.filter((t) => !t.rep.today || loud(t));
+  const today = sorted.filter((t) => t.rep.today && !loud(t));
+  const [showToday, setShowToday] = useState(() => !!current?.rep.today || !main.length);
+  const row = (t: Task) => <TaskRow key={t.key} bare t={t} l={ctx.live} icon={ctx.icons[t.rep.project]} on={t === current} currentId={currentId} onOpen={onOpen} />;
+  return (
+    <div className={`fixed inset-0 z-[70] flex ${side ? "flex-row" : "flex-col justify-end"}`} role="dialog" aria-label={`Chats in ${project}`}>
+      <div className="absolute inset-0 bg-black/50" onClick={onDismiss} />
+      <div className={`relative flex flex-col bg-neutral-900 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl ${side ? "h-full w-[380px] max-w-[85vw] border-r border-white/10 pt-3" : "max-h-[88dvh] rounded-t-2xl border-t border-white/10"}`}>
+        {!side && <button onClick={onDismiss} aria-label="Close" className="flex w-full justify-center py-2.5"><span className="h-1 w-10 rounded-full bg-white/20" /></button>}
+        <div className="flex items-center gap-2 px-4 pb-2">
+          <ProjectIcon name={project} icon={ctx.icons[project]} size={22} />
+          <p className="min-w-0 flex-1 truncate text-[15px] font-semibold">{projectLabel(project)} <span className="font-normal text-neutral-500">· {tasks.length} {tasks.length === 1 ? "chat" : "chats"}</span></p>
+          <button onClick={onAll} className="h-10 shrink-0 rounded-lg border border-white/10 px-3 text-[13px] text-neutral-300 active:bg-white/10">All chats</button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1">
+          {main.map(row)}
+          {today.length > 0 && (
+            <>
+              <button onClick={() => setShowToday((v) => !v)} aria-expanded={showToday}
+                className="flex h-12 w-full items-center gap-2 px-3 text-left text-[13px] text-neutral-400 active:bg-white/[0.06]">
+                <span className={`text-[16px] transition-transform ${showToday ? "rotate-90" : ""}`}>›</span>
+                <span className="flex-1">From Today · {today.length}</span>
+                {today.some((t) => t.g === "running") && <span className="text-[12px] text-[#f0a868]">{today.filter((t) => t.g === "running").length} working</span>}
+              </button>
+              {showToday && today.map(row)}
+            </>
+          )}
+          {!tasks.length && <p className="px-4 py-10 text-center text-[13px] text-neutral-500">No chats in this topic yet.</p>}
+        </div>
+      </div>
     </div>
   );
 }

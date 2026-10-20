@@ -220,9 +220,38 @@ marks it read.
 **One tap to any chat, in any project.** `openChat(sid)` restores or parks the topic through
 `openProject`, then focuses the chat, adds it as a pane, or swaps it into the current pane when all
 four are taken. `/?open=<sid>` uses the same path; notifications and the glance view land there. The
-bottom chat bar's swipe now walks the **most-recently-visited chats across topics** (right = back,
-left = forward), like Android's gesture-bar swipe between apps. The MRU list is not reordered during
+bottom chat bar's swipe walked the **most-recently-visited chats across topics** (right = back,
+left = forward), like Android's gesture-bar swipe between apps — replaced 2026-10-20, see "Moving within a topic" below. The MRU list is not reordered during
 a swipe sequence (4s), or each swipe would bounce between the same two chats.
+
+**Links that open a chat (2026-10-20).** "I tap a chat link on the phone and nothing happens." The
+board's list is the 60 most recently touched chats (`listSessions`), and `/?open=<id>` waited for the
+id to appear in it — an older Today hand-off, a goal's chat or a notification on a busy day never did,
+so the tap did nothing, silently. Now `requestOpen` pins the id and the list fetches it by id
+(`/api/bento/sessions?ids=` answers ids outside the cut via `sessionMeta`), keeping it on every poll;
+after 15s without it the board says it couldn't open the chat. Every attempt writes one line to
+`~/.minami/open.jsonl` (listed? opened?) because the phone can't be watched from the Mac. Two quieter
+causes went with it: `openChat` returned nothing when the chat's topic was filtered out as trivial
+(it now builds the topic from the raw list), and with all four tabs taken it swapped the chat into the
+*leaving* topic's tab index while `openProject` selected another — the chat opened behind the one on
+screen. It now selects the tab it swapped into.
+
+**Inbox filters (2026-10-20).** Half the board was Today hand-offs (29 of 59 chats), listed one by one.
+The inbox now opens with topic chips (`All · n`, then each topic by count) and a Today switch:
+**Fold** (default) · Show · Hide · Only, stored per device (`inboxToday`). Fold puts a topic's Today
+chats under one "<topic> · Today" row that expands in place; a Today chat that needs you or failed is
+never folded. Chips write the shell's project filter (§30) so the two are one control, but the inbox
+matches the topic *exactly* — elsewhere "ecvision" keeping "ecvisionContent" is sibling work; here it
+put another topic's twelve chats into a list you had just narrowed. "Today chat" comes from Today's own
+hand-off records (`lib/today-origin.ts`), not the "Today ·" title, which the rolling title (§5h)
+replaces after three asks.
+
+**Moving within a topic (2026-10-20).** The dock's chip reads "Topic · 3 of 12 ▾" and opens
+`TopicSheet` — that topic's chats by urgency, Today hand-offs folded under "From Today · n" (open when
+you're in one), "All chats" to the full sheet. The bar's swipe and ‹ › now step through the topic's
+chats, newest first (left = next), instead of recently visited chats across topics: with a dozen
+hand-offs per topic, "the other chat in this project" had no route but the all-chats sheet.
+Cross-topic hops are the inbox's and ☰'s job.
 
 **List-detail on the N5 unfolded** (`split` = compact and ≥700px): a 288px list (Inbox | Topics,
 icon-only nav) beside the chat. There is no nav rail, because at 750px a rail would leave the chat

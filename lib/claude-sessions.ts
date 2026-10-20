@@ -108,6 +108,8 @@ export type SessionMeta = {
   lastRole: string; // "user" | "assistant" — who spoke last (a cheap review signal)
   tail: string;      // short snippet of the last message (for the semantic review check)
   review?: boolean;  // LLM-decided: does this session need the user's attention?
+  /** Started by a Today hand-off (lib/today-origin.ts). Set by the sessions route, not the parser. */
+  today?: boolean;
 };
 
 type Row = { type?: string; message?: any; isCompactSummary?: boolean; cwd?: string; gitBranch?: string; timestamp?: string; customTitle?: string; lastPrompt?: string;

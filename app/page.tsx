@@ -37,7 +37,7 @@ import { buildJourney } from "@/lib/flow-model";
 import { splitPreviewSegments, isLocalUrl, type Preview } from "@/lib/preview-block";
 import { openLocalUrl, PREVIEW_EVENT } from "@/lib/open-local";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
-import { FocusDock, FocusSheet } from "@/components/Focus";
+import { FocusDock, FocusSheet, TopicSheet } from "@/components/Focus";
 import { imageSrc } from "@/lib/agent/labels";
 import { useFocus } from "@/lib/use-focus";
 import { PhoneAccess } from "@/components/PhoneAccess";
@@ -66,6 +66,8 @@ type SessionMeta = {
   model: string; tier: string; tokensIn: number; tokensOut: number; cost: number;
   messages: number; tools: number; toolNames: string[]; lastActivity: number; active: boolean;
   task?: string; now?: string; goal?: string; lastRole?: string; tail?: string; review?: boolean;
+  /** Started by a Today hand-off — set by /api/bento/sessions (lib/today-origin.ts). */
+  today?: boolean;
 };
 // Reuses AgentToolCall (not a separate shape) so a disk-loaded tool call and a live-streamed one render
 // through the exact same code — `done`/`ms` just stay unset for disk data, `output` (incl. screenshots)
@@ -530,6 +532,7 @@ export default function BentoHome() {
   // `compact` (declared above): the tab strip gives way to one bottom chat bar + a sheet
   // (components/ChatSheet.tsx, §23) below 640px, and on any touch-only screen up to tablet width.
   const [chatSheet, setChatSheet] = useState(false);
+  const [topicSheet, setTopicSheet] = useState(false);
   // "The keyboard is up", for hiding the bottom chat bar. Focus alone is the wrong signal: Android's
   // Back dismisses the keyboard and LEAVES the textarea focused, which would strand the bar hidden. So:
   // an editable field has focus AND the viewport has shrunk well below the tallest it has been (with
@@ -620,8 +623,18 @@ export default function BentoHome() {
   const rounds = useRef(0);
   const sessionsSig = useRef("");
 
+  // Chats a link asked for that the list doesn't carry (it is the 60 most recent). Fetched by id and
+  // appended on every poll, or the opened chat would vanish from its topic on the next refresh.
+  const pinnedIds = useRef<Set<string>>(new Set());
+  const withPinned = async (list: SessionMeta[]) => {
+    const miss = [...pinnedIds.current].filter((id) => !list.some((s) => s.id === id));
+    if (!miss.length) return list;
+    const r = await fetch(`/api/bento/sessions?ids=${miss.map(encodeURIComponent).join(",")}`).then((x) => x.json()).catch(() => null);
+    return Array.isArray(r?.sessions) ? [...list, ...r.sessions] : list;
+  };
   const loadSessions = useCallback(
-    () => fetch("/api/bento/sessions").then((r) => r.json()).then((d) => {
+    () => fetch("/api/bento/sessions").then((r) => r.json()).then(async (d) => {
+      if (Array.isArray(d?.sessions)) d = { ...d, sessions: await withPinned(d.sessions) };
       // A response without a `sessions` ARRAY is a failure, not an empty board — `{error}` from the
       // route, or an HTML error page that happened to parse. Treating it as [] emptied the grid and,
       // because the open panel resolves through that list, took the conversation off screen with it
@@ -766,7 +779,7 @@ export default function BentoHome() {
   const inboxSessions = useMemo(() => {
     const ids = new Set(windowed.map((x) => x.id));
     return [...windowed, ...pool.filter((x) => !ids.has(x.id) && (liveAct[x.id]?.need || liveAct[x.id]?.busy))]
-      .map((x) => ({ id: x.id, project: x.project, title: titleOf(x), tail: x.tail || "", lastActivity: x.lastActivity, lastRole: x.lastRole || "", task: taskKeyOf(x.cwd, x.id) }));
+      .map((x) => ({ id: x.id, project: x.project, title: titleOf(x), tail: x.tail || "", lastActivity: x.lastActivity, lastRole: x.lastRole || "", task: taskKeyOf(x.cwd, x.id), today: !!x.today }));
   }, [windowed, pool, liveAct]);
   const openProj = useMemo(
     () => (project ? allProjects.find((p) => p.name === project) ?? null : null),
@@ -858,20 +871,31 @@ export default function BentoHome() {
   // otherwise swaps it into the tab you were reading (same remount path as the ⌄ switcher).
   const activePaneRef = useRef(0);
   activePaneRef.current = activePane;
-  const openChat = useCallback((sid: string) => {
+  const openChat = useCallback((sid: string): boolean => {
     const meta = sessionsRef.current.find((x) => x.id === sid);
-    const p = meta && allProjects.find((x) => x.name === meta.project);
-    if (!meta || !p) return;
-    if (project !== p.name) openProject(p);
+    if (!meta) return false;
+    // `allProjects` drops trivial chats (isTrivial). A chat a link NAMES is never trivial to the person
+    // who tapped it, so its topic is built from the raw list rather than the tap doing nothing.
+    const p = allProjects.find((x) => x.name === meta.project)
+      ?? groupProjects(sessionsRef.current.filter((x) => x.project === meta.project))[0];
+    if (!p) return false;
+    const switching = project !== p.name;
+    if (switching) openProject(p);
     const cwd = meta.cwd && meta.cwd !== p.cwd ? meta.cwd : undefined;
     setPanes((prev) => {
       const at = prev.findIndex((x) => x.sid === sid);
       if (at >= 0) { setActivePane(at); return prev; }
       if (prev.length < MAX_PANES) { setActivePane(prev.length); return [...prev, { ...mkPane(sid), ...(cwd ? { cwd } : {}) }]; }
-      const j = Math.min(activePaneRef.current, prev.length - 1);
+      // All four tabs taken: swap into one AND select it. This used to take the index from
+      // activePaneRef — the topic you were LEAVING — and leave the selection to openProject, which
+      // lands on tab 0 or the running tab. Whenever those differed the chat went into one tab while
+      // another was on screen: on a phone, which shows one tab, the link opened a different chat.
+      const j = switching ? prev.length - 1 : Math.min(activePaneRef.current, prev.length - 1);
+      setActivePane(j);
       return prev.map((x, k) => (k === j ? { ...x, sid, switchGen: (x.switchGen || 0) + 1, ...(cwd ? { cwd } : { cwd: undefined }) } : x));
     });
     setPaneView("tabs");
+    return true;
   }, [allProjects, project, openProject, setPaneView]);
   // Most-recently-visited chats, across topics — what the chat bar's swipe walks. While a swipe
   // sequence is in progress (cursor younger than 4s) the list is NOT reordered, or each swipe would
@@ -888,7 +912,10 @@ export default function BentoHome() {
   // Web push (§24): re-send this device's subscription (never prompts — the toggle in Settings does),
   // open the chat a notification was tapped for, and report which chat is on screen so the server
   // doesn't notify you about the conversation you're already reading.
-  usePushRegistration({ onOpen: openChat });
+  // Through requestOpen (declared below, hence the ref) so a tapped notification for a chat outside the
+  // list is fetched by id instead of silently doing nothing.
+  const requestOpenRef = useRef<(sid: string) => void>(() => {});
+  usePushRegistration({ onOpen: (sid: string) => requestOpenRef.current(sid) });
   usePushPresence(currentSid || null);
   // `/?open=<sessionId>` — where a notification, the cover-screen glance or a link lands. Honoured once,
   // as soon as the sessions it names have loaded, then removed so a reload doesn't re-open it.
@@ -899,18 +926,40 @@ export default function BentoHome() {
   // (2026-10-19). By the first effect the router's history update has committed. Declared before the
   // consumer below so it runs first.
   useEffect(() => { openParam.current ??= new URLSearchParams(location.search).get("open"); }, []);
+  // A chat that isn't in the list yet is either outside the 60 most recent (pin it: the next load asks
+  // the server for it by id) or seconds old (the next poll lists it). Either way it gets a bounded
+  // number of loads, then the tap says so instead of waiting forever — the old silent wait is what
+  // "I tap the link and nothing happens" was (2026-10-20).
+  const [openMiss, setOpenMiss] = useState<string | null>(null);
+  useEffect(() => { if (!openMiss) return; const t = setTimeout(() => setOpenMiss(null), 5000); return () => clearTimeout(t); }, [openMiss]);
+  const settleOpen = useCallback((sid: string, listed: boolean) => {
+    openParam.current = null;
+    if (new URLSearchParams(location.search).has("open")) history.replaceState(history.state, "", location.pathname);
+    const ok = listed && openChat(sid);
+    if (!ok) setOpenMiss(sid);
+    // One line per link tap in ~/.minami/open.jsonl: the phone can't be watched from here, so the next
+    // "nothing happened" says which of these it was.
+    void fetch("/api/bento/open-log", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sid, listed, ok, w: innerWidth }) }).catch(() => {});
+  }, [openChat]);
+  const requestOpen = useCallback((sid: string) => {
+    openParam.current = sid;
+    if (sessionsRef.current.some((x) => x.id === sid)) return settleOpen(sid, true);
+    pinnedIds.current.add(sid);
+    void loadSessions();
+    setTimeout(() => { if (openParam.current === sid) settleOpen(sid, false); }, 15_000);
+  }, [settleOpen, loadSessions]);
   useEffect(() => {
     const sid = openParam.current;
-    if (!sid || !sessions.some((x) => x.id === sid)) return;
-    openParam.current = null;
-    history.replaceState(history.state, "", location.pathname);
-    openChat(sid);
-  }, [sessions, openChat]);
+    if (!sid || !loaded) return;
+    if (sessions.some((x) => x.id === sid)) settleOpen(sid, true);
+    else if (!pinnedIds.current.has(sid)) requestOpen(sid);
+  }, [sessions, loaded, settleOpen, requestOpen]);
   // The team inbox (§25). Explain starts its chat server-side and hands back the id; parking it in
   // openParam reuses the `?open=` path, which already waits for the new session to reach the list.
   const team = useTeamInbox();
   const [teamOpen, setTeamOpen] = useState(false);
-  const openWhenListed = (sid: string) => { openParam.current = sid; } // the next sessions poll runs the effect;
+  requestOpenRef.current = requestOpen;
+  const openWhenListed = requestOpen;
   // The shell's drawer opening a chat while the board is already mounted (§30). `?open=` is read once
   // at mount, so a same-page link would change the URL and do nothing; the drawer sends this instead.
   // A chat not yet in the list (a goal capture that started seconds ago) waits for the next poll.
@@ -1234,6 +1283,7 @@ export default function BentoHome() {
   useEffect(() => { reportViewport("/"); }, []);
   useBackLayer(!!proj, closePanel);
   useBackLayer(chatSheet, () => setChatSheet(false));
+  useBackLayer(topicSheet, () => setTopicSheet(false));
   useBackLayer(!!flowFor, () => setFlowFor(null));
   useBackLayer(picker, () => setPicker(false));
   useBackLayer(teamOpen, () => setTeamOpen(false));
@@ -1285,6 +1335,22 @@ export default function BentoHome() {
     () => assignIcons(projects.map((p) => p.name), Object.fromEntries(Object.entries(attachMap).map(([k, v]) => [k, v.icon]))),
     [projects, attachMap],
   );
+  // The open topic's chats, one entry per task (a worktree's sessions are one task), newest first —
+  // what the phone's ‹ › and swipe step through and what "3 of 12" counts. Newest-first rather than
+  // by urgency, so a chat changing state doesn't reorder the list mid-swipe.
+  const topicOrder = useMemo(() => {
+    const name = proj && "name" in proj ? proj.name : "";
+    if (!name) return [] as { rep: string; ids: Set<string>; last: number }[];
+    const by = new Map<string, { rep: string; ids: Set<string>; last: number }>();
+    for (const x of inboxSessions) {
+      if (x.project !== name) continue;
+      const k = x.task || `s:${x.id}`;
+      const t = by.get(k);
+      if (!t) by.set(k, { rep: x.id, ids: new Set([x.id]), last: x.lastActivity });
+      else { t.ids.add(x.id); if (x.lastActivity > t.last) { t.last = x.lastActivity; t.rep = x.id; } }
+    }
+    return [...by.values()].sort((a, b) => b.last - a.last);
+  }, [inboxSessions, proj]);
   const focusCtx = useMemo(() => ({ sessions: inboxSessions, live: liveAct, seen: seen.seen, floor: seen.floor, icons: topicIcons, focus: focusSet.focus }),
     [inboxSessions, liveAct, seen, topicIcons, focusSet.focus]);
   // The picker's Recent tab. Derived from `allProjects` — the UNFILTERED grouping — on purpose: the
@@ -1897,32 +1963,37 @@ export default function BentoHome() {
               const i = focusPane ?? 0;
               const pn = panes[i];
               const s = pn?.sid ? proj.sessions.find((x) => x.id === pn.sid) : undefined;
-              // A horizontal swipe on the bar steps through the chats you've RECENTLY VISITED, in any
-              // topic — Android's gesture-bar swipe between recent apps, applied to chats. Right = back to the
-              // previous one, left = forward again. Across projects on purpose: hopping between two projects
-              // used to be back → tile → tab, twice (§23). Only on the bar — the transcript scrolls code blocks
-              // sideways, and a swipe there would be a trap.
+              // A horizontal swipe on the bar steps through THIS TOPIC's chats (topicOrder): left = the next
+              // one, right = the previous. It used to walk recently visited chats across every topic, like
+              // Android's recent-apps swipe; with a dozen Today hand-offs per topic that made "the other chat
+              // in this project" unreachable except through the all-chats sheet (2026-10-20). Cross-topic
+              // hops are the inbox's and the ☰ sheet's job now. Only on the bar — the transcript scrolls
+              // code blocks sideways, and a swipe there would be a trap.
+              const at = pn?.sid ? topicOrder.findIndex((t) => t.ids.has(pn.sid)) : -1;
               const swipe = (e: TouchEvent<HTMLDivElement>) => {
                 const t0 = (e.currentTarget as HTMLElement).dataset;
                 if (e.type === "touchstart") { t0.x = String(e.touches[0].clientX); t0.y = String(e.touches[0].clientY); return; }
                 const dx = e.changedTouches[0].clientX - Number(t0.x), dy = e.changedTouches[0].clientY - Number(t0.y);
-                if (Math.abs(dx) < 60 || Math.abs(dy) > 40) return;
-                const list = mru.current;
-                const at = mruCursor.current && Date.now() - mruCursor.current.at < 4000 ? mruCursor.current.i : 0;
-                const next = Math.max(0, Math.min(list.length - 1, at + (dx > 0 ? 1 : -1)));
-                if (next === at || !list[next]) return;
-                mruCursor.current = { i: next, at: Date.now() };
-                openChat(list[next]);
+                if (Math.abs(dx) < 60 || Math.abs(dy) > 40 || !topicOrder.length) return;
+                const next = at < 0 ? 0 : Math.max(0, Math.min(topicOrder.length - 1, at + (dx < 0 ? 1 : -1)));
+                if (next === at) return;
+                openChat(topicOrder[next].rep);
               };
               return (
                 // Bottom-docked, the thumb's natural zone, directly under the composer. Off while the
                 // keyboard is up — the keyboard owns that band then (Material: the nav bar may be covered
                 // by the keyboard, never permanently). Its contents are the FOCUS set: components/Focus.tsx
                 // carries the reasoning for every rule in it.
-                <FocusDock ctx={focusCtx} current={{ id: pn?.sid || null, title: s ? titleOf(s) : "New chat", project: s?.project }} recent={mru.current}
-                  hidden={keyboardUp} onOpen={openChat} onSheet={() => setChatSheet(true)} onSwipe={swipe} />
+                <FocusDock ctx={focusCtx} current={{ id: pn?.sid || null, title: s ? titleOf(s) : "New chat", project: s?.project, ...(at >= 0 ? { pos: { i: at, n: topicOrder.length } } : {}) }} recent={mru.current}
+                  hidden={keyboardUp} onOpen={openChat} onSheet={() => setChatSheet(true)} onTopic={s?.project ? () => setTopicSheet(true) : undefined} onSwipe={swipe} />
               );
             })()}
+            {compact && topicSheet && proj && "name" in proj && (
+              <TopicSheet side={split} ctx={focusCtx} project={proj.name} currentId={currentSid || null}
+                onOpen={(id) => { setTopicSheet(false); openChat(id); }}
+                onAll={() => { setTopicSheet(false); setChatSheet(true); }}
+                onDismiss={() => setTopicSheet(false)} />
+            )}
             {compact && chatSheet && (
               <FocusSheet side={split} ctx={focusCtx} currentId={currentSid || null} pin={focusSet.pin} unpin={focusSet.unpin}
                 onOpen={(id) => { setChatSheet(false); openChat(id); }}
@@ -1956,6 +2027,12 @@ export default function BentoHome() {
       {teamOpen && <TeamSheet inbox={team.data} reload={team.reload} onClose={() => setTeamOpen(false)} onExplained={openWhenListed} />}
 
       {preview && <PreviewOverlay href={preview} onClose={() => setPreview(null)} />}
+      {openMiss && (
+        <div role="status" onClick={() => setOpenMiss(null)}
+          className="fixed inset-x-3 top-3 z-[60] mx-auto max-w-md rounded-xl border border-white/10 bg-[#1a1d22]/95 px-4 py-3 text-[13.5px] text-zinc-200 shadow-xl backdrop-blur">
+          Couldn&apos;t open that chat — it isn&apos;t on this machine&apos;s board yet. Try again in a moment.
+        </div>
+      )}
       {picker && <FolderPicker onPick={startTopic} onClose={() => setPicker(false)} recents={recentTopics} />}
     </div>
   );
