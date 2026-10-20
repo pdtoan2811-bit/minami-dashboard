@@ -287,10 +287,10 @@ function Timeline({ items, onJump }: { items: Automation[]; onJump: (id: string)
   return (
     <div className="mt-3 overflow-x-auto rounded-xl" style={{ background: K.paper, border: `1px solid ${K.line}` }}>
       <div className="relative min-w-[660px] px-4 pb-2 pt-3">
-        <div className="mb-2 flex items-center justify-between text-[11px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
+        <div className="mb-2 flex flex-col gap-1 text-[11px] tracking-[.08em] sm:flex-row sm:items-center sm:justify-between sm:gap-0" style={{ ...MONO, color: K.faint }}>
           <span>YOUR 24 HOURS</span><span className="tracking-normal">● fixed time · ┈ repeats · ━ always on · ○ paused</span>
         </div>
-        <div className="relative ml-[140px]">
+        <div className="relative ml-[96px] sm:ml-[140px]">
           <div className="absolute inset-y-0" style={{ left: `${pos("22:00")}%`, right: 0, background: "linear-gradient(90deg, transparent, rgba(110,130,255,.08) 10%)", borderRadius: 6 }} />
           {hours.map((h) => (
             <div key={h} className="absolute inset-y-0" style={{ left: `${pos(`${h}:00`)}%`, borderLeft: `1px dashed ${K.line}` }}>
@@ -320,7 +320,7 @@ function Lane({ project, list, onJump }: { project: string; list: Automation[]; 
   const h = Math.max(44, top + bands.length * 7 + 6);
   return (
     <div className="relative" style={{ height: h, borderTop: `1px solid ${mix(K.line, 50)}` }}>
-      <span className="absolute -left-[140px] top-[12px] w-[132px] truncate text-[12px]" style={{ color: K.muted }} title={project}>
+      <span className="absolute -left-[96px] top-[12px] w-[88px] truncate sm:-left-[140px] sm:w-[132px] text-[12px]" style={{ color: K.muted }} title={project}>
         <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: c }} />{project}
       </span>
       {bands.map((a, i) => {
@@ -375,8 +375,8 @@ function Card({ a, busy, open, flash, toggle, run }: {
     }}>
       <div className="absolute inset-y-0 left-0 w-[3px] rounded-l-xl" style={{ background: st.color, opacity: off ? 0.6 : 1 }} />
       <div className="px-4 py-3.5 pl-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1" style={{ opacity: off ? 0.62 : 1, transition: `opacity .3s ${EASE}` }}>
+        <div className="flex flex-wrap items-start justify-between gap-3 sm:flex-nowrap">
+          <div className="min-w-0 flex-1 basis-full sm:basis-0" style={{ opacity: off ? 0.62 : 1, transition: `opacity .3s ${EASE}` }}>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[15px]" style={{ color: colorOf(a.project) }} title={a.scheduleText}>{KIND_ICON[a.schedule.kind]}</span>
               <span className="text-[15.5px] font-medium">{a.name}</span>

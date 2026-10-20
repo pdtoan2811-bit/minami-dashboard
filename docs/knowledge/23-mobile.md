@@ -60,6 +60,11 @@ can be widened by dragging the divider. On a phone, the narrow pane is all the r
   column collapse to a word per line; a `min-w-[7rem]` cell floor is what makes them scroll.
   `/settings` rows wrap a wide control onto its own line (the text keeps a 14rem floor, so toggles stay
   beside it), and the routing card's seven model chips scroll sideways instead of breaking "449.4k tok".
+- **Text crushed by its own buttons (2026-10-20).** A `min-w-0 flex-1` text column beside a group of
+  buttons or chips got 33–72px on a phone (goal cards, Today rows, runner cards, meeting action lines).
+  `flex-wrap` alone does nothing: a `flex-1` item has a zero basis, so it never pushes its neighbours
+  down. Below `sm` the text gets `basis-full` (or `basis-[calc(100%-Npx)]` beside a fixed dot/toggle)
+  and the controls drop to the line under it; `sm:basis-0 sm:flex-nowrap` keeps the desk layout as it was.
 - **Desk-only chrome.** The `⌥1–4` shortcut labels are hidden below `md` (there is no ⌥ on a phone),
   `esc ✕` becomes `✕`, and the send/stop/attach buttons grow under `pointer-coarse:`.
 

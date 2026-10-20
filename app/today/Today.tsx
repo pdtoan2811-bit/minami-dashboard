@@ -500,13 +500,14 @@ function TodoRow({ t, first, state, deps, chat, onToggle, onRemove, onDo, onRese
   const stalled = t.research?.state === "running" && !looking;
   return (
     <li style={{ borderTop: first ? undefined : `1px solid ${K.line}` }}>
-      <div className="flex items-center gap-3.5 px-5 py-3.5">
+      {/* Phone: the title gets the line, chips and the chat chip drop under it (same pattern as GoalsSection). */}
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 px-5 py-3.5 sm:flex-nowrap">
         <button onClick={onToggle} aria-label={t.done ? "Mark not done" : "Mark done"}
           className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[12px] transition-all active:scale-90"
           style={{ background: t.done ? K.accent : "transparent", border: `1.5px solid ${t.done ? K.accent : K.line2}`, color: "#fff", transitionTimingFunction: EASE }}>{t.done ? "✓" : ""}</button>
-        <button onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+        <button onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 basis-[calc(100%-36px)] flex-wrap items-center gap-x-3 gap-y-1.5 text-left sm:basis-0 sm:flex-nowrap">
           <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: FOCUS[fkey(t.focus)].color }} />
-          <span className={`min-w-0 flex-1 text-[15px] font-medium leading-snug ${t.done ? "line-through" : ""}`} style={{ color: t.done ? K.faint : K.ink, textDecorationColor: K.line2 }}>
+          <span className={`min-w-0 flex-1 basis-[calc(100%-20px)] text-[15px] sm:basis-0 font-medium leading-snug ${t.done ? "line-through" : ""}`} style={{ color: t.done ? K.faint : K.ink, textDecorationColor: K.line2 }}>
             <Inline text={titleOf(t)} /></span>
           {/* A handed-off row's chat chip (beside this button) already says "working" / "waiting on you";
               the task chip here carries only what the chat chip can't: your move, blocked, read the reply. */}
@@ -515,8 +516,8 @@ function TodoRow({ t, first, state, deps, chat, onToggle, onRemove, onDo, onRese
           {state?.drift && <span title={state.drift} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix("#ff8a8d", 16), color: "#ff8a8d", fontFamily: "var(--today-mono)" }}>⚠ DRIFT</span>}
           {t.done && t.done_by === "auto" && <span title={t.done_evidence} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px]" style={{ background: mix(K.cat3, 22), color: "#f3c766", fontFamily: "var(--today-mono)" }}>AUTO</span>}
           {!t.done && t.progress && <span title={t.progress.detail} className="shrink-0 rounded-full px-2 py-0.5 text-[10.5px] tabular-nums" style={{ background: "rgba(255,255,255,.06)", color: K.muted, fontFamily: "var(--today-mono)" }}>{t.progress.met}/{t.progress.total}</span>}
-          {t.est_min ? <span className="shrink-0 tabular-nums" style={{ color: K.faint, fontFamily: "var(--today-mono)", fontSize: 11 }}>{t.est_min}m</span> : null}
-          <span className="shrink-0 text-[12px] transition-transform" style={{ color: K.faint, transform: open ? "rotate(90deg)" : "none" }}>›</span>
+          {t.est_min ? <span className="hidden shrink-0 tabular-nums sm:inline" style={{ color: K.faint, fontFamily: "var(--today-mono)", fontSize: 11 }}>{t.est_min}m</span> : null}
+          <span className="hidden shrink-0 text-[12px] transition-transform sm:inline" style={{ color: K.faint, transform: open ? "rotate(90deg)" : "none" }}>›</span>
         </button>
         {/* Outside the title button: a link can't sit inside a button. One tap from the list to the chat. */}
         {t.handoff && chat && <ChatLink sid={t.handoff.sessionId} s={chat} />}
@@ -650,7 +651,7 @@ const CHAT: Record<ChatState, { label: string; color: string; dot: string }> = {
 };
 function ChatLink({ sid, s }: { sid: string; s: ChatState }) {
   const v = CHAT[s];
-  return <Link href={`/?open=${sid}`} title="Open Minami's chat" className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] hover:brightness-125 ${s === "working" ? "animate-pulse" : ""}`}
+  return <Link href={`/?open=${sid}`} title="Open Minami's chat" className={`ml-[36px] inline-flex min-h-8 shrink-0 items-center rounded-full px-3 py-0.5 text-[10.5px] hover:brightness-125 sm:ml-0 sm:min-h-0 sm:px-2 ${s === "working" ? "animate-pulse" : ""}`}
     style={{ background: mix(v.color, 18), color: v.color, fontFamily: "var(--today-mono)" }}>{v.dot ? `${v.dot} ` : ""}{v.label} →</Link>;
 }
 
