@@ -23,6 +23,7 @@ import ChatName from "@/components/ChatName";
 import { projectLabel } from "@/lib/chat-title";
 import { memo, useMemo, useRef, useState, type TouchEvent } from "react";
 import { ChevronDown, Plus, X } from "lucide-react";
+import { ChatFilter, useChatFilter } from "@/components/ChatFilter";
 import { groupOf, Ring, type Group, type InboxLive, type InboxSession } from "@/components/Inbox";
 import { ProjectIcon } from "@/components/ProjectIcon";
 import type { TaskProgress } from "@/lib/task-progress";
@@ -196,6 +197,8 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
   const [swapFor, setSwapFor] = useState<string | null>(null);
   const [edit, setEdit] = useState(false);
   const [older, setOlder] = useState(0);
+  const [showToday, setShowToday] = useState(false);
+  const f = useChatFilter();
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const say = (text: string, undo: () => void) => {
     setToast({ text, undo });
@@ -203,19 +206,27 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
     toastTimer.current = setTimeout(() => setToast(null), 5000);
   };
   const now = Date.now();
-  const pins = tasks.filter(pinned).sort(byUrgency);
-  const rest = tasks.filter((t) => !pinned(t)).sort(byUrgency);
-  const active = rest.filter((t) => t.g !== "idle" || now - t.last < ACTIVE_MS);
-  const old = rest.filter((t) => !active.includes(t));
-  const count = (g: Group) => tasks.filter((t) => t.g === g).length;
+  // Pin limits count every pin; the lists below show only what the filter keeps.
+  const allPins = tasks.filter(pinned);
+  const shown = tasks.filter((t) => f.keep(t.rep));
+  const pins = shown.filter(pinned).sort(byUrgency);
+  const loudT = (t: Task) => t.g === "need" || t.g === "failed";
+  // Today hand-offs fold to one line, as in the inbox — unless the Today chip is on, or one needs you.
+  const rest = shown.filter((t) => !pinned(t)).sort(byUrgency);
+  const today = f.todayOnly ? [] : rest.filter((t) => t.rep.today && !loudT(t));
+  const mine = rest.filter((t) => !today.includes(t));
+  const active = mine.filter((t) => t.g !== "idle" || now - t.last < ACTIVE_MS);
+  const old = mine.filter((t) => !active.includes(t));
+  const count = (g: Group) => shown.filter((t) => t.g === g).length;
   const current = currentId ? ofSession.get(currentId) : undefined;
+  const loud = useMemo(() => new Set(tasks.filter(loudT).map((t) => t.rep.project)), [tasks]);
 
   const doPin = async (t: Task, swapOut?: Task) => {
     // Full: a DONE pin (finished, nothing waiting) steps out on its own; ask only if none is done.
-    const done = !swapOut && pins.length >= FOCUS_MAX ? pins.find((p) => p.g === "idle" || p.g === "new") : undefined;
+    const done = !swapOut && allPins.length >= FOCUS_MAX ? allPins.find((p) => p.g === "idle" || p.g === "new") : undefined;
     const out = swapOut || done;
     // The server stores up to 8 session ids, so the three-TASK limit is enforced here.
-    if (!out && pins.length >= FOCUS_MAX) { setSwapFor(t.key); return; }
+    if (!out && allPins.length >= FOCUS_MAX) { setSwapFor(t.key); return; }
     for (const m of out?.members ?? []) if (ctx.focus.includes(m.id) && m.id !== out!.rep.id) await unpin(m.id);
     const outId = out ? (out.members.find((m) => ctx.focus.includes(m.id))?.id ?? out.rep.id) : undefined;
     const r = await pin(t.rep.id, outId);
@@ -229,13 +240,13 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
   };
   const row = (t: Task) => (
     <div key={t.key}>
-      <TaskRow t={t} l={ctx.live} icon={ctx.icons[t.rep.project]} on={t === current} currentId={currentId} onOpen={onOpen}
+      <TaskRow t={t} bare={!!f.topic} l={ctx.live} icon={ctx.icons[t.rep.project]} on={t === current} currentId={currentId} onOpen={onOpen}
         action={edit ? (pinned(t) ? { label: "Unpin", run: () => doUnpin(t) } : { label: "Pin", run: () => doPin(t) }) : undefined} />
       {swapFor === t.key && (
         <div className="mx-2 mb-2 rounded-xl bg-white/[0.05] p-3">
           <p className="text-[13px] font-semibold">{FOCUS_MAX} pins already. Swap out:</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {pins.map((p) => <button key={p.key} onClick={() => doPin(t, p)} className="h-11 max-w-[60%] truncate rounded-lg border border-white/10 px-3 text-[13px] active:bg-white/10">{p.rep.title}</button>)}
+            {allPins.map((p) => <button key={p.key} onClick={() => doPin(t, p)} className="h-11 max-w-[60%] truncate rounded-lg border border-white/10 px-3 text-[13px] active:bg-white/10">{p.rep.title}</button>)}
             <button onClick={() => setSwapFor(null)} className="h-11 px-3 text-[13px] text-neutral-500">Cancel</button>
           </div>
         </div>
@@ -256,15 +267,27 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
             {count("running") > 0 && <> · {count("running")} working</>}
           </p>
           <button onClick={() => { setEdit((v) => !v); setSwapFor(null); }}
-            className={`h-11 shrink-0 rounded-xl px-3 text-[13px] ${edit ? "bg-[var(--accent-fill)] font-semibold text-white" : "border border-white/10 text-neutral-300"}`}>{edit ? "Done" : "Edit pins"}</button>
+            className={`h-10 shrink-0 rounded-lg px-3 text-[13px] ${edit ? "bg-[var(--accent-fill)] font-semibold text-white" : "text-neutral-400 active:bg-white/10"}`}>{edit ? "Done" : "Edit pins"}</button>
         </div>
+        <ChatFilter chats={ctx.sessions} topic={f.topic} setTopic={f.setTopic} todayOnly={f.todayOnly} setTodayOnly={f.setTodayOnly} loud={loud} className="px-4 pb-1 pt-1" />
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2">
-          {(pins.length > 0 || edit) && head(pins.length > FOCUS_MAX ? `Pinned · ${pins.length} · limit ${FOCUS_MAX}` : `Pinned · ${pins.length} of ${FOCUS_MAX}`, "text-[var(--sakura)]")}
-          {edit && pins.length === 0 && <p className="px-3 pb-2 text-[13px] text-neutral-500">Tap Pin on up to {FOCUS_MAX} tasks to keep them on top and in your dock.</p>}
+          {(pins.length > 0 || edit) && head(allPins.length > FOCUS_MAX ? `Pinned · ${allPins.length} · limit ${FOCUS_MAX}` : `Pinned · ${allPins.length} of ${FOCUS_MAX}`, "text-[var(--sakura)]")}
+          {edit && allPins.length === 0 && <p className="px-3 pb-2 text-[13px] text-neutral-500">Tap Pin on up to {FOCUS_MAX} tasks to keep them on top and in your dock.</p>}
           {pins.map(row)}
           {head(`Active · ${active.length}`)}
-          {active.length === 0 && <p className="px-3 pb-2 text-[13px] text-neutral-500">Nothing moved in the last 6 hours.</p>}
+          {active.length === 0 && <p className="px-3 pb-2 text-[13px] text-neutral-500">{shown.length ? "Nothing moved in the last 6 hours." : "No chats with this filter."}</p>}
           {active.map(row)}
+          {today.length > 0 && (
+            <>
+              <button onClick={() => setShowToday((v) => !v)} aria-expanded={showToday}
+                className="flex h-11 w-full items-center gap-2 px-4 text-left text-[13px] text-neutral-400 active:bg-white/5">
+                <span className={`text-[16px] transition-transform ${showToday ? "rotate-90" : ""}`}>›</span>
+                <span className="flex-1">From Today · {today.length}</span>
+                {today.some((t) => t.g === "running") && <span className="text-[12px] text-[#f0a868]">{today.filter((t) => t.g === "running").length} working</span>}
+              </button>
+              {showToday && today.map(row)}
+            </>
+          )}
           {old.length > 0 && (older ? <>{head(`Older · ${old.length}`)}{old.slice(0, older).map(row)}</> : null)}
           {old.length > older && (
             <button onClick={() => setOlder((n) => n + 15)} className="flex h-11 w-full items-center px-4 text-left text-[13px] text-neutral-500 active:bg-white/5">
