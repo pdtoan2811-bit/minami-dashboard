@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-21
+- **Desktop panes no longer freeze on old content** (§3; `lib/use-agent.ts`, `app/page.tsx`). A pane that had released its idle stream now watches the transcript size and re-syncs when the chat does work on its own, such as an auto-compact, a task notification or a message from the phone. The idle poll's change check also includes the last turn's offset, so it no longer goes blind at the 400-turn cap.
+
 ### 2026-10-20
 - **Autopilot on a phone: the Live Activity view** (§29, §27, §30; `app/autopilot/PhoneAutopilot.tsx`, `lib/autopilot-ask.ts`, `app/api/autopilot/ask/route.ts`). Below the compact breakpoint, goals are a line, a card or one metric full screen, changed by tapping; each block says its verdict in words first; the rank, indexed, searches and spend metrics are charted one point per day (rank in the SEO convention, captcha days as "?"); healthy runners collapse to "✓ N running fine" and a failed one is a card; questions on a card start a chat like Today's hand-off and stay on the card with their live state. Picked from the autopilot-phone pitch, round 4. Desktop unchanged.
 - **Phone: one chat filter row, shared by the inbox and the all-chats sheet** (§23; `components/ChatFilter.tsx`, `components/Inbox.tsx`, `components/Focus.tsx`). All · ☀ Today · topics active in the last 24h (Today chats don't count) · +N older; a green dot on topics that need you. Today is one chip (off = folded, on = only Today), replacing the Fold/Show/Hide/Only switch. The sheet now folds Today chats to one line too. Chat previews no longer show `<local-command-stdout>` after a `/compact` (`lib/claude-sessions.ts`, PARSE_VERSION 5).

@@ -2776,6 +2776,15 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // (then the live turns are authoritative and the poll would just fight the stream). Skip the state
   // update when nothing changed, so an idle chat doesn't re-render every 2.5s.
   const sigRef = useRef("");
+  // What "changed" means for that skip. It used to be count + the last turn's text length, which goes
+  // blind once a long chat sits at the 400-turn window cap: the count stops moving, and a step that
+  // only ran a tool has empty text, so "400:0" matched "400:0" and the pane froze on old content —
+  // exactly the long, compacted chats (2026-10-21). The last turn's byte offset moves with every new
+  // turn; tool count and text length cover a turn that grew in place.
+  const sigOf = (turns: Turn[] | undefined) => {
+    const t = turns?.at(-1);
+    return `${turns?.length || 0}:${t?.off ?? ""}:${t?.text?.length || 0}:${t?.tools?.length || 0}`;
+  };
   // History pages fetched on demand, kept SEPARATE from `detail` because the 2.5s poll replaces `detail`
   // wholesale — merging older turns into it would mean every poll silently discarded them.
   const [older, setOlder] = useState<{ turns: Turn[]; start: number } | null>(null);
@@ -2791,13 +2800,13 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     let a = true;
     // Paint the cached copy immediately on (re)mount / session switch, then refresh in the background.
     const cached = transcriptCache.get(sessionId);
-    if (cached) { setDetail(cached); sigRef.current = `${cached.turns.length}:${cached.turns.at(-1)?.text.length || 0}`; }
+    if (cached) { setDetail(cached); sigRef.current = sigOf(cached.turns); }
     else { setDetail(null); sigRef.current = ""; }
     // Coalesced with every other caller wanting this transcript right now (lib/session-fetch.ts) —
     // a background refresh, so any in-flight request is fresh enough.
     const load = () => fetchSession(sessionId).then((d) => {
       if (!a || !d) return;
-      const sig = `${d.turns?.length || 0}:${d.turns?.at(-1)?.text?.length || 0}`;
+      const sig = sigOf(d.turns);
       if (sig === sigRef.current) return;
       sigRef.current = sig; cacheTranscript(sessionId, d); setDetail(d);
     }).catch(() => {});

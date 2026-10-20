@@ -538,6 +538,23 @@ the session is reaped, so releasing would answer for the user); the next tick re
 unattended turn is still released once it lands. Coming back re-attaches down the same path a refresh
 takes: session alive → snapshot; reaped → `detached`, falling back to disk with `resume` re-armed.
 
+**A released pane watches the disk.** It is still `live`, so the page keeps rendering `agent.turns` and
+skips its own disk poll, and with the stream closed nothing else updates them. So while released (and
+visible), `watch` in `use-agent.ts` polls the transcript every 4 s through `fetchSession` (an `unchanged`
+answer is a few bytes). The first read after release is the baseline. When the size moves, it runs
+`reconcile()` and re-attaches, so the busy state and any pending question come back with the new turns.
+
+> 🐛 **2026-10-21 — "chat log not showing after compact" (desktop, stuck on old content).** Two freezes
+> with the same look. (1) The release above: once a desktop pane had sat 5 minutes without a click, any
+> work the session did on its own (an auto-compact, a background task's notification turn, a message
+> sent from the phone, a queued follow-up) never reached it, because the stream was closed and the disk
+> poll was off. It stayed that way until the next `pointerdown`, and scrolling isn't one. Fixed by
+> `watch`. (2) The idle pane's disk poll in `app/page.tsx` skipped the re-render when `turns.length` and
+> the last turn's text length matched. At the 400-turn window cap the count stops moving, and a
+> tool-only step has empty text, so `"400:0"` matched itself and the pane froze. Long chats are the ones
+> that get compacted, which is why it read as a compact bug. The signature now includes the last
+> turn's byte offset and tool count (`sigOf`).
+
 One **structural** note: this is a single 30 s interval reading state through refs, deliberately not a
 chain of per-transition `setTimeout`s. The first version was the latter and lost its pending timer
 whenever the effect re-registered — a bug that presented as "the release never fires", which is

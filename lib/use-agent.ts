@@ -596,6 +596,8 @@ export function useAgent(paneKey: string) {
   // these are re-attached by the 30 s tick — re-attaching idle releases made every idle visible pane
   // flap release→reattach every 30 s, which also reset the server's idle reaper forever.
   const evictedRef = useRef(false);
+  // The transcript's size while released — see `watch` below. null = no baseline yet.
+  const releasedSizeRef = useRef<number | null>(null);
   // Everything the check needs lives in refs: a single interval that reads state through refs cannot
   // develop the stale-closure and cleared-timer bugs that a per-transition setTimeout chain did (an
   // earlier version silently lost its pending timer whenever the effect re-registered).
@@ -651,17 +653,43 @@ export function useAgent(paneKey: string) {
       attachingRef.current = true;
       ensureStream(true);
     };
+    // A released pane is still `live`, so app/page.tsx keeps rendering `turns` and does NOT run its
+    // disk poll — and with the stream closed, nothing updates `turns` either. Any work the session did
+    // without a click or key in THIS tab (an auto-compact, a background task's notification turn, a
+    // message sent from the phone, a queued follow-up) left the desktop pane frozen on what it showed
+    // at release, until the next pointerdown (scrolling doesn't count). Reported 2026-10-21 as "chat log
+    // not showing after compact". So watch the transcript's size while released: the poll is the
+    // cheap one (`unchanged` is a few bytes), and when it grows, rebuild `turns` from disk and
+    // re-attach so the live state (busy, a pending question) comes back too. A budget-evicted pane
+    // may find no free slot to re-attach, but its turns still follow the disk.
+    const watch = () => {
+      if (!releasedRef.current || esRef.current || !liveRef.current || detachedRef.current) { releasedSizeRef.current = null; return; }
+      if (document.visibilityState !== "visible") return;
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      fetchSession(sid).then((d) => {
+        if (typeof d?.size !== "number" || !releasedRef.current || esRef.current) return;
+        // The first read after a release is the baseline: a release only happens after minutes with
+        // no deltas, so the file is quiet at that moment.
+        if (releasedSizeRef.current == null) { releasedSizeRef.current = d.size; return; }
+        if (d.size === releasedSizeRef.current) return;
+        releasedSizeRef.current = d.size;
+        void reconcile();
+        if (document.visibilityState === "visible") reattach();
+      }).catch(() => {});
+    };
     const iv = setInterval(check, 30_000);
+    const iw = setInterval(watch, 4_000);
     document.addEventListener("visibilitychange", onVisible);
     document.addEventListener("pointerdown", onInteract, { passive: true });
     document.addEventListener("keydown", onInteract, { passive: true });
     return () => {
-      clearInterval(iv);
+      clearInterval(iv); clearInterval(iw);
       document.removeEventListener("visibilitychange", onVisible);
       document.removeEventListener("pointerdown", onInteract);
       document.removeEventListener("keydown", onInteract);
     };
-  }, [live, detached, closeStream, ensureStream, UNPIN_IDLE_MS, UNPIN_HIDDEN_MS]);
+  }, [live, detached, closeStream, ensureStream, reconcile, UNPIN_IDLE_MS, UNPIN_HIDDEN_MS]);
 
   // ── The one-shot events, and why they need a watchdog ────────────────────────────────────────────
   //
