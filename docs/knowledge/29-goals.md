@@ -94,3 +94,36 @@ chat in the vault and opens it.
   rejected). The runner clicks Search Console's *Request indexing* in the harness browser as thomas@ecvision.ai
   (`gsc-request.mjs`, ≤10 a day, never the same page within 7 days). The ledger shows each as its own row; a
   `quota` row is amber, not red — it is Google's daily cap, not a failure.
+
+## On a phone: the Live Activity view (2026-10-20)
+
+Below the compact breakpoint (`useCompact`), `/autopilot` renders `app/autopilot/PhoneAutopilot.tsx` instead of
+the stacked goal and runner cards, which made the page 8,918px tall on a 393px phone. Thomas picked it from the
+`autopilot-phone` pitch (round 4, `~/ecvision/pitches/autopilot-phone`) after three rounds that didn't read;
+the moodboard there carries the references. Desktop is unchanged.
+
+- **Sizes change by tapping the thing, like an iPhone Live Activity.** A goal is a *line* (verdict + one
+  number), a *card* (verdict, four tiles, your part, questions) or *full screen* (one metric, day by day).
+  The most urgent goal starts as a card, the rest as lines. Tapping the card's header shrinks it back.
+  Round 3 tried separate "–"/"⤢" buttons and a Hidden tray; Thomas found them unintuitive, because they were
+  controls you had to learn.
+- **Every block says its verdict in words first** (`verdict()`): *On target* · *Ranking #N* · *Not ranking yet*
+  for a position goal, *On track* / *Behind* otherwise. The page opens with a sentence ("1 goal behind, 1 runner
+  failed. 13 fine."). The goal runner's own trouble (a failed action, not loaded, a missed day) is a separate
+  amber line, because "behind" and "broken" are different news (as on desktop).
+- **Metrics, one point per day** (`days()`): a day's point is its *last* run and its spend is the sum of its
+  runs. Every calendar day from the first run to today appears, so a day with no run shows "–" instead of
+  vanishing. The Rank tile and chart use the latest *real* reading: a captcha day ("no reading") doesn't erase
+  what was last known, and it's drawn as "?", never as a result. The rank chart follows the SEO convention: #1
+  on top, a log scale, bands for top 3 / 10 / depth, a red floor band for "not in the top N", and the target as
+  a dashed line. N is the run's `depth` (50 since 2026-10-19; older runs read page 1 only, so 10).
+- **Runners: a failed one is a card, the rest one sentence.** "✓ 13 others running fine ›" opens to one row
+  each; a row grows in place to its description, schedule, last line, Run now / Pause. Protected runners ask
+  before pausing.
+- **Ask → chat, as Today's hand-off.** Questions written for the card sit on it. A tap POSTs
+  `/api/autopilot/ask` (`lib/autopilot-ask.ts`), which starts a chat with the goal's `resolveContext` or the
+  runner's description, schedule, status and last 40 log lines. A goal's chat runs in the vault; a runner's
+  runs in its `workdir`, so that project's CLAUDE.md loads. Each ask is appended to
+  `~/.minami/autopilot-asks.jsonl`: that file is the only link from a card to its chats. The card lists its
+  last three with Today's live state (working · needs you · ready). Not to be confused with `/api/autopilot`,
+  the worktree-merge switch (§9).
