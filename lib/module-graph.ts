@@ -102,6 +102,7 @@ export const NODES: ModuleNode[] = [
   // ── api routes ──────────────────────────────────────────────────────────
   { id: "r/agent", label: "/api/agent/*", sub: "send · stream · stop\npermission · answer · mode · model · live", layer: "route", row: 0, pipeline: "live" },
   { id: "r/sessions", label: "/api/bento/sessions", sub: "grid list", layer: "route", row: 1, pipeline: "read" },
+  { id: "r/openlog", label: "/api/bento/open-log", sub: "link-tap outcomes\n→ ~/.minami/open.jsonl", layer: "route", row: 2, pipeline: "read" },
   { id: "r/session", label: "/api/bento/session/[id]", sub: "transcript page · ?before=\nslim · delta (size/since)", layer: "route", row: 2, pipeline: "read" },
   { id: "r/sessionimage", label: "/api/bento/session/[id]/image", sub: "a slim transcript's\nscreenshots, on demand", layer: "route", row: 24, pipeline: "read" },
   { id: "l/transcriptslim", label: "transcript-slim.ts", sub: "base64 images → URLs", layer: "core", row: 32, pipeline: "read" },
@@ -121,6 +122,7 @@ export const NODES: ModuleNode[] = [
   { id: "c/Today", label: "app/today/Today.tsx", sub: "the morning page (§26)\nto-dos · loops · log", layer: "component", row: 40, pipeline: "live" },
   { id: "r/today", label: "/api/today", sub: "read · tick · resolve · comment\nrun heartbeat", layer: "route", row: 40, pipeline: "live" },
   { id: "l/today", label: "today.ts", sub: "~/.minami/today/<date>.json\nspawns heartbeat · today-research", layer: "core", row: 40, pipeline: "live" },
+  { id: "l/todayorigin", label: "today-origin.ts", sub: "which chats Today started\n(hand-off ids, not titles)", layer: "core", row: 42, pipeline: "read" },
   { id: "c/Ideas", label: "app/ideas/Ideas.tsx", sub: "the Ideas stash (§28)\nhot · by day · themes · drop box", layer: "component", row: 43, pipeline: "live" },
   { id: "r/ideas", label: "/api/ideas", sub: "list · star · comment · remove\nadd (multipart) · media · /video", layer: "route", row: 43, pipeline: "live" },
   { id: "l/ideas", label: "ideas.ts", sub: "~/.minami/ideas · hot/warm/cold\nspawns ~/Minami/bin/ideas-add.mjs\n→ video: ~/tiktok-studio story-card.mjs", layer: "core", row: 43, pipeline: "live" },
@@ -495,6 +497,8 @@ export const EDGES: ModuleEdge[] = [
   // API routes → core
   { from: "r/agent", to: "l/manager", kind: "import" },
   { from: "r/sessions", to: "l/sessions", kind: "import" },
+  { from: "r/sessions", to: "l/todayorigin", kind: "import" },
+  { from: "app/page", to: "r/openlog", kind: "http", label: "per link tap" },
   { from: "r/session", to: "l/sessions", kind: "import" },
   { from: "r/enrich", to: "l/sessions", kind: "import" },
   { from: "r/enrich", to: "l/enrich", kind: "import" },

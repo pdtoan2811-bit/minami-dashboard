@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-20
+- **Phone: chat links, inbox filters, topic switching** (§23, `app/page.tsx`, `components/Inbox.tsx`, `components/Focus.tsx`, `lib/today-origin.ts`, `/api/bento/sessions`, `/api/bento/open-log`). A link to a chat outside the board's 60 most recent now fetches it by id instead of waiting forever; a full set of tabs no longer opens the chat behind the one on screen; link taps are logged to `~/.minami/open.jsonl`. The inbox has topic chips and a Today switch (Fold by default). The dock reads "Topic · i of n", opens a topic sheet, and its swipe steps through the topic's chats.
+
 ### 2026-10-19
 - **Compaction no longer looks like a freeze** (§3, `lib/agent/manager.ts`, `lib/claude-sessions.ts`). The `/compact` bookkeeping rows are hidden in the pane, a compact-only turn keeps the chat's last reply as its ending, and the context meter and re-compact guard reset at the boundary.
 - **Today's "Open chat →" links open the right chat** (§26, `app/page.tsx`). `?open=` was read during render, before the App Router wrote the URL on an in-app link; now it is re-read in a mount effect.
