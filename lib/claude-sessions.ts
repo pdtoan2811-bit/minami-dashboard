@@ -177,7 +177,7 @@ const META_DERIVATION_VERSION = 5;
 // counting at zero and keep its opening title for three more messages — the exact complaint.
 // v4: `/compact` bookkeeping rows (caveat, summary, stdout) are dropped and `<command-name>` shows as the
 // bare command — without the bump a chat that already compacted keeps its markup bubbles.
-const PARSE_VERSION = 4;
+const PARSE_VERSION = 5;
 
 // Fingerprint of a file's first `len` bytes — cheap (len is capped small) and used ONLY to tell "this
 // file was purely appended to" apart from "this file was truncated and rewritten, but happens to have
@@ -312,7 +312,9 @@ function foldLine(acc: ParseAccum, line: string): void {
       const c = cleanTitle(txt.trim());
       if (c && looksLikeATopic(c)) acc.titleSeed = c;
     }
-    if (txt.trim()) { acc.lastText = txt.trim(); acc.lastRole = "user"; }
+    // A `/compact` (or any local command) leaves `<local-command-stdout>Compacted` as the newest user
+    // row; as the preview it read like the chat's last words. Harness rows don't move lastText.
+    if (txt.trim() && !r.isCompactSummary && !/^\s*<(local-command-|command-name)/.test(txt)) { acc.lastText = txt.trim(); acc.lastRole = "user"; }
     // A real ask, not a tool result (no text), a harness injection (`<task-notification>`, a
     // `<system-reminder>`, a local-command echo — all open on a tag) or a one-word nudge.
     const ask = txt.trim() && !/^\s*[<[]/.test(txt) ? cleanTitle(txt.trim()) : "";

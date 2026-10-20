@@ -15,11 +15,11 @@
 // - Nothing approves from here. A row says what's needed; the decision is made in the chat, with
 //   the transcript beside it.
 import ChatName from "@/components/ChatName";
+import { projectLabel } from "@/lib/chat-title";
 import { memo, useMemo, useRef, useState } from "react";
 import { ProjectIcon } from "@/components/ProjectIcon";
 import { groupTasks, RANK } from "@/lib/task-groups";
-import { projectKey, useProjectFilter } from "@/lib/project-filter";
-import { useSetting } from "@/lib/use-settings";
+import { ChatFilter, useChatFilter } from "@/components/ChatFilter";
 
 export type InboxSession = { id: string; project: string; title: string; tail: string; lastActivity: number; lastRole: string;
   /** Task key (lib/task-groups.ts): sessions sharing a worktree are one task, one row. */
@@ -35,12 +35,6 @@ export type Group = "need" | "failed" | "new" | "running" | "idle";
 const GROUPS: { key: Group; label: string }[] = [
   { key: "need", label: "Needs you" }, { key: "failed", label: "Failed" }, { key: "new", label: "New" },
   { key: "running", label: "Running" }, { key: "idle", label: "Idle" },
-];
-/** How chats started from the Today page sit in the list. Fold is the default: half the board can be
- *  Today hand-offs (29 of 59 on 2026-10-20), and listed one by one they buried everything else. */
-export type TodayMode = "fold" | "show" | "hide" | "only";
-const TODAY_MODES: { key: TodayMode; label: string }[] = [
-  { key: "fold", label: "Fold" }, { key: "show", label: "Show" }, { key: "hide", label: "Hide" }, { key: "only", label: "Only" },
 ];
 const NEED_VERB: Record<string, string> = { question: "Asks", plan: "Plan to review", held: "Held", permission: "Wants" };
 
@@ -82,27 +76,18 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
   head?: React.ReactNode;
 }) {
   const [showIdle, setShowIdle] = useState(5);
-  // The topic chips write the SHELL's project filter (§30), so the picker up top and these chips are
-  // one control. But the inbox matches the topic exactly, where other pages match by prefix: there,
-  // "ecvision" keeping "ecvisionContent" is sibling work worth seeing; here it put another topic's
-  // twelve chats in the list you had just narrowed.
-  const [pf, setPf] = useProjectFilter();
-  const [todayMode, setTodayMode] = useSetting<TodayMode>("inboxToday", "fold");
+  // The filter row is shared with the all-chats sheet (components/ChatFilter.tsx). Today chats fold to
+  // one line per topic unless the Today chip is on: half the board can be Today hand-offs (29 of 59 on
+  // 2026-10-20), and listed one by one they buried everything else.
+  const f = useChatFilter();
   const [openFold, setOpenFold] = useState<Set<string>>(new Set());
-  const inMode = (s: InboxSession) => todayMode === "hide" ? !s.today : todayMode === "only" ? !!s.today : true;
-  const topics = useMemo(() => {
-    const c = new Map<string, number>();
-    for (const s of sessions) if (inMode(s)) c.set(s.project, (c.get(s.project) || 0) + 1);
-    return [...c].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [sessions, todayMode]); // eslint-disable-line react-hooks/exhaustive-deps
-  const visible = useMemo(() => sessions.filter((s) => inMode(s) && (!pf || projectKey(s.project) === projectKey(pf))),
-    [sessions, todayMode, pf]); // eslint-disable-line react-hooks/exhaustive-deps
+  const visible = useMemo(() => sessions.filter(f.keep), [sessions, f.topic, f.todayOnly]); // eslint-disable-line react-hooks/exhaustive-deps
   // Frozen while a finger is down: the poll keeps landing, but the order the user is aiming at
   // doesn't move until they let go.
   const [touching, setTouching] = useState(false);
   // One row per task (lib/task-groups.ts): a task's row is its most urgent session, so the group it
   // lands in is the task's state, and the older sessions of the same worktree stay out of the list.
-  const { grouped, extra, folded } = useMemo(() => {
+  const { grouped, extra, folded, loud } = useMemo(() => {
     const gs: Record<string, Group> = {};
     for (const s of visible) gs[s.id] = groupOf(s, live[s.id], seen[s.id] || 0, floor);
     const by: Record<Group, InboxSession[]> = { need: [], failed: [], new: [], running: [], idle: [] };
@@ -110,8 +95,11 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
     // Folded Today chats: one row per topic. A Today chat that needs you or failed stays a row of its
     // own — folding a question away is how it goes unanswered.
     const folded = new Map<string, InboxSession[]>();
+    // Topics with something waiting, for the dot on their chip — over every chat, not just the filtered.
+    const loud = new Set<string>();
+    for (const s of sessions) { const x = s.id in gs ? gs[s.id] : groupOf(s, live[s.id], seen[s.id] || 0, floor); if (x === "need" || x === "failed") loud.add(s.project); }
     for (const t of groupTasks(visible, gs)) {
-      if (todayMode === "fold" && t.rep.today && t.g !== "need" && t.g !== "failed") {
+      if (!f.todayOnly && t.rep.today && t.g !== "need" && t.g !== "failed") {
         const a = folded.get(t.rep.project) || [];
         a.push(t.rep); folded.set(t.rep.project, a);
         continue;
@@ -126,8 +114,8 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
     by.new.sort((a, b) => endedAt(b) - endedAt(a));
     by.running.sort((a, b) => (live[b.id]?.turnStartedAt ?? 0) - (live[a.id]?.turnStartedAt ?? 0));
     by.idle.sort((a, b) => b.lastActivity - a.lastActivity);
-    return { grouped: by, extra, folded: [...folded].sort((a, b) => b[1][0].lastActivity - a[1][0].lastActivity) };
-  }, [visible, live, seen, floor, todayMode]);
+    return { grouped: by, extra, loud, folded: [...folded].sort((a, b) => b[1][0].lastActivity - a[1][0].lastActivity) };
+  }, [sessions, visible, live, seen, floor, f.todayOnly]);
   const last = useRef({ grouped, folded });
   if (!touching) last.current = { grouped, folded };
   const g = last.current.grouped;
@@ -152,7 +140,7 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2" onTouchStart={() => setTouching(true)} onTouchEnd={() => setTouching(false)} onTouchCancel={() => setTouching(false)}>
       {head}
-      <Filters topics={topics} pf={pf} setPf={setPf} total={sessions.filter(inMode).length} todayMode={todayMode} setTodayMode={setTodayMode} />
+      <ChatFilter chats={sessions} topic={f.topic} setTopic={f.setTopic} todayOnly={f.todayOnly} setTodayOnly={f.setTodayOnly} loud={loud} className="px-3 pb-1 pt-2" />
       {GROUPS.map(({ key, label }) => {
         const rows = g[key];
         if (!rows.length) return null;
@@ -185,7 +173,7 @@ export const Inbox = memo(function Inbox({ sessions, live, seen, floor, icons, c
                   className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/[0.06]">
                   <span className="relative shrink-0"><ProjectIcon name={project} icon={icons[project]} />{running > 0 && <Ring g="running" />}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[15px] text-neutral-200">{project} <span className="text-neutral-500">· Today</span></span>
+                    <span className="block truncate text-[15px] text-neutral-200">{projectLabel(project)} <span className="text-neutral-500">· Today</span></span>
                     <span className="block truncate text-[13px] text-neutral-500">
                       {rows.length} {rows.length === 1 ? "chat" : "chats"}{running ? ` · ${running} running` : ""}{fresh ? ` · ${fresh} new` : ""}
                     </span>
@@ -248,25 +236,3 @@ const Row = memo(function Row({ s, l, group, icon, on, chats, onOpen, onMarkRead
     </button>
   );
 });
-
-/** Topic chips (exact match, written to the shell's filter) and the Today switch. Thumb-sized: 34px. */
-function Filters({ topics, pf, setPf, total, todayMode, setTodayMode }: {
-  topics: [string, number][]; pf: string; setPf: (v: string) => void; total: number; todayMode: TodayMode; setTodayMode: (m: TodayMode) => void;
-}) {
-  const chip = (on: boolean) => `h-[34px] shrink-0 rounded-full px-3.5 text-[13px] tabular-nums ${on ? "bg-white/[0.14] text-neutral-50" : "bg-white/[0.04] text-neutral-400 active:bg-white/[0.08]"}`;
-  const active = topics.find(([t]) => projectKey(t) === projectKey(pf))?.[0];
-  return (
-    <div className="flex flex-col gap-2 px-3 pb-1 pt-2">
-      <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3 [scrollbar-width:none]">
-        <button className={chip(!pf)} onClick={() => setPf("")}>All · {total}</button>
-        {/* A filter set elsewhere (the shell picker) that matches no topic here still shows, so it can be cleared. */}
-        {pf && !active && <button className={chip(true)} onClick={() => setPf("")}>{pf} · 0 ✕</button>}
-        {topics.map(([t, n]) => <button key={t} className={chip(t === active)} onClick={() => setPf(t === active ? "" : t)}>{t} · {n}</button>)}
-      </div>
-      <div className="flex items-center gap-1.5 text-[12px] text-neutral-500">
-        <span className="pl-1 pr-1">Today chats</span>
-        {TODAY_MODES.map(({ key, label }) => <button key={key} className={chip(todayMode === key)} onClick={() => setTodayMode(key)}>{label}</button>)}
-      </div>
-    </div>
-  );
-}

@@ -236,15 +236,29 @@ causes went with it: `openChat` returned nothing when the chat's topic was filte
 *leaving* topic's tab index while `openProject` selected another — the chat opened behind the one on
 screen. It now selects the tab it swapped into.
 
-**Inbox filters (2026-10-20).** Half the board was Today hand-offs (29 of 59 chats), listed one by one.
-The inbox now opens with topic chips (`All · n`, then each topic by count) and a Today switch:
-**Fold** (default) · Show · Hide · Only, stored per device (`inboxToday`). Fold puts a topic's Today
-chats under one "<topic> · Today" row that expands in place; a Today chat that needs you or failed is
-never folded. Chips write the shell's project filter (§30) so the two are one control, but the inbox
-matches the topic *exactly* — elsewhere "ecvision" keeping "ecvisionContent" is sibling work; here it
-put another topic's twelve chats into a list you had just narrowed. "Today chat" comes from Today's own
-hand-off records (`lib/today-origin.ts`), not the "Today ·" title, which the rolling title (§5h)
-replaces after three asks.
+**Chat filter (2026-10-20, rebuilt the same day).** Half the board was Today hand-offs (29 of 59
+chats), listed one by one. The first cut — a chip per topic *ever seen* plus a four-way Today switch
+(Fold / Show / Hide / Only) on two rows, inbox only — read as "all over the place". Now one row
+(`components/ChatFilter.tsx`), the same in the inbox and the all-chats sheet: **All · ☀ Today · n ·
+| topics · +N older**.
+- **Topics** are the ones with a chat that moved in the last 24h (`RECENT_TOPIC_MS`), newest first.
+  Today hand-offs don't count towards that — a topic whose only recent chats are Today runs isn't one
+  you're working in. Older topics wait behind "+N older". A topic with a chat that needs you or
+  failed has a green dot. The chip matches the topic *exactly* — elsewhere "ecvision" keeping
+  "ecvisionContent" is sibling work; here it put another topic's twelve chats into a list you had just
+  narrowed.
+- **Today** is one chip, not a mode. Off (default): Today chats fold — one "<topic> · Today" row each in
+  the inbox, one "From Today · n" line in the sheet. On (`chatsTodayOnly`): only Today chats, unfolded.
+  A Today chat that needs you or failed is never folded.
+- Topic is the shell's project filter (§30) and Today a shared setting, so narrowing one list narrows
+  the other. In the sheet, the pin limit still counts every pin; only the rows are filtered.
+- "Today chat" comes from Today's own hand-off records (`lib/today-origin.ts`), not the "Today ·"
+  title, which the rolling title (§5h) replaces after three asks.
+
+> 🐛 **2026-10-20 — `<local-command-stdout>Compacted` as a chat's preview.** After a `/compact`, the
+> newest user row is the harness's command echo; the metadata pass took any user text as `lastText`,
+> so the inbox and sheet showed the tag as the chat's last words. Those rows (and the compact summary)
+> no longer move `lastText`/`lastRole` (`PARSE_VERSION` 5).
 
 **Moving within a topic (2026-10-20).** The dock's chip reads "Topic · 3 of 12 ▾" and opens
 `TopicSheet` — that topic's chats by urgency, Today hand-offs folded under "From Today · n" (open when
