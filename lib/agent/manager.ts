@@ -26,7 +26,7 @@ import { retitleSoon } from "../retitle";
 import { teamBriefing } from "../team-roster";
 import { releaseClaim, touchClaim, worktreeOf } from "../worktree-claim";
 import { isolate, isolateMode, moveTranscriptHome } from "../worktree";
-import { contextWindowFor, isSelectableModel, isPremiumModel, meetsMinCli, SELECTABLE_MODELS } from "../model-catalog";
+import { advisorFor, contextWindowFor, isSelectableModel, isPremiumModel, meetsMinCli, runtimeModelFor, SELECTABLE_MODELS } from "../model-catalog";
 import { sdkClaudeVersion } from "../runtime-version";
 import { cachedRepoState, repoBriefing, repoNotice } from "../repo-state";
 import { closedReadyBlocks } from "../preview-block";
@@ -64,6 +64,11 @@ function autocompactThreshold(key: string, window: number): number {
   const pct = (Number(AUTOCOMPACT_PCT) / 100) * window;
   return isAgentSessionKey(key) ? pct : Math.min(MAIN_AUTOCOMPACT_TOKENS, pct);
 }
+// Build mode's advisor reads the WHOLE transcript, uncached, at the advisor's full input price on every
+// consult (measured 2026-10-21: a 35k chat → a 35k fresh Opus read). Sonnet-for-Opus saves ~$0.04 a
+// call at 300k, so one consult there ($1.20) eats ~30 calls of saving. Past this size the advisor is
+// switched off and the pane runs as plain Sonnet; it re-arms after a compaction brings it back under.
+const ADVISOR_CTX_CAP = Number(process.env.MINAMI_DASHBOARD_ADVISOR_CTX_CAP) || 120_000;
 function autocompactLabel(key: string): string {
   return isAgentSessionKey(key) ? `${AUTOCOMPACT_PCT}%` : `${Math.round(MAIN_AUTOCOMPACT_TOKENS / 1000)}k tokens`;
 }
@@ -500,6 +505,8 @@ type Session = {
    *  change and respawn the session. This field exists so "requested Opus, running something else" is
    *  observable at all — before it, `m.model` was broadcast to the browser and thrown away server-side. */
   observedModel: string | null;
+  /** Build mode only: whether the Opus advisor is currently armed. See syncAdvisor. */
+  advisorOn: boolean;
   /** Whether this session was BORN with the fan-out instruction in its system prompt. Creation-time
    *  only, same trap as `model`: an append can't be edited on a warm query, so setFanout() answers a
    *  mid-chat toggle the way setModel() does — teardown, and the next send resumes from disk. */
@@ -843,6 +850,22 @@ async function* inputGen(s: Session): AsyncGenerator<any> {
  */
 /** "claude-fable-5-1" → "fable". The unit an alert should compare on: a dated id for the same model
  *  is not drift, a different family is. */
+/**
+ * Arm or disarm Build mode's advisor to match the context size (see ADVISOR_CTX_CAP). Live, via the
+ * SDK's applyFlagSettings — no respawn, so the warm cache survives. A no-op for every other model.
+ */
+function syncAdvisor(s: Session): void {
+  const adv = advisorFor(s.model);
+  if (!adv || !s.q || !s.ctxUsed) return;
+  const want = s.ctxUsed < ADVISOR_CTX_CAP;
+  if (want === s.advisorOn) return;
+  s.advisorOn = want;
+  Promise.resolve(s.q.applyFlagSettings({ advisorModel: want ? adv : null })).catch(() => { /* best effort — worst case the advisor stays as it was */ });
+  broadcast(s, { t: "notice", kind: "model", text: want
+    ? `Opus advisor on — chat is under ${Math.round(ADVISOR_CTX_CAP / 1000)}k`
+    : `Opus advisor off — past ${Math.round(ADVISOR_CTX_CAP / 1000)}k each consult would re-read the whole chat at Opus price` });
+}
+
 function family(id: string): string {
   return id.replace(/^claude-/, "").split("-")[0].toLowerCase();
 }
@@ -884,7 +907,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
   const s: Session = {
     key, cwd, mode, hold: false, q: null, queue: [], queued: [], queueTimer: null, waiter: null, closed: false, busy: false, sawText: false, sawThinking: false, partial: "",
     partialThinking: "",
-    sessionId: resume || null, model: picked.id, observedModel: null, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, ended: null, lastText: "", plan: [], askStartedAt: null, planPending: new Map(), paceHist: [], writePaths: [], ctxUsed: 0, compactedInTurn: false, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
+    sessionId: resume || null, model: picked.id, observedModel: null, advisorOn: !!advisorFor(picked.id) && !resume, fanout: fanout ?? DEFAULT_FANOUT, blacksmith: smithOn, turnStartedAt: null, ended: null, lastText: "", plan: [], askStartedAt: null, planPending: new Map(), paceHist: [], writePaths: [], ctxUsed: 0, compactedInTurn: false, lastAutoCompactCtx: 0, subs: new Set(), pending: new Map(), idleTimer: null, lastEventAt: Date.now(),
     smith: pre ? { ready: !pre.missing.length, issue: pre.missing.length ? pre.missing.join("; ") : null, roles: pre.roles, touches: 0, agents: 0, lastAt: null, blindTurn: false, offRole: 0, turnTouches: 0, turnWork: 0 } : null,
     phase: "idle", phaseSince: Date.now(), note: null, liveTools: new Map(), liveTasks: new Map(), settledTasks: new Map(), askTeam: null,
     toolBufs: new Map(),
@@ -987,7 +1010,11 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // raw chain of thought is never returned on current models.
       thinking: { type: "adaptive", display: "summarized" },
       settingSources: ["user", "project", "local"], // mirror the user's own CLAUDE.md / permissions / MCP
-      model: picked.id,
+      model: runtimeModelFor(picked.id),
+      // Build mode's advisor. Armed at birth only for a NEW chat: a resumed one may already be far past
+      // ADVISOR_CTX_CAP, and its first consult would re-read all of it uncached before the meter could
+      // say so — syncAdvisor arms it on the first usage report if the chat is in fact small.
+      ...(advisorFor(picked.id) && !resume ? { settings: { advisorModel: advisorFor(picked.id)! } } : {}),
       // Only set effort if explicitly pinned via env — omitting it lets the SDK/model default apply
       // (see the DEFAULT_EFFORT comment above; "default effort" was the explicit ask, not "high").
       ...(DEFAULT_EFFORT ? { effort: DEFAULT_EFFORT } : {}),
@@ -1222,6 +1249,7 @@ function handleMessage(s: Session, m: any) {
       if (u && !m.parent_tool_use_id) {
         const used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
         if (used > 0 && used !== s.ctxUsed) { s.ctxUsed = used; broadcast(s, { t: "ctx", used }); }
+        syncAdvisor(s);
       }
       // Text is already streamed via deltas; surface tool_use blocks for live "running X" feedback.
       // A message with parent_tool_use_id set came from INSIDE a subagent — its tools belong to that
@@ -1492,7 +1520,9 @@ function handleSystem(s: Session, m: any) {
         // the one that started it — can subscribe/send/reattach and stream it live (the client uses
         // `live:<sessionId>` as the canonical key for an existing session).
         store.set(SID_KEY + m.session_id, s);
-        broadcast(s, { t: "init", sessionId: m.session_id, model: m.model, blacksmith: s.blacksmith, fanout: s.fanout });
+        // A mode pick (Build) reports the mode, not the bare model it runs as: the picker's "staged" dot
+        // is pick ≠ reported, and that would otherwise read as a swap that never lands.
+        broadcast(s, { t: "init", sessionId: m.session_id, model: m.model === runtimeModelFor(s.model) ? s.model : m.model, blacksmith: s.blacksmith, fanout: s.fanout });
         // The stronger check. Preflight said the files exist; this is the CLI saying the skill and the
         // roles are IN the session. The two disagree exactly when `additionalDirectories` stopped doing
         // what the probe measured (an SDK bump is the obvious way), and that failure is otherwise
@@ -1521,7 +1551,7 @@ function handleSystem(s: Session, m: any) {
           s.observedModel = m.model;
           // Family-level compare, not exact: the CLI resolves aliases and may return a dated id for the
           // same model, which is not drift. Landing in a different FAMILY than we asked for is.
-          if (family(m.model) !== family(s.model)) {
+          if (family(m.model) !== family(runtimeModelFor(s.model))) {
             broadcast(s, { t: "notice", kind: "model", text: `asked for ${s.model}, the CLI started ${m.model}` });
           }
         }
@@ -1549,6 +1579,7 @@ function handleSystem(s: Session, m: any) {
       s.ctxUsed = md.post_tokens || 0;
       s.lastAutoCompactCtx = 0;
       broadcast(s, { t: "ctx", used: s.ctxUsed });
+      syncAdvisor(s);
       s.compactedInTurn = true;
       // Compaction happens mid-turn and can take a while; show it, then hand back to whatever's live.
       touch(s, "compacting", `compacting context ${pre} → ${post}`);
