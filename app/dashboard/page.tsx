@@ -1,12 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ModelRouting } from "@/components/ModelRouting";
-import { RoutingFlow } from "@/components/RoutingFlow";
-import { UsagePanel } from "@/components/UsagePanel";
-import { UsageHeatmap } from "@/components/UsageHeatmap";
 import { AccountsPanel } from "@/components/AccountsPanel";
-import { ProjectsPanel } from "@/components/ProjectsPanel";
+import { UsageBoard } from "@/components/UsageBoard";
 import { getPanels } from "@/lib/panels";
-import { Activity, CalendarDays, FolderClock, GitBranch, KeyRound, ListTodo, Radio, Route, Users, Zap } from "lucide-react";
+import { Activity, GitBranch, KeyRound, ListTodo, Route, Users } from "lucide-react";
 
 export const dynamic = "force-dynamic"; // panels are read from disk at request time
 export const runtime = "nodejs";
@@ -56,40 +53,24 @@ export default function Page() {
       <header className="mb-4 flex items-center gap-2 lg:mb-6">
         <div className="flex-1">
           <h1 className="text-lg font-semibold tracking-tight lg:text-2xl">Metrics</h1>
-          <p className="text-xs text-neutral-500">Live usage & model routing across your machines</p>
+          <p className="text-xs text-neutral-500">Claude usage, plan limits and model routing on this Mac</p>
         </div>
       </header>
 
+      {/* Usage reads this Mac's transcripts (lib/usage-index.ts). It replaced four cards — usage, heatmap, live
+          routing, projects — that read the metrics collector on the Hetzner box, retired 2026-10-14 (§16). */}
+      <UsageBoard />
+
       {/* Masonry: 1 column on mobile, 2 on tablet, 3 on desktop. Cards never split across columns. */}
       <div className="gap-4 [column-fill:_balance] md:columns-2 xl:columns-3 [&>*]:mb-4 [&>*]:break-inside-avoid">
-      <Card>
-        <CardHeader><CalendarDays className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Usage heatmap</CardTitle></CardHeader>
-        <CardContent><UsageHeatmap /></CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><Radio className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Live routing</CardTitle></CardHeader>
-        <CardContent><RoutingFlow /></CardContent>
-      </Card>
-
       <Card>
         <CardHeader><Route className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Model routing</CardTitle></CardHeader>
         <CardContent><ModelRouting /></CardContent>
       </Card>
 
       <Card>
-        <CardHeader><Zap className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Usage · both machines</CardTitle></CardHeader>
-        <CardContent><UsagePanel /></CardContent>
-      </Card>
-
-      <Card>
         <CardHeader><KeyRound className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Accounts · token-slayer</CardTitle></CardHeader>
         <CardContent><AccountsPanel /></CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><FolderClock className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Projects · last touched</CardTitle></CardHeader>
-        <CardContent><ProjectsPanel /></CardContent>
       </Card>
 
       {taskLog.length > 0 && (

@@ -93,8 +93,8 @@ LIVE      browser pane → /api/agent/send → manager.ts → Agent SDK → clau
 READ      claude CLI writes ~/.claude/projects/*.jsonl
           → claude-sessions.ts (incremental parse + 3 caches) → /api/bento/* → grid tiles
 
-METRICS   Stop hook on EVERY machine → metrics-server.js (Hetzner, loopback)
-          → events.jsonl → Tailscale Funnel → /dashboard cards
+METRICS   ~/.claude/projects/*.jsonl → usage-index.ts (incremental, ~/.minami/usage-index.json)
+          → /api/usage → /dashboard UsageBoard (+ tok status limit samples)   §16
 ```
 
 The live and read pipelines meet only on disk. They never call each other.
@@ -115,7 +115,8 @@ The live and read pipelines meet only on disk. They never call each other.
 | Transcript parser | `lib/claude-sessions.ts` | **shipped** | incremental meta *and* turns; windowed history paging — see §1 |
 | Transcript CLI | `bin/transcript.mjs` | **shipped** | full history, no server, no caps — see §1 |
 | Client SSE | `lib/use-agent.ts` | **shipped** | reconnect-aware |
-| Metrics collector | `server/metrics-server.js` | **shipped** | systemd on Hetzner |
+| Usage index | `lib/usage-index.ts` + `/api/usage` + `components/UsageBoard.tsx` | **shipped** | the Metrics board's usage, from this Mac's transcripts — see §16 |
+| Metrics collector | `server/metrics-server.js` | **retired** | lived on the Hetzner box (gone 2026-10-14); nothing on the board reads it now |
 | Account bridge | `app/api/accounts` | **shipped** | ground-truth identity; preferred account set in Settings |
 | Browser panel | `lib/browser-view.ts` + `components/BrowserPanel.tsx` | **shipped** | derived from tool results; observer-only — see §5b |
 | Topic creation | `components/FolderPicker.tsx` + `app/api/fs/*` | **shipped** | Recent/Browse tabs; opens on the ranked list; cwd validated — see §5d |

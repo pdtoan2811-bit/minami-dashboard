@@ -59,7 +59,7 @@ LIVE      browser pane → /api/agent/send → lib/agent/manager.ts → Agent SD
 READ      claude CLI writes ~/.claude/projects/*.jsonl
           → lib/claude-sessions.ts (incremental parse + 3 caches) → /api/bento/* → grid tiles
 
-METRICS   Stop hook on every machine → server/metrics-server.js → events.jsonl → /dashboard cards
+METRICS   claude CLI writes ~/.claude/projects/*.jsonl → lib/usage-index.ts → /api/usage → /dashboard
 ```
 
 The live and read pipelines meet only on disk. They never call each other.

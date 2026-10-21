@@ -1,13 +1,13 @@
-// Claude model-routing reference (prices per million tokens, Claude API, verified 2026-09-23).
+// Claude model-routing reference (prices per million tokens, Claude API, verified 2026-10-21).
 // The idea: spend the least while keeping output quality identical — push grunt work (search,
 // reads, status checks) down to cheaper tiers and reserve the top tier for judgement. Edit this
 // table to match the models and prices you actually use.
 //
-// NOTE: Sonnet 5 is listed at its INTRODUCTORY price ($2/$10). That runs through 2026-08-31;
-// from 2026-09-01 the standard rate is $3/$15 — bump the row then or the savings bar under-reports
-// what Sonnet turns actually cost.
+// The cache and Haiku 5.5's >100k tier are NOT modelled here — lib/usage-index.ts prices the Metrics
+// board's usage with the full table (§16). This file is the routing reference card and the rough
+// per-turn costs older surfaces show.
 
-export type Tier = "Haiku 4.5" | "Sonnet 5.5" | "Sonnet 5" | "Opus 5.5" | "Opus 5" | "Opus 4.8" | "Fable 5" | "Fable 5.1";
+export type Tier = "Haiku 5.5" | "Haiku 4.5" | "Sonnet 5.5" | "Sonnet 5" | "Opus 5.5" | "Opus 5" | "Opus 4.8" | "Fable 5" | "Fable 5.1";
 
 export const MODELS: {
   tier: Tier;
@@ -17,7 +17,9 @@ export const MODELS: {
   tint: string;
   note: string;
 }[] = [
-  { tier: "Haiku 4.5", id: "claude-haiku-4-5", in: 1, out: 5, tint: "#6cc4a1", note: "search & grunt" },
+  // Haiku 5.5 (2026-10-07): $0.10/$0.50 for prompts up to 100k, 5× that above. Listed at the ≤100k rate.
+  { tier: "Haiku 5.5", id: "claude-haiku-5-5", in: 0.1, out: 0.5, tint: "#5fd0a0", note: "search & grunt · ≤100k rate" },
+  { tier: "Haiku 4.5", id: "claude-haiku-4-5", in: 1, out: 5, tint: "#6cc4a1", note: "previous Haiku" },
   // Sonnet 5.5 BEFORE Sonnet 5 — same substring trap as the Opus and Fable pairs below:
   // "claude-sonnet-5-5" contains "claude-sonnet-5". Same price as Sonnet 5 (Claude Code 2.1.284 notes).
   { tier: "Sonnet 5.5", id: "claude-sonnet-5-5", in: 2, out: 10, tint: "#f09ab0", note: "draft & reconcile · default Sonnet" },
@@ -36,8 +38,9 @@ export const MODELS: {
 ];
 
 export const ROUTING_RULES: { work: string; tier: Tier; why: string }[] = [
-  { work: "grep / glob, read logs, fetch one number, check a status", tier: "Haiku 4.5", why: "finding ≠ thinking — 5× cheaper than Opus" },
-  { work: "summarise, draft a reply, build a task, light review", tier: "Sonnet 5.5", why: "near-Opus quality, 2× cheaper" },
+  { work: "grep / glob, read logs, fetch one number, check a status", tier: "Haiku 5.5", why: "finding ≠ thinking — 40× cheaper than Opus (Explore and scout run here)" },
+  { work: "summarise, draft a reply, build to a clear spec, light review", tier: "Sonnet 5.5", why: "near-Opus quality, 2× cheaper — the default subagent" },
+  { work: "fix, preview, wire a known feature in a chat pane", tier: "Sonnet 5.5", why: "Build mode: Sonnet works, Opus advises while the chat is under 120k" },
   { work: "decide, complex code, final synthesis, anything a human reads", tier: "Opus 5.5", why: "judgement work — don't downgrade" },
   { work: "very long autonomous run, hardest reasoning", tier: "Fable 5.1", why: "only when Opus visibly struggles — 2.5× Opus 5.5" },
 ];
