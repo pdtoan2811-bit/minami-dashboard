@@ -13,12 +13,23 @@ export const SELECTABLE_MODELS: {
   id: string; label: string; note: string; premium?: boolean;
   /** Lowest Claude Code version that will accept this id. See `meetsMinCli`. */
   minCli?: string;
+  /** A MODE rather than a model: the id the SDK is actually handed. `id` stays the pane's pick so
+   *  setModel's compare and the picker's "staged" dot keep working off one value. See runtimeModelFor. */
+  runAs?: string;
+  /** Server-side advisor the executor may consult mid-turn (`advisorModel`). See syncAdvisor in
+   *  lib/agent/manager.ts for why it is switched off past a context size. */
+  advisor?: string;
 }[] = [
   { id: "claude-opus-5-5", label: "Opus 5.5", note: "Top tier, and cheaper than Opus 5 ($4/$20). Judgement, ambiguity, code that has to be right.", minCli: "2.1.280" },
   { id: "claude-opus-5", label: "Opus 5", note: "Previous Opus. Legacy as of 2026-09-22, still selectable and still $5/$25." },
   // minCli 2.1.284: the release that added it. Below that the runtime 400s mid-turn, so the picker
   // greys the row out instead (see meetsMinCli and the Opus 5.5 row).
   { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "Fast and capable, same $2/$10 as Sonnet 5. The right default for high-volume work.", minCli: "2.1.284" },
+  // Build mode (2026-10-21 token plan, §16). Sonnet does the work at half Opus's rates and may consult
+  // Opus on a hard call. The advisor reads the WHOLE transcript uncached at Opus input price (measured:
+  // a 35k chat cost a 35k fresh Opus read per consult), so past ADVISOR_CTX_CAP it is switched off and
+  // the pane is plain Sonnet. For execution-heavy chats — preview, fix, wire, run — not for decisions.
+  { id: "claude-sonnet-5-5+opus-advisor", label: "Build · Sonnet + Opus advisor", note: "Sonnet 5.5 does the work (half Opus's rates); Opus advises on hard calls while the chat is small. For fix/preview/wire chats.", minCli: "2.1.284", runAs: "claude-sonnet-5-5", advisor: "claude-opus-5-5" },
   { id: "claude-sonnet-5", label: "Sonnet 5", note: "Previous Sonnet. Same price; keep only if 5.5 misbehaves." },
   { id: "claude-fable-5-1", label: "Fable 5.1", note: "Frontier. Long-horizon agents; when Opus falls short. 2× Opus price.", premium: true, minCli: "2.1.251" },
   // The previous Fable, kept selectable rather than retired. Not nostalgia: the runtime this app
@@ -55,6 +66,16 @@ export function meetsMinCli(version: string | null | undefined, min?: string): b
 // fixed point that makes "did the pin itself move?" an answerable question. Change it only when the
 // box's declared default genuinely changes.
 export const EXPECTED_MODEL = "claude-opus-5-5";
+
+/** The model id the SDK is handed for a catalog pick — differs from the pick only for a mode row. */
+export function runtimeModelFor(id: string): string {
+  return SELECTABLE_MODELS.find((m) => m.id === id)?.runAs || id;
+}
+
+/** The advisor a catalog pick runs with, if any. */
+export function advisorFor(id?: string | null): string | null {
+  return (id && SELECTABLE_MODELS.find((m) => m.id === id)?.advisor) || null;
+}
 
 /** Is this an id the app is willing to send? Anything else is a stale or hand-edited value. */
 export function isSelectableModel(id?: string | null): boolean {

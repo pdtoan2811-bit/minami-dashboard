@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "Minami Bento — a local, real-time mission-control for your Claude Code sessions. Every session on your machine becomes a live bento tile, with an optional cross-machine usage dashboard.",
+  "description": "Minami Bento \u2014 a local, real-time mission-control for your Claude Code sessions. Every session on your machine becomes a live bento tile, with an optional cross-machine usage dashboard.",
   "keywords": [
     "claude-code",
     "claude",
@@ -27,7 +27,8 @@
     "deploy": "bash bin/deploy.sh",
     "dev:iterate": "NODE_ENV=development NEXT_DIST_DIR=.next-dev PORT=3001 MINAMI_AUTOPILOT_DISABLE=1 next dev",
     "kb": "node public/kb/serve.mjs",
-    "check": "tsx scripts/regression.mts"
+    "check": "tsx scripts/regression.mts",
+    "tokens": "node bin/token-report.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.291",

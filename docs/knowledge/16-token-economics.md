@@ -128,4 +128,39 @@ agent-sdk/modifying-system-prompts; anthropic.com/engineering/effective-context-
 Whether the Haiku enrichment and flow-narration paths (234 of 445 sessions ran Haiku) are worth their
 cost. They are cheap enough that they did not show up against the numbers above.
 
+### 2026-10-21 — the delegation plan (measured baseline, then routing)
+
+Week of 10-14 → 10-21, `npm run tokens` (bin/token-report.mjs): **$1,102 at list prices**. Opus 5.5 was
+97% of it: 77% main threads, 20% subagents. 55% sat in calls already carrying 200k+ context, and the top 5
+sessions were 68%. 158 subagents ran on Opus (120 asked for it, 38 inherited it). Background
+automations barely register: they use Haiku/Sonnet through the toolshed's `claude.mjs`, which saves no
+transcript, so the report can't see them.
+
+The lineup since early October is Opus 5.5 $4/$20 · Sonnet 5.5 $2/$10 (cache read $0.10) ·
+**Haiku 5.5 $0.10/$0.50** (≤100k prompts, 40× under Opus). Applied **on this box only**, outside the
+repo: `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` in `~/.claude/settings.json`; `~/.claude/agents/Explore.md`
+and `scout.md` pinned to `claude-haiku-5-5`; `MINAMI_CHEAP_MODEL=claude-haiku-5-5` in `.env.local`.
+
+> 🐛 **On a subscription the built-in Explore subagent runs on Opus, not Haiku** (code.claude.com
+> sub-agents docs). And the bundled CLI 2.1.291 resolves the `haiku` alias to **Haiku 4.5** and doesn't
+> know `claude-haiku-5-5` (it warns, assumes a 200k window, and misprices it). Use the full id until the
+> runtime is ≥ 2.1.305.
+
+**Build mode** (picker row `claude-sonnet-5-5+opus-advisor`, `lib/model-catalog.ts`): Sonnet 5.5 runs
+the pane (`runAs`) and the server-side advisor tool lets it consult Opus 5.5 (`advisor`, sent as the
+SDK's `settings.advisorModel`). Measured: **the advisor re-reads the whole transcript uncached at Opus
+input price on every consult**, so a consult at 300k costs ~$1.20, about 30 calls' worth of the
+Sonnet saving. So `syncAdvisor` (lib/agent/manager.ts) disarms it live, through
+`applyFlagSettings({ advisorModel: "" })` with no respawn, once the chat passes `ADVISOR_CTX_CAP`
+(120k, `MINAMI_DASHBOARD_ADVISOR_CTX_CAP`). It re-arms when a compaction brings the chat back under. A
+resumed chat is born disarmed, because its size is unknown until the first usage report. The init
+event reports the mode id when the CLI started the mode's `runAs`, so the picker's "staged" dot
+doesn't stick.
+
+> 🐛 **`advisorModel: null` does not disarm the advisor; `""` does.** Measured through the SDK on
+> 2026-10-21: after `null` the next turn's Opus input grew 17k → 37k; after `""` it stayed flat.
+
+Expected saving (an estimate; re-measure with `npm run tokens` a week on): subagent routing 9–11%,
+Build mode on execution-heavy panes 12–15%.
+
 ---
