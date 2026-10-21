@@ -13,7 +13,9 @@
 //   • "Resolve with Minami", which hands all of the above to a vault chat that can fix what is broken.
 // Many goals = the list on the left, behind/broken first.
 //
-// A failed check is never drawn as a result: "no reading" is its own word, "not on page 1" is not a position.
+// A failed check is never drawn as a result: "no reading" is its own word. Since the Scoreboard pick (2026-10-21)
+// the detail is: one sentence, the numbers with their change vs yesterday and 7 days, the one thing that needs you,
+// and everything above folded behind one click (Scoreboard.tsx has the why).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Goal, GoalAction, GoalRun, Position } from "@/lib/goals";
@@ -21,14 +23,15 @@ import type { Automation } from "@/lib/automations";
 import { K as TK, Glass } from "../today/ui";
 import { STATUS } from "./RunnersSection";
 import { useOpenChat } from "@/components/shell/Drawer";
-import { RankChart, rankSentence } from "./RankChart";
+import { CountDelta, GoalDays, PageBars, RankLine, SC, ScoreCard, ScoreDeltas, headline, localDate, rankText, useScoreCards } from "./Scoreboard";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
 const MONO = { fontFamily: "var(--today-mono)" } as const;
 
-// "Not found (top 46)", not "Not in top 46": the number is the check's depth, and on its own it read as a rank.
-const posText = (p: Position | undefined, depth = 10) => (p === undefined ? "—" : p === "no reading" ? "Check failed" : p === null ? `Not found (top ${depth})` : `#${p}`);
+// A rank is a number (2026-10-21): "#55", or "100+" when it wasn't in the 100 results read — "46+" for the shallower
+// checks before that day. Never "not in top N": the N is the check's depth, and beside a rank it read as one.
+const posText = (p: Position | undefined, depth = 10) => (p === undefined ? "—" : p === "no reading" ? "no reading" : p === null ? `${depth >= 90 ? 100 : depth}+` : `#${p}`);
 const short = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short" });
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 const obsidian = (note: string) => `obsidian://open?vault=secondBrain&file=${encodeURIComponent(note)}`;
@@ -129,10 +132,11 @@ export function GoalsSection({ goals, total, err, busy, runNow, runnersFor }: {
         </Glass>
       )}
       {g && (
-        <div className="mt-4 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <ul className="space-y-2">
+        <div className={`mt-4 grid gap-4 ${sorted.length > 1 ? "lg:grid-cols-[260px_minmax(0,1fr)]" : ""}`}>
+          {/* The list only earns its column when there is more than one goal to pick from. */}
+          {sorted.length > 1 && <ul className="space-y-2">
             {sorted.map((x) => <GoalRow key={x.spec.id} g={x} on={x === g} onPick={() => { setSel(x.spec.id); history.replaceState(null, "", `#goal-${x.spec.id}`); }} />)}
-          </ul>
+          </ul>}
           <GoalDetail key={g.spec.id} g={g} busy={busy || g.runner.running} onRun={runNow} runners={runnersFor(g)} />
         </div>
       )}
@@ -160,15 +164,16 @@ function GoalRow({ g, on, onPick }: { g: Goal; on: boolean; onPick: () => void }
 }
 
 function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun: () => void; runners: Automation[] }) {
-  const last = g.log.at(-1);
-  const q = g.spec.target.queries;
-  const ranked = q.map((x) => last?.positions[x]).filter((p): p is number => typeof p === "number");
-  const spent = g.log.reduce((s, r) => s + (r.usd || 0), 0), paid = g.log.filter((r) => r.usd).length;
   const h = health(g);
+  const { ranks, pages } = useScoreCards(g);
+  const q = g.spec.target.queries ?? [];
+  const todo = g.today?.todos.find((t) => !t.done);
+  const asks = g.today ? g.today.todos.filter((t) => !t.done).length + g.today.questions.length : 0;
   const openChat = useOpenChat();
   const [resolving, setResolving] = useState(false);
   const [rerr, setRerr] = useState("");
   const [more, setMore] = useState(false);
+  const cards = ranks.length + (pages ? 1 : 0);
 
   const resolve = async () => {
     setResolving(true); setRerr("");
@@ -182,76 +187,79 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
   return (
     // The id is the shell's "Needs you" target (/autopilot#goal-<id>); Glass takes no id, hence the wrapper.
     <div id={`goal-${g.spec.id}`} className="min-w-0 scroll-mt-6">
-      <Glass className="p-5 sm:p-6">
-        <div className="flex flex-wrap items-start gap-3">
-          {/* basis-full below sm: a flex-1 item has a zero basis, so it never pushes the buttons to the next
-              line, flex-wrap or not; it just shrinks to one word per line beside them on a phone. */}
-          <div className="min-w-0 flex-1 basis-full sm:basis-0">
-            <div className="text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
-              <a href={obsidian(`10-19 Projects/${g.note}`)} style={{ color: K.faint }}>{g.note.toUpperCase()}</a>
-              {g.spec.started && <> · STARTED {short(g.spec.started).toUpperCase()}</>}
-            </div>
-            <h2 className="mt-1 text-[19px] font-semibold leading-snug tracking-tight">{g.spec.goal}</h2>
-            <p className="mt-1 text-[12.5px]" style={{ color: K.faint }}>Done when: {g.spec.done_when}</p>
+      <Glass className="p-6 sm:p-8">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          <div className="text-[12px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
+            <a href={obsidian(`10-19 Projects/${g.note}`)} style={{ color: K.faint }}>{g.note.toUpperCase()}</a> · {g.spec.goal.toUpperCase()}
           </div>
-          <div className="flex flex-wrap gap-2">
-            {/* The chat is the way to ACT on what this card shows: the page can only say a goal is stuck. */}
-            <button onClick={resolve} disabled={resolving} title="Send this goal's runs, failures and your part to a Minami chat that fixes what it can"
-              className="rounded-full px-3.5 py-1.5 text-[13px] font-semibold transition-opacity disabled:opacity-50"
-              style={{ background: "rgba(255,255,255,.07)", border: `1px solid ${K.line2}`, color: K.ink }}>{resolving ? "Starting…" : "Resolve with Minami"}</button>
-            <button onClick={onRun} disabled={busy} className="rounded-full px-3.5 py-1.5 text-[13px] font-semibold text-white transition-opacity disabled:opacity-50"
-              style={{ background: K.accent }}>{busy ? "Running…" : "Run now"}</button>
+          <GoalDays g={g} />
+        </div>
+        {/* One sentence, the numbers, the one thing that needs you (Shrink · Hide · Embody). */}
+        <h2 className="mt-3 text-[30px] font-semibold leading-[1.18] tracking-tight">{headline(g)}</h2>
+        <p className="mt-2 text-[17px]" style={{ color: K.muted }}>
+          Goal: #{g.spec.target.value}{q.length > 1 ? " for both" : q.length ? ` for “${q[0]}”` : ""} by {short(g.spec.deadline)}
+        </p>
+
+        <div className="mt-7 grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+          <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(${cards > 2 ? 210 : 260}px, 1fr))` }}>
+            {ranks.map((s) => (
+              <ScoreCard key={s.key} k={`Rank · ${s.label}`} color={s.color} value={rankText(s.now)} deltas={<ScoreDeltas s={s} />}>
+                <RankLine series={s.series} color={s.color} />
+                {s.now && s.day !== localDate() && <p className="mt-1.5 text-[13px]" style={{ color: K.faint }}>as of {short(s.day!)}: today's check hasn't run or didn't read</p>}
+              </ScoreCard>
+            ))}
+            {pages && (
+              <ScoreCard k="Pages in Google" color={SC.green} value={<>{pages.value}{pages.total != null && <small className="text-[20px] font-medium" style={{ color: K.faint }}> / {pages.total}</small>}</>}
+                deltas={<><CountDelta v={pages.dayDelta} label="vs yesterday" /><CountDelta v={pages.weekDelta} label="vs 7 days" /></>}>
+                <PageBars days={pages.days} />
+              </ScoreCard>
+            )}
+          </div>
+          <div className="flex flex-col gap-3">
+            {todo ? (
+              <div className="rounded-2xl p-4" style={{ background: mix(SC.amber, 7), border: `1px solid ${mix(SC.amber, 32)}` }}>
+                <div className="text-[13px] font-semibold" style={{ color: SC.amber }}>Needs you{todo.est_min ? ` · ${todo.est_min} min` : ""}{asks > 1 ? ` · ${asks - 1} more` : ""}</div>
+                <p className="mt-1 text-[16px] font-semibold leading-snug">{todo.text}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {/* Ticked on Today: the heartbeat copied it there, and Today is where the tick is stored. */}
+                  <Link href="/today" className="inline-flex h-9 items-center rounded-[11px] px-3.5 text-[14px] font-semibold text-white" style={{ background: K.accent }}>Tick on Today</Link>
+                  <button onClick={resolve} disabled={resolving} className="h-9 rounded-[11px] px-3.5 text-[14px] disabled:opacity-50" style={{ border: `1px solid ${K.line2}`, color: K.muted }}>{resolving ? "Starting…" : "Ask Minami"}</button>
+                </div>
+              </div>
+            ) : <p className="rounded-2xl px-4 py-3 text-[15px]" style={{ background: "rgba(255,255,255,.04)", color: K.muted }}>Nothing needs you today.</p>}
+            {/* The RUNNER's health on its own line: "behind" and "broken" are different news (§29). */}
+            <div className="flex items-start gap-2 rounded-xl px-3.5 py-2.5 text-[14px]" style={{ background: mix(TONE[h.tone], 10), border: `1px solid ${mix(TONE[h.tone], 30)}` }}>
+              <span className="mt-[6px] h-2 w-2 shrink-0 rounded-full" style={{ background: TONE[h.tone] }} />
+              <span style={{ color: K.muted }}>{h.text}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={onRun} disabled={busy} className="h-9 rounded-full px-3.5 text-[13.5px] font-semibold disabled:opacity-50" style={{ background: "rgba(255,255,255,.07)", border: `1px solid ${K.line2}` }}>{busy ? "Running…" : "Run now"}</button>
+              {!todo && <button onClick={resolve} disabled={resolving} className="h-9 rounded-full px-3.5 text-[13.5px] disabled:opacity-50" style={{ border: `1px solid ${K.line2}`, color: K.muted }}>{resolving ? "Starting…" : "Resolve with Minami"}</button>}
+            </div>
+            {rerr && <p className="text-[13px]" style={{ color: K.red }}>{rerr}</p>}
           </div>
         </div>
-        {rerr && <p className="mt-2 text-[12.5px]" style={{ color: K.red }}>{rerr}</p>}
 
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {/* "Not found", never "Not in top 46": the 46 is how deep the check read, and it read as a rank. */}
-          <Stat k="Rank on Google" v={ranked.length ? `#${Math.min(...ranked)}` : !last ? "—" : q.some((x) => last.positions[x] === null) ? "Not found" : posText(last.positions[q[0]])}
-            s={`goal #${g.spec.target.value}${!ranked.length && last && q.some((x) => last.positions[x] === null) ? ` · checked top ${(() => { const d = q.map((x) => last.depth?.[x] ?? 10), lo = Math.min(...d), hi = Math.max(...d); return lo === hi ? lo : `${lo}–${hi}`; })()}` : q.length > 1 ? ` · best of ${q.length} searches` : ""}`} />
-          <Stat k="Indexed" v={last?.index ? `${last.index.indexed} / ${last.index.total}` : "—"} s="pages in Google" />
-          <Stat k="Days left" v={String(Math.max(0, g.daysLeft))} s={`deadline ${short(g.spec.deadline)}`} />
-          <Stat k="Spent" v={`$${spent.toFixed(2)}`} s={`${paid} paid run${paid === 1 ? "" : "s"}`} />
-        </div>
-
-        {g.spec.target.metric === "position" && g.log.length > 0 && (
-          <div className="mt-4 rounded-2xl px-4 pb-3 pt-3.5" style={{ background: "rgba(255,255,255,.03)", border: `1px solid ${K.line}` }}>
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-              <Label>Rank, day by day</Label>
-              <span className="text-[11.5px]" style={{ color: K.faint }}>hover a day for its readings</span>
-            </div>
-            <p className="mb-2 mt-1 text-[14px] font-medium leading-snug">{rankSentence(g)}</p>
-            <RankChart g={g} />
+        <button onClick={() => setMore((v) => !v)} className="mt-6 text-[13.5px]" style={{ ...MONO, color: K.faint }}>
+          {more ? "▾" : "▸"} Every run and what it tried · your part · rules · ranks.jsonl
+        </button>
+        {more && (
+          <div>
+            {g.log.at(-1) && <p className="mt-4 text-[15px] leading-relaxed" style={{ color: K.muted }}>{g.log.at(-1)!.decision.assessment}</p>}
+            <Ledger g={g} />
+            <YourPart g={g} />
+            <More g={g} runners={runners} />
+            {g.ranks.length > 0 && (
+              <div className="mt-5">
+                <Label>{`ranks.jsonl · ~/.minami/goals/${g.spec.id} · ${g.ranks.length} line${g.ranks.length === 1 ? "" : "s"}`}</Label>
+                <div className="mt-2 overflow-hidden rounded-xl p-3 text-[12.5px] leading-relaxed" style={{ ...MONO, background: "rgba(0,0,0,.35)", color: "#b9c6e6" }}>
+                  {g.ranks.slice(-14).map((r) => <div key={`${r.date}${r.keyword}`} className="truncate">{JSON.stringify(r)}</div>)}
+                </div>
+              </div>
+            )}
           </div>
         )}
-
-        <div className="mt-3 flex items-start gap-2 rounded-xl px-3.5 py-2.5 text-[12.5px]"
-          style={{ background: mix(TONE[h.tone], 12), border: `1px solid ${mix(TONE[h.tone], 35)}` }}>
-          <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full" style={{ background: TONE[h.tone] }} />
-          <span><b>Runner:</b> <span style={{ color: K.muted }}>{h.text}</span></span>
-          {runners.length > 0 && <span className="ml-auto hidden shrink-0 sm:inline" style={{ ...MONO, color: K.faint }}>{runners.map((a) => a.scheduleText).join(" · ")}</span>}
-        </div>
-
-        {last && <p className="mt-4 text-[13.5px] leading-relaxed" style={{ color: K.muted }}>{last.decision.assessment}</p>}
-
-        <Ledger g={g} />
-        <YourPart g={g} />
-
-        <button onClick={() => setMore((v) => !v)} className="mt-5 text-[12.5px]" style={{ ...MONO, color: K.faint }}>
-          {more ? "▾" : "▸"} Page 1 today · runners · rules
-        </button>
-        {more && <More g={g} runners={runners} />}
       </Glass>
-    </div>
-  );
-}
-
-function Stat({ k, v, s }: { k: string; v: string; s: string }) {
-  return (
-    <div className="rounded-2xl px-3.5 py-3" style={{ background: "rgba(255,255,255,.045)", border: `1px solid ${K.line}` }}>
-      <Label>{k}</Label>
-      <div className="mt-0.5 text-[20px] font-bold tabular-nums">{v}</div>
-      <div className="text-[11.5px]" style={{ color: K.faint }}>{s}</div>
     </div>
   );
 }

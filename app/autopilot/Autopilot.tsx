@@ -74,7 +74,8 @@ export function Autopilot() {
             <p className="mt-4 text-[13.5px]" style={{ color: K.muted }}>No goals in {pf}.</p>
           )}
         </section>
-        <section id="runners" className="mx-auto mt-14 max-w-[860px] scroll-mt-6">
+        {/* Full width since the Day strip (2026-10-21): 24 hours on one line need the room the old card list didn't. */}
+        <section id="runners" className="mt-14 scroll-mt-6">
           <RunnersSection feed={feed} items={items} serving={serving} />
         </section>
       </div>

@@ -1,16 +1,15 @@
 "use client";
 // The Runners section of /autopilot (§27, inside §30): every job that runs on this Mac without being asked, and
-// the controls for it. It used to be its own page (/automations); it sits under Goals now, split into the jobs
-// that serve a goal and "Housekeeping", because the question it gets opened with is usually "what is working on
-// that goal, and is it OK?" — the housekeeping jobs matter, but rarely first.
+// the controls for it.
 //
-// Read top to bottom it answers, in order: what fires when (the day timeline), what's next (the countdown),
-// is anything wrong (the filter chips — red only when something failed), and then each job's own state.
-// The state is carried by colour + motion before words: the left stripe and the pill, a pulsing dot while a
-// process runs, a dimmed, hatched card when paused, and the last line the job wrote to its log.
+// Since 2026-10-21 it is the Day strip (DayStrip.tsx has the why): one sentence, the runners that need a look as
+// cards, then today on a straight line with every runner named on it. The 24-hour lane chart, the filter chips and
+// the 16 stacked cards are gone — clicking any pin, track or name opens that runner's card (state, last log line,
+// run / pause / edit / log / delete) right under the strip. Nothing that was editable before became unreachable.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Automation, Schedule } from "@/lib/automations";
 import { K as TK } from "../today/ui";
+import { AsideLine, DayStrip, DC, Tracks, dayOf, daySentence } from "./DayStrip";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d", pink: "#db6393", violet: "#a78bfa" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
@@ -34,13 +33,6 @@ const colorOf = (p?: string) => (p && PROJECT_COLOR[p]) || FALLBACK[[...(p || "x
 const KIND_ICON: Record<Schedule["kind"], string> = { daily: "◷", weekly: "▦", every: "↻", login: "⏻", always: "∞", custom: "◷" };
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-// The fixed times a job fires in a day — what the timeline draws. In-process loops carry theirs in the text.
-function marks(a: Automation): { at: string; label?: string }[] {
-  if (a.schedule.kind === "daily" || a.schedule.kind === "weekly") return [{ at: a.schedule.at, label: a.schedule.kind === "weekly" ? DAYS[a.schedule.day].slice(0, 3) : undefined }];
-  if (a.schedule.kind === "custom") return [...a.schedule.text.matchAll(/(\d{1,2}):(\d{2})\s*([a-z]+)?/gi)].map((m) => ({ at: `${m[1].padStart(2, "0")}:${m[2]}`, label: m[3] }));
-  return [];
-}
-
 function dur(sec: number) {
   if (sec < 60) return `${Math.max(1, Math.round(sec))} s`;
   if (sec < 3600) return `${Math.round(sec / 60)} min`;
@@ -49,7 +41,6 @@ function dur(sec: number) {
 }
 const ago = (iso?: string | null) => (iso ? (Date.now() - Date.parse(iso) < 60e3 ? "just now" : `${dur((Date.now() - Date.parse(iso)) / 1000)} ago`) : "");
 const inT = (iso?: string | null) => (iso ? `in ${dur(Math.max(0, (Date.parse(iso) - Date.now()) / 1000))}` : "");
-const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
 type Trash = { file: string; id: string; at: string };
 type Toast = { text: string; undo?: () => void; tone?: "bad" };
@@ -87,18 +78,21 @@ export function useAutomations() {
 }
 export type AutomationsFeed = ReturnType<typeof useAutomations>;
 
-/** `items` arrives already project-filtered; `serving` is the set of ids that work on a visible goal. */
-export function RunnersSection({ feed, items, serving }: { feed: AutomationsFeed; items: Automation[] | null; serving: Set<string> }) {
+/** `items` arrives already project-filtered. */
+// `serving` (the ids working on a visible goal) used to split the list into two bands; the strip is one day, so it
+// is accepted and unused until a goal filter on the strip earns it back.
+export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: Automation[] | null; serving: Set<string> }) {
   const { bin, err, busy } = feed;
   const [open, setOpen] = useState<{ id: string; mode: "edit" | "logs" } | null>(null);
   const [creating, setCreating] = useState(false);
-  const [filter, setFilter] = useState<Status | "all">("all");
+  const [picked, setPicked] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
-  const [, tick] = useState(0);
+  const [now, tick] = useState(0);
 
   useEffect(() => {
-    const clockT = setInterval(() => { if (!document.hidden) tick((n) => n + 1); }, 1_000); // countdowns stay true
+    // The strip's now-line and "in 4 h" move once a minute; a per-second tick redrew all 16 pins for nothing.
+    const clockT = setInterval(() => { if (!document.hidden) tick((n) => n + 1); }, 60_000);
     return () => clearInterval(clockT);
   }, []);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 7000); return () => clearTimeout(t); }, [toast]);
@@ -123,37 +117,23 @@ export function RunnersSection({ feed, items, serving }: { feed: AutomationsFeed
     return true;
   }, [act]);
 
-  const jump = useCallback((id: string) => {
-    setFilter("all");
-    requestAnimationFrame(() => document.getElementById(`auto-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  // Every pin, track, name and #auto-<id> link lands here: the runner's card opens under the strip.
+  const jump = useCallback((id: string, mode?: "edit" | "logs") => {
+    setPicked(id); setOpen(mode ? { id, mode } : null);
+    requestAnimationFrame(() => document.getElementById(`auto-${id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
     setFlash(id); setTimeout(() => setFlash(null), 1600);
   }, []);
   // The goal cards' "worked on by" rows are plain #auto-<id> links (no prop drilling across sections); catch the
-  // hash here so the card is un-filtered and flashed, not just scrolled to — or not found, if a chip hid it.
+  // hash here so the runner's card opens under the strip, not just a scroll to somewhere.
   useEffect(() => {
     const onHash = () => { const m = location.hash.match(/^#auto-(.+)$/); if (m) jump(decodeURIComponent(m[1])); };
+    onHash(); // arriving at /autopilot#auto-<id> opens it too (it only sets the pick, so the feed can still be loading)
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, [jump]);
 
-  const counts = useMemo(() => {
-    const c: Record<Status, number> = { running: 0, idle: 0, paused: 0, failing: 0, "not-loaded": 0 };
-    for (const a of items ?? []) c[a.status]++;
-    return c;
-  }, [items]);
-  // Two bands, each grouped by project: the jobs that serve a goal first, then everything else.
-  const bands = useMemo(() => {
-    const group = (list: Automation[]) => {
-      const g = new Map<string, Automation[]>();
-      for (const a of list) { const k = a.project || "Other"; g.set(k, [...(g.get(k) ?? []), a]); }
-      return [...g.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-    };
-    const shown = (items ?? []).filter((a) => filter === "all" || a.status === filter);
-    return [
-      { key: "serving", label: "Serving a goal", groups: group(shown.filter((a) => serving.has(a.id))) },
-      { key: "housekeeping", label: "Housekeeping", groups: group(shown.filter((a) => !serving.has(a.id))) },
-    ].filter((b) => b.groups.length);
-  }, [items, filter, serving]);
+  const day = useMemo(() => dayOf(items ?? []), [items, now]); // `now` ticks each minute so the now-line and "in 4 h" move
+  const pickedA = (items ?? []).find((a) => a.id === picked) ?? null;
 
   return (
     <div>
@@ -166,7 +146,7 @@ export function RunnersSection({ feed, items, serving }: { feed: AutomationsFeed
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-[22px] font-semibold tracking-tight">Runners</h2>
-          <p className="mt-1 text-[14px]" style={{ color: K.muted }}>Everything that runs on this Mac without being asked.</p>
+          {items && <p className="mt-1.5 text-[19px] font-semibold leading-snug">{daySentence(day)}</p>}
         </div>
         <Btn onClick={() => setCreating((v) => !v)} primary>{creating ? "Cancel" : "+ New automation"}</Btn>
       </div>
@@ -179,41 +159,39 @@ export function RunnersSection({ feed, items, serving }: { feed: AutomationsFeed
 
       {!items && !err && <p className="pt-16 text-center text-sm" style={{ color: K.muted }}>Loading…</p>}
       {items && items.length > 0 && <>
-        <NextUp items={items} onJump={jump} />
-        <Timeline items={items} onJump={jump} />
-        <div className="mt-6 flex flex-wrap gap-2">
-          <Chip on={filter === "all"} onClick={() => setFilter("all")} color={K.ink} n={items.length}>All</Chip>
-          {(["running", "idle", "paused", "failing", "not-loaded"] as Status[]).map((s) => (counts[s] || s === "failing") ? (
-            <Chip key={s} on={filter === s} onClick={() => setFilter(filter === s ? "all" : s)} color={STATUS[s].color} n={counts[s]} quiet={!counts[s]}>
-              {s === "failing" && !counts[s] ? "Nothing failed" : STATUS[s].label}
-            </Chip>
-          ) : null)}
-        </div>
-      </>}
-
-      {bands.map((band) => (
-        <div key={band.key} className="mt-8">
-          <h3 className="text-[15px] font-semibold tracking-tight">{band.label}
-            <span className="ml-2 text-[11.5px] font-normal" style={{ ...MONO, color: K.faint }}>{band.groups.reduce((n, [, l]) => n + l.length, 0)}</span>
-          </h3>
-          {band.groups.map(([project, list]) => (
-            <section key={project} className="mt-4">
-              <h4 className="mb-2.5 flex items-center gap-2 text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
-                <span className="inline-block h-2 w-2 rounded-full" style={{ background: colorOf(project) }} />{project.toUpperCase()}
-                <span style={{ opacity: 0.6 }}>· {list.length}</span>
-              </h4>
-              <div className="flex flex-col gap-2.5">
-                {list.map((a) => (
-                  <Card key={a.id} a={a} busy={busy} open={open?.id === a.id ? open.mode : null} flash={flash === a.id}
-                    toggle={(mode) => setOpen(open?.id === a.id && open.mode === mode ? null : { id: a.id, mode })}
-                    run={(op, extra) => run(a, op, extra)} />
-                ))}
+        {day.looks.length > 0 && (
+          <div className="mt-5 grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))" }}>
+            {day.looks.map(({ a, l }) => (
+              <div key={a.id} className="rounded-2xl p-4" style={{ background: mix(DC.amber, 7), border: `1px solid ${mix(DC.amber, 32)}` }}>
+                <div className="text-[30px] font-bold leading-none" style={{ color: DC.amber }}>{l.big}</div>
+                <div className="mt-2 text-[16px] font-semibold">{a.name}</div>
+                <p className="mt-1 text-[14.5px] leading-snug" style={{ color: K.muted }}>{l.why}</p>
+                <div className="mt-3 flex gap-2">
+                  <Btn primary onClick={() => jump(a.id, "logs")}>Open the log</Btn>
+                  {a.kind === "launchd" && a.status !== "running" && a.schedule.kind !== "always" && <Btn onClick={() => run(a, "run")}>Run now</Btn>}
+                  {!a.project && <Btn onClick={() => jump(a.id, "edit")}>Name it</Btn>}
+                </div>
               </div>
-            </section>
-          ))}
+            ))}
+          </div>
+        )}
+        <div className="mt-6 rounded-2xl px-5 pb-5 pt-4" style={{ background: K.paper, border: `1px solid ${K.line}` }}>
+          <DayStrip day={day} picked={picked} onPick={(id) => jump(id)} />
+          {day.tracks.length > 0 && <>
+            <p className="mb-2 mt-4 text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>ALL DAY · {day.tracks.length}</p>
+            <Tracks day={day} onPick={(id) => jump(id)} />
+          </>}
+          <div className="mt-4"><AsideLine day={day} onPick={(id) => jump(id)} /></div>
         </div>
-      ))}
-      {items && items.length > 0 && !bands.length && <p className="mt-10 text-center text-[14px]" style={{ color: K.muted }}>Nothing is {STATUS[filter as Status]?.label.toLowerCase()}.</p>}
+        {pickedA && (
+          <div className="mt-3">
+            <Card a={pickedA} busy={busy} open={open?.id === pickedA.id ? open.mode : null} flash={flash === pickedA.id}
+              toggle={(mode) => setOpen(open?.id === pickedA.id && open.mode === mode ? null : { id: pickedA.id, mode })}
+              run={(op, extra) => run(pickedA, op, extra)} />
+            <button type="button" onClick={() => { setPicked(null); setOpen(null); }} className="mt-1.5 text-[12.5px]" style={{ ...MONO, color: K.faint }}>close</button>
+          </div>
+        )}
+      </>}
 
       {bin.length > 0 && (
         <details className="mt-12 text-[13px]" style={{ color: K.muted }}>
@@ -238,117 +216,6 @@ export function RunnersSection({ feed, items, serving }: { feed: AutomationsFeed
           <button type="button" onClick={() => setToast(null)} aria-label="Dismiss" style={{ color: K.faint }}>✕</button>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── what's next ─────────────────────────────────────────────────────────────────────────────────────────────
-function NextUp({ items, onJump }: { items: Automation[]; onJump: (id: string) => void }) {
-  const now = Date.now();
-  const next = items.filter((a) => a.nextRun && a.schedule.kind !== "every" && Date.parse(a.nextRun) > now)
-    .sort((a, b) => Date.parse(a.nextRun!) - Date.parse(b.nextRun!))[0];
-  const running = items.filter((a) => a.status === "running" && a.schedule.kind !== "always");
-  if (!next && !running.length) return null;
-  return (
-    <div className="mt-7 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl px-4 py-3" style={{ background: `linear-gradient(90deg, ${mix(colorOf(next?.project), 14)}, ${K.paper} 70%)`, border: `1px solid ${K.line}` }}>
-      {running.map((a) => (
-        <button key={a.id} type="button" onClick={() => onJump(a.id)} className="flex items-center gap-2 text-left text-[14px]">
-          <Dot color={K.green} pulse /> <span><b className="font-medium">{a.name}</b> <span style={{ color: K.muted }}>is running{a.upSec ? ` · ${dur(a.upSec)}` : ""}</span></span>
-        </button>
-      ))}
-      {next && (
-        <button type="button" onClick={() => onJump(next.id)} className="flex flex-wrap items-baseline gap-x-3 text-left">
-          <span className="text-[11px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>NEXT</span>
-          <span className="text-[15px] font-medium">{next.name}</span>
-          <span className="tabular-nums text-[14px]" style={{ ...MONO, color: colorOf(next.project) }}>{inT(next.nextRun)}</span>
-          <span className="text-[12px]" style={{ ...MONO, color: K.faint }}>at {clock(next.nextRun!)}</span>
-        </button>
-      )}
-    </div>
-  );
-}
-
-// ── the day, as lanes ───────────────────────────────────────────────────────────────────────────────────────
-// 06:00 → 06:00, so the night's chain (plan 20:00 → card 21:30 → lock 00:30) sits in the middle instead of
-// being cut at midnight. One lane per project; fixed times are dots joined by a line, repeating jobs a
-// dotted band, always-on jobs a solid one.
-const START = 6;
-const pos = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return (((h - START + 24) % 24) + m / 60) / 24 * 100; };
-
-function Timeline({ items, onJump }: { items: Automation[]; onJump: (id: string) => void }) {
-  const lanes = useMemo(() => {
-    const g = new Map<string, Automation[]>();
-    for (const a of items) { const k = a.project || "Other"; g.set(k, [...(g.get(k) ?? []), a]); }
-    return [...g.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [items]);
-  const d = new Date();
-  const nowPct = pos(`${d.getHours()}:${d.getMinutes()}`);
-  const hours = [6, 9, 12, 15, 18, 21, 0, 3];
-  return (
-    <div className="mt-3 overflow-x-auto rounded-xl" style={{ background: K.paper, border: `1px solid ${K.line}` }}>
-      <div className="relative min-w-[660px] px-4 pb-2 pt-3">
-        <div className="mb-2 flex flex-col gap-1 text-[11px] tracking-[.08em] sm:flex-row sm:items-center sm:justify-between sm:gap-0" style={{ ...MONO, color: K.faint }}>
-          <span>YOUR 24 HOURS</span><span className="tracking-normal">● fixed time · ┈ repeats · ━ always on · ○ paused</span>
-        </div>
-        <div className="relative ml-[96px] sm:ml-[140px]">
-          <div className="absolute inset-y-0" style={{ left: `${pos("22:00")}%`, right: 0, background: "linear-gradient(90deg, transparent, rgba(110,130,255,.08) 10%)", borderRadius: 6 }} />
-          {hours.map((h) => (
-            <div key={h} className="absolute inset-y-0" style={{ left: `${pos(`${h}:00`)}%`, borderLeft: `1px dashed ${K.line}` }}>
-              <span className="absolute left-1 top-0 text-[10px]" style={{ ...MONO, color: K.faint }}>{String(h).padStart(2, "0")}:00</span>
-            </div>
-          ))}
-          <div className="relative pt-5">
-            {lanes.map(([project, list]) => <Lane key={project} project={project} list={list} onJump={onJump} />)}
-          </div>
-          <div className="pointer-events-none absolute bottom-0 top-4" style={{ left: `${nowPct}%`, borderLeft: `1.5px solid ${K.accent2}` }}>
-            <span className="absolute -top-1 -translate-x-1/2 rounded px-1 text-[10px] font-semibold" style={{ ...MONO, background: K.accent2, color: K.bg }}>now</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Lane({ project, list, onJump }: { project: string; list: Automation[]; onJump: (id: string) => void }) {
-  const c = colorOf(project);
-  // Two times close together (07:30 / 09:00) would print over each other: step the second label down a line.
-  const pts = list.flatMap((a) => marks(a).map((m) => ({ a, ...m, x: pos(m.at), row: 0 }))).sort((p, q) => p.x - q.x);
-  pts.forEach((p, i) => { if (i && p.x - pts[i - 1].x < 9 && pts[i - 1].row === 0) p.row = 1; });
-  const rows = pts.some((p) => p.row) ? 2 : 1;
-  const bands = list.filter((a) => a.schedule.kind === "every" || a.schedule.kind === "always");
-  const top = pts.length ? 24 + rows * 12 : 8; // where the bands start, under the labels
-  const h = Math.max(44, top + bands.length * 7 + 6);
-  return (
-    <div className="relative" style={{ height: h, borderTop: `1px solid ${mix(K.line, 50)}` }}>
-      <span className="absolute -left-[96px] top-[12px] w-[88px] truncate sm:-left-[140px] sm:w-[132px] text-[12px]" style={{ color: K.muted }} title={project}>
-        <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: c }} />{project}
-      </span>
-      {bands.map((a, i) => {
-        const off = a.status === "paused" || a.status === "not-loaded";
-        const gap = a.schedule.kind === "every" ? Math.max(5, a.schedule.minutes / 1440 * 640) : 0;
-        return (
-          <button key={a.id} type="button" onClick={() => onJump(a.id)} title={`${a.name} · ${a.scheduleText}${off ? " · paused" : ""}`}
-            className="absolute left-0 right-0 rounded-full" style={{ top: top + i * 7, height: 3, opacity: off ? 0.2 : 0.75,
-              background: a.schedule.kind === "always" ? c : `repeating-linear-gradient(90deg, ${c} 0 2px, transparent 2px ${gap}px)` }} />
-        );
-      })}
-      {pts.length > 1 && <div className="absolute h-[2px] rounded-full" style={{ top: 17, left: `${pts[0].x}%`, width: `${pts[pts.length - 1].x - pts[0].x}%`, background: `linear-gradient(90deg, ${mix(c, 20)}, ${mix(c, 55)})` }} />}
-      {pts.map((p, i) => {
-        const off = p.a.status === "paused" || p.a.status === "not-loaded";
-        const bad = p.a.status === "failing";
-        const col = bad ? K.red : c;
-        return (
-          <button key={`${p.a.id}-${i}`} type="button" onClick={() => onJump(p.a.id)} title={`${p.at} · ${p.a.name}${p.label ? ` (${p.label})` : ""}${off ? " · paused" : ""}`}
-            className="group absolute -translate-x-1/2" style={{ left: `${p.x}%`, top: 11 }}>
-            <span className="block h-[14px] w-[14px] rounded-full transition-transform group-hover:scale-125"
-              style={{ background: off ? K.bg : col, border: `2px ${off ? "dashed" : "solid"} ${col}`, boxShadow: off ? "none" : `0 0 12px ${mix(col, 60)}` }} />
-            {p.row > 0 && <span className="absolute left-1/2 top-[14px] h-[10px] w-px -translate-x-1/2" style={{ background: mix(col, 40) }} />}
-            <span className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] tabular-nums" style={{ ...MONO, top: 16 + p.row * 12, color: off ? K.faint : K.muted }}>
-              {p.at}{p.label ? ` ${p.label}` : ""}
-            </span>
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -513,15 +380,6 @@ function Dot({ color, pulse, small }: { color: string; pulse?: boolean; small?: 
 }
 function Meta({ icon, color, children }: { icon: string; color?: string; children: React.ReactNode }) {
   return <span className="inline-flex items-center gap-1.5 tabular-nums" style={{ color: color ?? K.faint }}><span style={{ fontSize: 10 }}>{icon}</span>{children}</span>;
-}
-function Chip({ children, on, onClick, color, n, quiet }: { children: React.ReactNode; on: boolean; onClick: () => void; color: string; n: number; quiet?: boolean }) {
-  return (
-    <button type="button" onClick={onClick} disabled={quiet} className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12.5px] transition-colors"
-      style={{ background: on ? mix(color, 20) : "rgba(255,255,255,.04)", border: `1px solid ${on ? mix(color, 60) : K.line}`, color: quiet ? K.faint : on ? K.ink : K.muted, cursor: quiet ? "default" : "pointer" }}>
-      {quiet ? <span style={{ color: K.green }}>✓</span> : <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: color }} />}
-      {children}{!quiet && <span className="tabular-nums" style={{ ...MONO, color: K.faint }}>{n}</span>}
-    </button>
-  );
 }
 function Switch({ on, onClick, busy, label }: { on: boolean; onClick: () => void; busy?: boolean; label: string }) {
   return (

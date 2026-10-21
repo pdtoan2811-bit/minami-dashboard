@@ -146,3 +146,37 @@ Above it, `rankSentence()` says where it stands in one line. The words changed w
 Google · Not found · goal #1 · checked top 46–49", the ledger says "Not found (top 46)" and "Check failed", and
 the phone says "Not found → goal #1" instead of ">46". `days()` moved here from `PhoneAutopilot.tsx`; the phone's
 Rank screen renders the same chart (`compact`).
+
+## The Scoreboard: a rank is a number (2026-10-21, later the same day)
+
+The chart above didn't survive the day. Thomas: "what the hell with the not in top 46??? Can it just be like, rank: 46
+… with some sort of a small log or json … as mini database". Two causes, both fixed:
+
+- **The check was too shallow.** `serp()` stopped after 5 pages, so "ecvision" at #55 read as "not found". The runner
+  now reads 10 pages (100 results) for every target query (vault `tools/goals/goal.mjs`, `sensors.mjs`).
+- **There was no per-keyword history.** The runner now upserts one line per keyword per day into
+  `~/.minami/goals/<id>/ranks.jsonl`: `{date, keyword, rank, read, url, gsc_position}`. `rank` is a number or `null`,
+  and null means "read `read` results, it wasn't there". A failed check writes no line, so a missing day is "no
+  reading", never a result. Seeded 2026-10-21 with #55 / null (98 read). `lib/goals.ts` reads it as `Goal.ranks`.
+
+The detail is now `app/autopilot/Scoreboard.tsx` (picked from the `autopilot` pitch, V1):
+- **The headline is a sentence from the rows:** "“ecvision” is #55 on Google. “ecvision ai” isn't in the top 100 yet."
+- **Score cards:** one per `target.queries` entry plus "Pages in Google", so a new goal gets its cards from its spec.
+  - Each card has the number in rank form, `#55` or `100+`. Only the checks from before 10-21, which read about 46
+    results, show as `46+`.
+  - It has a ▲/▼ chip vs yesterday and vs 7 days. A lower rank is better, so ▲ is green. With no earlier row the chip
+    reads "first reading".
+  - It has a 30-day line: log scale, #1 at the top, 100+ on the floor, and a gap for a day with no reading.
+- **Beside the cards:** the one thing that needs you, then the runner's health line, then Run now.
+- **One click away:** the assessment, the run ledger, your part, the rules and the last 14 `ranks.jsonl` lines.
+- **Goal days:** a straight bar in the header, "day 7 of 28". They used to be an arc on the runners' ring.
+- **Removed:** `RankChart.tsx` and its four stat tiles. `days()` moved into `Scoreboard.tsx`.
+- **The phone (`PhoneAutopilot.tsx`):**
+  - The card's tiles are now the same rows.
+  - The Rank screen is the keyword's line plus `ranks.jsonl` listed day by day.
+  - The verdict pill says `#55` or `100+`, never "Not ranking yet".
+
+> 🐛 **"Not in top 46" read as a rank, twice.** The first fix ("Not found (top 46)", plus a lane for it on the chart)
+> kept the depth on screen beside the rank, so it read as one all the same. The real fix was to read deep enough to
+> get a number and to store that number per day. Rule: on this page a rank is always a number (`#N` or `100+`), with
+> its change.

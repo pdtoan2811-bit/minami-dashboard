@@ -1,0 +1,74 @@
+#!/bin/bash
+# minami-run <id> -- <command> [args...]
+#
+# WHY: launchd keeps no run history, so "last run" on the dashboard was a log file's mtime.
+# This wrapper records every run of a launchd job to a JSONL file, and otherwise stays invisible:
+# stdout/stderr pass through unchanged (the plists' StandardOutPath logs keep working) and the
+# exit code is the child's. SIGTERM/SIGINT (launchd stops jobs with SIGTERM) are forwarded to the
+# child and the end record is still written.
+#
+# RECORDS (one JSON object per line, appended to ${MINAMI_RUNS_FILE:-~/.minami/runs.jsonl}):
+#   start: {"id","event":"start","start":ISO}          written at launch, so a long/always-on job shows as running
+#   end:   {"id","event":"end","start","end","exit","secs","last_line"}   last_line = last non-empty output line, <=300 chars
+# A start with no later end for the same id (and start time) = still running (or killed hard).
+#
+# Env: MINAMI_RUNS_FILE overrides the record file (used by tests).
+# Deps: /bin/bash + /opt/homebrew/bin/node only (launchd PATH is minimal). Install copy: ~/.minami/bin/minami-run
+# (plists point there, never at a worktree).
+
+NODE=/opt/homebrew/bin/node
+RUNS="${MINAMI_RUNS_FILE:-$HOME/.minami/runs.jsonl}"
+
+if [ $# -lt 3 ] || [ "$2" != "--" ]; then
+  echo "usage: minami-run <id> -- <command> [args...]" >&2
+  exit 64
+fi
+ID="$1"; shift 2
+
+# Appends one whole line with a single O_APPEND write, so concurrent jobs can't interleave.
+record() { # $1=event
+  MR_FILE="$RUNS" MR_ID="$ID" MR_EVENT="$1" MR_START="$START" MR_END="$END" \
+  MR_EXIT="$CODE" MR_SECS="$SECS" MR_LAST="$LAST" "$NODE" -e '
+    const e = process.env, fs = require("fs"), path = require("path");
+    const o = { id: e.MR_ID, event: e.MR_EVENT, start: e.MR_START };
+    if (e.MR_EVENT === "end") {
+      o.end = e.MR_END; o.exit = Number(e.MR_EXIT); o.secs = Number(e.MR_SECS);
+      o.last_line = Array.from(e.MR_LAST || "").slice(0, 300).join("");
+    }
+    fs.mkdirSync(path.dirname(e.MR_FILE), { recursive: true });
+    fs.appendFileSync(e.MR_FILE, JSON.stringify(o) + "\n");
+  ' 2>/dev/null
+}
+
+T0=$(date +%s); START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+record start
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/minami-run.XXXXXX")
+mkfifo "$TMP/f"
+# Keeps only the latest non-empty line (bounded memory, and already on disk if we must stop waiting).
+# Pass-through is done by tee below, so this reader never alters what the log sees.
+: > "$TMP/last"
+while IFS= read -r l || [ -n "$l" ]; do
+  l=${l//$'\r'/}
+  [[ $l =~ [^[:space:]] ]] && printf '%s' "${l:0:2000}" > "$TMP/last"
+done < "$TMP/f" &
+TAILPID=$!
+
+"$@" > >(tee "$TMP/f") 2> >(tee "$TMP/f" >&2) &
+CHILD=$!
+trap 'kill -TERM "$CHILD" 2>/dev/null' TERM
+trap 'kill -INT "$CHILD" 2>/dev/null' INT
+
+wait "$CHILD"; CODE=$?
+# A trapped signal makes wait return early (>128) while the child is still alive: keep waiting.
+while kill -0 "$CHILD" 2>/dev/null; do wait "$CHILD"; CODE=$?; done
+# tail ends once both tees close (all output flushed). A grandchild that outlives the child can hold
+# the pipe open forever, so give it ~3s and then stop waiting rather than delay the end record.
+for _ in 1 2 3 4 5 6; do kill -0 "$TAILPID" 2>/dev/null || break; sleep 0.5; done
+kill "$TAILPID" 2>/dev/null; wait "$TAILPID" 2>/dev/null
+
+LAST=$(cat "$TMP/last")
+rm -rf "$TMP"
+END=$(date -u +%Y-%m-%dT%H:%M:%SZ); SECS=$(( $(date +%s) - T0 ))
+record end
+exit "$CODE"

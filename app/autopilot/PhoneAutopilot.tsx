@@ -16,7 +16,12 @@
 //
 // The desktop page is unchanged: this replaces the stacked goal and runner cards only below the compact breakpoint,
 // where they made the page 8,918px tall.
-import { RankChart, days, type Day } from "./RankChart";
+//
+// 2026-10-21, after the Scoreboard and Day strip picks: the card's four tiles became the Scoreboard's rows (a rank is
+// a number, #55 or 100+, with ▲/▼ vs yesterday and vs 7 days, read from ranks.jsonl), and the runners became the day
+// running top to bottom (DayStrip.tsx's PhoneDay) — a runner that needs a look opens as its card where it sits.
+import { CountDelta, days, type Day, PageBars, RankLine, ScoreDeltas, headline, rankScores, rankText, useScoreCards } from "./Scoreboard";
+import { PhoneDay, dayOf, daySentence, lookOf } from "./DayStrip";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Goal, GoalRun, Position } from "@/lib/goals";
 import type { Automation } from "@/lib/automations";
@@ -31,16 +36,8 @@ const tint = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transpare
 const localDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
 const dayLabel = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short" });
 const firstSentence = (s = "") => (s.match(/^.*?[.!?](\s|$)/)?.[0] ?? s).trim();
-const ago = (iso?: string | null) => {
-  if (!iso) return "";
-  const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
-  return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
-};
 
 // ── the goal's numbers, one point per day ────────────────────────────────────────────────────────────────
-/** ">50" means the check read 50 results and we weren't in them; "?" means the check itself failed. */
-// "Not found", never ">46": the number is how deep the check read, and alone it read as a rank (2026-10-21).
-const posLabel = (p: Position | undefined, _depth = 10) => (typeof p === "number" ? `#${p}` : p === null ? "Not found" : p === "no reading" ? "?" : "–");
 /** The latest real reading for a query: a captcha day doesn't erase what we last knew. */
 function lastReading(g: Goal, q: string): { run: GoalRun; p: Position } | null {
   for (let i = g.log.length - 1; i >= 0; i--) { const p = g.log[i].positions[q]; if (p !== undefined && p !== "no reading") return { run: g.log[i], p }; }
@@ -53,9 +50,11 @@ function verdict(g: Goal): Verdict {
   const last = g.log.at(-1);
   if (!last) return { word: "Not measured yet", color: K.faint };
   if (g.spec.target.metric === "position") {
+    const rows = rankScores(g).map((x) => x.now?.rank).filter((r): r is number => typeof r === "number");
+    if (rows.length) nums.splice(0, nums.length, ...rows);
     if (nums.length && Math.min(...nums) <= g.spec.target.value) return { word: "On target", color: C.green };
     if (nums.length) return { word: `Ranking #${Math.min(...nums)}`, color: last.decision.on_track ? C.blue : C.amber };
-    return { word: "Not ranking yet", color: C.amber };
+    return { word: "100+", color: C.amber };
   }
   return last.decision.on_track ? { word: "On track", color: C.green } : { word: "Behind", color: C.amber };
 }
@@ -105,23 +104,6 @@ const Q = ({ children, onClick, busy }: { children: ReactNode; onClick: () => vo
   <button onClick={onClick} disabled={busy} className="inline-flex h-9 items-center whitespace-nowrap rounded-full px-3.5 text-[13px] transition-opacity active:opacity-70 disabled:opacity-50"
     style={{ background: tint(C.blue, 15), color: C.blue }}>{busy ? "Starting…" : children}</button>
 );
-function Tile({ label, value, ctx, tone, onClick, children }: { label: string; value: ReactNode; ctx: ReactNode; tone?: string; onClick: () => void; children?: ReactNode }) {
-  return (
-    <button onClick={onClick} className="flex min-w-0 flex-col items-start gap-1 rounded-2xl px-3 py-2.5 text-left active:bg-white/[0.08]" style={{ background: "rgba(0,0,0,.24)" }}>
-      <span className="text-[10.5px] font-semibold tracking-[.09em]" style={{ color: K.faint }}>{label}</span>
-      <b className="text-[24px] font-semibold leading-none" style={{ color: tone }}>{value}</b>
-      {children}
-      <span className="text-[11.5px]" style={{ color: K.faint }}>{ctx}</span>
-    </button>
-  );
-}
-/** One dot per day for the last seven days: red = outside the results read, blue = ranked, grey = no reading. */
-function Week({ ds, q }: { ds: Day[]; q: string }) {
-  return <span className="flex gap-[3px]">{ds.slice(-7).map((d) => {
-    const p = d.run?.positions[q];
-    return <i key={d.date} className="h-[9px] w-[9px] rounded-[3px]" style={{ background: typeof p === "number" ? C.blue : p === null ? tint(C.red, 80) : "rgba(255,255,255,.16)" }} />;
-  })}</span>;
-}
 function AskRows({ asks, live, kind, id, onOpen }: { asks: Ask[]; live: ReturnType<typeof useHandoffLive>; kind: Ask["kind"]; id: string; onOpen: (sid: string) => void }) {
   const mine = asks.filter((a) => a.kind === kind && a.id === id).slice(-3).reverse();
   if (!mine.length) return null;
@@ -154,18 +136,15 @@ function GoalLine({ g, onGrow }: { g: Goal; onGrow: () => void }) {
     </button>
   );
 }
-function GoalCard({ g, ds, a, onShrink, onMetric, onResolve, resolving }: {
-  g: Goal; ds: Day[]; a: Asks & { live: ReturnType<typeof useHandoffLive>; open: (sid: string) => void };
+function GoalCard({ g, a, onShrink, onMetric, onResolve, resolving }: {
+  g: Goal; a: Asks & { live: ReturnType<typeof useHandoffLive>; open: (sid: string) => void };
   onShrink: () => void; onMetric: (m: Metric) => void; onResolve: () => void; resolving: boolean;
 }) {
-  const v = verdict(g), last = g.log.at(-1), q = g.spec.target.queries ?? [];
+  const v = verdict(g);
   const trouble = machineTrouble(g);
-  const idx = ds.filter((d) => d.run?.index), cur = idx.at(-1)?.run?.index, prev = idx.at(-2)?.run?.index;
-  const delta = cur && prev ? cur.indexed - prev.indexed : null;
-  const best = q.map((x) => ({ x, r: lastReading(g, x) })).sort((m, n) => (typeof m.r?.p === "number" ? m.r.p : 1e9) - (typeof n.r?.p === "number" ? n.r.p : 1e9))[0];
-  const total = g.spec.started ? Math.max(1, Math.round((Date.parse(g.spec.deadline) - Date.parse(g.spec.started)) / 86400_000)) : null;
+  const cards = useScoreCards(g);
   const todo = g.today?.todos.find((t) => !t.done);
-  const ranking = v.word === "Not ranking yet";
+  const ranking = v.word === "100+";
   const qs = [ranking ? "Why no rank yet?" : "What moved this week?", "What do I do this week?", "Report"];
   const ask = (s: string) => a.ask("goal", g.spec.id, s === "Report" ? "Write me a short report on this goal: where it stands, what changed day by day, and what's next." : s);
   return (
@@ -173,24 +152,26 @@ function GoalCard({ g, ds, a, onShrink, onMetric, onResolve, resolving }: {
       {/* Tapping the header shrinks the card back to its line: the same thing you tapped to grow it. */}
       <button onClick={onShrink} className="block w-full text-left" aria-label="Shrink">
         <span className="flex items-center gap-2"><Pill v={v} /><span className="ml-auto truncate text-[12px]" style={{ color: K.faint }}>Goal · {g.note}</span><span className="text-[13px]" style={{ color: K.faint }}>⌃</span></span>
-        <span className="mt-2 block text-[16px] font-semibold leading-snug">{g.spec.goal}</span>
-        {last && <span className="mt-0.5 block text-[13px] leading-snug" style={{ color: K.muted }}>{firstSentence(last.decision.assessment)}</span>}
+        <span className="mt-2 block text-[19px] font-semibold leading-snug">{headline(g)}</span>
+        <span className="mt-0.5 block text-[14px] leading-snug" style={{ color: K.muted }}>{g.spec.goal} · {Math.max(0, g.daysLeft)} days left</span>
       </button>
-      {trouble && <p className="mt-2 flex items-start gap-2 text-[12.5px]" style={{ color: "#f0c08a" }}><i className="mt-[5px] h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: C.amber }} />{trouble}</p>}
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        {g.spec.target.metric === "position" && best && (
-          <Tile label="RANK" onClick={() => onMetric("rank")} tone={typeof best.r?.p === "number" ? (best.r.p <= g.spec.target.value ? C.green : undefined) : C.red}
-            value={best.r ? posLabel(best.r.p, best.r.run.depth?.[best.x]) : "–"} ctx={`target #${g.spec.target.value}${q.length > 1 ? ` · best of ${q.length}` : ""}`}>
-            <Week ds={ds} q={best.x} />
-          </Tile>
+      {trouble && <p className="mt-2 flex items-start gap-2 text-[13.5px]" style={{ color: "#f0c08a" }}><i className="mt-[5px] h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: C.amber }} />{trouble}</p>}
+      {/* The Scoreboard's rows: the number on the right, its change under it, its line under that. Tap = full screen. */}
+      <div className="mt-3 space-y-2">
+        {cards.ranks.map((sc) => (
+          <button key={sc.key} onClick={() => onMetric("rank")} className="block w-full rounded-2xl px-3.5 py-3 text-left active:bg-white/[0.08]" style={{ background: "rgba(0,0,0,.24)" }}>
+            <span className="flex items-baseline gap-2"><i className="h-[9px] w-[9px] shrink-0 rounded-full" style={{ background: sc.color }} /><span className="min-w-0 flex-1 truncate text-[15px]" style={{ color: K.muted }}>{sc.label}</span><b className="text-[28px] font-bold leading-none tabular-nums">{rankText(sc.now)}</b></span>
+            <span className="mt-1.5 flex flex-wrap gap-1.5"><ScoreDeltas s={sc} /></span>
+            <span className="mt-2 block"><RankLine series={sc.series} color={sc.color} h={44} /></span>
+          </button>
+        ))}
+        {cards.pages && (
+          <button onClick={() => onMetric("indexed")} className="block w-full rounded-2xl px-3.5 py-3 text-left active:bg-white/[0.08]" style={{ background: "rgba(0,0,0,.24)" }}>
+            <span className="flex items-baseline gap-2"><i className="h-[9px] w-[9px] shrink-0 rounded-full" style={{ background: C.green }} /><span className="flex-1 text-[15px]" style={{ color: K.muted }}>Pages in Google</span><b className="text-[28px] font-bold leading-none tabular-nums">{cards.pages.value}<i className="not-italic text-[15px] font-medium" style={{ color: K.faint }}>/{cards.pages.total}</i></b></span>
+            <span className="mt-1.5 flex flex-wrap gap-1.5"><CountDelta v={cards.pages.dayDelta} label="1 day" /><CountDelta v={cards.pages.weekDelta} label="7 days" /></span>
+            <span className="mt-2 block"><PageBars days={cards.pages.days} h={34} /></span>
+          </button>
         )}
-        <Tile label="INDEXED" onClick={() => onMetric("indexed")} value={cur ? <>{cur.indexed}<i className="not-italic text-[14px] font-medium" style={{ color: K.faint }}>/{cur.total}</i></> : "–"}
-          ctx={delta ? <span style={{ color: delta > 0 ? C.green : C.red }}>{delta > 0 ? "▲" : "▼"}{Math.abs(delta)} since last run</span> : "pages in Google"} />
-        <Tile label="SEARCHES" onClick={() => onMetric("searches")} value={String(searches(last ?? null, q))} ctx="Search Console · 7d" />
-        <Tile label="TIME" onClick={() => onMetric("time")} value={<>{Math.max(0, g.daysLeft)}<i className="not-italic text-[14px] font-medium" style={{ color: K.faint }}> days</i></>}
-          ctx={total ? `day ${Math.min(total, total - g.daysLeft)} of ${total}` : `deadline ${dayLabel(g.spec.deadline)}`}>
-          {total && <span className="flex w-full gap-[2px]">{Array.from({ length: Math.min(total, 40) }).map((_, i) => <i key={i} className="h-[5px] flex-1 rounded-[2px]" style={{ background: i < Math.round(((total - g.daysLeft) / total) * Math.min(total, 40)) ? C.blue : "rgba(255,255,255,.1)" }} />)}</span>}
-        </Tile>
       </div>
       {todo && (
         <div className="mt-3 flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: tint(C.green, 7), border: `1px solid ${tint(C.green, 25)}` }}>
@@ -220,7 +201,7 @@ function GoalFull({ g, ds, metric, setMetric, onClose, a }: { g: Goal; ds: Day[]
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        {metric === "rank" && <RankView g={g} ds={ds} q={q[qi] ?? q[0]} qs={q} qi={qi} setQi={setQi} />}
+        {metric === "rank" && <RankView g={g} qi={qi} setQi={setQi} />}
         {metric === "indexed" && <BarsView title="pages indexed" ds={ds} get={(r) => r.index?.indexed ?? null} max={(r) => r.index?.total ?? null} unit={(d) => d.run?.index ? `of ${d.run.index.total}` : ""} sub="Pages Google has indexed from the sitemap" />}
         {metric === "searches" && <BarsView title="searches seen" ds={ds} get={(r) => searches(r, q)} sub={`Search Console impressions for ${q.map((x) => `“${x}”`).join(" and ")}, last 7 days at each run`} />}
         {metric === "time" && <TimeView g={g} ds={ds} />}
@@ -245,25 +226,27 @@ function Big({ verdict: v, value, rest, sub }: { verdict: Verdict; value: string
     </>
   );
 }
-function RankView({ g, ds, q, qs, qi, setQi }: { g: Goal; ds: Day[]; q: string; qs: string[]; qi: number; setQi: (i: number) => void }) {
-  const lr = lastReading(g, q);
-  const depth = Math.max(10, ...g.log.map((r) => r.depth?.[q] ?? 10));
-  const checked = ds.filter((d) => d.run && d.run.positions[q] !== "no reading" && d.run.positions[q] !== undefined).length;
-  const fails = ds.filter((d) => d.run?.positions[q] === "no reading").length;
-  const above = [...g.log].reverse().find((r) => r.above?.[q]?.length)?.above?.[q] ?? [];
-  const aboveDay = [...g.log].reverse().find((r) => r.above?.[q]?.length);
-  const v: Verdict = typeof lr?.p === "number" ? (lr.p <= g.spec.target.value ? { word: "On target", color: C.green } : { word: `Ranking #${lr.p}`, color: C.amber }) : { word: "Not ranking yet", color: C.red };
+// One keyword, full screen: its number, its change, and every day of ranks.jsonl as a line and a list — the mini
+// database itself, readable. #1 at the top; 100+ on the floor; a day with no line (failed or not run) is a gap.
+function RankView({ g, qi, setQi }: { g: Goal; qi: number; setQi: (i: number) => void }) {
+  const all = rankScores(g, 60), sc = all[qi] ?? all[0];
+  if (!sc) return null;
+  const rows = g.ranks.filter((r) => r.keyword === sc.key).sort((a, b) => b.date.localeCompare(a.date));
+  const v: Verdict = typeof sc.now?.rank === "number" ? (sc.now.rank <= g.spec.target.value ? { word: "On target", color: C.green } : { word: `#${sc.now.rank}`, color: C.amber }) : { word: sc.now ? "100+" : "No reading yet", color: C.red };
   return (
     <>
-      {qs.length > 1 && <div className="mb-3 flex gap-1.5">{qs.map((x, i) => <button key={x} onClick={() => setQi(i)} className="h-8 rounded-full px-3 text-[13px]" style={i === qi ? { background: tint(C.blue, 22), color: "#fff" } : { background: "rgba(255,255,255,.05)", color: K.muted }}>“{x}”</button>)}</div>}
-      <Big verdict={v} value={lr ? posLabel(lr.p, lr.run.depth?.[q]) : "–"} rest={`→ goal #${g.spec.target.value}`} sub={`“${q}”${lr?.p === null ? ` · not in the top ${lr.run.depth?.[q] ?? 10}` : ""} · checked ${checked} of ${ds.length} days${fails ? ` (${fails} failed)` : ""}`} />
-      <div className="mt-3"><RankChart g={g} compact height={230} /></div>
-      {above.length > 0 && aboveDay && (
-        <>
-          <p className="mt-5 text-[10.5px] font-semibold tracking-[.09em]" style={{ color: K.faint }}>ABOVE YOU · {dayLabel(localDay(aboveDay.at)).toUpperCase()}</p>
-          {above.slice(0, 6).map((s, i) => <div key={s} className="flex gap-3 py-[5px] text-[13.5px]"><span className="w-4 tabular-nums" style={{ color: K.faint }}>{i + 1}</span><span className="truncate">{s}</span></div>)}
-        </>
-      )}
+      {all.length > 1 && <div className="mb-3 flex gap-1.5">{all.map((x, i) => <button key={x.key} onClick={() => setQi(i)} className="h-8 rounded-full px-3 text-[13px]" style={i === qi ? { background: tint(C.blue, 22), color: "#fff" } : { background: "rgba(255,255,255,.05)", color: K.muted }}>{x.label}</button>)}</div>}
+      <Big verdict={v} value={rankText(sc.now)} rest={`→ goal #${g.spec.target.value}`} sub={`${sc.label} · ${rows.length} day${rows.length === 1 ? "" : "s"} on record`} />
+      <div className="mt-2 flex flex-wrap gap-1.5"><ScoreDeltas s={sc} /></div>
+      <div className="mt-4"><RankLine series={sc.series} color={sc.color} h={180} /></div>
+      <p className="mt-5 text-[10.5px] font-semibold tracking-[.09em]" style={{ color: K.faint }}>DAY BY DAY · ranks.jsonl</p>
+      {rows.slice(0, 30).map((r) => (
+        <div key={r.date} className="flex items-baseline gap-3 py-1.5 text-[14px]">
+          <span className="w-14 shrink-0 text-[12px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>{dayLabel(r.date)}</span>
+          <b className="w-14 tabular-nums">{rankText(r)}</b>
+          <span className="min-w-0 truncate text-[12.5px]" style={{ color: K.faint }}>read {r.read}{r.url ? ` · ${r.url.replace(/^https?:\/\//, "")}` : ""}</span>
+        </div>
+      ))}
     </>
   );
 }
@@ -319,53 +302,30 @@ function TimeView({ g, ds }: { g: Goal; ds: Day[] }) {
   );
 }
 
-// ── runners: a failed one is a card, the rest one sentence ───────────────────────────────────────────────
-const broken = (r: Automation) => r.status === "failing" || r.status === "not-loaded";
-function FailedCard({ r, a, act }: { r: Automation; a: Asks & { live: ReturnType<typeof useHandoffLive>; open: (sid: string) => void }; act: AutomationsFeed["act"] }) {
-  const v: Verdict = { word: r.status === "not-loaded" ? "Not loaded" : "Failed", color: C.red };
+// ── runners: the day, top to bottom ──────────────────────────────────────────────────────────────────────
+/** A runner opened where it sits in the day: what it does, its schedule, its last line, and what you can do. A
+ *  runner that needs a look leads with why, in amber. */
+function RunnerOpen({ r, a, act }: { r: Automation; a: Asks & { live: ReturnType<typeof useHandoffLive>; open: (sid: string) => void }; act: AutomationsFeed["act"] }) {
+  const look = lookOf(r);
   const [ran, setRan] = useState(false);
-  return (
-    <div id={`auto-${r.id}`} className="mx-3 mb-2 rounded-2xl p-3.5" style={{ background: tint(C.red, 6), border: `1px solid ${tint(C.red, 40)}` }}>
-      <div className="flex items-center gap-2"><Pill v={v} /><span className="truncate text-[12px]" style={{ color: K.faint }}>{[r.project, r.scheduleText].filter(Boolean).join(" · ")}</span></div>
-      <p className="mt-2 text-[15px] font-semibold">{r.name}</p>
-      {r.lastLine && <p className="mt-0.5 line-clamp-2 text-[12.5px]" style={{ color: K.faint, fontFamily: "var(--today-mono)" }}>{r.lastLine}</p>}
-      <AskRows asks={a.asks} live={a.live} kind="runner" id={r.id} onOpen={a.open} />
-      <div className="mt-2.5 flex flex-wrap gap-1.5">
-        <Q onClick={() => a.ask("runner", r.id, "Why did it fail?")} busy={a.busy === `runner:${r.id}:Why did it fail?`}>Why did it fail?</Q>
-        <Q onClick={async () => { await act({ op: "run", id: r.id }, `run:${r.id}`); setRan(true); }}>{ran ? "Started" : "Run it again"}</Q>
-      </div>
-    </div>
-  );
-}
-function RunnerRow({ r, a, act }: { r: Automation; a: Asks & { live: ReturnType<typeof useHandoffLive>; open: (sid: string) => void }; act: AutomationsFeed["act"] }) {
-  const [open, setOpen] = useState(false);
-  const dot = r.status === "running" ? C.amber : r.status === "paused" ? K.faint : C.green;
-  const when = r.status === "running" ? "always on" : r.status === "paused" ? "paused" : r.lastRun ? ago(r.lastRun) : "not run yet";
   const pause = async () => {
     // Pausing a protected runner has consequences outside the page (the bot leaves Slack), so it asks first.
     if (r.status !== "paused" && r.protected && !confirm(`Pause “${r.name}”? ${r.description}`)) return;
     await act({ op: r.status === "paused" ? "resume" : "pause", id: r.id }, `pause:${r.id}`);
   };
+  const q = look ? "Why does it need a look?" : "What did it do on its last run?";
   return (
-    <div id={`auto-${r.id}`} className={open ? "my-1 rounded-xl p-2.5" : ""} style={open ? { background: "rgba(0,0,0,.25)" } : undefined}>
-      <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2.5 py-[7px] text-left text-[13.5px]">
-        <i className="h-2 w-2 shrink-0 rounded-full" style={{ background: dot, boxShadow: r.status === "running" ? `0 0 0 3px ${tint(C.amber, 25)}` : undefined }} />
-        <span className="min-w-0 flex-1 truncate">{r.name}</span>
-        <span className="shrink-0 text-[11.5px]" style={{ color: K.faint }}>{when}</span>
-      </button>
-      {open && (
-        <div className="pl-[18px]">
-          <p className="text-[12.5px] leading-snug" style={{ color: K.muted }}>{r.description}</p>
-          <p className="mt-1 text-[12px]" style={{ color: K.faint }}>{r.scheduleText}{r.nextRun ? ` · next ${new Date(r.nextRun).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : ""}</p>
-          {r.lastLine && <p className="mt-1 truncate text-[11.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>{r.lastLine}</p>}
-          <AskRows asks={a.asks} live={a.live} kind="runner" id={r.id} onOpen={a.open} />
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            <Q onClick={() => a.ask("runner", r.id, "What did it do on its last run?")} busy={a.busy === `runner:${r.id}:What did it do on its last run?`}>What did it do last run?</Q>
-            {r.kind === "launchd" && r.status !== "running" && <button onClick={() => act({ op: "run", id: r.id }, `run:${r.id}`)} className="h-9 rounded-full px-3.5 text-[13px]" style={{ border: `1px solid ${K.line}`, color: K.muted }}>Run now</button>}
-            <button onClick={pause} className="h-9 rounded-full px-3.5 text-[13px]" style={{ border: `1px solid ${K.line}`, color: K.muted }}>{r.status === "paused" ? "Resume" : "Pause"}</button>
-          </div>
-        </div>
-      )}
+    <div id={`auto-${r.id}`} className="rounded-2xl p-3.5" style={look ? { background: tint(C.amber, 7), border: `1px solid ${tint(C.amber, 35)}` } : { background: "rgba(0,0,0,.25)" }}>
+      {look && <><b className="block text-[28px] leading-none" style={{ color: C.amber }}>{look.big}</b><p className="mt-2 text-[14.5px] leading-snug">{look.why}</p></>}
+      {!look && r.description && <p className="text-[14px] leading-snug" style={{ color: K.muted }}>{r.description}</p>}
+      <p className="mt-1.5 text-[13px]" style={{ color: K.faint }}>{[r.project, r.scheduleText].filter(Boolean).join(" · ")}{r.nextRun ? ` · next ${new Date(r.nextRun).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : ""}</p>
+      {r.lastLine && <p className="mt-1 truncate text-[12px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>{r.lastLine}</p>}
+      <AskRows asks={a.asks} live={a.live} kind="runner" id={r.id} onOpen={a.open} />
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <Q onClick={() => a.ask("runner", r.id, q)} busy={a.busy === `runner:${r.id}:${q}`}>{look ? "Why?" : "What did it do last run?"}</Q>
+        {r.kind === "launchd" && r.status !== "running" && r.schedule.kind !== "always" && <button onClick={async () => { await act({ op: "run", id: r.id }, `run:${r.id}`); setRan(true); }} className="h-9 rounded-full px-3.5 text-[13px]" style={{ border: `1px solid ${K.line}`, color: K.muted }}>{ran ? "Started" : "Run now"}</button>}
+        <button onClick={pause} className="h-9 rounded-full px-3.5 text-[13px]" style={{ border: `1px solid ${K.line}`, color: K.muted }}>{r.status === "paused" ? "Resume" : "Pause"}</button>
+      </div>
     </div>
   );
 }
@@ -381,7 +341,7 @@ export function PhoneAutopilot({ goals, runners, feed }: { goals: Goal[] | null;
   const [size, setSize] = useState<Record<string, "line" | "card">>({});
   const sizeOf = (g: Goal, i: number) => size[g.spec.id] ?? (i === 0 ? "card" : "line");
   const [full, setFull] = useState<{ id: string; m: Metric } | null>(null);
-  const [allOpen, setAllOpen] = useState(false);
+  const [openRunner, setOpenRunner] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
   const fullGoal = full ? sorted.find((g) => g.spec.id === full.id) : undefined;
   const series = useMemo(() => new Map(sorted.map((g) => [g.spec.id, days(g)])), [sorted]);
@@ -396,27 +356,22 @@ export function PhoneAutopilot({ goals, runners, feed }: { goals: Goal[] | null;
   };
 
   if (!goals || !runners) return <p className="px-5 py-10 text-[14px]" style={{ color: K.faint }}>Loading…</p>;
-  const bad = runners.filter(broken), fine = runners.filter((r) => !broken(r));
+  const day = dayOf(runners);
   const lagging = sorted.filter(behind).length;
   const n = (k: number, w: string) => `${k} ${w}${k === 1 ? "" : "s"}`;
-  const sentence = [lagging ? `${n(lagging, "goal")} behind` : sorted.length ? "Goals on track" : "", bad.length ? `${n(bad.length, "runner")} failed` : ""].filter(Boolean).join(", ");
+  // A runner that needs a look starts open, where it sits in the day; tapping any other one opens it instead.
+  const opened = openRunner ?? day.looks[0]?.a.id ?? null;
 
   return (
     <div className="pb-28">
-      <p className="px-5 pb-3 text-[14px]" style={{ color: K.muted }}>{sentence ? `${sentence}. ` : "All quiet. "}<span style={{ color: K.faint }}>{fine.length} fine.</span></p>
+      {lagging > 0 && <p className="px-5 pb-2 text-[14.5px]" style={{ color: K.muted }}>{n(lagging, "goal")} behind.</p>}
       {sorted.map((g, i) => sizeOf(g, i) === "card"
-        ? <div key={g.spec.id} className="mb-2"><GoalCard g={g} ds={series.get(g.spec.id) ?? []} a={a} onShrink={() => setSize((s) => ({ ...s, [g.spec.id]: "line" }))} onMetric={(m) => setFull({ id: g.spec.id, m })} onResolve={() => resolve(g)} resolving={resolving === g.spec.id} /></div>
+        ? <div key={g.spec.id} className="mb-2"><GoalCard g={g} a={a} onShrink={() => setSize((s) => ({ ...s, [g.spec.id]: "line" }))} onMetric={(m) => setFull({ id: g.spec.id, m })} onResolve={() => resolve(g)} resolving={resolving === g.spec.id} /></div>
         : <GoalLine key={g.spec.id} g={g} onGrow={() => setSize((s) => ({ ...s, [g.spec.id]: "card" }))} />)}
-      {bad.length > 0 && <p className="px-5 pb-1.5 pt-3 text-[11px] font-semibold tracking-[.09em]" style={{ color: K.faint }}>NEEDS A LOOK</p>}
-      {bad.map((r) => <FailedCard key={r.id} r={r} a={a} act={feed.act} />)}
-      {fine.length > 0 && (
-        <div id="runners" className="mx-3 mt-2 rounded-2xl px-3.5 py-3" style={{ background: tint(C.green, 6), border: `1px solid ${tint(C.green, 20)}` }}>
-          <button onClick={() => setAllOpen((v) => !v)} aria-expanded={allOpen} className="flex w-full items-center gap-2 text-left text-[14.5px]">
-            <span style={{ color: C.green }}>✓</span><span className="flex-1">{bad.length ? `${n(fine.length, "other")} running fine` : `${n(fine.length, "runner")} running fine`}</span><span style={{ color: K.faint }}>{allOpen ? "⌃" : "›"}</span>
-          </button>
-          {allOpen && <div className="mt-1.5">{fine.map((r) => <RunnerRow key={r.id} r={r} a={a} act={feed.act} />)}</div>}
-        </div>
-      )}
+      <div id="runners" className="mt-5">
+        <p className="px-5 pb-2 text-[17px] font-semibold leading-snug">{daySentence(day)}</p>
+        <PhoneDay day={day} open={opened} onPick={(id) => setOpenRunner(opened === id ? "" : id)} renderOpen={(r) => <RunnerOpen r={r} a={a} act={feed.act} />} />
+      </div>
       {fullGoal && full && <GoalFull g={fullGoal} ds={series.get(fullGoal.spec.id) ?? []} metric={full.m} setMetric={(m) => setFull({ id: fullGoal.spec.id, m })} onClose={() => setFull(null)} a={asks} />}
       {asks.toast && (
         <div className="fixed inset-x-3 bottom-[calc(76px+env(safe-area-inset-bottom))] z-[90] flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[13.5px] shadow-2xl" style={{ background: "#1f242e", border: `1px solid ${K.line}` }}>
