@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-21
+- **Phone: the question card shows its answers** (§23; `components/AskCard.tsx`). Long questions cut to four lines with "more", the teammate row scrolls with the options, Skip all joins the button row, and the card gets 78% of a phone pane.
 - **Desktop panes no longer freeze on old content** (§3; `lib/use-agent.ts`, `app/page.tsx`). A pane that had released its idle stream now watches the transcript size and re-syncs when the chat does work on its own, such as an auto-compact, a task notification or a message from the phone. The idle poll's change check also includes the last turn's offset, so it no longer goes blind at the 400-turn cap.
 
 ### 2026-10-20

@@ -598,3 +598,11 @@ screenshots plus an overflow scan, then a touch walk-through of a pane), and the
 less useful half, for the reason above. What finds these bugs is a `hasTouch: true, isMobile: true`
 context that **taps** through the panel: open a tile, switch tabs, open the slot, open the add menu.
 Never type into a pane in such a run. A pane on a dev instance is a real session.
+
+> 🐛 **2026-10-21 — the question card was all question and no answers on a phone.** `AskCard` pinned
+> the full question above the options, plus a pinned "Not mine — ask" row and a separate "Skip all" row.
+> An eight-line question at 393px left the options one row of scroll space, half an option visible.
+> Now: a question over 160 characters is cut to four lines with "more ▾"; the teammate row scrolls with
+> the options (where its own comment always said it was); on touch, "Skip all N" sits in the button row
+> and the "sending: …" echo is dropped (the lit row already says it); the card may take 78% of a
+> `compact:` pane. Checked on an emulated 393px phone: all four options of a four-option question visible.

@@ -99,6 +99,9 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   // conversation that produced it in view, and the expanded card can't always leave room for that.
   // Lives here, not at the call site, so folding never remounts the card and loses half-made picks.
   const [folded, setFolded] = useState(false);
+  // A long question is cut to four lines until asked for (see the question block below).
+  const [qOpen, setQOpen] = useState(false);
+  useEffect(() => { setQOpen(false); }, [qi]);
   // Sending: a click that hasn't been confirmed yet must LOOK different from a dead button. Reported
   // 2026-10-07: Send clicked, nothing happened, no warning, and the answer went through minutes later.
   // So: the button says "Sending…" and locks (a second click can't double-send), after SLOW_MS it says
@@ -153,6 +156,7 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   // throwing on `q.multiSelect` below and crashing the whole page (no error boundary exists upstream).
   if (!q) return null;
   const multi = !!q.multiSelect;
+  const longQ = q.question.length > 160;
   const isLast = qi === n - 1;
   const picked = sel[qi] || [];
 
@@ -297,8 +301,10 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
     // `max-h-[60%]` is the other half: shrinking alone let the card take every pixel it wanted, and
     // the transcript (flex-basis 0) gave them all up — a four-option question left the log at zero
     // height, so the context the question was about was exactly what you couldn't scroll back to.
-    // The cap keeps 40% of the pane for the conversation; the fold button gives it all of it.
-    <div className="mx-4 mb-2 flex max-h-[60%] min-h-0 flex-col focus-within:max-h-[88%] rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
+    // The cap keeps 40% of the pane for the conversation; the fold button gives it all of it. On a
+    // phone (`compact:`) the pane is the whole screen and the card is the thing being worked, so it
+    // gets 78% — "▾ read the chat" is one tap away.
+    <div className="mx-4 mb-2 flex max-h-[60%] min-h-0 flex-col compact:max-h-[78%] focus-within:max-h-[88%] rounded-xl border border-[var(--sakura)]/40 bg-[var(--sakura)]/[0.06] px-3 py-2.5">
       <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2">
         <p className={`flex items-center gap-1.5 ${sc.eyebrow} font-medium uppercase tracking-wider text-[var(--sakura)]`}><span>✻</span> Claude is asking</p>
         {n > 1 && (
@@ -330,7 +336,15 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             {q.header && <span className={`mb-1 inline-block rounded bg-white/10 px-1.5 py-0.5 ${sc.header} font-medium text-neutral-300`}>{q.header}</span>}
-            <p className={`${sc.question} font-medium text-neutral-50`}>{q.question}</p>
+            {/* Clamped when long (2026-10-21, phone). Pinned in full, an eight-line question on a
+                393px screen left the options ONE row of scroll space — the card was all question and
+                no answers. Four lines say what is being asked; "more" gives the rest on demand. */}
+            <p className={`${sc.question} font-medium text-neutral-50 ${longQ && !qOpen ? "line-clamp-4" : ""}`}>{q.question}</p>
+            {longQ && (
+              <button onClick={() => setQOpen((v) => !v)} className={`mt-0.5 pointer-coarse:min-h-8 ${sc.hint} text-neutral-500 transition-colors hover:text-[var(--sakura)]`}>
+                {qOpen ? "less ▴" : "more ▾"}
+              </button>
+            )}
           </div>
           {n > 1 && <span className={`shrink-0 pt-0.5 ${sc.hint} tabular-nums text-neutral-500`}>{qi + 1}/{n}</span>}
         </div>
@@ -379,28 +393,30 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
             placeholder="type your own answer…"
             className={`mt-1.5 w-full rounded-md border border-white/10 bg-black/30 px-2 py-1.5 pointer-coarse:py-2.5 ${sc.input} text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-[var(--sakura)]/60`} />
         </Row>
-      </div>
 
-      {/* Hand this one question to someone else. Inside the scrolling region deliberately: it is part
-          of choosing an answer, not an action on the card, and it must never push Send off the pane. */}
-      {team.length > 0 && (
-        <div className={`mt-2 flex shrink-0 flex-wrap items-center gap-1.5 ${sc.chip}`}>
-          <span className="text-neutral-400">Not mine — ask:</span>
-          {team.map((m) => {
-            const on = fwd[qi]?.key === m.key;
-            return (
-              <button key={m.key} title={m.role || m.expertise?.join(", ")}
-                onClick={() => setFwd((p) => ({ ...p, [qi]: on ? (undefined as unknown as TeamMember) : m }))}
-                className={`rounded-full border px-2 py-0.5 transition-colors pointer-coarse:min-h-10 pointer-coarse:px-3 ${
-                  on ? "border-[var(--sakura)] bg-[var(--sakura)]/20 text-white"
-                     : "border-white/15 text-neutral-400 hover:border-white/30 hover:text-neutral-200"}`}>
-                {on ? "✓ " : ""}{m.name}
-              </button>
-            );
-          })}
-          {fwd[qi] && <span className="basis-full text-[var(--sakura)]">→ On send, Claude asks {fwd[qi].name} on Slack and waits; the wait shows here as a card.</span>}
-        </div>
-      )}
+        {/* Hand this one question to someone else. Inside the scrolling region deliberately: it is part
+            of choosing an answer, not an action on the card, and it must never push Send off the pane.
+            (It had drifted outside, as a pinned row, and on a phone that row alone ate a third of the
+            options' space.) */}
+        {team.length > 0 && (
+          <div className={`mt-0.5 flex shrink-0 flex-wrap items-center gap-1.5 ${sc.chip}`}>
+            <span className="text-neutral-400">Not mine — ask:</span>
+            {team.map((m) => {
+              const on = fwd[qi]?.key === m.key;
+              return (
+                <button key={m.key} title={m.role || m.expertise?.join(", ")}
+                  onClick={() => setFwd((p) => ({ ...p, [qi]: on ? (undefined as unknown as TeamMember) : m }))}
+                  className={`rounded-full border px-2 py-0.5 transition-colors pointer-coarse:min-h-10 pointer-coarse:px-3 ${
+                    on ? "border-[var(--sakura)] bg-[var(--sakura)]/20 text-white"
+                       : "border-white/15 text-neutral-400 hover:border-white/30 hover:text-neutral-200"}`}>
+                  {on ? "✓ " : ""}{m.name}
+                </button>
+              );
+            })}
+            {fwd[qi] && <span className="basis-full text-[var(--sakura)]">→ On send, Claude asks {fwd[qi].name} on Slack and waits; the wait shows here as a card.</span>}
+          </div>
+        )}
+      </div>
 
       {/* Pinned. This row is the exit from `phase=awaiting`; it may never be the thing that overflows. */}
       <div className="mt-2.5 flex shrink-0 flex-wrap items-center gap-2">
@@ -414,20 +430,24 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
         </button>
         {/* What will actually be sent, in the words that will be sent. The old hint described the
             *rules* of the control; this describes the outcome, which is the thing in doubt. */}
-        <span className={`ml-auto min-w-0 truncate ${sc.sending} text-neutral-500`} title={fwd[qi] ? `${fwd[qi].name}${fwd[qi].role ? ` — ${fwd[qi].role}` : ""}` : answered ? String(Array.isArray(count) ? count.join(", ") : count) : undefined}>
+        {/* Not on a phone: there the picked row is lit right above it, and the line was the one
+            truncating to fragments ("sending: xif") in a row that already wraps. */}
+        <span className={`ml-auto min-w-0 truncate pointer-coarse:hidden ${sc.sending} text-neutral-500`} title={fwd[qi] ? `${fwd[qi].name}${fwd[qi].role ? ` — ${fwd[qi].role}` : ""}` : answered ? String(Array.isArray(count) ? count.join(", ") : count) : undefined}>
           {fwd[qi]
             ? <>handing to <span className="text-neutral-300">{fwd[qi].name}</span></>
             : answered
               ? <>sending: <span className="text-neutral-300">{Array.isArray(count) ? count.join(", ") : count}</span></>
               : "nothing selected yet"}
         </span>
+        {/* On a phone Skip-all joins this row instead of taking one of its own below it. */}
+        {n > 1 && <button onClick={guardedSkipAll} disabled={sending} className={`ml-auto hidden pointer-coarse:inline pointer-coarse:min-h-11 ${sc.skip} ${armed === "skipAll" ? "font-medium text-[#f0a868]" : "text-neutral-600"} transition-colors hover:text-neutral-400 disabled:opacity-40`}>{armed === "skipAll" ? `Skip all ${n}? Tap again` : `Skip all ${n}`}</button>}
       </div>
       {(slow || sendErr) && (
         <p role="status" className={`mt-1.5 shrink-0 ${sc.hint} ${sendErr ? "text-[#ef7c7c]" : "text-[#f0a868]"}`}>
           {sendErr ? `Didn't go through — ${sendErr}. Tap Send again.` : "Still sending — the server is slow right now. Your answer is on its way; no need to click again."}
         </p>
       )}
-      {n > 1 && <button onClick={guardedSkipAll} disabled={sending} className={`mt-1.5 shrink-0 self-start pointer-coarse:min-h-11 ${sc.skip} ${armed === "skipAll" ? "font-medium text-[#f0a868]" : "text-neutral-600"} transition-colors hover:text-neutral-400 disabled:opacity-40`}>{armed === "skipAll" ? `Skip all ${n}? Claude gets no answers — tap again` : `Skip all ${n} questions`}</button>}
+      {n > 1 && <button onClick={guardedSkipAll} disabled={sending} className={`mt-1.5 shrink-0 self-start pointer-coarse:hidden ${sc.skip} ${armed === "skipAll" ? "font-medium text-[#f0a868]" : "text-neutral-600"} transition-colors hover:text-neutral-400 disabled:opacity-40`}>{armed === "skipAll" ? `Skip all ${n}? Claude gets no answers — tap again` : `Skip all ${n} questions`}</button>}
     </div>
   );
 }
