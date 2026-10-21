@@ -30,7 +30,7 @@
 //    the one scrolling region, because that is the only place a block of arbitrary length cannot push
 //    "Send answer" off the bottom of a short pane (see the layout note below — that bug is why this
 //    card is a flex column at all).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentQuestion } from "@/lib/use-agent";
 import { atLeast, useDensityTier } from "@/lib/density";
 import { forwardInstruction, type TeamMember } from "@/lib/team-forward";
@@ -102,6 +102,11 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
   // A long question is cut to four lines until asked for (see the question block below).
   const [qOpen, setQOpen] = useState(false);
   useEffect(() => { setQOpen(false); }, [qi]);
+  // The Other field's starting text, fixed per QUESTION — never recomputed while typing. See the
+  // field's note: passing `other[qi]` straight in changed `defaultValue` on every keystroke, and React
+  // writes a changed defaultValue to the DOM (the `value` attribute) even on an uncontrolled input.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const otherInit = useMemo(() => other[qi] || "", [qi]);
   // Sending: a click that hasn't been confirmed yet must LOOK different from a dead button. Reported
   // 2026-10-07: Send clicked, nothing happened, no warning, and the answer went through minutes later.
   // So: the button says "Sending…" and locks (a second click can't double-send), after SLOW_MS it says
@@ -384,8 +389,12 @@ export default function AskCard({ questions, onAnswer }: { questions: AgentQuest
               reproduce in emulation (WebKit, Chromium + IME composition), so this removes the mechanism:
               React never writes the field while you type; `defaultValue` + `key={qi}` restore a
               question's text when you page back, and `dir="ltr"` pins the direction. `other` stays the
-              source of truth for the answer. */}
-          <input key={qi} ref={otherRef} defaultValue={other[qi] || ""} onChange={(e) => typeOther(e.target.value)}
+              source of truth for the answer.
+              2026-10-21, it came back ("typed fix, shows xif"): `defaultValue={other[qi]}` changed on every
+              keystroke, and React writes a changed defaultValue into the DOM as the `value` attribute —
+              uncontrolled or not. That was still a write into the field mid-composition. `otherInit` only
+              changes with the question, so React now writes nothing at all while you type. */}
+          <input key={qi} ref={otherRef} defaultValue={otherInit} onChange={(e) => typeOther(e.target.value)}
             dir="ltr" autoCapitalize="sentences" autoCorrect="on" spellCheck
 
             onClick={(e) => e.stopPropagation()}

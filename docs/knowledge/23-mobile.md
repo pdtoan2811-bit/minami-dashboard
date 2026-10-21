@@ -606,3 +606,11 @@ Never type into a pane in such a run. A pane on a dev instance is a real session
 > the options (where its own comment always said it was); on touch, "Skip all N" sits in the button row
 > and the "sending: …" echo is dropped (the lit row already says it); the card may take 78% of a
 > `compact:` pane. Checked on an emulated 393px phone: all four options of a four-option question visible.
+
+> 🐛 **2026-10-21 — "typed fix, shows xif" came back.** The 2026-10-09 fix made AskCard's Other field
+> uncontrolled, but passed `defaultValue={other[qi]}`, which changes on every keystroke, and React writes
+> a changed `defaultValue` into the DOM's `value` attribute even on an uncontrolled input. That is still a
+> write into the field while the Android keyboard composes. Now `otherInit` is fixed per question.
+> Measured with a MutationObserver while typing "fix": 3 `value` writes before, 0 after; the text still
+> comes back on Next → Back. The reversed typing itself never reproduces in emulation, so the real
+> check is the phone.
