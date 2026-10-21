@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bot, ChevronDown, ChevronRight, ListChecks, PanelBottom, PanelRight, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import Markdown from "@/components/Markdown";
 import { activityLabel } from "@/lib/agent/labels";
+import { shortModelLabel } from "@/lib/model-catalog";
 import type { FinishedTask, LiveTask, TaskKind } from "@/lib/agent/labels";
 import type { Turn } from "@/lib/claude-sessions";
 
@@ -29,15 +30,7 @@ const fmtElapsed = (ms: number) => {
   return m < 60 ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 };
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-/** "claude-sonnet-5" → "Sonnet 5". The catalog label where the id is in it; a readable guess otherwise,
- *  because a subagent can be on a model the picker doesn't offer. */
-const fmtModel = (id?: string) => {
-  if (!id) return null;
-  const m = id.match(/claude-(fable|opus|sonnet|haiku)-(\d+)(?:-(\d+))?/);
-  if (!m) return id;
-  const fam = m[1][0].toUpperCase() + m[1].slice(1);
-  return `${fam} ${m[2]}${m[3] ? "." + m[3] : ""}`;
-};
+const fmtModel = shortModelLabel;
 
 const KIND: Record<TaskKind, { label: string; Icon: typeof Bot; tint: string }> = {
   agent: { label: "Agent", Icon: Bot, tint: "#b98cff" },

@@ -27,7 +27,7 @@ export type AskPrompt = { id: string; questions: AgentQuestion[] } | null;
 export type AskTeamPrompt = { id: string; packet: AskTeamPacket; since?: number } | null;
 export type AgentMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 // `agent`/`status` only ride along on kind "task" — see manager.ts's AgentEvent for why.
-export type Notice = { kind: string; text: string; at: number; agent?: string; taskKind?: TaskKind; status?: "completed" | "failed" | "stopped" };
+export type Notice = { kind: string; text: string; at: number; agent?: string; taskKind?: TaskKind; status?: "completed" | "failed" | "stopped"; model?: string };
 
 export { activityLabel, toolCategory, escalationHint } from "./agent/labels";
 export type { ActivityState, ActivityPhase, ToolCategory, ToolOutput, ToolOutputBlock, TodoItem, LiveTask, FinishedTask, TaskKind } from "./agent/labels";
@@ -454,7 +454,7 @@ export function useAgent(paneKey: string) {
           }));
           break;
         case "notice":
-          setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now(), agent: ev.agent, taskKind: ev.taskKind, status: ev.status }]);
+          setNotices((prev) => [...prev.slice(-4), { kind: ev.kind, text: String(ev.text || ""), at: Date.now(), agent: ev.agent, taskKind: ev.taskKind, status: ev.status, model: ev.model }]);
           break;
         case "task_end":
           // Dedup on taskId: a reconnect can replay the tail of the buffer, and the same ending twice

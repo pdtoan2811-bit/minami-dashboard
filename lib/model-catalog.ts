@@ -99,3 +99,14 @@ export function isPremiumModel(id?: string | null): boolean {
 export function contextWindowFor(model?: string | null): number {
   return model?.includes("haiku") ? 200_000 : 1_000_000;
 }
+
+/** "claude-sonnet-5-5" → "Sonnet 5.5". A readable family + version rather than the catalog label,
+ *  because a subagent can be on a model the picker doesn't offer (an agent type's own `model:`, a
+ *  bare alias resolved by the CLI). Shared by the tasks panel and the chat's agent board so the two
+ *  can't name the same agent's model differently. */
+export function shortModelLabel(id?: string | null): string | null {
+  if (!id) return null;
+  const m = id.match(/claude-(fable|opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?!\d)/);
+  if (!m) return id;
+  return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}`;
+}

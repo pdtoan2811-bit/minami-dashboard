@@ -735,6 +735,13 @@ tool-use count, and a per-agent timer. Finished agents stay in the same list, di
 (their data comes from the "task" notices, same as the old finished-pill row — hover for the full
 summary). This is the third design: full-sentence notice lines → inline pills → the board.
 
+Each row also names the agent's **model** (2026-10-21) — "Sonnet 5.5", "Haiku 4.5" — next to the type
+badge. The type can't tell you: a `general-purpose` agent inherits the pane's model, an `Explore` runs
+on whatever its definition pins. The value is `LiveTask.model`, the same one the tasks panel shows,
+read off the subagent's own transcript by `resolveTaskModel()`, so the cell stays blank until that
+transcript's first row lands. Finished rows get it from the `task` notice, which now carries `model`.
+Both surfaces format it with `shortModelLabel()` in `lib/model-catalog.ts`.
+
 `LiveTask.since` is stamped server-side at `task_started` for the per-agent timer — the turn's
 shared elapsed says nothing about which agent has been grinding. Deliberately absent on background
 tasks adopted from a `background_tasks_changed` REPLACE snapshot: their true start predates our
