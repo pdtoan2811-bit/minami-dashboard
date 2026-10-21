@@ -506,7 +506,7 @@ export function listSessions(): SessionMeta[] {
     for (const f of files) {
       const file = path.join(dir, f);
       const id = f.replace(/\.jsonl$/, "");
-      touchLRU(idIndex, id, file, ID_INDEX_MAX); // free id→path index for getSession()'s hot polling path
+      indexId(id, file); // free id→path index for getSession()'s hot polling path
       try { candidates.push({ file, id, mtime: fs.statSync(file).mtimeMs, scratch }); } catch { /* gone mid-scan */ }
     }
   }
@@ -580,7 +580,7 @@ export function listSessionsIn(cwds: string[], limit = 200): SessionMeta[] {
       if (seen.has(id)) continue; // two cwds can encode to one dir (e.g. `a/b` and `a-b`)
       seen.add(id);
       const file = path.join(dir, f);
-      touchLRU(idIndex, id, file, ID_INDEX_MAX);
+      indexId(id, file);
       try { candidates.push({ file, id, mtime: fs.statSync(file).mtimeMs }); } catch { /* gone mid-scan */ }
     }
   }
@@ -858,15 +858,28 @@ const PAGE_CACHE_MAX = 24;
 const idIndex: Map<string, string> = ((globalThis as any).__minamiIdIndex ||= new Map());
 const ID_INDEX_MAX = 2000; // tiny entries (id → path string) — generous cap costs almost nothing
 
+// One session id can own files in TWO project dirs: when a chat moves into a worktree, the CLI writes a
+// ~1KB stub there (last-prompt, ai-title, cost-state — no messages) while the transcript stays where the
+// chat started. Whichever file the walk saw last used to win, so a pane opened the stub and showed an
+// empty log (2026-10-21: 3 chats, two of them 37MB and 107MB). The bigger file is always the transcript.
+function indexId(id: string, file: string) {
+  const prev = idIndex.get(id);
+  if (prev && prev !== file) {
+    try { if (fs.statSync(prev).size >= fs.statSync(file).size) { touchLRU(idIndex, id, prev, ID_INDEX_MAX); return; } } catch { /* prev gone — take file */ }
+  }
+  touchLRU(idIndex, id, file, ID_INDEX_MAX);
+}
+
 export function resolveSessionFile(id: string): string {
   if (!/^[a-zA-Z0-9._-]+$/.test(id)) return "";
   let found = idIndex.get(id) || "";
   if (found && !fs.existsSync(found)) found = ""; // stale (file moved/deleted) — fall back to a real scan
   if (!found) {
     try {
+      let best = -1;
       for (const d of fs.readdirSync(PROJECTS)) {
         const file = path.join(PROJECTS, d, id + ".jsonl");
-        if (fs.existsSync(file)) { found = file; break; }
+        try { const sz = fs.statSync(file).size; if (sz > best) { best = sz; found = file; } } catch { /* not here */ }
       }
     } catch { /* none */ }
     if (found) touchLRU(idIndex, id, found, ID_INDEX_MAX);

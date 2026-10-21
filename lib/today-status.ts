@@ -56,11 +56,15 @@ function findTranscript(sid: string): string | null {
   if (hit && fs.existsSync(hit)) return hit;
   let dirs: string[] = [];
   try { dirs = fs.readdirSync(PROJECTS); } catch { return null; }
+  // The biggest file wins: a chat moved into a worktree can leave a ~1KB metadata stub under a second
+  // project dir with the same id (see resolveSessionFile in lib/claude-sessions.ts).
+  let best: string | null = null, bestSize = -1;
   for (const d of dirs) {
     const p = path.join(PROJECTS, d, `${sid}.jsonl`);
-    if (fs.existsSync(p)) { where.set(sid, p); return p; }
+    try { const sz = fs.statSync(p).size; if (sz > bestSize) { bestSize = sz; best = p; } } catch { /* not here */ }
   }
-  return null;
+  if (best) where.set(sid, best);
+  return best;
 }
 
 type Parsed = { outcome: Outcome | null; lastAt: number | null; firstAt: number | null; writes: string[] };

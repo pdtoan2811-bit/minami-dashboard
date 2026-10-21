@@ -353,8 +353,12 @@ export function moveTranscriptHome(sessionId: string, fromCwd: string, toCwd: st
   const toDir = path.join(projects, slug(toCwd));
   const dst = path.join(toDir, sessionId + ".jsonl");
   try {
-    if (fs.existsSync(dst)) return true; // already moved — a reload racing an earlier move
-    if (!fs.existsSync(src)) return false;
+    // A dst that is only a CLI stub (last-prompt/ai-title/cost-state, ~1KB, no messages) is NOT an
+    // earlier move: treating it as one left the real transcript behind and the pane resumed into an
+    // empty log (2026-10-21). The real transcript replaces the stub; anything bigger is a finished move.
+    if (fs.existsSync(dst)) {
+      if (!fs.existsSync(src) || fs.statSync(dst).size >= fs.statSync(src).size || fs.statSync(dst).size > 16_384) return true;
+    } else if (!fs.existsSync(src)) return false;
     fs.mkdirSync(toDir, { recursive: true });
     fs.renameSync(src, dst);
     // Sidechain dir (subagent transcripts) rides along; losing it only loses subagent detail, so

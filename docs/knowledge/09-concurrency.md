@@ -169,6 +169,15 @@ from inside a vault worktree that protected nothing. Interviewed (10 answers), t
   `relocatedTo` outranks every cwd the pane's props know, `sentOnce` re-arms, and a persistent
   green bar says where the chat now lives (NoticeStrip can't carry it — it renders only during a
   live turn, and relocation happens precisely when the turn ends).
+
+> 🐛 **2026-10-21 — a moved chat opened as an empty log.** One session id can own a `.jsonl` in two
+> project dirs: the CLI writes a ~1KB stub (`last-prompt`, `ai-title`, `cost-state`, no messages)
+> under the dir of a cwd the chat passed through, while the transcript stays put. Three lookups chose
+> by walk order, not content. `resolveSessionFile` (via the listing walk's id index) took the last dir
+> seen, `today-status` the first, and `moveTranscriptHome` saw the stub at `dst` and returned "already
+> moved". So the pane polled a file with zero turns and drew nothing (a 788KB tiktok-studio chat; 3 ids
+> on the box, two of them 37MB and 107MB). **Fix:** the biggest file is the transcript. Both lookups
+> keep the larger one (`indexId`), and `moveTranscriptHome` replaces a dst of ≤16KB that is smaller than src.
 - **Scoped to lazy repos on purpose.** In an eager (code) repo, editing a second repo is usually a
   deliberate cross-repo fix; auto-yanking the session would be automation fighting intent. The
   vault declared itself context-first; that declaration is the licence.

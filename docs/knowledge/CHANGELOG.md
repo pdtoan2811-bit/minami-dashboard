@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-21
+- **Moved chats no longer open empty** (§9; `lib/claude-sessions.ts`, `lib/worktree.ts`, `lib/today-status.ts`). A ~1KB CLI stub with the same session id in a second project dir won the id lookup, so the pane showed no messages. The biggest file wins now, and `moveTranscriptHome` replaces a stub at its destination.
 - **Usage board counts headless automations** (§16; `lib/usage-index.ts`, `components/UsageBoard.tsx`, `bin/today-research.mjs`). Every no-transcript `claude -p` logs to `~/.minami/headless-usage.jsonl`, and the board gains an Automations card. The nightly video jobs (about 70 Opus-high sessions a night) were invisible before this. Overnight research and builder moved to Sonnet 5.5.
 - **Metrics board: usage from this Mac's transcripts** (§16; new `lib/usage-index.ts`, `app/api/usage`, `components/UsageBoard.tsx`). It replaces four cards that read the retired Hetzner collector. The board adds plan limits, per-day usage by model, main vs subagent and context size, subagent runs by model, an hour heatmap, usage by app and project, and the heaviest sessions. The routing card now lists Haiku 5.5.
 - **Goals: rank, day by day** (§29; new `app/autopilot/RankChart.tsx`, `GoalsSection.tsx`, `PhoneAutopilot.tsx`). A chart with #1 at the top, the goal line, separate "not found" and "check failed" lanes, and the days left to the deadline. "Not in top 46" became "Not found (top 46)", since 46 is how deep the check read, not a rank.
