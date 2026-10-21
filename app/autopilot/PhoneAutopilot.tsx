@@ -16,6 +16,7 @@
 //
 // The desktop page is unchanged: this replaces the stacked goal and runner cards only below the compact breakpoint,
 // where they made the page 8,918px tall.
+import { RankChart, days, type Day } from "./RankChart";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Goal, GoalRun, Position } from "@/lib/goals";
 import type { Automation } from "@/lib/automations";
@@ -37,27 +38,9 @@ const ago = (iso?: string | null) => {
 };
 
 // ── the goal's numbers, one point per day ────────────────────────────────────────────────────────────────
-type Day = { date: string; run: GoalRun | null; usd: number };
-/** Every calendar day from the first run to today; a day's point is its LAST run, its spend the sum of its runs. */
-function days(g: Goal): Day[] {
-  if (!g.log.length) return [];
-  const by = new Map<string, Day>();
-  for (const r of g.log) {
-    const d = localDay(r.at), cur = by.get(d);
-    if (!cur || Date.parse(r.at) >= Date.parse(cur.run!.at)) by.set(d, { date: d, run: r, usd: (cur?.usd ?? 0) + (r.usd || 0) });
-    else cur.usd += r.usd || 0;
-  }
-  const out: Day[] = [];
-  const end = localDay(new Date().toISOString());
-  for (let t = Date.parse(`${[...by.keys()].sort()[0]}T12:00:00`); ; t += 86400_000) {
-    const d = localDay(new Date(t).toISOString());
-    out.push(by.get(d) ?? { date: d, run: null, usd: 0 });
-    if (d >= end || out.length > 60) break;
-  }
-  return out;
-}
 /** ">50" means the check read 50 results and we weren't in them; "?" means the check itself failed. */
-const posLabel = (p: Position | undefined, depth = 10) => (typeof p === "number" ? `#${p}` : p === null ? `>${depth}` : p === "no reading" ? "?" : "–");
+// "Not found", never ">46": the number is how deep the check read, and alone it read as a rank (2026-10-21).
+const posLabel = (p: Position | undefined, _depth = 10) => (typeof p === "number" ? `#${p}` : p === null ? "Not found" : p === "no reading" ? "?" : "–");
 /** The latest real reading for a query: a captcha day doesn't erase what we last knew. */
 function lastReading(g: Goal, q: string): { run: GoalRun; p: Position } | null {
   for (let i = g.log.length - 1; i >= 0; i--) { const p = g.log[i].positions[q]; if (p !== undefined && p !== "no reading") return { run: g.log[i], p }; }
@@ -269,35 +252,12 @@ function RankView({ g, ds, q, qs, qi, setQi }: { g: Goal; ds: Day[]; q: string; 
   const fails = ds.filter((d) => d.run?.positions[q] === "no reading").length;
   const above = [...g.log].reverse().find((r) => r.above?.[q]?.length)?.above?.[q] ?? [];
   const aboveDay = [...g.log].reverse().find((r) => r.above?.[q]?.length);
-  const v: Verdict = typeof lr?.p === "number" ? (lr.p <= g.spec.target.value ? { word: "On target", color: C.green } : { word: `Ranking #${lr.p}`, color: C.amber }) : { word: `Outside the top ${depth}`, color: C.red };
-  // The SEO convention: #1 at the top on a log scale, bands for top 3 / 10 / depth, and a floor for "not found".
-  const W = 340, H = 180, L = 50, top = 8, floor = H - 44;
-  const y = (p: number) => top + 4 + (Math.log(p) / Math.log(depth)) * (floor - top - 16);
-  const x = (i: number) => L + 14 + (i * (W - L - 26)) / Math.max(1, ds.length - 1);
-  const bands: [string, number, number][] = [["top 3", 1, 3], ["top 10", 3, 10], ...(depth > 10 ? [[`top ${depth}`, 10, depth] as [string, number, number]] : [])];
+  const v: Verdict = typeof lr?.p === "number" ? (lr.p <= g.spec.target.value ? { word: "On target", color: C.green } : { word: `Ranking #${lr.p}`, color: C.amber }) : { word: "Not ranking yet", color: C.red };
   return (
     <>
       {qs.length > 1 && <div className="mb-3 flex gap-1.5">{qs.map((x, i) => <button key={x} onClick={() => setQi(i)} className="h-8 rounded-full px-3 text-[13px]" style={i === qi ? { background: tint(C.blue, 22), color: "#fff" } : { background: "rgba(255,255,255,.05)", color: K.muted }}>“{x}”</button>)}</div>}
-      <Big verdict={v} value={lr ? posLabel(lr.p, lr.run.depth?.[q]) : "–"} rest={`→ target #${g.spec.target.value}, ${g.spec.target.days} days running`} sub={`“${q}” · checked ${checked} of ${ds.length} days${fails ? ` (${fails} failed checks)` : ""}`} />
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" className="mt-3 block">
-        {bands.map(([l, a, b], i) => <g key={l}><rect x={L} y={y(a)} width={W - L - 4} height={Math.max(8, y(b) - y(a))} rx={5} fill={i === 0 ? "rgba(74,222,128,.07)" : "rgba(255,255,255,.04)"} /><text x={L - 6} y={(y(a) + y(b)) / 2 + 4} fontSize="10" textAnchor="end" fill="rgba(255,255,255,.5)">{l}</text></g>)}
-        <rect x={L} y={floor - 10} width={W - L - 4} height={22} rx={5} fill="rgba(239,124,124,.1)" />
-        <text x={L - 6} y={floor + 5} fontSize="10" textAnchor="end" fill="rgba(239,124,124,.85)">&gt;{depth}</text>
-        <line x1={L} x2={W - 4} y1={y(g.spec.target.value)} y2={y(g.spec.target.value)} stroke={C.green} strokeDasharray="4 4" />
-        <text x={W - 6} y={y(g.spec.target.value) + 13} fontSize="9.5" textAnchor="end" fill={C.green}>target #{g.spec.target.value}</text>
-        {ds.map((d, i) => {
-          const p = d.run?.positions[q];
-          return (
-            <g key={d.date}>
-              {typeof p === "number" && <circle cx={x(i)} cy={y(Math.min(p, depth))} r={4.5} fill={C.blue} />}
-              {p === null && <circle cx={x(i)} cy={floor + 1} r={4.5} fill={C.red} />}
-              {(p === "no reading" || p === undefined || !d.run) && <text x={x(i)} y={floor + 5} fontSize="11" textAnchor="middle" fill="rgba(255,255,255,.5)">{p === "no reading" ? "?" : "–"}</text>}
-              {(ds.length <= 10 || i % Math.ceil(ds.length / 8) === 0 || i === ds.length - 1) && <text x={x(i)} y={H - 8} fontSize="10" textAnchor="middle" fill="rgba(255,255,255,.45)">{d.date.slice(8)}</text>}
-            </g>
-          );
-        })}
-      </svg>
-      <p className="text-[12px]" style={{ color: K.faint }}>● outside the top {depth} · ? the check failed (e.g. a captcha) · – no run</p>
+      <Big verdict={v} value={lr ? posLabel(lr.p, lr.run.depth?.[q]) : "–"} rest={`→ goal #${g.spec.target.value}`} sub={`“${q}”${lr?.p === null ? ` · not in the top ${lr.run.depth?.[q] ?? 10}` : ""} · checked ${checked} of ${ds.length} days${fails ? ` (${fails} failed)` : ""}`} />
+      <div className="mt-3"><RankChart g={g} compact height={230} /></div>
       {above.length > 0 && aboveDay && (
         <>
           <p className="mt-5 text-[10.5px] font-semibold tracking-[.09em]" style={{ color: K.faint }}>ABOVE YOU · {dayLabel(localDay(aboveDay.at)).toUpperCase()}</p>

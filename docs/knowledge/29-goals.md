@@ -127,3 +127,22 @@ the moodboard there carries the references. Desktop is unchanged.
   `~/.minami/autopilot-asks.jsonl`: that file is the only link from a card to its chats. The card lists its
   last three with Today's live state (working · needs you · ready). Not to be confused with `/api/autopilot`,
   the worktree-merge switch (§9).
+
+## Rank, day by day — one chart for desktop and phone (2026-10-21)
+
+Asked for because the card said "Not in top 46" in a stat tile and down the ledger, and 46 read as a rank
+("goal is top 1, the actual is 46 of some sort"). It is the **depth**: how many results that morning's check read
+before giving up. `app/autopilot/RankChart.tsx` draws a position goal so that confusion can't happen:
+
+- **Rank zone:** #1 at the top, log scale, bands for Top 3, Page 1 and Pages 2–5, the goal as a green dashed line.
+- **"Not found" lane:** the check worked and the site wasn't there. Hollow dot per search; the newest day says
+  how deep it read ("read top 46–49"). A not-found is never plotted on the rank axis.
+- **"Check failed" lane:** a captcha or timeout, one "?" per day.
+- **x axis runs to the deadline.** The days still to go are shaded with "22 days left → Nov 12". Days with data
+  get at least 62% of the width, so a week of history isn't squeezed into a corner beside three empty weeks.
+- Hover a day (desktop) for that day's readings in words. Both searches share one chart, one colour each.
+
+Above it, `rankSentence()` says where it stands in one line. The words changed with it: the stat tile is "Rank on
+Google · Not found · goal #1 · checked top 46–49", the ledger says "Not found (top 46)" and "Check failed", and
+the phone says "Not found → goal #1" instead of ">46". `days()` moved here from `PhoneAutopilot.tsx`; the phone's
+Rank screen renders the same chart (`compact`).

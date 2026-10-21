@@ -21,12 +21,14 @@ import type { Automation } from "@/lib/automations";
 import { K as TK, Glass } from "../today/ui";
 import { STATUS } from "./RunnersSection";
 import { useOpenChat } from "@/components/shell/Drawer";
+import { RankChart, rankSentence } from "./RankChart";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
 const MONO = { fontFamily: "var(--today-mono)" } as const;
 
-const posText = (p: Position | undefined, depth = 10) => (p === undefined ? "—" : p === "no reading" ? "No reading" : p === null ? `Not in top ${depth}` : `#${p}`);
+// "Not found (top 46)", not "Not in top 46": the number is the check's depth, and on its own it read as a rank.
+const posText = (p: Position | undefined, depth = 10) => (p === undefined ? "—" : p === "no reading" ? "Check failed" : p === null ? `Not found (top ${depth})` : `#${p}`);
 const short = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short" });
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 const obsidian = (note: string) => `obsidian://open?vault=secondBrain&file=${encodeURIComponent(note)}`;
@@ -204,11 +206,24 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
         {rerr && <p className="mt-2 text-[12.5px]" style={{ color: K.red }}>{rerr}</p>}
 
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat k="Position" v={ranked.length ? `#${Math.min(...ranked)}` : last ? posText(last.positions[q[0]], last.depth?.[q[0]]) : "—"} s={`${q.length > 1 ? "best of " + q.length + " queries" : `“${q[0]}”`} · target #${g.spec.target.value}`} />
+          {/* "Not found", never "Not in top 46": the 46 is how deep the check read, and it read as a rank. */}
+          <Stat k="Rank on Google" v={ranked.length ? `#${Math.min(...ranked)}` : !last ? "—" : q.some((x) => last.positions[x] === null) ? "Not found" : posText(last.positions[q[0]])}
+            s={`goal #${g.spec.target.value}${!ranked.length && last && q.some((x) => last.positions[x] === null) ? ` · checked top ${(() => { const d = q.map((x) => last.depth?.[x] ?? 10), lo = Math.min(...d), hi = Math.max(...d); return lo === hi ? lo : `${lo}–${hi}`; })()}` : q.length > 1 ? ` · best of ${q.length} searches` : ""}`} />
           <Stat k="Indexed" v={last?.index ? `${last.index.indexed} / ${last.index.total}` : "—"} s="pages in Google" />
           <Stat k="Days left" v={String(Math.max(0, g.daysLeft))} s={`deadline ${short(g.spec.deadline)}`} />
           <Stat k="Spent" v={`$${spent.toFixed(2)}`} s={`${paid} paid run${paid === 1 ? "" : "s"}`} />
         </div>
+
+        {g.spec.target.metric === "position" && g.log.length > 0 && (
+          <div className="mt-4 rounded-2xl px-4 pb-3 pt-3.5" style={{ background: "rgba(255,255,255,.03)", border: `1px solid ${K.line}` }}>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+              <Label>Rank, day by day</Label>
+              <span className="text-[11.5px]" style={{ color: K.faint }}>hover a day for its readings</span>
+            </div>
+            <p className="mb-2 mt-1 text-[14px] font-medium leading-snug">{rankSentence(g)}</p>
+            <RankChart g={g} />
+          </div>
+        )}
 
         <div className="mt-3 flex items-start gap-2 rounded-xl px-3.5 py-2.5 text-[12.5px]"
           style={{ background: mix(TONE[h.tone], 12), border: `1px solid ${mix(TONE[h.tone], 35)}` }}>
