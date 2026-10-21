@@ -163,4 +163,36 @@ doesn't stick.
 Expected saving (an estimate; re-measure with `npm run tokens` a week on): subagent routing 9–11%,
 Build mode on execution-heavy panes 12–15%.
 
+### The Metrics board reads the transcripts (2026-10-21)
+
+> 🐛 **The board's usage cards had been stale since 2026-10-14.** `UsagePanel`, `UsageHeatmap`,
+> `RoutingFlow` and `ProjectsPanel` fetched `NEXT_PUBLIC_METRICS_URL`, the collector on the Hetzner box
+> (`server/metrics-server.js`, fed by the `usage-hook.py` Stop hook). The box was retired when Minami
+> moved to this Mac, so nothing errored and every card simply stopped moving. All four were deleted.
+
+Their replacement reads the one record every Claude process here writes. `lib/usage-index.ts` walks
+`~/.claude/projects` (35-day window), keeps a byte offset per file, reads only appended lines, and
+JSON-parses only lines carrying `"usage"`. It aggregates into hourly buckets keyed by family ·
+main/subagent · entrypoint · project · context band, and keeps per-session rows and subagent runs.
+State persists to `~/.minami/usage-index.json` (~1 MB), so a deploy doesn't trigger a re-read. A cold build
+takes about a minute; the board shows progress meanwhile. `/api/usage?days=N` serves the view, and
+`components/UsageBoard.tsx` draws it as hand-drawn SVG/HTML with no chart dependency.
+
+The board shows:
+- plan limits (5h / 7d from `tok status`, sampled to `~/.minami/limit-samples.jsonl` at most every 10
+  minutes, *only while the board or the API is being read*);
+- KPIs against the previous window;
+- usage per day by model, main vs subagent, or context band;
+- subagent runs per model with the routing-change marker;
+- a weekday × hour heatmap;
+- usage by app (entrypoint) and by project;
+- the heaviest sessions, linked with `/?open=`.
+
+> 🐛 **Count each API response once, box-wide.** It repeats in two ways. A response is written as
+> one line per content block, and those lines are not always adjacent: consecutive-only dedupe counted a
+> 1,457-response transcript as 3,102. And a resumed or forked chat copies its history into a new
+> transcript with the same ids, so per-file dedupe still over-counted main threads by ~20%. The index
+> keeps a global `seen` map pruned by hour. It was cross-checked against `npm run tokens` (global dedupe):
+> $1,097 vs $1,096 and 17,955 vs 17,939 calls for the same week.
+
 ---

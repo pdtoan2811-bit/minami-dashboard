@@ -49,7 +49,7 @@ export function ModelRouting() {
             ))}
           </tbody>
         </table>
-        <p className="px-2 py-1 text-[10px] text-neutral-400">$ / million tokens · Claude API · verified 2026-07-24</p>
+        <p className="px-2 py-1 text-[10px] text-neutral-400">$ / million tokens · Claude API · verified 2026-10-21</p>
       </div>
     </div>
   );

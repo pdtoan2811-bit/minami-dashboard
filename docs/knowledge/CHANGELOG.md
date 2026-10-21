@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-21
+- **Metrics board: usage from this Mac's transcripts** (§16; new `lib/usage-index.ts`, `app/api/usage`, `components/UsageBoard.tsx`). It replaces four cards that read the retired Hetzner collector. The board adds plan limits, per-day usage by model, main vs subagent and context size, subagent runs by model, an hour heatmap, usage by app and project, and the heaviest sessions. The routing card now lists Haiku 5.5.
 - **Goals: rank, day by day** (§29; new `app/autopilot/RankChart.tsx`, `GoalsSection.tsx`, `PhoneAutopilot.tsx`). A chart with #1 at the top, the goal line, separate "not found" and "check failed" lanes, and the days left to the deadline. "Not in top 46" became "Not found (top 46)", since 46 is how deep the check read, not a rank.
 - **Token plan: a week's usage measured, Build mode added, `npm run tokens`** (§16; `lib/model-catalog.ts`, `lib/agent/manager.ts`, `bin/token-report.mjs`). Build mode runs Sonnet 5.5 with an Opus advisor, and the advisor turns off past 120k because each consult re-reads the whole chat uncached.
 - **Phone: typing in a question's Other box no longer comes out reversed** (§23; `components/AskCard.tsx`). React stopped writing the field on each keystroke.
