@@ -1095,19 +1095,31 @@ export function findSubagentFile(sessionId: string, by: { taskId?: string; toolU
 /** The model a subagent is actually running on — from its first assistant row. Reads only the head of
  *  the file (the first row is always the prompt, the second is usually the answer), so this is cheap
  *  enough to call from the live path once per task. Null until that row exists. */
+// Read forward to the first assistant row, not a fixed head. The CLI now writes `attachment` rows (the skills
+// list, CLAUDE.md, memory) between the prompt and the first answer, ~140KB of them (2026-10-21: the first
+// assistant row of all 67 subagent transcripts from the last two days started past the old 64KB window, so no
+// agent card ever showed its model). Capped so a transcript with no answer yet costs a bounded read.
+const SUBAGENT_MODEL_SCAN = 2 * 1024 * 1024;
 export function subagentModel(file: string): string | null {
   let fd: number | null = null;
   try {
     fd = fs.openSync(file, "r");
     const buf = Buffer.allocUnsafe(64 * 1024);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    for (const line of buf.subarray(0, n).toString("utf8").split("\n")) {
-      if (!line.includes('"assistant"')) continue;
-      try {
-        const r = JSON.parse(line);
-        const m = r?.message?.model;
-        if (r?.type === "assistant" && typeof m === "string" && m && m !== "<synthetic>") return m;
-      } catch { /* a partial trailing line — the next call will see it whole */ }
+    let pos = 0, carry = "";
+    while (pos < SUBAGENT_MODEL_SCAN) {
+      const n = fs.readSync(fd, buf, 0, buf.length, pos);
+      if (n <= 0) break;
+      pos += n;
+      const lines = (carry + buf.subarray(0, n).toString("utf8")).split("\n");
+      carry = lines.pop() ?? ""; // a line cut by the chunk edge is finished by the next read
+      for (const line of lines) {
+        if (!line.includes('"assistant"')) continue;
+        try {
+          const r = JSON.parse(line);
+          const m = r?.message?.model;
+          if (r?.type === "assistant" && typeof m === "string" && m && m !== "<synthetic>") return m;
+        } catch { /* not JSON — skip */ }
+      }
     }
   } catch { /* missing or unreadable — caller treats as "not yet" */ }
   finally { if (fd !== null) fs.closeSync(fd); }
