@@ -779,11 +779,20 @@ Two things are genuinely new capabilities rather than re-layout:
   after, which is the point: once a turn ends, the parent transcript keeps only the Task tool's capped
   result.
 
-**The model isn't on any task event.** It IS on the subagent's transcript, one row in, so
-`resolveTaskModel()` reads the head of that file — on `task_progress` (throttled to one attempt per
-3s per task, since progress can fire several times a second) and, forced, on `task_notification`.
-The second call exists because of a measured gap: an agent that uses no tools never emits progress,
-so a 7-second "reply ok" agent finished with no model. Both lookups are best-effort and never block.
+**The model isn't on any task event.** It IS on the subagent's transcript, on its first assistant
+row, so `resolveTaskModel()` reads that file forward to the first assistant row (`subagentModel()`,
+capped at 2MB) — on `task_progress` (throttled to one attempt per 3s per task, since progress can fire
+several times a second) and, forced, on `task_notification`. The second call exists because of a
+measured gap: an agent that uses no tools never emits progress, so a 7-second "reply ok" agent
+finished with no model. Both lookups are best-effort and never block.
+
+> 🐛 **No agent card ever showed its model (2026-10-21).** `subagentModel()` read a fixed 64KB head,
+> on the belief that the first assistant row is "one row in". It isn't any more: the CLI writes
+> `attachment` rows (skills list, CLAUDE.md, memory) between the prompt and the first answer, ~140KB of
+> them. All 67 subagent transcripts from the last two days had their first assistant row past 64KB, so
+> the lookup found the file and returned null every time, live and on finish. **Fix:** read forward in
+> 64KB chunks, carrying a line cut by the chunk edge, until the first assistant row or 2MB. All 67 now
+> resolve (52 Sonnet, 14 Opus, 1 Haiku) in 70ms total.
 
 > 🐛 **A backgrounded command rendered twice (caught in the probe, 2026-09-14).** The SDK says the
 > level signal (`background_tasks_changed`) precedes the edge (`task_started`) "in practice", and it

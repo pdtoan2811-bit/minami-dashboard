@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-21
+- **🐛 Agent cards showed no model** (§3; `lib/claude-sessions.ts` `subagentModel()`). It read a 64KB head, but the CLI's ~140KB of attachment rows push the first assistant row past it in every current transcript. It now reads forward to that row (cap 2MB).
 - **Chat agent board shows each subagent's model** (§3; `app/page.tsx`, `lib/model-catalog.ts`, `lib/agent/manager.ts`, `lib/use-agent.ts`). Running and finished rows name the model, e.g. "Sonnet 5.5". The finish notice carries it, and the tasks panel and the board share `shortModelLabel()`.
 - **Autopilot: Scoreboard, Day strip, run record** (§29, §27; new `app/autopilot/Scoreboard.tsx`, `app/autopilot/DayStrip.tsx`, `bin/minami-run`; `GoalsSection.tsx`, `RunnersSection.tsx`, `PhoneAutopilot.tsx`, `lib/goals.ts`, `lib/automations.ts`; `RankChart.tsx` removed). A rank is a number (#55 / 100+), read from the runner's new `ranks.jsonl` and shown with its change vs yesterday and vs 7 days. Runners are today on a straight line with a now-line, and the ring and the lane chart are gone. All 15 launchd jobs are wrapped by `minami-run`, which appends every run to `~/.minami/runs.jsonl`.
 - **Moved chats no longer open empty** (§9; `lib/claude-sessions.ts`, `lib/worktree.ts`, `lib/today-status.ts`). A ~1KB CLI stub with the same session id in a second project dir won the id lookup, so the pane showed no messages. The biggest file wins now, and `moveTranscriptHome` replaces a stub at its destination.
