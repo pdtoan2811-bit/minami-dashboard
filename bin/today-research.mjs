@@ -14,6 +14,17 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
+// Headless and session-less, so the usage board can't see this run in ~/.claude/projects. Its token counts go to the
+// same ledger the toolshed's claude.mjs writes (~/.minami/headless-usage.jsonl), which lib/usage-index.ts reads (§16).
+function logUsage(result) {
+  try {
+    const file = process.env.MINAMI_HEADLESS_USAGE || path.join(os.homedir(), ".minami", "headless-usage.jsonl");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, JSON.stringify({ ts: Date.now(), source: "today-research", cwd: process.cwd(), model: "sonnet",
+      turns: result?.num_turns, ms: result?.duration_ms, modelUsage: result?.modelUsage || {} }) + "\n");
+  } catch { /* observability only */ }
+}
+
 const HOME = os.homedir();
 const DIR = process.env.MINAMI_TODAY_DIR || path.join(HOME, ".minami/today");
 const VAULT = path.join(HOME, "secondBrain");
@@ -97,6 +108,7 @@ function runClaude(text, dirs) {
       clearTimeout(timer);
       try {
         const j = JSON.parse(out);
+        logUsage(j);
         if (j.is_error) throw new Error(j.result || "claude error");
         resolve({ result: String(j.result || ""), usd: j.total_cost_usd ?? null });
       } catch (e) { reject(new Error(`claude exit ${code}: ${clip((err || out || String(e)).trim(), 240)}`)); }

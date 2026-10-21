@@ -195,4 +195,34 @@ The board shows:
 > keeps a global `seen` map pruned by hour. It was cross-checked against `npm run tokens` (global dedupe):
 > $1,097 vs $1,096 and 17,955 vs 17,939 calls for the same week.
 
+### Headless runs: the ledger (2026-10-21)
+
+> 🐛 **The transcripts were not the whole box.** An audit of every Claude spawn site found the largest
+> automation invisible. `tiktok-studio`'s nightly `overnight.mjs` runs about 7 headless sessions per
+> video × 10 videos (research, the writer stages, the builder for up to 90 min), all `claude -p
+> --model opus --effort high --setting-sources "" --no-session-persistence`. `pitch.mjs` (daily) and
+> `harness-week.mjs` are the same shape. None of them reads `~/.claude/settings.json`, so the subagent
+> routing never reached them, and none of them leaves a transcript. Each parsed the CLI's JSON result
+> for `.result` and dropped its `modelUsage`. The weekly limit was hit overnight on 2026-10-18, a day
+> the transcript board shows as nearly empty.
+
+Every headless spawner now appends `{ts, source, cwd, model, turns, ms, modelUsage}` to
+`~/.minami/headless-usage.jsonl`:
+- the toolshed's `claude.mjs` (its `logUsage` export; ~20 call sites: today-sync, goals, Minami ideas, video helpers);
+- `overnight.mjs`, `pitch.mjs`, `harness-week.mjs`, `probe.mjs`;
+- `bin/today-research.mjs`, which writes inline because the repo must not import from the vault.
+
+`usage-index.ts` reads the ledger the same incremental way, as entrypoint `headless` ("Automations (logged
+runs)"). Per-call context is the run's average over its turns, and a run is counted once on its
+costliest model. The board's Automations card lists runs by source. Spawners that keep transcripts
+(the Minami bot's brain, morning-heartbeat, compact/gtm/spawn-worker scripts) are already in the
+transcript index and must not log, or they would count twice.
+
+Thomas's call, the same day: overnight's **research and builder stages run on Sonnet 5.5**
+(execution). The writer stages (titles, judging, the ear, the editor, the script), the pitch and the weekly
+harness stay on Opus. The preflight probe now tests the builder on Sonnet: 17/17 beliefs right on its first run.
+
+**Rule for new code:** a `claude -p … --no-session-persistence` that doesn't go through `claude.mjs` must
+log its result to the ledger. Otherwise this page silently under-reports again.
+
 ---
