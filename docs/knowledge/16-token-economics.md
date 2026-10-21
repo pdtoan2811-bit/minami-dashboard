@@ -151,11 +151,14 @@ the pane (`runAs`) and the server-side advisor tool lets it consult Opus 5.5 (`a
 SDK's `settings.advisorModel`). Measured: **the advisor re-reads the whole transcript uncached at Opus
 input price on every consult**, so a consult at 300k costs ~$1.20, about 30 calls' worth of the
 Sonnet saving. So `syncAdvisor` (lib/agent/manager.ts) disarms it live, through
-`applyFlagSettings({ advisorModel: null })` with no respawn, once the chat passes `ADVISOR_CTX_CAP`
+`applyFlagSettings({ advisorModel: "" })` with no respawn, once the chat passes `ADVISOR_CTX_CAP`
 (120k, `MINAMI_DASHBOARD_ADVISOR_CTX_CAP`). It re-arms when a compaction brings the chat back under. A
 resumed chat is born disarmed, because its size is unknown until the first usage report. The init
 event reports the mode id when the CLI started the mode's `runAs`, so the picker's "staged" dot
 doesn't stick.
+
+> 🐛 **`advisorModel: null` does not disarm the advisor; `""` does.** Measured through the SDK on
+> 2026-10-21: after `null` the next turn's Opus input grew 17k → 37k; after `""` it stayed flat.
 
 Expected saving (an estimate; re-measure with `npm run tokens` a week on): subagent routing 9–11%,
 Build mode on execution-heavy panes 12–15%.

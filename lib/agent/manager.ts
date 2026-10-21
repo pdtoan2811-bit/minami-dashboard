@@ -860,7 +860,9 @@ function syncAdvisor(s: Session): void {
   const want = s.ctxUsed < ADVISOR_CTX_CAP;
   if (want === s.advisorOn) return;
   s.advisorOn = want;
-  Promise.resolve(s.q.applyFlagSettings({ advisorModel: want ? adv : null })).catch(() => { /* best effort — worst case the advisor stays as it was */ });
+  // "" and not null: measured 2026-10-21 against this SDK build, `null` is accepted and changes
+  // nothing (the next turn still consulted Opus); an empty string disarms it.
+  Promise.resolve(s.q.applyFlagSettings({ advisorModel: want ? adv : "" })).catch(() => { /* best effort — worst case the advisor stays as it was */ });
   broadcast(s, { t: "notice", kind: "model", text: want
     ? `Opus advisor on — chat is under ${Math.round(ADVISOR_CTX_CAP / 1000)}k`
     : `Opus advisor off — past ${Math.round(ADVISOR_CTX_CAP / 1000)}k each consult would re-read the whole chat at Opus price` });
