@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-21
+- **Chat agent board shows each subagent's model** (§3; `app/page.tsx`, `lib/model-catalog.ts`, `lib/agent/manager.ts`, `lib/use-agent.ts`). Running and finished rows name the model, e.g. "Sonnet 5.5". The finish notice carries it, and the tasks panel and the board share `shortModelLabel()`.
 - **Moved chats no longer open empty** (§9; `lib/claude-sessions.ts`, `lib/worktree.ts`, `lib/today-status.ts`). A ~1KB CLI stub with the same session id in a second project dir won the id lookup, so the pane showed no messages. The biggest file wins now, and `moveTranscriptHome` replaces a stub at its destination.
 - **Usage board counts headless automations** (§16; `lib/usage-index.ts`, `components/UsageBoard.tsx`, `bin/today-research.mjs`). Every no-transcript `claude -p` logs to `~/.minami/headless-usage.jsonl`, and the board gains an Automations card. The nightly video jobs (about 70 Opus-high sessions a night) were invisible before this. Overnight research and builder moved to Sonnet 5.5.
 - **Metrics board: usage from this Mac's transcripts** (§16; new `lib/usage-index.ts`, `app/api/usage`, `components/UsageBoard.tsx`). It replaces four cards that read the retired Hetzner collector. The board adds plan limits, per-day usage by model, main vs subagent and context size, subagent runs by model, an hour heatmap, usage by app and project, and the heaviest sessions. The routing card now lists Haiku 5.5.

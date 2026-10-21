@@ -6,7 +6,7 @@ import { useSetting } from "@/lib/use-settings";
 // The catalog, not lib/model-pins — that module reads ~/Minami's config with node:fs and can't be
 // imported into a client component. See its own comment: the split exists so one list of ids serves
 // both sides.
-import { SELECTABLE_MODELS, contextWindowFor, isPremiumModel, meetsMinCli } from "@/lib/model-catalog";
+import { SELECTABLE_MODELS, contextWindowFor, isPremiumModel, meetsMinCli, shortModelLabel } from "@/lib/model-catalog";
 import { useAgent, toolCategory, activityLabel, escalationHint, LINK_STALE_MS, type AgentMode, type ActivityState, type ActivityPhase, type AgentToolCall, type ToolCategory, type ToolOutputBlock, type Notice, type LiveTask, type SmithEvidence } from "@/lib/use-agent";
 import { onPageVisible, pageHidden } from "@/lib/page-visible";
 import { fetchSession } from "@/lib/session-fetch";
@@ -319,13 +319,18 @@ const TOOL_ICON: Record<ToolCategory, LucideIcon> = {
  *  fleet reads as one roster from launch to landing rather than two disconnected pill groups.
  *  `Date.now()` in render is safe here: every full-size caller re-renders each second on the ticking
  *  `elapsed` prop, so the per-row timers tick with it — no interval of their own needed. */
+function ModelTag({ id }: { id?: string }) {
+  const label = shortModelLabel(id);
+  return <span className="font-mono text-[9px] text-neutral-500" title={id || "model not known yet"}>{label || ""}</span>;
+}
+
 function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[] }) {
   if (!tasks.length && !finished.length) return null;
   // One shared grid so four agents read as a table without being one — ragged flex rows made a
   // fleet scannable only by reading every row. Columns: status dot · type · assignment (flexes) ·
-  // current tool · tool count · per-agent clock. Meta cells render even when empty so the columns
+  // model · current tool · tool count · per-agent clock. Meta cells render even when empty so the columns
   // hold their line.
-  const grid = "grid w-full grid-cols-[14px_auto_minmax(0,1fr)_auto_auto_auto] items-center gap-x-2 px-2.5 py-1 text-[10px]";
+  const grid = "grid w-full grid-cols-[14px_auto_auto_minmax(0,1fr)_auto_auto_auto] items-center gap-x-2 px-2.5 py-1 text-[10px]";
   return (
     <span className="agent-in flex w-full max-w-xl flex-col overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.02]">
       {/* The formation strip: one dot per agent, breathing while it flies, parked solid when it
@@ -349,6 +354,10 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
             <span className="agent-dot h-1.5 w-1.5 rounded-full" style={{ background: TOOL_TINT.task, animationDelay: `${-i * 0.35}s` }} />
           </span>
           <span className="rounded px-1 py-px font-mono text-[9px] font-medium" style={{ background: TOOL_TINT.task + "1e", color: TOOL_TINT.task }}>{k.agent || k.kind || "agent"}</span>
+          {/* The model it actually runs on, read off its own transcript (resolveTaskModel) — the type
+              alone can't say: a general-purpose agent inherits this pane's model, an Explore runs on
+              whatever its definition pins. Blank until the first transcript row lands. */}
+          <ModelTag id={k.model} />
           <span className="min-w-0 truncate text-neutral-300" title={k.description}>{k.description}</span>
           {/* Keyed by the tool text: the span REMOUNTS when the agent moves to a new tool, so the
               swap itself is the animation — motion exactly when something real happened, per the
@@ -365,6 +374,7 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
           <span key={`${n.at}-${i}`} title={n.text} className={`agent-in ${grid} border-t border-white/[0.04] opacity-60`}>
             <span className="agent-land text-center text-[10px] leading-none" style={{ color: tint }}>{ok ? "✓" : n.status === "stopped" ? "⏹" : "✗"}</span>
             <span className="rounded px-1 py-px font-mono text-[9px]" style={{ background: tint + "1e", color: tint }}>{n.agent || n.taskKind || "agent"}</span>
+            <ModelTag id={n.model} />
             {/* The notice text is "<subagent|bash|…> <status>: <summary>" — the summary half is the payload. */}
             <span className="col-span-4 min-w-0 truncate text-neutral-400">{n.text.replace(/^(?:subagent|bash|workflow|mcp|other) \w+: /, "")}</span>
           </span>

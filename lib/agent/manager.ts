@@ -405,7 +405,7 @@ export type AgentEvent =
   // "restarting" is the deploy path telling every open pane that the server is about to be swapped for
   // a new build — see drainForRestart() below. It's the one notice the user gets BEFORE the disruption
   // rather than after, which is the whole point: an unexplained dead turn reads as a bug.
-  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting" | "model" | "repo" | "blacksmith"; text: string; agent?: string; taskKind?: TaskKind; status?: "completed" | "failed" | "stopped" }
+  | { t: "notice"; kind: "retry" | "compact" | "task" | "limit" | "denied" | "aborted" | "restarting" | "model" | "repo" | "blacksmith"; text: string; agent?: string; taskKind?: TaskKind; status?: "completed" | "failed" | "stopped"; model?: string }
   | { t: "permission"; id: string; toolName: string; input: unknown; held?: boolean; expiresAt?: number } // waiting on the user
   | { t: "hold"; hold: boolean } // the Flow view's brake: park every tool call at the gate (REPLACE semantics)
   | { t: "ask"; id: string; questions: AgentQuestion[] } // Claude's AskUserQuestion tool
@@ -1647,7 +1647,7 @@ function handleSystem(s: Session, m: any) {
         // Last chance for the model: an agent that used no tools never emitted task_progress, so the
         // lookup there never ran. Its transcript certainly exists by now.
         if (t.kind === "agent" && !t.model) resolveTaskModel(s, t, { force: true });
-        broadcast(s, { t: "notice", kind: "task", text: `${t.kind === "agent" ? "subagent" : t.kind} ${m.status}: ${m.summary || t.description}`, agent: t.agent, taskKind: t.kind, status: m.status });
+        broadcast(s, { t: "notice", kind: "task", text: `${t.kind === "agent" ? "subagent" : t.kind} ${m.status}: ${m.summary || t.description}`, agent: t.agent, taskKind: t.kind, status: m.status, ...(t.model ? { model: t.model } : {}) });
         // The structured record, for the tasks panel's Finished list. Separate from the notice above
         // on purpose: notices are a five-deep transient strip, and a finished task is a durable thing
         // you scroll back to — different lifetime, different consumer.
