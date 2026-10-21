@@ -8,7 +8,7 @@
 // no chart dependency on the live box.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Boxes, CalendarClock, Gauge, Layers, ListOrdered, MonitorSmartphone, Workflow } from "lucide-react";
+import { Activity, Bot, Boxes, CalendarClock, Gauge, Layers, ListOrdered, MonitorSmartphone, Workflow } from "lucide-react";
 import type { UsageView, Family, LimitSample } from "@/lib/usage-index";
 
 const FAM: { key: Family; label: string; color: string }[] = [
@@ -395,6 +395,36 @@ export function UsageBoard() {
           </div>
 
           <Card>
+            <CardHeader><Bot className="h-4 w-4 text-[var(--sakura)]" /><CardTitle className="flex-1">Automations · headless runs</CardTitle>
+              <Legend items={FAM.filter((f) => d.automations.some((a) => (a.fam[f.key] || 0) > 0)).map((f) => ({ label: f.label, color: f.color }))} />
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {d.automations.length > 0 ? (
+                <div className="flex flex-col divide-y divide-white/[0.06]">
+                  {d.automations.map((a) => {
+                    const fams = FAM.filter((f) => (a.fam[f.key] || 0) > 0);
+                    return (
+                      <div key={a.source} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2 sm:grid-cols-[minmax(0,1fr)_140px_70px_70px_64px]">
+                        <span className="truncate text-xs text-neutral-200">{a.source}</span>
+                        <div className="hidden h-1.5 overflow-hidden rounded-full bg-white/[0.05] sm:flex">
+                          {fams.map((f) => <div key={f.key} style={{ width: `${(100 * (a.fam[f.key] || 0)) / Math.max(0.0001, a.usd)}%`, background: f.color }} />)}
+                        </div>
+                        <span className="hidden text-right text-[11px] tabular-nums text-neutral-400 sm:block">{a.runs} {a.runs === 1 ? "run" : "runs"}</span>
+                        <span className="hidden text-right text-[11px] tabular-nums text-neutral-400 sm:block">{a.hours * 60 < 1 ? `${Math.round(a.hours * 3600)}s` : a.hours < 1 ? `${Math.round(a.hours * 60)}m` : `${a.hours.toFixed(1)}h`}</span>
+                        <span className="text-right text-xs font-medium tabular-nums text-neutral-200">{usd(a.usd)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <span className="text-xs text-neutral-500">No logged headless runs in this window yet.</span>}
+              <p className="text-[11px] leading-relaxed text-neutral-500">
+                Scheduled and scripted Claude runs that keep no transcript: the nightly video jobs, the daily pitch, the toolshed helper (today-sync, goals, Minami ideas), today-research. Each run logs what Claude reported it used.
+                {d.ledgerSince ? ` Logging began ${new Date(d.ledgerSince).toLocaleDateString(undefined, { month: "short", day: "numeric" })}; runs before that aren't in any total on this page.` : " Nothing logged yet."}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
             <CardHeader><ListOrdered className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Heaviest sessions</CardTitle></CardHeader>
             <CardContent className="flex flex-col divide-y divide-white/[0.06]">
               {d.sessions.map((s) => {
@@ -419,7 +449,7 @@ export function UsageBoard() {
           </Card>
 
           <p className="flex items-center gap-1.5 text-[11px] text-neutral-600">
-            <Layers className="h-3 w-3" /> Calls run through the toolshed's <code>claude.mjs</code> keep no transcript, so this page can't see them. They're the Haiku and Sonnet automations and were too small to register on Oct 21.
+            <Layers className="h-3 w-3" /> Transcripts cover chats and anything that saves a session. Headless runs come from <code>~/.minami/headless-usage.jsonl</code>. A new headless spawner has to log there, or this page won't see it.
           </p>
         </>
       )}

@@ -22,8 +22,12 @@ import { tokStatus } from "./token-slayer";
 const ROOT = path.join(os.homedir(), ".claude", "projects");
 const STATE = path.join(os.homedir(), ".minami", "usage-index.json");
 const SAMPLES = path.join(os.homedir(), ".minami", "limit-samples.jsonl");
+// Headless runs that keep no transcript (`claude -p --no-session-persistence`: the toolshed's claude.mjs, the
+// nightly video builders, pitch, today-research) log what the CLI reported they used here instead (2026-10-21).
+// Before it existed they were invisible — the overnight run alone was ~70 Opus sessions a night.
+const LEDGER = process.env.MINAMI_HEADLESS_USAGE || path.join(os.homedir(), ".minami", "headless-usage.jsonl");
 const KEEP_DAYS = 35;
-const VERSION = 5;
+const VERSION = 7;
 const REFRESH_MS = 60_000;
 const SAMPLE_MS = 10 * 60_000;
 
@@ -49,7 +53,8 @@ type Agg = { calls: number; tin: number; tout: number; cr: number; cw: number; u
 type FileState = { size: number; offset: number; proj: string; sub: boolean; sid: string; runModel?: string };
 type SessionRow = { sid: string; proj: string; title: string; usd: number; subUsd: number; calls: number; peak: number; last: number; first: number; fam: Partial<Record<Family, number>> };
 type SubRun = { day: string; fam: Family; type: string };
-type State = { v: number; files: Record<string, FileState>; buckets: Record<string, Agg>; sessions: Record<string, SessionRow>; runs: SubRun[]; seen: Record<string, number>; builtAt: number };
+type AutoRow = { day: string; source: string; fam: Family; runs: number; usd: number; ms: number };
+type State = { v: number; files: Record<string, FileState>; buckets: Record<string, Agg>; sessions: Record<string, SessionRow>; runs: SubRun[]; seen: Record<string, number>; auto: Record<string, AutoRow>; ledgerOffset: number; builtAt: number };
 
 let state: State | null = null;
 let refreshing: Promise<void> | null = null;
@@ -63,7 +68,7 @@ function load(): State {
     const s = JSON.parse(fs.readFileSync(STATE, "utf8"));
     if (s.v === VERSION) return (state = s);
   } catch { /* first run, or an older format — rebuild */ }
-  return (state = { v: VERSION, files: {}, buckets: {}, sessions: {}, runs: [], seen: {}, builtAt: 0 });
+  return (state = { v: VERSION, files: {}, buckets: {}, sessions: {}, runs: [], seen: {}, auto: {}, ledgerOffset: 0, builtAt: 0 });
 }
 
 // Project label from the transcript folder: "-Users-me-tiktok-studio--minami-worktrees-chat-3" →
@@ -168,6 +173,55 @@ function dayKey(ts: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// "/Users/me/tiktok-studio/.minami-worktrees/x/scripts" → "tiktok-studio"; anything outside $HOME (a temp dir) → "~ (home)".
+function projectOfCwd(cwd?: string): string {
+  const home = os.homedir();
+  if (!cwd || !cwd.startsWith(home + path.sep)) return "~ (home)";
+  return cwd.slice(home.length + 1).split(path.sep)[0] || "~ (home)";
+}
+
+function readLedger(S: State, cutoff: number) {
+  let size = 0;
+  try { size = fs.statSync(LEDGER).size; } catch { return; }
+  if (size < S.ledgerOffset) S.ledgerOffset = 0;
+  if (size === S.ledgerOffset) return;
+  const fd = fs.openSync(LEDGER, "r");
+  try {
+    const buf = Buffer.alloc(size - S.ledgerOffset);
+    fs.readSync(fd, buf, 0, buf.length, S.ledgerOffset);
+    const text = buf.toString("utf8");
+    const end = text.lastIndexOf("\n");
+    if (end < 0) return;
+    for (const line of text.slice(0, end).split("\n")) {
+      let r: any; try { r = JSON.parse(line); } catch { continue; }
+      if (!(r.ts >= cutoff)) continue;
+      const proj = projectOfCwd(r.cwd);
+      const source = String(r.source || "unknown");
+      // A run reports every model it touched — the CLI's own small helper calls show up as a second Haiku entry —
+      // so the run is counted once, on the model that cost the most.
+      let topFam: Family | null = null, topUsd = -1;
+      for (const [model, u] of Object.entries<any>(r.modelUsage || {})) {
+        const tin = u.inputTokens || 0, tout = u.outputTokens || 0, cr = u.cacheReadInputTokens || 0, cw = u.cacheCreationInputTokens || 0;
+        // The result reports a whole run, not each call — the per-call context is its average over the run's turns.
+        const turns = Math.max(1, Number(r.turns) || 1);
+        const ctx = (tin + cr + cw) / turns;
+        const p = priceOf(model, ctx);
+        const usd = (tin * p[0] + tout * p[1] + cr * p[2] + cw * p[3]) / 1e6;
+        const fam = familyOf(model);
+        const bk = `${hourOf(r.ts)}|${fam}|0|headless|${proj}|${bandOf(ctx)}`;
+        const b = S.buckets[bk] ??= { calls: 0, tin: 0, tout: 0, cr: 0, cw: 0, usd: 0 };
+        b.calls += turns; b.tin += tin; b.tout += tout; b.cr += cr; b.cw += cw; b.usd += usd;
+        const ak = `${dayKey(r.ts)}|${source}|${fam}`;
+        const a = S.auto[ak] ??= { day: dayKey(r.ts), source, fam, runs: 0, usd: 0, ms: 0 };
+        a.usd += usd;
+        if (usd > topUsd) { topUsd = usd; topFam = fam; }
+      }
+      if (topFam) { const a = S.auto[`${dayKey(r.ts)}|${source}|${topFam}`]; a.runs++; a.ms += Number(r.ms) || 0; }
+    }
+    S.ledgerOffset += Buffer.byteLength(text.slice(0, end + 1), "utf8");
+  } finally { fs.closeSync(fd); }
+}
+
 async function refresh(): Promise<void> {
   const S = load();
   const cutoff = Date.now() - KEEP_DAYS * 864e5;
@@ -182,6 +236,7 @@ async function refresh(): Promise<void> {
     try { await readAppended(f, st, S, cutoff); } catch { /* unreadable mid-write — next refresh */ }
     progress.done++;
   }
+  try { readLedger(S, cutoff); } catch { /* a malformed ledger must not stop the transcript index */ }
   // Prune: files that aged out, buckets and sessions past the window.
   const minHour = hourOf(cutoff);
   for (const k of Object.keys(S.buckets)) if (Number(k.slice(0, k.indexOf("|"))) < minHour) delete S.buckets[k];
@@ -189,6 +244,7 @@ async function refresh(): Promise<void> {
   for (const [k, s] of Object.entries(S.sessions)) if (s.last && s.last < cutoff) delete S.sessions[k];
   for (const k of Object.keys(S.files)) if (!files.includes(k)) delete S.files[k];
   const minDay = dayKey(cutoff); S.runs = S.runs.filter((r) => r.day >= minDay);
+  for (const [k, a] of Object.entries(S.auto)) if (a.day < minDay) delete S.auto[k];
   S.builtAt = Date.now();
   try {
     fs.mkdirSync(path.dirname(STATE), { recursive: true });
@@ -238,7 +294,7 @@ export async function waitFresh(timeoutMs: number): Promise<void> {
 // ---- the board's view --------------------------------------------------------------------------------
 
 export const ENTRY_LABEL: Record<string, string> = {
-  "sdk-ts": "Dashboard chats", "sdk-cli": "Headless · bot & scripts", cli: "Terminal", "claude-desktop": "Desktop app",
+  "sdk-ts": "Dashboard chats", "sdk-cli": "Minami bot & scripts", headless: "Automations (logged runs)", cli: "Terminal", "claude-desktop": "Desktop app",
   unknown: "Other",
 };
 
@@ -254,7 +310,29 @@ export type UsageView = {
   subRuns: { day: string; fam: Record<Family, number> }[];
   sessions: (SessionRow & { href: string })[];
   limits: LimitSample[];
+  automations: { source: string; usd: number; runs: number; hours: number; fam: Partial<Record<Family, number>> }[];
+  ledgerSince: number | null;
 };
+
+function autoView(S: State, fromDay: string): UsageView["automations"] {
+  const m = new Map<string, UsageView["automations"][number]>();
+  for (const a of Object.values(S.auto)) {
+    if (a.day < fromDay) continue;
+    // "overnight:build" and "overnight:research" read as one job with stages; keep the stage visible.
+    const r = m.get(a.source) || { source: a.source, usd: 0, runs: 0, hours: 0, fam: {} };
+    r.usd += a.usd; r.runs += a.runs; r.hours += a.ms / 3_600_000; r.fam[a.fam] = (r.fam[a.fam] || 0) + a.usd;
+    m.set(a.source, r);
+  }
+  return [...m.values()].sort((a, b) => b.usd - a.usd);
+}
+
+function ledgerStart(): number | null {
+  try {
+    const fd = fs.openSync(LEDGER, "r");
+    try { const b = Buffer.alloc(8192); const n = fs.readSync(fd, b, 0, 8192, 0); return JSON.parse(b.subarray(0, n).toString("utf8").split("\n")[0]).ts ?? null; }
+    finally { fs.closeSync(fd); }
+  } catch { return null; }
+}
 
 export function view(days: number): UsageView {
   const S = load();
@@ -301,5 +379,7 @@ export function view(days: number): UsageView {
     subRuns: [...runMap].map(([day, fam]) => ({ day, fam })),
     sessions,
     limits: readSamples(now - Math.max(days, 7) * 864e5),
+    automations: autoView(S, dayKey(from)),
+    ledgerSince: ledgerStart(),
   };
 }
