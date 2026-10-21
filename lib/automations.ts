@@ -26,6 +26,12 @@ const UID = process.getuid?.() ?? 501;
 const DOMAIN = `gui/${UID}`;
 const LABEL_RE = /^com\.thomas\.[a-z0-9][a-z0-9.-]{0,60}$/;
 const PATH_ENV = `${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+// The run record (2026-10-21). launchd keeps no history — "last run" used to be the log file's mtime, which can't
+// tell a run that wrote nothing from one that never started (the upload sync went quiet for 10 h and looked fine).
+// Every plist's ProgramArguments is wrapped as [RUN, <label>, "--", ...command]; the wrapper (bin/minami-run, installed
+// at this stable path so no plist points into a worktree) appends a start and an end line per run to RUNS.
+const RUN = path.join(HOME, ".minami", "bin", "minami-run");
+const RUNS = process.env.MINAMI_RUNS_FILE || path.join(HOME, ".minami", "runs.jsonl");
 
 export type Schedule =
   | { kind: "daily"; at: string }                 // "20:00"
@@ -45,7 +51,12 @@ export type Automation = {
   pausedAt?: string | null;   // when it was paused from this page
   upSec?: number | null;      // how long the running process has been up
   lastLine?: string | null;   // the last thing it wrote to its log — the cheapest sign of life there is
+  /** From the run record: today's runs, oldest first (a start with no end = still running, or killed). */
+  today?: RunRecord[];
+  /** False for a plist that isn't wrapped yet — it has no run record, so the page can't vouch for its runs. */
+  recorded?: boolean;
 };
+export type RunRecord = { start: string; end?: string; exit?: number; secs?: number; last_line?: string };
 
 type Meta = Record<string, { name?: string; description?: string; project?: string; pausedAt?: string }>;
 
@@ -176,6 +187,33 @@ function upSeconds(pid?: number): number | null {
   return m ? ((+(m[1] || 0) * 24 + +(m[2] || 0)) * 60 + +m[3]) * 60 + +m[4] : null;
 }
 
+// The record's tail, grouped by job. 512 KB is ~3,000 runs: a few days of the every-10-min jobs, which is all the
+// page draws (today). Older lines are simply not read.
+function runRecords(): Map<string, RunRecord[]> {
+  const by = new Map<string, RunRecord[]>();
+  let text = "";
+  try {
+    const fd = fs.openSync(RUNS, "r"); const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, 512 * 1024); const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len); fs.closeSync(fd);
+    text = buf.toString("utf8");
+  } catch { return by; }
+  for (const line of text.split("\n")) {
+    let r: { id?: string; event?: string } & RunRecord;
+    try { r = JSON.parse(line); } catch { continue; } // the first line of the tail is usually cut in half
+    if (!r.id || !r.start) continue;
+    const list = by.get(r.id) ?? [];
+    // An end line repeats its start, so it replaces the start line it closes rather than adding a second run.
+    const open = r.event === "end" ? list.findIndex((x) => x.start === r.start && !x.end) : -1;
+    const rec: RunRecord = { start: r.start, end: r.end, exit: r.exit, secs: r.secs, last_line: r.last_line };
+    if (open >= 0) list[open] = rec; else list.push(rec);
+    by.set(r.id, list);
+  }
+  return by;
+}
+const isWrapped = (args: string[]) => args[0] === RUN && args[2] === "--";
+const wrap = (label: string, args: string[]) => (fs.existsSync(RUN) ? [RUN, label, "--", ...args] : args);
+
 function logTime(file?: string): string | null {
   if (!file) return null;
   try { return fs.statSync(file).mtime.toISOString(); } catch { return null; }
@@ -186,6 +224,8 @@ export function list(): Automation[] {
   const meta = { ...KNOWN, ...readMeta() };
   const disabled = disabledSet();
   const items: Automation[] = [];
+  const records = runRecords();
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
   for (const f of fs.existsSync(AGENTS) ? fs.readdirSync(AGENTS) : []) {
     if (!f.startsWith(PREFIX) || !f.endsWith(".plist")) continue;
     const label = f.slice(0, -6);
@@ -194,15 +234,20 @@ export function list(): Automation[] {
     const s = scheduleOf(p);
     const st = launchState(label);
     const m = { ...KNOWN[label], ...meta[label] };
-    const lastRun = logTime(p.StandardOutPath);
-    const args: string[] = p.ProgramArguments ?? (p.Program ? [p.Program] : []);
+    const raw: string[] = p.ProgramArguments ?? (p.Program ? [p.Program] : []);
+    const recorded = isWrapped(raw), args = recorded ? raw.slice(3) : raw;
+    const runs = records.get(label) ?? [];
+    const lastRec = runs.at(-1);
+    // The record wins when there is one: a run's own end time, not when its log was last touched.
+    const lastRun = lastRec ? lastRec.end ?? lastRec.start : logTime(p.StandardOutPath);
     const status: Automation["status"] = disabled.has(label) ? "paused" : !st.loaded ? "not-loaded" : st.pid ? "running"
       : st.lastExit && st.lastExit !== 0 ? "failing" : "idle";
     items.push({ id: label, kind: "launchd", name: m.name || label.slice(PREFIX.length), description: m.description || "", project: m.project,
       schedule: s, scheduleText: describeSchedule(s), nextRun: status === "paused" ? null : nextRun(s, lastRun),
       command: args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ").replaceAll(HOME, "~"), workdir: p.WorkingDirectory?.replace(HOME, "~"),
       log: p.StandardOutPath, status, pid: st.pid, lastExit: st.lastExit ?? null, runs: st.runs, lastRun, protected: PROTECTED.has(label),
-      pausedAt: status === "paused" ? m.pausedAt ?? null : null, upSec: upSeconds(st.pid), lastLine: lastLineOf(p.StandardOutPath || p.StandardErrorPath) });
+      pausedAt: status === "paused" ? m.pausedAt ?? null : null, upSec: upSeconds(st.pid), lastLine: lastLineOf(p.StandardOutPath || p.StandardErrorPath),
+      today: runs.filter((r) => Date.parse(r.start) >= midnight.getTime()).slice(-200), recorded });
   }
   for (const j of INPROC) {
     const host = items.find((i) => i.id === j.host);
@@ -271,7 +316,7 @@ export function update(e: Edit) {
     for (const k of ["StartCalendarInterval", "StartInterval", "KeepAlive", "RunAtLoad"]) delete p[k];
     Object.assign(p, keys);
   }
-  if (e.command !== undefined && e.command.trim()) p.ProgramArguments = ["/bin/zsh", "-lc", e.command.trim()];
+  if (e.command !== undefined && e.command.trim()) p.ProgramArguments = wrap(e.id, ["/bin/zsh", "-lc", e.command.trim()]);
   if (e.workdir !== undefined) { const w = expand(e.workdir); if (w && !fs.existsSync(w)) throw new Error(`no such folder: ${w}`); if (w) p.WorkingDirectory = w; else delete p.WorkingDirectory; }
   writePlist(file, p);
   reload(e.id);
@@ -288,7 +333,7 @@ export function create(c: Create) {
   if (!fs.existsSync(wd)) throw new Error(`no such folder: ${wd}`);
   const log = path.join(HOME, ".minami", "automations", "logs", `${label.slice(PREFIX.length)}.log`);
   fs.mkdirSync(path.dirname(log), { recursive: true });
-  writePlist(plistPath(label), { Label: label, ProgramArguments: ["/bin/zsh", "-lc", c.command.trim()], WorkingDirectory: wd,
+  writePlist(plistPath(label), { Label: label, ProgramArguments: wrap(label, ["/bin/zsh", "-lc", c.command.trim()]), WorkingDirectory: wd,
     EnvironmentVariables: { PATH: PATH_ENV }, StandardOutPath: log, StandardErrorPath: log, ...toCalendar(c.schedule) });
   const meta = readMeta(); meta[label] = { name: c.name.trim() || label, description: c.description?.trim() || "", project: c.project?.trim() || undefined }; writeMeta(meta);
   bootstrap(label);

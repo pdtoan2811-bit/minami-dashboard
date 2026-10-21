@@ -45,10 +45,14 @@ export type GoalRun = {
   decision: { assessment: string; on_track: boolean };
   todos: string[]; actions: GoalAction[]; usd: number | null;
 };
+/** One keyword's rank on one day, from ~/.minami/goals/<id>/ranks.jsonl (the runner's mini database, one line per
+ *  keyword per day). `rank` is always a number or null, and null means "read `read` results, not in them" — a failed
+ *  check writes no line at all, so a missing day is "no reading", never a result. */
+export type RankRow = { date: string; keyword: string; rank: number | null; read: number; url: string | null; gsc_position: number | null };
 export type GoalTodo = { text: string; why?: string; est_min?: number; done?: boolean };
 export type GoalQuestion = { question: string; options: { label: string; description?: string }[] };
 export type Goal = {
-  spec: GoalSpec; note: string; daysLeft: number; log: GoalRun[];
+  spec: GoalSpec; note: string; daysLeft: number; log: GoalRun[]; ranks: RankRow[];
   /** Thomas's part today, with the ticks from Today when the heartbeat has put them there. */
   today: { date: string; todos: GoalTodo[]; questions: GoalQuestion[] } | null;
   runner: { loaded: boolean; running: boolean; lastExit: number | null };
@@ -95,7 +99,7 @@ export function listGoals(): Goal[] {
       ? { date, todos: (t.todos || []).map((x) => ({ ...x, done: done.get(x.text) ?? false })), questions: t.loops || [] }
       : null;
     return {
-      spec, note, log: jsonl<GoalRun>(path.join(dir, "log.jsonl")), today, runner: r,
+      spec, note, log: jsonl<GoalRun>(path.join(dir, "log.jsonl")), ranks: jsonl<RankRow>(path.join(dir, "ranks.jsonl")), today, runner: r,
       daysLeft: Math.ceil((Date.parse(spec.deadline) - Date.parse(date)) / 864e5),
     };
   });

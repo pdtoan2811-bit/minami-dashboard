@@ -80,6 +80,52 @@ tab apart.
   and flashes the card. The toast sits at `bottom-24` on phones so the shell's bottom bar doesn't cover
   Undo.
 
+## The Day strip and the run record (2026-10-21)
+
+Thomas called the 24-hour ring in the pitches "confusing", then picked "T1 · Day strip" from the `autopilot-time`
+pitch. Its moodboard (`autopilot-time-mood`) counted what was wrong with the ring:
+- it put two clocks on one circle;
+- it left off 6 of the 16 runners (every N min, always on, at login);
+- it drew Sunday jobs on a Wednesday;
+- its dots had no names, and it had to be read by angle.
+
+The section is now `app/autopilot/DayStrip.tsx` plus a much shorter `RunnersSection.tsx`:
+- **The sentence:** "12 ran today. 3 need a look. Next is … at 20:10."
+- **Needs-a-look cards**, decided once in `lookOf()`. A runner gets one when it:
+  - failed (exit ≠ 0);
+  - isn't loaded;
+  - repeats but has been quiet for more than 3 periods, which prints "about N runs left no trace";
+  - is daily and missed its time by more than 45 min;
+  - finished a partial run (a last line like `9/10 rendered`);
+  - is unfiled (no project).
+- **The strip:** 00 → 24 in a straight line with a red now-line. Every timed runner is a named pin: ✓ done, amber
+  needs a look, blue later, grey passed with no record. Labels sit in 3 lanes, filled greedily, and a label left of
+  the now-line ends at its pin instead of crossing the line.
+- **Tracks:** one thin bar per repeating or always-on runner. It is green while on time, then amber dashes from
+  when it went quiet.
+- **One line for the rest:** at login, and not today (weekly jobs on another weekday).
+- **Clicking anything opens that runner's `Card` under the strip:** a pin, a track, a name, a look card or an
+  `#auto-<id>` link. The card has run, pause, edit, log and delete. The lane chart, the status chips and the two
+  bands of 16 stacked cards are gone.
+- **The phone (`PhoneDay`):** the same day runs top to bottom, with the now-line between past and later and the
+  repeating jobs in one "All day" block. A runner that needs a look starts open where it sits.
+
+**The run record.** launchd keeps no history, and "last run" was the log's mtime. That can't tell a run that wrote
+nothing from one that never started, which is how the upload sync went quiet for 10 h and still looked fine.
+- **The wrapper** is `bin/minami-run`, installed as `~/.minami/bin/minami-run` so no plist points into a worktree.
+  `minami-run <label> -- <command…>` appends `{id, event:"start", start}` when the job starts, then
+  `{id, event:"end", start, end, exit, secs, last_line}` to `~/.minami/runs.jsonl` (`MINAMI_RUNS_FILE` for tests).
+- **It is invisible to the job:** output passes through, the exit code is kept, and SIGTERM is forwarded.
+- **Migration:** all 15 `com.thomas.*` plists were migrated on 2026-10-21, with originals in
+  `~/.minami/automations/plist-backup-2026-10-21/`.
+  - 10 were reloaded straight away.
+  - `video-pitch` was mid-run, and `minami-bot` is always on, so those two take the wrapper at their next reload.
+  - `minami-login`, `minami-vocab` and `secondbrain-sync` are RunAtLoad, so they take it at the next login.
+- **What `list()` does with it:** it reads the last 512 KB of the record. Every item gets `today` (its runs since
+  midnight) and `recorded` (whether it is wrapped). `lastRun` prefers the record over the log's mtime. The command
+  shown on screen drops the wrapper prefix.
+- **create / update** wrap new commands the same way.
+
 ## Gotchas
 
 - **Status `NOT LOADED` is real, not a bug.** On 2026-10-14, `minami-login` was not loaded in the GUI
