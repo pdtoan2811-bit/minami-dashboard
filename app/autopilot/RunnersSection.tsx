@@ -10,8 +10,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Automation, Effect, Schedule } from "@/lib/automations";
 import { K as TK } from "../today/ui";
 import { AskBox } from "./AskBox";
-import { AskRows, useAsks } from "./Asks";
-import { AsideLine, DayStrip, DC, Tracks, dayOf, daySentence } from "./DayStrip";
+import { useAsks } from "./Asks";
+import { DayStrip, DC, dayOf, daySentence, type Day } from "./DayStrip";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d", pink: "#db6393", violet: "#a78bfa" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
@@ -156,8 +156,12 @@ export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: 
     return () => window.removeEventListener("hashchange", onHash);
   }, [jump]);
 
-  const day = useMemo(() => dayOf(items ?? []), [items, now]); // `now` ticks each minute so the now-line and "in 4 h" move
-  const pickedA = (items ?? []).find((a) => a.id === picked) ?? null;
+  const day = useMemo(() => dayOf(items ?? []), [items, now]);
+  const openCard = (a: Automation) => (
+    <Card a={a} busy={busy} open={open?.id === a.id ? open.mode : null} flash={flash === a.id}
+      toggle={(mode) => setOpen(open?.id === a.id && open.mode === mode ? null : { id: a.id, mode })}
+      run={(op, extra) => run(a, op, extra)} />
+  ); // `now` ticks each minute so the now-line and "in 4 h" move
 
   return (
     <div>
@@ -167,11 +171,10 @@ export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: 
         @keyframes auto-flash { 0%, 100% { box-shadow: 0 0 0 0 transparent } 30% { box-shadow: 0 0 0 2px ${K.accentBright} } }
         @media (prefers-reduced-motion: reduce) { .auto-anim { animation: none !important } }
       `}</style>
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-[22px] font-semibold tracking-tight">Runners</h2>
-          {items && <p className="mt-1.5 text-[19px] font-semibold leading-snug">{daySentence(day)}</p>}
-        </div>
+      {/* V4 of the autopilot-layout pitch (2026-10-22): the sentence, the slim strip, what needs a look, then every
+          other runner in one table with its columns lined up. Chats live in the Minami panel on the right. */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {items && <p className="max-w-[780px] text-[24px] font-semibold leading-snug tracking-tight">{daySentence(day)}</p>}
         <Btn onClick={() => setCreating((v) => !v)} primary>{creating ? "Cancel" : "+ New automation"}</Btn>
       </div>
 
@@ -184,41 +187,33 @@ export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: 
 
       {!items && !err && <p className="pt-16 text-center text-sm" style={{ color: K.muted }}>Loading…</p>}
       {items && items.length > 0 && <>
+        <div className="mt-5 rounded-2xl px-5 pb-2 pt-3" style={{ background: "rgba(255,255,255,.035)", border: `1px solid ${K.line}` }}>
+          <DayStrip day={day} picked={picked} onPick={(id) => jump(id)} />
+        </div>
         {day.looks.length > 0 && (
-          <div className="mt-5 grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))" }}>
+          <div className="mt-4 grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))" }}>
+            {/* Its NAME first: "0/10" and "unfiled" as the headline only made sense after reading the name under them. */}
             {day.looks.map(({ a, l }) => (
-              <div key={a.id} className="rounded-2xl p-4" style={{ background: mix(DC.amber, 7), border: `1px solid ${mix(DC.amber, 32)}` }}>
-                <div className="text-[30px] font-bold leading-none" style={{ color: DC.amber }}>{l.big}</div>
-                <div className="mt-2 text-[16px] font-semibold">{a.name}</div>
+              <div key={a.id} className="rounded-2xl p-4" style={{ background: mix(DC.amber, 6), border: `1px solid ${mix(DC.amber, 30)}` }}>
+                <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                  <span className="text-[16px] font-semibold">{a.name}</span>
+                  <span className="text-[14px] font-semibold" style={{ color: DC.amber }}>{l.big}</span>
+                </div>
                 <p className="mt-1 text-[14.5px] leading-snug" style={{ color: K.muted }}>{l.why}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Btn primary onClick={() => jump(a.id, "logs")}>Open the log</Btn>
+                  <FixIt a={a} why={l.why} />
+                  <Btn onClick={() => jump(a.id, "logs")}>Open the log</Btn>
                   {a.kind === "launchd" && a.status !== "running" && a.schedule.kind !== "always" && <Btn onClick={() => run(a, "run")}>Run now</Btn>}
                   {!a.project && <Btn onClick={() => jump(a.id, "edit")}>Name it</Btn>}
-                  <FixIt a={a} why={l.why} />
                 </div>
-                {/* The chat it started stays on the card, with its state, and opens in place (Asks.tsx). */}
-                <AskRows kind="runner" id={a.id} max={2} className="mt-3" />
+                {/* "Open the log" / "Name it" open its card here, under the problem it's about. */}
+                {picked === a.id && <div className="mt-3">{openCard(a)}</div>}
               </div>
             ))}
           </div>
         )}
-        <div className="mt-6 rounded-2xl px-5 pb-5 pt-4" style={{ background: K.paper, border: `1px solid ${K.line}` }}>
-          <DayStrip day={day} picked={picked} onPick={(id) => jump(id)} />
-          {day.tracks.length > 0 && <>
-            <p className="mb-2 mt-4 text-[11.5px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>ALL DAY · {day.tracks.length}</p>
-            <Tracks day={day} onPick={(id) => jump(id)} />
-          </>}
-          <div className="mt-4"><AsideLine day={day} onPick={(id) => jump(id)} /></div>
-        </div>
-        {pickedA && (
-          <div className="mt-3">
-            <Card a={pickedA} busy={busy} open={open?.id === pickedA.id ? open.mode : null} flash={flash === pickedA.id}
-              toggle={(mode) => setOpen(open?.id === pickedA.id && open.mode === mode ? null : { id: pickedA.id, mode })}
-              run={(op, extra) => run(pickedA, op, extra)} />
-            <button type="button" onClick={() => { setPicked(null); setOpen(null); }} className="mt-1.5 text-[12.5px]" style={{ ...MONO, color: K.faint }}>close</button>
-          </div>
-        )}
+        <RunnerTable day={day} picked={picked} pick={(id) => (picked === id ? (setPicked(null), setOpen(null)) : jump(id))}
+          renderOpen={openCard} />
       </>}
 
       {bin.length > 0 && (
@@ -312,7 +307,8 @@ function Card({ a, busy, open, flash, toggle, run }: {
         )}
       </div>
       {/* About THIS runner: the chat runs in its workdir with its schedule, status and log (lib/autopilot-ask.ts). */}
-      <div className="px-4 pb-3 pl-5"><AskBox row url="/api/autopilot/ask" body={{ kind: "runner", id: a.id }} field="question" placeholder="Ask about this runner…" /></div>
+      {/* Its chat is a thread in the Minami panel (rows={false}): the card stays a card. */}
+      <div className="px-4 pb-3 pl-5"><AskBox row rows={false} url="/api/autopilot/ask" body={{ kind: "runner", id: a.id }} field="question" placeholder="Ask Minami about this runner…" /></div>
       {open === "logs" && <div className="px-4 pb-3 pl-5"><Logs id={a.id} /></div>}
       {open === "edit" && <div className="px-3 pb-3"><Editor a={a} busy={isBusy("update")} onCancel={() => toggle("edit")}
         onSave={async (v) => { if (await run("update", v)) toggle("edit"); }} /></div>}
@@ -453,15 +449,16 @@ function Menu({ items }: { items: { label: string; onClick: () => void; danger?:
 function Btn({ children, onClick, primary, busy }: { children: React.ReactNode; onClick: () => void; primary?: boolean; busy?: boolean }) {
   return (
     <button type="button" onClick={onClick} disabled={busy}
-      className="rounded-full px-3.5 py-1.5 text-[12.5px] transition-opacity disabled:opacity-50"
-      style={{ ...MONO, background: primary ? K.accent : "rgba(255,255,255,.06)", color: "#fff", border: `1px solid ${primary ? K.accent : K.line}` }}>
+      // Plain type, not mono (V4, 2026-10-22): monospace buttons read as code beside the names.
+      className="rounded-full px-3.5 py-1.5 text-[13.5px] font-medium transition-opacity disabled:opacity-50"
+      style={{ background: primary ? K.accent : "rgba(255,255,255,.06)", color: "#fff", border: `1px solid ${primary ? K.accent : K.line2}` }}>
       {busy ? "…" : children}
     </button>
   );
 }
 
 // "Fix it with Minami" on a runner that needs a look: a chat in the runner's folder with its log tail (lib/autopilot-
-// ask.ts), which asks before changing anything. The page stays put; the chat becomes a row on this card.
+// ask.ts), which asks before changing anything. The page stays put; the chat becomes a thread in the Minami panel.
 function FixIt({ a, why }: { a: Automation; why: string }) {
   const { asks, reload } = useAsks();
   const [busy, setBusy] = useState(false);
@@ -475,5 +472,50 @@ function FixIt({ a, why }: { a: Automation; why: string }) {
     } catch { setErr("Couldn't reach the dashboard."); }
     finally { setBusy(false); }
   };
-  return <><Btn onClick={go} busy={busy}>{busy ? "Starting…" : "Fix it with Minami"}</Btn>{err && <span className="self-center text-[12px]" style={{ color: "#ff8a8d" }}>{err}</span>}</>;
+  return <><Btn primary onClick={go} busy={busy}>{busy ? "Starting…" : "Fix it with Minami"}</Btn>{err && <span className="self-center text-[12px]" style={{ color: "#ff8a8d" }}>{err}</span>}</>;
+}
+
+// Every runner that doesn't need a look, as one table (V4, 2026-10-22): today's timed runs in order, then the ones
+// that repeat or stay on, then at login and other weekdays. The columns line up — name · project · when · how it
+// went — so the times compare at a glance; a row opens its card right under it, and the list stays where it was.
+function RunnerTable({ day, picked, pick, renderOpen }: { day: Day; picked: string | null; pick: (id: string) => void; renderOpen: (a: Automation) => React.ReactNode }) {
+  const look = new Set(day.looks.map((x) => x.a.id));
+  const seen = new Set<string>();
+  // A runner with two times today (the Slack card: 00:30 lock, 21:30 post) is one row with both times.
+  const timed = day.pins.filter((p) => !look.has(p.a.id) && !seen.has(p.a.id) && seen.add(p.a.id)).map((p) => {
+    const all = day.pins.filter((x) => x.a.id === p.a.id);
+    return { a: p.a, when: all.map((x) => `${x.atText}${x.tag ? ` ${x.tag}` : ""}`).join(" · "), note: all.map((x) => x.note).filter(Boolean).at(-1) ?? "", st: p.state };
+  });
+  const groups: [string, { a: Automation; when: string; note: string; color: string }[]][] = [
+    ["Today, in order", timed.map((r) => ({ ...r, color: r.st === "later" ? DC.blue : r.st === "passed" ? DC.grey : DC.green }))],
+    ["All day", day.tracks.filter((t) => !look.has(t.a.id)).map((t) => ({ a: t.a, when: t.a.scheduleText.toLowerCase(), note: t.note, color: t.state === "off" ? DC.grey : DC.green }))],
+    ["At login · other days", [...day.login, ...day.notToday].filter((a) => !look.has(a.id)).map((a) => ({ a, when: a.scheduleText, note: a.lastRun ? `last ${ago(a.lastRun)}` : "", color: DC.grey }))],
+  ];
+  const n = groups.reduce((s, [, r]) => s + r.length, 0);
+  if (!n) return null;
+  return (
+    <div className="mt-7">
+      <div className="mb-2.5 text-[12px] font-semibold uppercase tracking-[.07em]" style={{ color: K.faint }}>{day.looks.length ? `The other ${n}` : `All ${n}`}</div>
+      <div className="overflow-hidden rounded-2xl" style={{ background: "rgba(0,0,0,.22)", border: `1px solid ${K.line}` }}>
+        {groups.filter(([, r]) => r.length).map(([g, rows]) => (
+          <div key={g}>
+            <div className="px-4 pb-1.5 pt-3.5 text-[12px] font-semibold uppercase tracking-[.07em]" style={{ color: K.faint }}>{g}</div>
+            {rows.map((r) => (
+              <div key={r.a.id}>
+                <button type="button" onClick={() => pick(r.a.id)} className="grid w-full items-center gap-4 px-4 py-2.5 text-left text-[14.5px] hover:bg-white/[0.04]"
+                  style={{ gridTemplateColumns: "10px minmax(0,1.4fr) minmax(0,.9fr) 190px minmax(0,1fr)", borderTop: `1px solid ${K.line}`, background: picked === r.a.id ? mix(K.accentBright, 9) : undefined }}>
+                  <span className="h-2 w-2 rounded-full" style={{ background: r.color }} />
+                  <span className="truncate font-medium">{r.a.name}</span>
+                  <span className="truncate text-[13px]" style={{ color: K.faint }}>{r.a.project || "not filed"}</span>
+                  <span className="truncate text-[12.5px]" style={{ ...MONO, color: K.muted }}>{r.when}</span>
+                  <span className="truncate text-[13.5px]" style={{ color: K.faint }}>{r.note}</span>
+                </button>
+                {picked === r.a.id && <div className="px-3 pb-3">{renderOpen(r.a)}</div>}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

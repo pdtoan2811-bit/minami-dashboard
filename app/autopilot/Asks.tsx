@@ -60,49 +60,73 @@ export function AskRows({ kind, id, max = 4, className = "" }: { kind: AskKind; 
   );
 }
 
+/** A chat's word: an unwatched (older) ask has no live tile, and "gone" reads as REPLIED, which it most likely is.
+ *  A chat a few seconds old may not be in the live feed's next answer yet: that is "starting", not "replied". */
+export function askState(a: Ask, tile: LiveTile | undefined, watched = Date.now() - Date.parse(a.at) < LIVE_MS): HandoffState {
+  return !watched ? "gone" : !tile && Date.now() - Date.parse(a.at) < 60_000 ? "running" : stateOf(tile);
+}
+
+/** One line of where a chat stands: what it's asking, else the first line of its last reply. */
+export function askLine(st: HandoffState, tile: LiveTile | undefined): string {
+  return tile?.need?.summary || tile?.ended?.text?.split("\n").find((l) => l.trim()) || (st === "running" ? "Minami is on it…" : "");
+}
+
+/** The whole reply, read from the transcript while `open`, and again whenever the chat's state changes, so an open
+ *  reply follows the chat without a reload. The live feed's own text is cut at 400 chars. */
+export function useFullReply(sessionId: string, open: boolean, st: HandoffState, tile: LiveTile | undefined) {
+  const [reply, setReply] = useState<{ text: string; question?: string; failed?: boolean } | null>(null);
+  const need = tile?.need, endedAt = tile?.ended?.at;
+  useEffect(() => {
+    if (!open) return;
+    let gone = false;
+    fetch(`/api/glance/last?id=${encodeURIComponent(sessionId)}${need ? `&need=${encodeURIComponent(need.id)}` : ""}`, { cache: "no-store" })
+      .then((r) => r.json()).then((j) => { if (!gone) setReply({ text: j.text || "", question: j.question }); })
+      // Never leave "Reading the chat…" up forever: a dropped read says so, and reopening tries again.
+      .catch(() => { if (!gone) setReply({ text: "", failed: true }); });
+    return () => { gone = true; };
+  }, [open, sessionId, st, endedAt, need?.id]);
+  return reply;
+}
+
+/** Send a reply into an ask's chat (the live one, or resumed). Returns the error, or "" on success. */
+export async function replyInto(sessionId: string, text: string): Promise<string> {
+  try {
+    const r = await fetch("/api/autopilot/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "reply", sessionId, text }) }).then((r) => r.json());
+    return r.error || "";
+  } catch { return "Couldn't reach the dashboard."; }
+}
+
+/** Pick one of a single-choice question's options. Returns the error, or "". */
+export async function pickAnswer(sessionId: string, needId: string, opt: string): Promise<string> {
+  const r = await answerInPlace(sessionId, needId, opt).catch(() => ({ ok: false, reason: "Couldn't reach the dashboard." }));
+  return r.ok ? "" : r.reason || "Couldn't answer.";
+}
+
 function AskRow({ a, tile, watched, first }: { a: Ask; tile: LiveTile | undefined; watched: boolean; first: boolean }) {
   const openChat = useOpenChat();
   const { reload } = useAsks();
   const [open, setOpen] = useState(false);
-  const [reply, setReply] = useState<{ text: string; question?: string; failed?: boolean } | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  // An unwatched (older) row has no live tile; "gone" would read as REPLIED, which is what it most likely is.
-  // A chat a few seconds old may not be in the live feed's next answer yet: that is "starting", not "replied".
-  const st = !watched ? "gone" : !tile && Date.now() - Date.parse(a.at) < 60_000 ? "running" : stateOf(tile);
+  const st = askState(a, tile, watched);
   const s = CHAT_STATE[st];
   const need = tile?.need;
-  const line = need?.summary || tile?.ended?.text?.split("\n").find((l) => l.trim()) || (st === "running" ? "Minami is on it…" : "");
-
-  // The whole reply, read from the transcript when the row opens and again whenever the chat's state changes,
-  // so an open row follows the chat without a reload. The feed's own text is cut at 400 chars.
-  const endedAt = tile?.ended?.at;
-  useEffect(() => {
-    if (!open) return;
-    let gone = false;
-    fetch(`/api/glance/last?id=${encodeURIComponent(a.sessionId)}${need ? `&need=${encodeURIComponent(need.id)}` : ""}`, { cache: "no-store" })
-      .then((r) => r.json()).then((j) => { if (!gone) setReply({ text: j.text || "", question: j.question }); })
-      // Never leave "Reading the chat…" up forever: a dropped read says so, and reopening the row tries again.
-      .catch(() => { if (!gone) setReply({ text: "", failed: true }); });
-    return () => { gone = true; };
-  }, [open, a.sessionId, st, endedAt, need?.id]);
+  const line = askLine(st, tile);
+  const reply = useFullReply(a.sessionId, open, st, tile);
 
   const send = async () => {
     const v = note.trim();
     if (!v || busy) return;
     setBusy(true); setErr("");
-    try {
-      const r = await fetch("/api/autopilot/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "reply", sessionId: a.sessionId, text: v }) }).then((r) => r.json());
-      if (r.error) setErr(r.error); else { setNote(""); reload(); }
-    } catch { setErr("Couldn't reach the dashboard."); }
-    finally { setBusy(false); }
+    const e = await replyInto(a.sessionId, v);
+    if (e) setErr(e); else { setNote(""); reload(); }
+    setBusy(false);
   };
   const pick = async (opt: string) => {
     if (!need) return;
     setBusy(true); setErr("");
-    const r = await answerInPlace(a.sessionId, need.id, opt).catch(() => ({ ok: false, reason: "Couldn't reach the dashboard." }));
-    if (!r.ok) setErr(r.reason || "Couldn't answer.");
+    setErr(await pickAnswer(a.sessionId, need.id, opt));
     setBusy(false);
   };
 

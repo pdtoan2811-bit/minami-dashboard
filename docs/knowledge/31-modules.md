@@ -66,6 +66,13 @@ that folder any other way, from a terminal or with another tool, knows exactly a
   reply box (`POST /api/autopilot/ask {op:"reply"}` → the live chat's key, or a resume under a fresh key;
   only chats in that file). The boxes used to `router.push("/?open=…")`, which dropped Thomas on the home grid
   mid-decision. "Open the full chat →" is the opt-in, as on Today.
+- **On desktop the threads are in one panel, not on the cards** (V4 of `autopilot-layout`, same day, `MinamiPanel.tsx`).
+  The rows on the cards sat in a 300 px column and the page had two ask boxes. Now Minami is docked on the right of
+  Goals and Runners: each chat is your question as a bubble with the reply under it (newest open in full via
+  `useFullReply`, older ones one line), answer buttons for a single pick, and ONE message box at the foot that starts
+  a question, or after "Reply" on a thread writes into that chat (`replyInto`). Its scope: Goals = kind goal for the
+  goal on screen + the goals module + `goals:new`; Runners = every runner + the runners module. `AskBox rows={false}`
+  keeps a card's box from drawing its own rows. The phone keeps the rows on the cards.
 
 ## The pilot: Goals (`~/.minami/goals`, 2026-10-22)
 

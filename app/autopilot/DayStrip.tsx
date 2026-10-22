@@ -5,13 +5,12 @@
 // without an hour (every 10 min, always on…) off it entirely, drew Sunday jobs on a Wednesday, had unnamed dots, and
 // asked him to read angles. So here:
 //   • time is a straight line, 00 → 24, with a red now-line; each timed runner is a NAMED pin at its time;
-//   • repeating and always-on runners are a thin track each under the line — green while on time, amber dashes from
-//     the moment it went quiet — so all of them are on screen;
-//   • at-login and not-today (another weekday) are one line under the tracks;
+//   • repeating, always-on, at-login and other-weekday runners are rows in the runner table under the strip
+//     (RunnersSection, since V4 of the autopilot-layout pitch), so all of them are on screen;
 //   • the goal's days are not here at all (Scoreboard's GoalDays);
 //   • what needs a look is decided here, once, and drawn as a card by the section (and as an amber pin/track).
 // On a phone the same day runs top to bottom (PhoneDay).
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import type { Automation } from "@/lib/automations";
 import { K } from "../today/ui";
 
@@ -104,88 +103,34 @@ export function daySentence(d: Day): ReactNode {
 const PIN_COLOR: Record<Pin["state"], string> = { done: DC.green, running: DC.green, look: DC.amber, later: DC.blue, passed: DC.grey };
 
 // ── desktop: the strip ─────────────────────────────────────────────────────────────────────────────────────
-// Labels sit in three lanes (two above the line, one below). Each pin takes the first lane whose last label ends
-// before this one starts; widths are estimated from the text, since measuring every label would need a second render.
-const LANES = [0, 60, 176];
+// Slim since V4 of the autopilot-layout pitch (2026-10-22). The T1 strip named every pin in three label lanes, each
+// with a line down to its dot: it read as a zig-zag, two dots piled up at 00:15, and a two-time runner was named
+// twice. Names now live in the runner table under it (RunnersSection), lined up in columns; the strip only shows
+// WHEN — a dot per run, filled once it ran, amber with its time for what needs a look, and the now-line. A dot is
+// still a button (it opens that runner) and still says its name on hover.
 export function DayStrip({ day, onPick, picked }: { day: Day; onPick: (id: string) => void; picked: string | null }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [w, setW] = useState(1000);
-  useEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
-    ro.observe(ref.current); return () => ro.disconnect();
-  }, []);
-  const now = hoursOf(new Date());
-  const x = (h: number) => (h / 24) * w;
-  const ends = [-1e9, -1e9, -1e9];
-  const placed = day.pins.map((p) => {
-    const text = `${p.state === "done" ? "✓ " : ""}${p.a.name}`;
-    const lw = Math.min(280, Math.max(text.length * 8.6, (p.atText.length + p.note.length + 3) * 7.6) + 10);
-    let left = Math.min(Math.max(0, x(p.at) - lw / 2), w - lw);
-    // A label left of the now-line that would cross it ends at its pin instead.
-    if (p.at < now && left + lw > x(now) && x(p.at) < x(now)) left = Math.max(0, x(p.at) - lw + 8);
-    let lane = ends.findIndex((e) => e + 14 <= left);
-    if (lane < 0) lane = ends.indexOf(Math.min(...ends));
-    ends[lane] = left + lw;
-    return { p, text, left, lw, lane };
-  });
-  return (
-    <div ref={ref} className="relative" style={{ height: 228 }}>
-      <div className="absolute inset-x-0 h-[2px]" style={{ top: 132, background: "rgba(255,255,255,.18)" }} />
-      <div className="absolute left-0 h-[4px] rounded-full" style={{ top: 131, width: x(now), background: "rgba(255,255,255,.42)" }} />
-      {[0, 3, 6, 9, 12, 15, 18, 21, 24].map((h) => (
-        <span key={h} className="absolute -translate-x-1/2 text-[12.5px]" style={{ ...MONO, top: 144, left: x(h), color: K.faint }}>{String(h).padStart(2, "0")}</span>
-      ))}
-      {/* "now" sits just above the line, beside it: below it would collide with the lower lane's labels. */}
-      <div className="pointer-events-none absolute w-[2px]" style={{ left: x(now), top: 0, bottom: 0, background: DC.red }}>
-        <span className="absolute whitespace-nowrap text-[13px] font-bold" style={{ left: 7, top: 106, color: DC.red }}>now {hm(new Date())}</span>
-      </div>
-      {placed.map(({ p, text, left, lw, lane }, i) => {
-        const top = LANES[lane], below = lane === 2, c = PIN_COLOR[p.state], on = picked === p.a.id;
-        return (
-          <div key={`${p.a.id}-${i}`}>
-            <span className="absolute w-px" style={{ left: x(p.at), top: below ? 141 : top + 42, height: below ? top - 141 : 125 - top - 42, background: "rgba(255,255,255,.16)" }} />
-            <button type="button" onClick={() => onPick(p.a.id)} aria-label={`${p.a.name}, ${p.atText}`}
-              className="absolute h-[16px] w-[16px] -translate-x-1/2 rounded-full transition-transform hover:scale-125"
-              style={{ left: x(p.at), top: 125, border: `2.5px solid ${c}`, background: p.state === "done" ? c : K.bg, boxShadow: on ? `0 0 0 4px ${tint(c, 35)}` : undefined }} />
-            <button type="button" onClick={() => onPick(p.a.id)} className="absolute rounded-lg px-1 text-left hover:bg-white/5"
-              style={{ left, top, width: lw, textAlign: x(p.at) < left + 4 ? "left" : x(p.at) > left + lw - 12 ? "right" : "center" }}>
-              <b className="block truncate text-[15px] font-semibold" style={{ color: p.state === "look" ? DC.amber : p.state === "passed" ? K.muted : undefined }}>{text}</b>
-              <span className="block truncate text-[13.5px]" style={{ color: K.muted }}>{p.atText}{p.tag ? ` ${p.tag}` : ""}{p.note ? ` · ${p.note}` : ""}</span>
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-export function Tracks({ day, onPick }: { day: Day; onPick: (id: string) => void }) {
   const now = hoursOf(new Date());
   const pct = (h: number) => `${(h / 24) * 100}%`;
   return (
-    <div className="flex flex-col gap-2">
-      {day.tracks.map(({ a, state, quietFrom, note }) => (
-        <button key={a.id} type="button" onClick={() => onPick(a.id)} className="grid items-center gap-4 rounded-lg px-1 py-0.5 text-left text-[15px] hover:bg-white/[0.04]" style={{ gridTemplateColumns: "240px minmax(0,1fr) 220px" }}>
-          <span className="truncate" style={{ color: state === "look" ? DC.amber : K.muted }}>{a.name}</span>
-          <span className="relative h-[10px] rounded-full" style={{ background: "rgba(255,255,255,.06)" }}>
-            {state !== "off" && <i className="absolute inset-y-0 left-0 rounded-full" style={{ width: pct(quietFrom ?? now), background: tint(DC.green, 55) }} />}
-            {quietFrom != null && <i className="absolute inset-y-0 rounded-full" style={{ left: pct(quietFrom), width: pct(Math.max(0.2, now - quietFrom)), background: `repeating-linear-gradient(90deg, ${DC.amber} 0 6px, transparent 6px 11px)` }} />}
-          </span>
-          <span className="truncate text-right text-[14px]" style={{ color: state === "look" ? DC.amber : K.muted }}>{a.scheduleText.toLowerCase()} · {note}</span>
-        </button>
+    <div className="relative" style={{ height: 84 }}>
+      <div className="absolute inset-x-0 h-[2px]" style={{ top: 44, background: "rgba(255,255,255,.16)" }} />
+      <div className="absolute left-0 h-[3px] rounded-full" style={{ top: 43.5, width: pct(now), background: "rgba(255,255,255,.38)" }} />
+      {day.pins.filter((p) => p.state === "look").map((p, i) => (
+        <span key={`l${p.a.id}${i}`} className="absolute -translate-x-1/2 whitespace-nowrap text-[13px] font-semibold" style={{ ...MONO, left: pct(p.at), top: 12, color: DC.amber }}>{p.atText}</span>
       ))}
-    </div>
-  );
-}
-
-export function AsideLine({ day, onPick }: { day: Day; onPick: (id: string) => void }) {
-  if (!day.login.length && !day.notToday.length) return null;
-  const Name = ({ a }: { a: Automation }) => <button type="button" onClick={() => onPick(a.id)} className="underline decoration-white/15 underline-offset-2 hover:decoration-white/50">{a.name}</button>;
-  return (
-    <div className="flex flex-wrap gap-x-7 gap-y-1 text-[14.5px]" style={{ color: K.faint }}>
-      {day.login.length > 0 && <span>At login: {day.login.map((a, i) => <span key={a.id}>{i ? ", " : ""}<Name a={a} />{a.lastRun ? ` ✓ ${hm(new Date(a.lastRun))}` : ""}</span>)}</span>}
-      {day.notToday.length > 0 && <span>Not today: {day.notToday.map((a, i) => <span key={a.id}>{i ? ", " : ""}<Name a={a} /> <span style={MONO}>{a.scheduleText.replace(/s at /, " ")}</span></span>)}</span>}
+      {day.pins.map((p, i) => {
+        const c = PIN_COLOR[p.state], on = picked === p.a.id;
+        return (
+          <button key={`${p.a.id}-${i}`} type="button" onClick={() => onPick(p.a.id)} title={`${p.a.name} · ${p.atText}${p.note ? ` · ${p.note}` : ""}`} aria-label={`${p.a.name}, ${p.atText}`}
+            className="absolute h-[14px] w-[14px] -translate-x-1/2 rounded-full transition-transform hover:scale-125"
+            style={{ left: pct(p.at), top: 38, border: `2.5px solid ${c}`, background: p.state === "done" ? c : K.bg, boxShadow: on ? `0 0 0 4px ${tint(c, 35)}` : undefined }} />
+        );
+      })}
+      <div className="pointer-events-none absolute w-[2px]" style={{ left: pct(now), top: 4, height: 56, background: DC.red }} />
+      {[0, 6, 12, 18, 24].map((h) => Math.abs(h - now) > 1.4 && (
+        <span key={h} className={`absolute text-[12px] ${h === 24 ? "-translate-x-full" : h ? "-translate-x-1/2" : ""}`} style={{ ...MONO, top: 62, left: pct(h), color: K.faint }}>{String(h).padStart(2, "0")}</span>
+      ))}
+      <span className="absolute -translate-x-1/2 text-[12.5px] font-bold" style={{ ...MONO, left: pct(now), top: 62, color: DC.red }}>{hm(new Date())}</span>
     </div>
   );
 }
