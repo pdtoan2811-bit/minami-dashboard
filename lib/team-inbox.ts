@@ -224,13 +224,20 @@ export async function teamInbox(force = false): Promise<TeamInbox> {
 export async function findCard(ts: string): Promise<TeamCard | null> {
   return (await teamInbox()).cards.find((x) => x.ts === ts) || null;
 }
+/** The card a "Để Minami trả lời" link names. The link is built on the asker's machine before Slack has
+ *  given the card a ts (the first render happens before chat.postMessage returns), so it carries the
+ *  topic and the asker instead. A topic can be asked again later; the newest card with it wins. */
+export async function findCardByTopic(topic: string, askerKey?: string): Promise<TeamCard | null> {
+  const hits = (await teamInbox(true)).cards.filter((x) => x.topic === topic && (!askerKey || x.askerKey === askerKey));
+  return hits.sort((a, b) => b.at - a.at)[0] || null;
+}
 export async function findDm(ts: string): Promise<TeamDm | null> {
   return (await teamInbox()).dms.find((x) => x.ts === ts) || null;
 }
 
 /** Answer a card exactly as a click on another machine would: a relay in its thread. One Answer per
  *  question, in order; `null` leaves a question unanswered. */
-export async function answerCard(ts: string, answers: Answer[], generalText?: string): Promise<{ ok: boolean; error?: string }> {
+export async function answerCard(ts: string, answers: Answer[], generalText?: string, opts: { minami?: boolean } = {}): Promise<{ ok: boolean; error?: string }> {
   const c = conf();
   if (!c.bot || !c.me?.slack) return { ok: false, error: "team-ask isn't set up on this machine" };
   const card = await findCard(ts);
@@ -248,7 +255,9 @@ export async function answerCard(ts: string, answers: Answer[], generalText?: st
   const channel = await botChannel(c);
   const r = await slack("chat.postMessage", c.bot, {
     channel, thread_ts: ts,
-    text: `:white_check_mark: <@${c.me.slack}> answered from Minami: ${human}`,
+    // The asker should know when a human didn't read it: "answered from Minami" is you pressing Send in
+    // the dashboard, "Minami answered for" is the AI deciding on your behalf.
+    text: opts.minami ? `:robot_face: Minami answered for <@${c.me.slack}>: ${human}` : `:white_check_mark: <@${c.me.slack}> answered from Minami: ${human}`,
     metadata: { event_type: RELAY_EVENT, event_payload: { ts, answers_json: JSON.stringify(norm), general_text: generalText?.trim() || "", by: c.me.slack, at: Date.now() } },
   }, true);
   if (!r.ok) return { ok: false, error: missing(r) };
@@ -286,8 +295,16 @@ export async function fetchFile(id: string): Promise<Response> {
 /** The first message of an Explain chat: everything the card carries, plus the instruction to help
  *  you decide — not to decide for you, and not to answer through team-ask (the dashboard sends it). */
 export function explainPrompt(card: TeamCard): string {
+  return [
+    `${card.asker}'s Claude asked me this through team-ask (Slack). Help me understand it and decide — I'll send the answer myself from the dashboard, so do NOT call ask_team or check_team_answers, and don't post anything to Slack.`,
+    cardBody(card),
+    `\nStart with: what is actually being decided, in two or three plain sentences; then for each question what each option means for ME and what you'd pick and why. If this folder has the code it touches, check it before you answer.`,
+  ].join("\n");
+}
+
+/** Everything the card carries, as markdown — shared by the Explain and the Minami-answers prompts. */
+function cardBody(card: TeamCard): string {
   const L: string[] = [];
-  L.push(`${card.asker}'s Claude asked me this through team-ask (Slack). Help me understand it and decide — I'll send the answer myself from the dashboard, so do NOT call ask_team or check_team_answers, and don't post anything to Slack.`);
   L.push(`\n# ${card.headline || card.topic}\nRepo: ${card.repo || "?"}${card.context ? ` · ${card.context}` : ""}`);
   if (card.doing) L.push(`\n## What they're doing\n${card.doing}`);
   if (card.whyNow) L.push(`\n## Why they're asking me\n${card.whyNow}`);
@@ -300,7 +317,31 @@ export function explainPrompt(card: TeamCard): string {
     if (q.reason) L.push(`Their reasoning: ${q.reason}`);
   });
   for (const f of card.files) L.push(`\n## Attached: ${f.name} (${f.lines} lines)\n\`\`\`\n${f.text.slice(0, 20000)}\n\`\`\``);
-  L.push(`\nStart with: what is actually being decided, in two or three plain sentences; then for each question what each option means for ME and what you'd pick and why. If this folder has the code it touches, check it before you answer.`);
+  return L.join("\n");
+}
+
+/** The first message of a "Để Minami trả lời" chat. Same card as explainPrompt, but here the click on the
+ *  Slack button WAS the go-ahead: decide, send through the dashboard's own answer route (the relay, never
+ *  ask_team), then explain to the owner what went out and why. The two refusals are the only things a
+ *  click shouldn't be able to commit someone to without reading it. */
+export function minamiPrompt(card: TeamCard, base: string): string {
+  const me = conf().me?.name || "the owner of this machine";
+  const L: string[] = [];
+  L.push(`${card.asker}'s Claude asked ${me} this through team-ask (Slack). ${me} pressed "Để Minami trả lời" on the card: answer it FOR them, send the answer, then explain to them what you sent and why.`);
+  L.push(cardBody(card));
+  const shape = card.questions.map((q) => `{"picked":["<exact option label>"],"text":"<optional note>"}`).join(",");
+  L.push(`\n# How to answer
+1. Read what you need first: if this folder has the code or docs the question touches, check them. Treat the "Already settled" points as fixed.
+2. Pick for each question. Use the EXACT option labels above (multi-select questions may take several). Put a short reason in "text" when it helps ${card.asker}; their recommendation is a starting point, not an order.
+3. Send it with one call — do NOT call ask_team / check_team_answers / share_team and don't post to Slack any other way:
+
+curl -s -X POST ${base}/api/team/answer -H 'content-type: application/json' --data-binary @- <<'JSON'
+{"ts":"${card.ts}","minami":true,"answers":[${shape}],"text":"<one or two sentences to ${card.asker}, in Vietnamese, starting with \\"🤖 Minami trả lời thay ${me}:\\">"}
+JSON
+
+   One answer object per question, in order (${card.questions.length} here). It returns {"ok":true} on success. If it says the card is already answered or expired, stop and say so.
+4. Don't send, and tell ${me} why, only if answering would commit them to money, a legal/contract term, or hand over a credential or secret, or if none of the options can be picked without facts only they have.
+5. Then reply here to ${me} in plain words: what was asked (two sentences), what you sent for each question and why, what you weren't sure of, and what they should do if they disagree (they can tell ${card.asker} directly).`);
   return L.join("\n");
 }
 

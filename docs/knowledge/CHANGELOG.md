@@ -9,6 +9,8 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-22
+- **"🤖 Để Minami trả lời" on team-ask cards** (§25; new `lib/team-chat.ts`, `app/api/team/minami`, `app/team/minami`; `lib/team-inbox.ts`, `app/api/team/{answer,explain}`; team-ask branch `feat/minami-answer-button`). A link button on the Slack card opens your dashboard, which starts a chat that answers the card through the relay, marked as Minami's, and then explains what it sent. One chat per card, open cards only.
+  *Reported by user: "enhance team ask slack message that I can click to send the message to Minami Dashboard to let Minami answers for me"*
 - **🐛 New chat failed with "folder does not exist: /Users/thomas/tiktok-"** (§9; `app/api/agent/send/route.ts`, `lib/use-agent.ts`, `app/page.tsx`). The blank tab's birth worktree had been recycled before its first message, and the error line cut the path at 44 characters. A new chat on a recycled tree now gets a fresh tree from the same base (or the base itself), and the pane adopts it with a notice. Clipped errors end in "…" with the full text on hover.
 - **Storage janitor: Docker-aware** (§32; `bin/janitor.mjs`). Folders mounted by running containers count as in use; with Docker hung, every compose repo is left alone. The Docker button prunes images + build cache only, never containers or volumes.
   *Reported by user: "when I activate docker — will it mess up since docker is not in the equation"*

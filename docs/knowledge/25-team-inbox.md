@@ -4,7 +4,7 @@ Part of the [Minami Bento knowledge record](../KNOWLEDGE.md).
 
 What a teammate's Claude asked you through **team-ask** (`~/dev/team-ask`), read and answered in the
 dashboard, with an "Explain with AI" chat beside it. Files: `lib/team-inbox.ts`,
-`app/api/team/{inbox,answer,reply,file,explain}`, `components/TeamInbox.tsx`; wired in `app/page.tsx`
+`lib/team-chat.ts`, `app/api/team/{inbox,answer,reply,file,explain,minami}`, `app/team/minami`, `components/TeamInbox.tsx`; wired in `app/page.tsx`
 (desktop: a 👥 badge beside the bell, only while something waits; phone: the inbox's first row).
 
 ## Why the dashboard talks to Slack now
@@ -51,6 +51,35 @@ already waits for a new session to reach the list, and the pane then attaches th
 session first, worktrees skipped because they get recycled), then `~/<repo>`, `~/dev/<repo>`, else
 home. The seed prompt carries the whole card and attached files and tells the chat **not** to call
 ask_team or post to Slack — you send the answer from the card.
+
+## "Để Minami trả lời" — the AI answers for you (2026-10-22)
+
+The team-ask card carries a **link** button, `:robot_face: Để Minami trả lời`, for any recipient whose
+`team.json` entry has a `dashboard` URL (team-ask branch `feat/minami-answer-button`; Thomas's entry is
+the tailnet URL, so it opens only on his own devices). The asker's machine never calls the dashboard; it
+only draws the link. The first render happens before Slack returns a `ts`, so the link names the card
+by `topic` + `asker`, and `findCardByTopic` picks the newest match from a fresh inbox read.
+
+- `/team/minami?topic=&asker=` is a page, and the page POSTs `/api/team/minami`. A GET must never be what
+  answers a teammate: link previews and prefetches would.
+- **One chat per card**, recorded in `~/.minami/team-minami.json` (`lib/team-chat.ts`), plus an
+  in-flight promise for two clicks that land together. A second click, the phone and then the Mac, or a
+  reload all land on the chat that already answered. On disk because a deploy can restart the server
+  between the click and the second look.
+- Only an **open** card gets a new chat. `sent` (you answered from the dashboard), `answered` and
+  `expired` are refused with the reason. A second answer would contradict the first.
+- The chat (key `team-minami-<ts>`, in the repo's checkout like Explain) decides, then sends through
+  `/api/team/answer` with `minami: true`. The relay reads `:robot_face: Minami answered for @you`
+  instead of `answered from Minami`, so the asker knows no human read it. The note to the asker starts
+  `🤖 Minami trả lời thay <you>:`. Then it explains to you what went out and why.
+- The prompt has it **not send** only for money, a legal/contract term, a credential, or a choice that
+  needs facts only you have. Clicking is the go-ahead for everything else (Thomas, 2026-10-22: "send
+  it then explain to me").
+- The body goes by heredoc (`--data-binary @-`): a single-quoted `-d '…'` broke on the first apostrophe
+  in the note.
+
+Not exercised against a real card: that would answer Đức's open question. The refusals, the lookup,
+the page and the relay body were checked against the live inbox on a dev server.
 
 ## The card's layout (audit 2026-10-08)
 
