@@ -12,6 +12,8 @@ import { K as TK } from "../today/ui";
 import { AskBox } from "./AskBox";
 import { useAsks } from "./Asks";
 import { DayStrip, DC, dayOf, daySentence, type Day } from "./DayStrip";
+import { UpNextPanel } from "./UpNext";
+import type { UpNext } from "@/lib/upnext";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d", pink: "#db6393", violet: "#a78bfa" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
@@ -77,10 +79,11 @@ export function useAutomations() {
   const [bin, setBin] = useState<Trash[]>([]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [up, setUp] = useState<UpNext | null>(null);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/automations").then((r) => r.json()).catch((e) => ({ error: String(e) }));
-    if (r.error) setErr(r.error); else { setErr(""); setItems(r.items); setBin(r.trash); }
+    if (r.error) setErr(r.error); else { setErr(""); setItems(r.items); setBin(r.trash); setUp(r.upNext ?? null); }
   }, []);
   useEffect(() => {
     load();
@@ -98,7 +101,7 @@ export function useAutomations() {
     } finally { setBusy(null); }
   }, []);
 
-  return { items, bin, err, busy, act };
+  return { items, bin, err, busy, act, up };
 }
 export type AutomationsFeed = ReturnType<typeof useAutomations>;
 
@@ -179,6 +182,7 @@ export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: 
       </div>
 
       {items && <EffectsLine items={items} jump={jump} />}
+      {items && feed.up && <UpNextPanel up={feed.up} visible={new Set(items.map((a) => a.id))} jump={jump} now={now} />}
       {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
       {creating && <div className="mt-4">
         <Editor onCancel={() => setCreating(false)} busy={busy === "create"}
