@@ -83,11 +83,17 @@ every SEO PR because `goal.mjs` called it the old way (fixed in the vault the sa
   - Skipped when the action has `skipped`
   - Queued when it has `queued`
   - Done when it has `note` (a draft)
-- **Your part** as a checklist with minute estimates. It's ticked on Today, where the heartbeat copied it.
+- **Your part** as Today's own to-do rows, on the card (`GoalTodos.tsx`, 2026-10-22). The tick is still
+  STORED on Today, where the heartbeat copied the to-do, but it's made here: `listGoals()` matches each goal
+  to-do to its day-file row by text and hands over that row's `id`, `handoff` and `comments`, and the card calls
+  the same `/api/today` ops Today's rows use (`toggle`, `comment`, `handoff`; a question's option → `resolve`).
+  It used to say "Tick on Today →", which sent him to another page to finish one decision. A to-do the 07:30
+  heartbeat hasn't copied yet has no id, so its tick is disabled and says why.
 - **"Page 1 today · runners · rules"**, folded away at the bottom.
 
 **Resolve with Minami** sends `POST /api/goals {op:"resolve", id}`. That calls `resolveGoal()`, which starts a
-chat in the vault and opens it.
+chat in the vault. It no longer opens it: the route records it in `autopilot-asks.jsonl`, so the chat
+shows as a row under the goal's ask box with its live state, and opens in place (`Asks.tsx`, §31).
 - **What the chat gets** (`resolveContext()`): the spec, the last 6 runs with each action's outcome, the
   runner's state and log paths, and Thomas's part.
 - **What it's told, in order:** fix broken machinery first, then unblock stuck actions, then do or prepare his
