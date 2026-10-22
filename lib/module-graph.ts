@@ -163,7 +163,7 @@ export const NODES: ModuleNode[] = [
   { id: "l/sessionfetch", label: "session-fetch.ts", sub: "coalesced transcript GET\n(per-caller freshness)", layer: "core", row: 6, pipeline: "read" },
   { id: "l/pagevisible", label: "page-visible.ts", sub: "pause polls for a hidden tab", layer: "core", row: 7, pipeline: "live" },
   { id: "l/teaminbox", label: "team-inbox.ts", sub: "team-ask cards + relay\nanswers (Slack Web API)", layer: "core", row: 4, pipeline: "live" },
-  { id: "l/teamchat", label: "team-chat.ts", sub: "chats born with a card in them\n· one Minami answer per card", layer: "core", row: 5, pipeline: "live" },
+  { id: "l/teamchat", label: "team-chat.ts", sub: "chats born with a card in them\n· Minami talk per card + Slack thread bridge", layer: "core", row: 5, pipeline: "live" },
   { id: "l/teamroster", label: "team-roster.ts", sub: "reads team-ask's team.json", layer: "core", row: 4, pipeline: "live" },
   { id: "l/teamforward", label: "team-forward.ts", sub: "the \"go ask them\" answer text", layer: "core", row: 5, pipeline: "live" },
   { id: "l/sessions", label: "claude-sessions.ts", sub: "windowed parser + caches", layer: "core", row: 3, pipeline: "read" },

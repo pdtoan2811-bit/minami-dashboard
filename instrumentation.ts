@@ -42,4 +42,13 @@ export async function register() {
   } catch (e) {
     console.error("[minami] web push failed to start (the app is fine without it):", e);
   }
+
+  // "Để Minami trả lời" Slack talk threads (lib/team-chat.ts, §25). Here because a deploy restarts the
+  // server mid-conversation, and your next reply in the thread should still reach the chat.
+  try {
+    const { startMinamiBridge } = await import("@/lib/team-chat");
+    startMinamiBridge();
+  } catch (e) {
+    console.error("[minami] team talk bridge failed to start:", e);
+  }
 }

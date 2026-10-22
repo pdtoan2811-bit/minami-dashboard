@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-22
+- **"Để Minami trả lời" explains first, answers on your word** (§25; `lib/team-chat.ts`, `lib/team-inbox.ts`, `app/team/minami`, `instrumentation.ts`). The click starts a talk in a Slack thread under the team-ask DM (never the card's thread, which team-ask reads as the answer): finished turns go up, your replies come down as `[Slack] …` turns, and the answer is sent only when you say "trả lời đi". Relay says "on their go-ahead".
 - **🐛 Dashboard was reachable from the Wi-Fi without auth** (§23; `package.json`, `bin/serve.sh`). `next start`/`next dev` bound `0.0.0.0`, so any LAN device could hit `/api/agent/send` and spawn a `bypassPermissions` agent. All three scripts now pass `-H 127.0.0.1`; the phone goes through `tailscale serve` as before.
 - **"🤖 Để Minami trả lời" on team-ask cards** (§25; new `lib/team-chat.ts`, `app/api/team/minami`, `app/team/minami`; `lib/team-inbox.ts`, `app/api/team/{answer,explain}`; team-ask branch `feat/minami-answer-button`). A link button on the Slack card opens your dashboard, which starts a chat that answers the card through the relay, marked as Minami's, and then explains what it sent. One chat per card, open cards only.
   *Reported by user: "enhance team ask slack message that I can click to send the message to Minami Dashboard to let Minami answers for me"*
