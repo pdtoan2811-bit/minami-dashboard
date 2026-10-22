@@ -7,8 +7,18 @@ which `§` ids live where. Section numbers are stable: code comments cite them.
 
 ## 23. Phone and foldable layouts — `app/page.tsx`, `lib/use-media.ts`, `app/manifest.ts`
 
-The dashboard was built for a desk, and "the phone view works" meant only that `next start` binds
-`0.0.0.0`. Audited 2026-10-05 on the two phones it is actually used from, all four screens:
+The dashboard was built for a desk, and "the phone view works" first meant only that `next start` bound
+`0.0.0.0`. Since 2026-10-22 it binds `127.0.0.1` and the phone reaches it only through `tailscale serve`
+(`https://<box>.ts.net` → `127.0.0.1:3000`).
+
+> 🐛 **2026-10-22 — the Wi-Fi could drive the box.** Binding `0.0.0.0` with the macOS firewall off meant any
+> device on the same Wi-Fi could call `/api/fs/*`, `/api/accounts` and `/api/agent/send` with no credentials,
+> and agents run in `bypassPermissions`: effectively remote code execution. Found in a security audit (read-only
+> GETs from the LAN address returned `~/.ssh` and the account pool). Fix: `-H 127.0.0.1` on `start`, `dev` and
+> `dev:iterate` in package.json. Don't bring back a LAN bind for "testing on the phone"; use the tailnet URL.
+> The `/api/*` routes still have no auth of their own; loopback plus tailnet-only `serve` is the boundary.
+
+Audited 2026-10-05 on the two phones it is actually used from, all four screens:
 
 | Screen | CSS viewport | Tier a focused pane gets |
 |---|---|---|

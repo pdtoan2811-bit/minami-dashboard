@@ -32,7 +32,9 @@ DRAIN_TIMEOUT_MS="${DRAIN_TIMEOUT_MS:-60000}"
 TOKEN_FILE=".minami-drain-token"
 
 # Shared secret for the restart-safety endpoint. It gates a call that can stall every chat on the box,
-# and `next start` binds 0.0.0.0 so the phone view works — meaning anything on the Wi-Fi can reach it.
+# and anything else running on this Mac (or on the tailnet, via `tailscale serve`) can reach it. `next start`
+# binds 127.0.0.1 since 2026-10-22 (package.json) — it used to bind 0.0.0.0, which handed the Wi-Fi an
+# unauthenticated, bypassPermissions agent. The phone view goes through `tailscale serve` → 127.0.0.1:3000.
 # Header-based "is this loopback?" checks don't work here (Next always injects x-forwarded-for, and a
 # client can forge both it and Host — see the comment in app/api/agent/health/route.ts), so the gate is
 # possession of this file: same privilege level as being able to run this script at all. Generated on

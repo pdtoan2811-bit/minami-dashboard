@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-22
+- **🐛 Dashboard was reachable from the Wi-Fi without auth** (§23; `package.json`, `bin/serve.sh`). `next start`/`next dev` bound `0.0.0.0`, so any LAN device could hit `/api/agent/send` and spawn a `bypassPermissions` agent. All three scripts now pass `-H 127.0.0.1`; the phone goes through `tailscale serve` as before.
 - **🐛 New chat failed with "folder does not exist: /Users/thomas/tiktok-"** (§9; `app/api/agent/send/route.ts`, `lib/use-agent.ts`, `app/page.tsx`). The blank tab's birth worktree had been recycled before its first message, and the error line cut the path at 44 characters. A new chat on a recycled tree now gets a fresh tree from the same base (or the base itself), and the pane adopts it with a notice. Clipped errors end in "…" with the full text on hover.
 - **Storage janitor: Docker-aware** (§32; `bin/janitor.mjs`). Folders mounted by running containers count as in use; with Docker hung, every compose repo is left alone. The Docker button prunes images + build cache only, never containers or volumes.
   *Reported by user: "when I activate docker — will it mess up since docker is not in the equation"*

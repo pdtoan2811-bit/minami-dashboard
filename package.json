@@ -18,14 +18,14 @@
     "url": "https://github.com/pdtoan2811-bit/minami-dashboard.git"
   },
   "scripts": {
-    "dev": "NEXT_DIST_DIR=.next-dev next dev",
+    "dev": "NEXT_DIST_DIR=.next-dev next dev -H 127.0.0.1",
     "build": "next build",
     "build:check": "NEXT_DIST_DIR=.next-verify next build",
-    "start": "next start",
+    "start": "next start -H 127.0.0.1",
     "lint": "next lint",
     "serve": "bash bin/serve.sh",
     "deploy": "bash bin/deploy.sh",
-    "dev:iterate": "NODE_ENV=development NEXT_DIST_DIR=.next-dev PORT=3001 MINAMI_AUTOPILOT_DISABLE=1 next dev",
+    "dev:iterate": "NODE_ENV=development NEXT_DIST_DIR=.next-dev PORT=3001 MINAMI_AUTOPILOT_DISABLE=1 next dev -H 127.0.0.1",
     "kb": "node public/kb/serve.mjs",
     "check": "tsx scripts/regression.mts",
     "tokens": "node bin/token-report.mjs"
