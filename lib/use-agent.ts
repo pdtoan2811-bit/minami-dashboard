@@ -815,7 +815,15 @@ export function useAgent(paneKey: string) {
         // was never delivered. Only ever undoes an adoption made by THIS call.
         if (adoptedHere) { setSessionId(null); sessionIdRef.current = null; }
       }
-      else { sentOnce.current = true; if (d?.sessionId && !sessionIdRef.current) { setSessionId(d.sessionId); sessionIdRef.current = d.sessionId; } }
+      else {
+        sentOnce.current = true; if (d?.sessionId && !sessionIdRef.current) { setSessionId(d.sessionId); sessionIdRef.current = d.sessionId; }
+        // The server moved a brand-new chat off a recycled worktree (send route). Adopt the folder exactly as a
+        // `relocated` event does, so the next send carries it and the header names where the chat really is.
+        if (typeof d?.cwd === "string" && d.cwd && d.cwd !== opts.cwd) {
+          setRelocatedTo(d.cwd);
+          setNotices((prev) => [...prev.slice(-4), { kind: "relocated", text: `Its checkout was recycled before the first message, so this chat runs in ${d.cwd}`, at: Date.now() }]);
+        }
+      }
     } catch (e) {
       setError(String((e as Error)?.message || e)); setBusy(false); applyActivity(IDLE_ACTIVITY); unstickTrailingTurn();
     }

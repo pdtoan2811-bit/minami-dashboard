@@ -3321,7 +3321,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     </button>
   ) : null;
   const statusEl = agent.stopping ? <span className="flex items-center gap-1 text-red-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />stopping…</span>
-    : agent.error ? <span className="truncate text-red-400">{agent.error.slice(0, 44)}</span>
+    : agent.error ? <span className="truncate text-red-400" title={agent.error}>{agent.error.length > 44 ? `${agent.error.slice(0, 43)}…` : agent.error}</span>
     // Ahead of every "live"/activity branch below, because those all describe what the server last
     // said and this says we have stopped hearing it. A green `● live` on a dead stream is the single
     // most misleading thing this line can show.

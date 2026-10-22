@@ -146,6 +146,19 @@ decision there and nowhere else:
 > can never have two homes and two rival writers (the §9 corruption). Only with `resume`: a NEW
 > chat aimed at a dead worktree path really is an error.
 
+> 🐛 **2026-10-22: "a NEW chat aimed at a dead worktree path really is an error" turned out to be wrong.** Thomas opened
+> a new tiktok-studio chat and got `folder does not exist: /Users/thomas/tiktok-`.
+> - **The clipped path:** the pane status line cut every error at 44 characters, which is exactly where that message
+>   ends. The real path was a recycled `.minami-worktrees/<name>`.
+> - **How a new chat gets a dead tree:** birth isolation gives a blank tab its worktree when the tab opens. The tree
+>   can be recycled before the first message, because no transcript points into it yet, so the pruners see an idle,
+>   empty tree.
+> - **Why nothing is lost:** a blank chat has no conversation or work tied to that tree.
+> - **Fix:** the send route gives a NEW chat a fresh `isolate()` tree from the same base, or the base itself if
+>   isolation declines. It returns `cwd` in the reply, and `use-agent` adopts it the way it adopts a `relocated`
+>   event, with a notice.
+> - **Fix:** the status line ends a clipped error in "…" and shows the whole message on hover.
+
 ### The placement pass — a chat follows its work (2026-09-02)
 
 Thomas's chats mostly START in the vault (context, capture, target-unknown-yet) while the WORK
