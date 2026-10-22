@@ -48,6 +48,8 @@ export type Automation = {
   status: "running" | "idle" | "paused" | "failing" | "not-loaded";
   pid?: number; lastExit?: number | null; runs?: number; lastRun?: string | null;
   protected?: boolean; host?: string;
+  /** What it does in the outside world that can't be taken back — the Runners page badges it and sums it up top. */
+  effects?: Effect[];
   pausedAt?: string | null;   // when it was paused from this page
   upSec?: number | null;      // how long the running process has been up
   lastLine?: string | null;   // the last thing it wrote to its log — the cheapest sign of life there is
@@ -56,6 +58,7 @@ export type Automation = {
   /** False for a plist that isn't wrapped yet — it has no run record, so the page can't vouch for its runs. */
   recorded?: boolean;
 };
+export type Effect = { kind: "posts" | "spends"; what: string };
 export type RunRecord = { start: string; end?: string; exit?: number; secs?: number; last_line?: string };
 
 type Meta = Record<string, { name?: string; description?: string; project?: string; pausedAt?: string }>;
@@ -70,11 +73,15 @@ const KNOWN: Meta = {
   "com.thomas.goal-runner": { name: "Goals — daily run", description: "Measures each autonomous goal, decides the day's moves within its rules, acts, and leaves your part for the 07:30 Today plan (§29).", project: "Second Brain" },
   "com.thomas.secondbrain-sync": { name: "Vault sync", description: "Commits and pushes the Second Brain so every device has it.", project: "Second Brain" },
   "com.thomas.video-evening": { name: "Video topics — evening plan", description: "Learns from last night's taps, scans AI news, writes tomorrow's 5 topics for the Slack card.", project: "Video Studio" },
-  "com.thomas.video-overnight": { name: "Videos — overnight runner", description: "Keeps the Mac awake, waits for the 00:30 lock, then writes, builds, voices and renders every locked video. First it tidies storage (old renders and footage, by ~/tiktok-studio/scripts/storage.json); before each render it checks the disk; at the end it commits the night's episodes. Progress goes in the card's thread; the morning card comes at 07:00.", project: "Video Studio" },
-  "com.thomas.video-sync": { name: "Videos — upload sync + views", description: "Every 30 min: builds the day's upload folder and schedules its posts (uploads.mjs sync), then pulls view counts into harness/views.", project: "Video Studio" },
+  "com.thomas.video-overnight": { name: "Videos — overnight runner", description: "Keeps the Mac awake, waits for the 00:30 lock, then writes, builds, voices and renders every locked video, and schedules the night's posts on TikTok (uploads.mjs publish, via Post for Me). First it tidies storage (old renders and footage, by ~/tiktok-studio/scripts/storage.json); before each render it checks the disk; at the end it commits the night's episodes. Progress goes in the card's thread; the morning card comes at 07:00.", project: "Video Studio" },
+  "com.thomas.video-sync": { name: "Videos — posted check + views", description: "Every 30 min: asks Post for Me which scheduled posts went live, ticks them in the day's upload folder and flags failures (uploads.mjs sync — it posts nothing), then pulls view counts into harness/views.", project: "Video Studio" },
   "com.thomas.video-harness-week": { name: "Videos — weekly harness review", description: "Sundays 14:00: drift lint, belief probes and check on every item; a gardener fixes stale docs on a harness/garden branch; lists loose ends (unmerged branches, old uncommitted files, free disk). Report in harness/reports, one Slack line.", project: "Video Studio" },
   "com.thomas.video-ideas-prune": { name: "Video ideas — weekly prune", description: "Sundays 19:00: drops expired news ideas and rejects older than 30 days from the idea store (harness/plans/ideas.jsonl), so the evening planner's pool stays small.", project: "Video Studio" },
   "com.thomas.design-kit-harness": { name: "Design kit — weekly harness", description: "Sundays 15:00: audit, drift lint, belief probes, tests, adopter status and the sheet taste ratchet; queues the week's blind bench request. Reports to design-kit/reports/harness/<date>.md and edits nothing.", project: "Design Kit" },
+};
+// Runners that publish or pay. Keep this honest when a runner gains or loses a step like that (EXPERIENCE.md, 2026-10-21).
+const EFFECTS: Record<string, Effect[]> = {
+  "com.thomas.video-overnight": [{ kind: "posts", what: "Schedules the night's videos on TikTok via Post for Me" }],
 };
 const PROTECTED = new Set(["com.thomas.minami-bot", "com.thomas.secondbrain-sync"]);
 
@@ -245,7 +252,7 @@ export function list(): Automation[] {
     items.push({ id: label, kind: "launchd", name: m.name || label.slice(PREFIX.length), description: m.description || "", project: m.project,
       schedule: s, scheduleText: describeSchedule(s), nextRun: status === "paused" ? null : nextRun(s, lastRun),
       command: args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ").replaceAll(HOME, "~"), workdir: p.WorkingDirectory?.replace(HOME, "~"),
-      log: p.StandardOutPath, status, pid: st.pid, lastExit: st.lastExit ?? null, runs: st.runs, lastRun, protected: PROTECTED.has(label),
+      log: p.StandardOutPath, status, pid: st.pid, lastExit: st.lastExit ?? null, runs: st.runs, lastRun, protected: PROTECTED.has(label), effects: EFFECTS[label],
       pausedAt: status === "paused" ? m.pausedAt ?? null : null, upSec: upSeconds(st.pid), lastLine: lastLineOf(p.StandardOutPath || p.StandardErrorPath),
       today: runs.filter((r) => Date.parse(r.start) >= midnight.getTime()).slice(-200), recorded });
   }

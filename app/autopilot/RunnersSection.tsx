@@ -7,7 +7,7 @@
 // the 16 stacked cards are gone — clicking any pin, track or name opens that runner's card (state, last log line,
 // run / pause / edit / log / delete) right under the strip. Nothing that was editable before became unreachable.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Automation, Schedule } from "@/lib/automations";
+import type { Automation, Effect, Schedule } from "@/lib/automations";
 import { K as TK } from "../today/ui";
 import { AskBox } from "./AskBox";
 import { AsideLine, DayStrip, DC, Tracks, dayOf, daySentence } from "./DayStrip";
@@ -39,6 +39,28 @@ function dur(sec: number) {
   if (sec < 3600) return `${Math.round(sec / 60)} min`;
   if (sec < 86400) { const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60); return m && h < 10 ? `${h} h ${m} min` : `${h} h`; }
   return `${Math.round(sec / 86400)} d`;
+}
+const EFFECT = { posts: { icon: "📤", label: "Posts publicly" }, spends: { icon: "💸", label: "Spends money" } } as const;
+const next = (iso?: string | null) => (iso ? `next ${new Date(iso).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })}` : "not scheduled");
+const off_ = (a: Automation) => a.status === "paused" || a.status === "not-loaded";
+function EffectBadge({ e }: { e: Effect }) {
+  return <span title={e.what} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold uppercase tracking-[.05em]" style={{ ...MONO, background: mix(K.red, 16), color: K.red }}>{EFFECT[e.kind].icon} {EFFECT[e.kind].label}</span>;
+}
+// Above the list: every runner that publishes or pays, whether it's on, and when it next goes — so it's never a hunt.
+function EffectsLine({ items, jump }: { items: Automation[]; jump: (id: string) => void }) {
+  const hits = items.flatMap((a) => (a.effects ?? []).map((e) => ({ a, e })));
+  if (!hits.length) return null;
+  return (
+    <div className="mt-4 flex flex-wrap gap-2">
+      {hits.map(({ a, e }) => (
+        <button key={a.id + e.kind} onClick={() => jump(a.id)} title={e.what} className="flex items-center gap-2 rounded-xl px-3 py-2 text-left text-[13.5px]" style={{ background: mix(K.red, 8), border: `1px solid ${mix(K.red, 35)}` }}>
+          <span className="text-[16px]">{EFFECT[e.kind].icon}</span>
+          <span><b style={{ color: K.red }}>{EFFECT[e.kind].label}:</b> {a.name}</span>
+          <span style={{ ...MONO, color: K.muted }} className="text-[12px]">{off_(a) ? "· paused" : `· ${next(a.nextRun)}`}</span>
+        </button>
+      ))}
+    </div>
+  );
 }
 const ago = (iso?: string | null) => (iso ? (Date.now() - Date.parse(iso) < 60e3 ? "just now" : `${dur((Date.now() - Date.parse(iso)) / 1000)} ago`) : "");
 const inT = (iso?: string | null) => (iso ? `in ${dur(Math.max(0, (Date.parse(iso) - Date.now()) / 1000))}` : "");
@@ -152,6 +174,7 @@ export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: 
         <Btn onClick={() => setCreating((v) => !v)} primary>{creating ? "Cancel" : "+ New automation"}</Btn>
       </div>
 
+      {items && <EffectsLine items={items} jump={jump} />}
       {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
       {creating && <div className="mt-4">
         <Editor onCancel={() => setCreating(false)} busy={busy === "create"}
@@ -252,6 +275,7 @@ function Card({ a, busy, open, flash, toggle, run }: {
                 {a.status === "running" && <Dot color={K.green} pulse small />}{st.label}
               </span>
               {a.kind === "inproc" && <span className="text-[10.5px]" style={{ ...MONO, color: K.faint }} title="A loop inside the Minami bot — if the bot is off, so is this">⊂ inside Minami bot</span>}
+              {a.effects?.map((e) => <EffectBadge key={e.kind} e={e} />)}
               {a.protected && <span className="text-[11px]" style={{ color: K.faint }} title="Can be paused, not deleted">🔒</span>}
             </div>
             {a.description && <p className="mt-1 text-[13.5px] leading-snug" style={{ color: K.muted }}>{a.description}</p>}
