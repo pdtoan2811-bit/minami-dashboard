@@ -30,6 +30,8 @@ import { K } from "../today/ui";
 import { stateOf, useHandoffLive, type HandoffState } from "../today/live";
 import { useOpenChat } from "@/components/shell/Drawer";
 import { useBackLayer } from "@/lib/use-back";
+import { AskBox } from "./AskBox";
+import type { Tab } from "./Autopilot";
 
 const C = { green: "#4ade80", amber: "#f0a868", red: "#ef7c7c", blue: "#7aa2ff" };
 const tint = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
@@ -181,6 +183,7 @@ function GoalCard({ g, a, onShrink, onMetric, onResolve, resolving }: {
       )}
       <AskRows asks={a.asks} live={a.live} kind="goal" id={g.spec.id} onOpen={a.open} />
       <div className="mt-3 flex flex-wrap gap-1.5">{qs.map((s) => <Q key={s} onClick={() => ask(s)} busy={a.busy?.startsWith(`goal:${g.spec.id}:`) && a.busy.endsWith(s === "Report" ? "next." : s)}>{s}</Q>)}</div>
+      <div className="mt-2.5"><AskBox row url="/api/autopilot/ask" body={{ kind: "goal", id: g.spec.id }} field="question" placeholder="Ask about this goal…" /></div>
     </div>
   );
 }
@@ -326,12 +329,13 @@ function RunnerOpen({ r, a, act }: { r: Automation; a: Asks & { live: ReturnType
         {r.kind === "launchd" && r.status !== "running" && r.schedule.kind !== "always" && <button onClick={async () => { await act({ op: "run", id: r.id }, `run:${r.id}`); setRan(true); }} className="h-9 rounded-full px-3.5 text-[13px]" style={{ border: `1px solid ${K.line}`, color: K.muted }}>{ran ? "Started" : "Run now"}</button>}
         <button onClick={pause} className="h-9 rounded-full px-3.5 text-[13px]" style={{ border: `1px solid ${K.line}`, color: K.muted }}>{r.status === "paused" ? "Resume" : "Pause"}</button>
       </div>
+      <div className="mt-2.5"><AskBox row url="/api/autopilot/ask" body={{ kind: "runner", id: r.id }} field="question" placeholder="Ask about this runner…" /></div>
     </div>
   );
 }
 
 // ── the page ─────────────────────────────────────────────────────────────────────────────────────────────
-export function PhoneAutopilot({ goals, runners, feed }: { goals: Goal[] | null; runners: Automation[] | null; feed: AutomationsFeed }) {
+export function PhoneAutopilot({ goals, runners, feed, tab, tabs }: { goals: Goal[] | null; runners: Automation[] | null; feed: AutomationsFeed; tab: Tab; tabs: ReactNode }) {
   const asks = useAsks();
   const openChat = useOpenChat();
   const live = useHandoffLive(asks.asks.map((x) => x.sessionId));
@@ -364,14 +368,22 @@ export function PhoneAutopilot({ goals, runners, feed }: { goals: Goal[] | null;
 
   return (
     <div className="pb-28">
-      {lagging > 0 && <p className="px-5 pb-2 text-[14.5px]" style={{ color: K.muted }}>{n(lagging, "goal")} behind.</p>}
-      {sorted.map((g, i) => sizeOf(g, i) === "card"
-        ? <div key={g.spec.id} className="mb-2"><GoalCard g={g} a={a} onShrink={() => setSize((s) => ({ ...s, [g.spec.id]: "line" }))} onMetric={(m) => setFull({ id: g.spec.id, m })} onResolve={() => resolve(g)} resolving={resolving === g.spec.id} /></div>
-        : <GoalLine key={g.spec.id} g={g} onGrow={() => setSize((s) => ({ ...s, [g.spec.id]: "card" }))} />)}
-      <div id="runners" className="mt-5">
-        <p className="px-5 pb-2 text-[17px] font-semibold leading-snug">{daySentence(day)}</p>
-        <PhoneDay day={day} open={opened} onPick={(id) => setOpenRunner(opened === id ? "" : id)} renderOpen={(r) => <RunnerOpen r={r} a={a} act={feed.act} />} />
-      </div>
+      {/* Tabs, as on desktop (2026-10-22): goals and runners are two modules, one tab each. */}
+      <div className="px-3 pb-3">{tabs}</div>
+      {tab === "goals" ? <>
+        <div className="px-3 pb-3"><AskBox key="goals" url="/api/modules" body={{ op: "chat", id: "goals" }} field="ask" placeholder="Ask about your goals…" /></div>
+        {lagging > 0 && <p className="px-5 pb-2 text-[14.5px]" style={{ color: K.muted }}>{n(lagging, "goal")} behind.</p>}
+        {sorted.map((g, i) => sizeOf(g, i) === "card"
+          ? <div key={g.spec.id} className="mb-2"><GoalCard g={g} a={a} onShrink={() => setSize((s) => ({ ...s, [g.spec.id]: "line" }))} onMetric={(m) => setFull({ id: g.spec.id, m })} onResolve={() => resolve(g)} resolving={resolving === g.spec.id} /></div>
+          : <GoalLine key={g.spec.id} g={g} onGrow={() => setSize((s) => ({ ...s, [g.spec.id]: "card" }))} />)}
+        <div className="px-3 pt-2"><AskBox row url="/api/modules" body={{ op: "chat", id: "goals", intent: "new" }} field="ask" placeholder="Add a goal" /></div>
+      </> : (
+        <div id="runners">
+          <div className="px-3 pb-3"><AskBox key="runners" url="/api/modules" body={{ op: "chat", id: "runners" }} field="ask" placeholder="Ask about your runners…" /></div>
+          <p className="px-5 pb-2 text-[17px] font-semibold leading-snug">{daySentence(day)}</p>
+          <PhoneDay day={day} open={opened} onPick={(id) => setOpenRunner(opened === id ? "" : id)} renderOpen={(r) => <RunnerOpen r={r} a={a} act={feed.act} />} />
+        </div>
+      )}
       {fullGoal && full && <GoalFull g={fullGoal} ds={series.get(fullGoal.spec.id) ?? []} metric={full.m} setMetric={(m) => setFull({ id: fullGoal.spec.id, m })} onClose={() => setFull(null)} a={asks} />}
       {asks.toast && (
         <div className="fixed inset-x-3 bottom-[calc(76px+env(safe-area-inset-bottom))] z-[90] flex items-center gap-3 rounded-2xl px-3.5 py-3 text-[13.5px] shadow-2xl" style={{ background: "#1f242e", border: `1px solid ${K.line}` }}>

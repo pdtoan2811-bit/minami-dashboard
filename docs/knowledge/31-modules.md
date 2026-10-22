@@ -56,8 +56,8 @@ that folder any other way, from a terminal or with another tool, knows exactly a
   day), there's no single job to resume.
 - With no `ask`, the opening message asks for where things stand in at most five lines, and to change nothing.
 - **The dashboard never writes into a module.** It finds modules, shows them and opens chats.
-- The button is `app/autopilot/ModuleChat.tsx` ("Chat here", beside the Goals heading). It moves to a shared
-  component when a second page has a module.
+- The entry point was a "Chat here" button (`ModuleChat.tsx`). Later the same day it was replaced by the text
+  inputs below.
 
 ## The pilot: Goals (`~/.minami/goals`, 2026-10-22)
 
@@ -78,10 +78,34 @@ did before. Added beside the data:
 Checked: nothing enumerates `~/.minami/goals` as a list of goals (the runner and `lib/goals.ts` both list
 goals from the vault notes), so `bin/` and `schema/` can't be mistaken for one.
 
+## Tabs and text inputs (2026-10-22, later the same day)
+
+Thomas: "do the text input like in today todo list", "there will be multiple goals and I want to manage runners too",
+"need tab navigation rather than goal and runners on same page - can be same module".
+
+- **`/autopilot` has two tabs, Goals and Runners** (`Tabs`/`useTab` in `Autopilot.tsx`, and the same on the phone).
+  - Each tab shows a count, plus an amber badge for goals behind or runners that need a look. The runners badge uses
+    `dayOf().looks`, the same rule as the "N need a look" sentence, so they can't disagree.
+  - The tab follows the URL: `?tab=runners`, or the hashes the app already links to (`#runners`, `#auto-<id>` → Runners;
+    `#goal-<id>` → Goals). So the bell drawer, the Day strip chips and a goal's "worked on by" links land on the right tab.
+  - It's one page and two data folders, because goals and runners have different writers and different rules.
+- **Text inputs replace the Chat here button** (`AskBox.tsx`, shaped like Today's "Add a to-do": type, Enter, and the
+  chat opens; the text stays if the send fails):
+  - One per tab, at the top: `POST /api/modules {op:"chat", id, ask}`. The chat runs in the module folder.
+  - **"Add a goal"**, the last row of the goal list: `intent:"new"`. The chat follows "Adding a goal" in the goals
+    module's `AGENTS.md`: draft the json block, show Thomas, write it into the vault note only after he says yes.
+    The goal list now shows from the first goal, so there's always a place to add one.
+  - **One per goal card and per runner card:** `/api/autopilot/ask`. These run in the **owner's** folder (the vault for
+    a goal, the runner's workdir), because that's where the fix happens. Module-wide questions run in the module.
+- **`~/.minami/automations` is now the runners module:** `module.json`, `AGENTS.md`, `CLAUDE.md` and `EXPERIENCE.md`.
+  Its write path is the dashboard API (`/api/automations`) until `bin/runners` exists. Its `AGENTS.md` makes the agent
+  ask before running or resuming anything that posts, spends, opens PRs or deletes.
+
 ## Next modules, in order
 
-1. **Runners** (`~/.minami/automations`). launchd is the truth there (§27), so the module is mostly a door and
-   a manifest.
+1. **Runners**: the door files exist (above). Still to do: `bin/runners` as the one write path, and each runner's
+   declared **effects** (posts publicly · spends · opens PRs · deletes), its lock and its pause switch, with an
+   "Unguarded" flag for any runner that posts or spends without a lock, and a confirm before Run now on those.
 2. **Today** (`~/.minami/today`). Its writers are the heartbeat and the page; the pilot for a module whose
    CLI is a real write path (validate → `lock.mjs` → append → fsync).
 3. When a third module exists, the rail can list modules from `GET /api/modules`. Until then, the registry

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Automation, Schedule } from "@/lib/automations";
 import { K as TK } from "../today/ui";
+import { AskBox } from "./AskBox";
 import { AsideLine, DayStrip, DC, Tracks, dayOf, daySentence } from "./DayStrip";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d", pink: "#db6393", violet: "#a78bfa" };
@@ -282,6 +283,8 @@ function Card({ a, busy, open, flash, toggle, run }: {
           </button>
         )}
       </div>
+      {/* About THIS runner: the chat runs in its workdir with its schedule, status and log (lib/autopilot-ask.ts). */}
+      <div className="px-4 pb-3 pl-5"><AskBox row url="/api/autopilot/ask" body={{ kind: "runner", id: a.id }} field="question" placeholder="Ask about this runner…" /></div>
       {open === "logs" && <div className="px-4 pb-3 pl-5"><Logs id={a.id} /></div>}
       {open === "edit" && <div className="px-3 pb-3"><Editor a={a} busy={isBusy("update")} onCancel={() => toggle("edit")}
         onSave={async (v) => { if (await run("update", v)) toggle("edit"); }} /></div>}

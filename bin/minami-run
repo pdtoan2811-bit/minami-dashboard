@@ -40,6 +40,49 @@ record() { # $1=event
   ' 2>/dev/null
 }
 
+# ONE RUN AT A TIME (2026-10-22). Two copies of a job must never overlap: on 2026-10-21 one command run twice,
+# 10 s apart, posted three videos twice (vault: Duplicate TikTok Posts 2026-10-21). That one was a chat session
+# running the command by hand, which only the action's own lock can stop (tiktok-studio scripts/lib/lock.mjs), but
+# the same overlap is open here whenever launchd's schedule and a "Run now" (or a second Run now) meet.
+# The lock is ~/.harness/locks/run-<id>.lock, in the same format as lock.mjs ({pid, at, note}, created O_EXCL), so a
+# script holding it shows up in either tool. A lock whose pid is dead is taken over (a killed run never cleans up).
+# A run that finds the lock held exits 0 without running and writes a "skip" line — no `start` field, so the run
+# record's readers, which key on `start`, never count it as a run. Exit 0, not an error: launchd would otherwise mark
+# the job failing because it was already doing its work.
+LOCKS="${MINAMI_LOCKS_DIR:-$HOME/.harness/locks}"
+LOCK="$LOCKS/run-$ID.lock"
+HOLDER=$(MR_LOCK="$LOCK" MR_PID="$$" MR_ID="$ID" "$NODE" -e '
+  const fs = require("fs"), path = require("path"), e = process.env;
+  const me = JSON.stringify({ pid: Number(e.MR_PID), at: Date.now(), note: `minami-run ${e.MR_ID}` });
+  const alive = (p) => { try { process.kill(p, 0); return true; } catch (x) { return x.code === "EPERM"; } };
+  const read = () => { try { return JSON.parse(fs.readFileSync(e.MR_LOCK, "utf8")); } catch { return null; } };
+  fs.mkdirSync(path.dirname(e.MR_LOCK), { recursive: true });
+  const take = () => { try { fs.writeFileSync(e.MR_LOCK, me, { flag: "wx" }); return true; } catch { return false; } };
+  if (take()) process.exit(0);
+  const h = read();
+  if (h && alive(h.pid)) { process.stdout.write(String(h.pid)); process.exit(0); }
+  // Dead holder (or an unreadable file older than 5 s): take it over, then re-read after a beat so two
+  // runs taking over the same dead lock cannot both believe they hold it.
+  if (!h) { try { if (Date.now() - fs.statSync(e.MR_LOCK).mtimeMs < 5000) { process.stdout.write("?"); process.exit(0); } } catch {} }
+  fs.rmSync(e.MR_LOCK, { force: true });
+  if (!take()) { process.stdout.write(String(read()?.pid ?? "?")); process.exit(0); }
+  setTimeout(() => { const n = read(); if (n?.pid !== Number(e.MR_PID)) process.stdout.write(String(n?.pid ?? "?")); }, 150);
+' 2>/dev/null) || HOLDER=""
+if [ -n "$HOLDER" ]; then
+  echo "minami-run: $ID is already running (pid $HOLDER) — not starting a second copy" >&2
+  MR_FILE="$RUNS" MR_ID="$ID" MR_HOLDER="$HOLDER" "$NODE" -e '
+    const e = process.env, fs = require("fs");
+    fs.appendFileSync(e.MR_FILE, JSON.stringify({ id: e.MR_ID, event: "skip", at: new Date().toISOString(), holder: e.MR_HOLDER }) + "\n");
+  ' 2>/dev/null
+  exit 0
+fi
+# Only our own lock is removed: a takeover by another run after ours died must not be undone by us.
+release() { MR_LOCK="$LOCK" MR_PID="$$" "$NODE" -e '
+  const fs = require("fs"), e = process.env;
+  try { if (JSON.parse(fs.readFileSync(e.MR_LOCK, "utf8")).pid === Number(e.MR_PID)) fs.rmSync(e.MR_LOCK); } catch {}
+' 2>/dev/null; }
+trap release EXIT
+
 T0=$(date +%s); START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 record start
 

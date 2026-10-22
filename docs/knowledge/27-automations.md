@@ -126,6 +126,24 @@ nothing from one that never started, which is how the upload sync went quiet for
   shown on screen drops the wrapper prefix.
 - **create / update** wrap new commands the same way.
 
+## One run at a time (2026-10-22)
+
+`bin/minami-run` (installed copy `~/.minami/bin/minami-run`, which every plist runs) now holds
+`~/.harness/locks/run-<id>.lock` for the whole run. It uses the same format as tiktok-studio's `scripts/lib/lock.mjs`:
+`{pid, at, note}`, created O_EXCL. A second copy that finds the lock held by a live pid doesn't start. It writes
+`{"id","event":"skip","at","holder"}` to `runs.jsonl` and exits 0. A lock whose pid is dead is taken over, then
+re-read after 150 ms. The lock is released on exit, including after a SIGTERM.
+
+- **Why:** on 2026-10-21 a publish command run twice, 10 s apart, posted three videos twice (vault note *Duplicate
+  TikTok Posts 2026-10-21*). That pair came from a chat session running the command by hand, so the action's own
+  lock is what stops it. The same overlap was open here whenever launchd's schedule met a Run now.
+- **Why exit 0:** a skipped run is the job already doing its work. A non-zero exit would mark the runner failing.
+- **Why no `start` field on a skip line:** `runRecords()` keys on `start`, so the skip line is ignored, and a
+  dashboard built before this change reads the file unchanged.
+- **Tested:** two overlapping runs, a dead-pid lock, exit-code passthrough, SIGTERM release.
+- **Install:** `cp` to a temp name, then `mv` over the installed copy. bash reads a script as it runs, so overwriting
+  the file in place could corrupt a job that is mid-run.
+
 ## Gotchas
 
 - **Status `NOT LOADED` is real, not a bug.** On 2026-10-14, `minami-login` was not loaded in the GUI

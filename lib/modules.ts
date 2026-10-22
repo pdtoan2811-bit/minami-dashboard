@@ -41,16 +41,22 @@ export function listModules(): ModuleInfo[] {
  * Start a chat whose cwd is the module folder. A new chat per click: unlike "Resolve with Minami" (one chat per goal
  * per day) there is no single job to resume here, and two questions about a module are two conversations.
  */
-export async function moduleChat(id: string, ask?: string): Promise<{ sessionId: string }> {
+export async function moduleChat(id: string, ask?: string, intent?: "new"): Promise<{ sessionId: string }> {
   const m = listModules().find((x) => x.module === id);
   if (!m) throw new Error(`no module ${id}`);
   const q = (ask ?? "").trim().slice(0, 500);
   const { sendMessage, liveStats } = await import("@/lib/agent/manager");
   const key = `module:${id}:${Date.now()}`;
   // The first line is the chat's name on the board (§5h). The rules come from the folder's own CLAUDE.md /
-  // AGENTS.md, not from this message: a chat opened in the folder any other way must know just as much.
-  const message = q
-    ? `${m.title} · ${q}\n\nThomas opened this chat in the ${m.title} module. ${q}`
+  // AGENTS.md, not from this message: a chat opened in the folder any other way must know just as much. So the
+  // message says only what Thomas typed and how to answer; HOW to add a goal lives in the module's AGENTS.md.
+  const message = intent === "new" && q
+    ? `${m.title} · new: ${q}\n\nThomas typed this into "Add" on the ${m.title} tab:\n\n${q}\n\n` +
+      "Follow your AGENTS.md's procedure for adding one: draft it, show him, and write nothing until he says yes."
+    : q
+    ? `${m.title} · ${q}\n\nThomas typed this on the ${m.title} tab of Autopilot:\n\n${q}\n\n` +
+      "Answer first, plainly and short, from this module's data. If it asks for a change, say what you'd change and ask " +
+      "before doing it, unless it is trivial and safe. Never post as Thomas."
     : `${m.title} · chat\n\nThomas opened a chat in the ${m.title} module. Read the state the way your AGENTS.md says, ` +
       "give him where things stand in at most five lines, then wait for his question. Change nothing yet.";
   let { sessionId } = sendMessage({ key, cwd: m.dir, message });

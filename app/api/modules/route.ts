@@ -9,11 +9,11 @@ export async function GET() {
   catch (e) { return Response.json({ error: String((e as Error).message || e) }, { status: 400 }); }
 }
 
-// POST { op: "chat", id, ask? } → { sessionId } — a new chat whose cwd is the module folder.
+// POST { op: "chat", id, ask?, intent?: "new" } → { sessionId } — a new chat whose cwd is the module folder.
 export async function POST(req: Request) {
   try {
     const b = await req.json();
     if (b.op !== "chat") throw new Error(`unknown op: ${b.op}`);
-    return Response.json(await moduleChat(String(b.id), typeof b.ask === "string" ? b.ask : undefined));
+    return Response.json(await moduleChat(String(b.id), typeof b.ask === "string" ? b.ask : undefined, b.intent === "new" ? "new" : undefined));
   } catch (e) { return Response.json({ error: String((e as Error).message || e) }, { status: 400 }); }
 }

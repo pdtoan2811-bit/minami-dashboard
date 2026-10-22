@@ -11,7 +11,8 @@
 //     and what it cost;
 //   • Thomas's part as a checklist (ticked on Today, where the heartbeat put it);
 //   • "Resolve with Minami", which hands all of the above to a vault chat that can fix what is broken.
-// Many goals = the list on the left, behind/broken first.
+// Many goals = the list on the left, behind/broken first, ending in "Add a goal" (2026-10-22: the list used to
+// appear only from the second goal on, so there was nowhere to add one).
 //
 // A failed check is never drawn as a result: "no reading" is its own word. Since the Scoreboard pick (2026-10-21)
 // the detail is: one sentence, the numbers with their change vs yesterday and 7 days, the one thing that needs you,
@@ -23,6 +24,7 @@ import type { Automation } from "@/lib/automations";
 import { K as TK, Glass } from "../today/ui";
 import { STATUS } from "./RunnersSection";
 import { useOpenChat } from "@/components/shell/Drawer";
+import { AskBox } from "./AskBox";
 import { CountDelta, GoalDays, PageBars, RankLine, SC, ScoreCard, ScoreDeltas, headline, localDate, rankText, useScoreCards } from "./Scoreboard";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d" };
@@ -129,19 +131,26 @@ export function GoalsSection({ goals, total, err, busy, runNow, runnersFor }: {
             No goals yet. A goal is a <code style={MONO}>```json goal</code> block in a note in <code style={MONO}>10-19 Projects/</code> — see the
             note <b style={{ color: K.ink }}>Autonomous Goal Spec</b> in the vault.
           </p>
+          <div className="mt-4"><AddGoal /></div>
         </Glass>
       )}
       {g && (
-        <div className={`mt-4 grid gap-4 ${sorted.length > 1 ? "lg:grid-cols-[260px_minmax(0,1fr)]" : ""}`}>
-          {/* The list only earns its column when there is more than one goal to pick from. */}
-          {sorted.length > 1 && <ul className="space-y-2">
+        <div className="mt-4 grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+          <ul className="space-y-2">
             {sorted.map((x) => <GoalRow key={x.spec.id} g={x} on={x === g} onPick={() => { setSel(x.spec.id); history.replaceState(null, "", `#goal-${x.spec.id}`); }} />)}
-          </ul>}
+            <li><AddGoal /></li>
+          </ul>
           <GoalDetail key={g.spec.id} g={g} busy={busy || g.runner.running} onRun={runNow} runners={runnersFor(g)} />
         </div>
       )}
     </div>
   );
+}
+
+// A new goal is drafted by a chat in the goals module (§31), which follows "Adding a goal" in its AGENTS.md: draft the
+// json goal block, show Thomas, write it into the vault note only after he says yes.
+function AddGoal() {
+  return <AskBox row url="/api/modules" body={{ op: "chat", id: "goals", intent: "new" }} field="ask" placeholder="Add a goal" />;
 }
 
 function GoalRow({ g, on, onPick }: { g: Goal; on: boolean; onPick: () => void }) {
@@ -237,6 +246,8 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
               {!todo && <button onClick={resolve} disabled={resolving} className="h-9 rounded-full px-3.5 text-[13.5px] disabled:opacity-50" style={{ border: `1px solid ${K.line2}`, color: K.muted }}>{resolving ? "Starting…" : "Resolve with Minami"}</button>}
             </div>
             {rerr && <p className="text-[13px]" style={{ color: K.red }}>{rerr}</p>}
+            {/* About THIS goal: the chat runs in the vault with the goal's whole context (lib/autopilot-ask.ts). */}
+            <AskBox row url="/api/autopilot/ask" body={{ kind: "goal", id: g.spec.id }} field="question" placeholder="Ask about this goal…" />
           </div>
         </div>
 
