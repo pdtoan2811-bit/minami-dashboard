@@ -15,10 +15,12 @@ function scopeOf(url: string, body: Record<string, unknown>): { kind: AskKind; i
 }
 
 /** POST `body` + the typed text; the chat it started shows as a row above the box. `field` names the text's key in the body. */
-export function AskBox({ placeholder, url, body, field, row }: {
+export function AskBox({ placeholder, url, body, field, row, rows = true }: {
   placeholder: string; url: string; body: Record<string, unknown>; field: string;
   /** a row inside a card (Today's AddTodo look) instead of a free-standing pill (Today's NoteBox look) */
   row?: boolean;
+  /** draw this box's chats above it — off on desktop, where they are threads in the Minami panel (MinamiPanel.tsx) */
+  rows?: boolean;
 }) {
   const { reload } = useAsks();
   const scope = scopeOf(url, body);
@@ -45,7 +47,7 @@ export function AskBox({ placeholder, url, body, field, row }: {
   return (
     // The rows sit outside the form: their buttons and reply box must not submit this one.
     <div>
-      <AskRows kind={scope.kind} id={scope.id} className="mb-2" />
+      {rows && <AskRows kind={scope.kind} id={scope.id} className="mb-2" />}
       <form onSubmit={send}>
         {row ? (
           <div className="flex items-center gap-3.5 rounded-xl px-4 py-2.5" style={{ background: "rgba(0,0,0,.22)", border: `1px solid ${K.line}` }}>

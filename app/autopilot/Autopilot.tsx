@@ -14,8 +14,8 @@ import { Ground, TopBar, K } from "../today/ui";
 import { GoalsSection, useGoals } from "./GoalsSection";
 import { RunnersSection, useAutomations } from "./RunnersSection";
 import { PhoneAutopilot } from "./PhoneAutopilot";
-import { AskBox } from "./AskBox";
 import { AsksProvider } from "./Asks";
+import { MinamiPanel } from "./MinamiPanel";
 import { useCompact } from "@/lib/use-media";
 import { dayOf } from "./DayStrip";
 import { StorageSection, useStorage } from "./StorageSection";
@@ -81,6 +81,8 @@ export function Autopilot() {
   const g = useGoals();
   const feed = useAutomations();
   const [tab, pick] = useTab();
+  // The goal on screen, so the Minami panel's threads and its message box are about THAT goal.
+  const [goalId, setGoalId] = useState<string | null>(null);
   const stFeed = useStorage();
   const st = stFeed.s;
   const storage = st && !st.error ? { label: `${st.freeGB.toFixed(0)} GB`, bad: st.stale || st.freeGB < st.thresholds.lowGB } : undefined;
@@ -116,36 +118,49 @@ export function Autopilot() {
   };
 
   return (
-    // One feed of the chats this page started, so each sits as a row on the card that started it (Asks.tsx).
+    // One feed of the chats this page started: the Minami panel on desktop, a row on the card on a phone (Asks.tsx).
     <AsksProvider>
     <Ground>
       <TopBar title="Autopilot" />
-      {/* Wider than the runners below: the goals are a list beside a run ledger (§29), the runners one column. */}
       {/* On a phone the stacked cards made an 8,918px page; the phone gets its own view (PhoneAutopilot.tsx). */}
       {compact && tab !== "storage" ? <PhoneAutopilot goals={goals} runners={items} feed={feed} tab={tab} reloadGoals={g.reload} tabs={<Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} storage={storage} />} /> : (
-      <div className="mx-auto max-w-[1160px] px-5 pb-28 pt-2 sm:pb-16">
+      // V4 of the autopilot-layout pitch (2026-10-22): the page on the left uses the width for numbers, to-dos and the
+      // runner table; Minami is docked on the right (MinamiPanel.tsx) and holds every chat this tab started, with the
+      // page's one message box. Storage has no chats, so it keeps the single column.
+      <div className={`mx-auto px-5 pb-28 pt-2 sm:pb-16 ${tab === "storage" ? "max-w-[1160px]" : "max-w-[1560px]"}`}>
         {pf && (
           <p className="mb-4 text-[12.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
             Filtered to {pf} · {hidden} hidden
           </p>
         )}
         <div className="mb-5"><Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} storage={storage} /></div>
-        {/* Each tab opens with its module's input (§31): what's typed starts a chat inside that module's folder. */}
         {tab === "storage" ? (
           <section id="storage" className="scroll-mt-6"><StorageSection feed={stFeed} /></section>
-        ) : tab === "goals" ? (
-          <section id="goals" className="scroll-mt-6">
-            <AskBox key="goals" url="/api/modules" body={{ op: "chat", id: "goals" }} field="ask" placeholder="Ask about your goals — which are behind, what the runner did, what to try next…" />
-            <GoalsSection goals={goals} total={g.goals?.length ?? 0} err={g.err} busy={g.busy} runNow={g.runNow} reload={g.reload} runnersFor={runnersFor} />
-            {goals && g.goals && g.goals.length > 0 && goals.length === 0 && (
-              <p className="mt-4 text-[13.5px]" style={{ color: K.muted }}>No goals in {pf}.</p>
-            )}
-          </section>
         ) : (
-          <section id="runners" className="scroll-mt-6">
-            <AskBox key="runners" url="/api/modules" body={{ op: "chat", id: "runners" }} field="ask" placeholder="Ask about your runners — what failed, what runs tonight, pause the video jobs…" />
-            <div className="mt-6"><RunnersSection feed={feed} items={items} serving={serving} /></div>
-          </section>
+          <div className="grid items-start gap-6" style={{ gridTemplateColumns: "minmax(0,1fr) 380px" }}>
+            {tab === "goals" ? (
+              <section id="goals" className="min-w-0 scroll-mt-6">
+                <GoalsSection goals={goals} total={g.goals?.length ?? 0} err={g.err} busy={g.busy} runNow={g.runNow} reload={g.reload} runnersFor={runnersFor} onShown={setGoalId} />
+                {goals && g.goals && g.goals.length > 0 && goals.length === 0 && (
+                  <p className="mt-4 text-[13.5px]" style={{ color: K.muted }}>No goals in {pf}.</p>
+                )}
+              </section>
+            ) : (
+              <section id="runners" className="min-w-0 scroll-mt-6"><RunnersSection feed={feed} items={items} serving={serving} /></section>
+            )}
+            {tab === "goals" ? (
+              <MinamiPanel key="goals" about={goalId ? "about this goal" : "about your goals"}
+                scopes={[{ kind: "goal", id: goalId ?? "*" }, { kind: "module", id: "goals" }, { kind: "module", id: "goals:new" }]}
+                // A goal on screen → a chat with that goal's whole context (lib/autopilot-ask.ts); none → the goals module (§31).
+                start={goalId ? { url: "/api/autopilot/ask", body: { kind: "goal", id: goalId }, field: "question" } : { url: "/api/modules", body: { op: "chat", id: "goals" }, field: "ask" }}
+                placeholder={goalId ? "Ask about this goal…" : "Ask about your goals…"} />
+            ) : (
+              <MinamiPanel key="runners" about="about your runners"
+                scopes={[{ kind: "runner", id: "*" }, { kind: "module", id: "runners" }]}
+                start={{ url: "/api/modules", body: { op: "chat", id: "runners" }, field: "ask" }}
+                placeholder="Ask about your runners — what failed, what runs tonight…" />
+            )}
+          </div>
         )}
       </div>
       )}

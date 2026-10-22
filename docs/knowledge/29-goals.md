@@ -159,6 +159,23 @@ Google · Not found · goal #1 · checked top 46–49", the ledger says "Not fou
 the phone says "Not found → goal #1" instead of ">46". `days()` moved here from `PhoneAutopilot.tsx`; the phone's
 Rank screen renders the same chart (`compact`).
 
+## V4 layout: one page, Minami on the right (2026-10-22)
+
+Picked from the `autopilot-layout` pitch (V4) after "weird UX and readability on goals and runner". The moodboard
+(`autopilot-layout-mood`) counted why: the goal's name three times (list, all-caps line, headline), the part he acts
+on squeezed into a 300 px column (a reply at ~35 characters a line), two ask boxes, 250 px rank cards around one or
+two dots, and page → glass card → cards → column, three frames deep. Now (desktop; the phone keeps its own view):
+- **No card around the goal and no list column for one goal.** The name once (small, with On track / Behind), the
+  headline at reading width (≤ 780 px), the target, the days bar.
+- **One row of number tiles:** the number, its change in words beside it ("▲ 2 vs yesterday"), and a small line only
+  once there are 7 readings (`Tile`, `rankChange`, `countChange` in `GoalsSection.tsx`).
+- **Your part | The runner** side by side: Today's rows (`GoalTodos`) and the health line with Run now / Resolve.
+- **Chats live in the Minami panel** on the right (`MinamiPanel.tsx`, §31). Its message box asks about the goal on
+  screen (`/api/autopilot/ask`, kind goal); with no goal, the goals module. `GoalsSection` reports that goal up
+  through `onShown`.
+- From the second goal on, goals are a row of chips above the page. "Add a goal" sits at the foot; its chat is a
+  thread in the panel.
+
 ## The Scoreboard: a rank is a number (2026-10-21, later the same day)
 
 The chart above didn't survive the day. Thomas: "what the hell with the not in top 46??? Can it just be like, rank: 46

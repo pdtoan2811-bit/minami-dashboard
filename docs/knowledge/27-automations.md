@@ -110,6 +110,18 @@ The section is now `app/autopilot/DayStrip.tsx` plus a much shorter `RunnersSect
 - **The phone (`PhoneDay`):** the same day runs top to bottom, with the now-line between past and later and the
   repeating jobs in one "All day" block. A runner that needs a look starts open where it sits.
 
+**V4: slim strip, look cards, one table, Minami on the right (2026-10-22).** "Weird UX and readability on goals and
+runner" → moodboard `autopilot-layout-mood` → pitch `autopilot-layout`, V4 picked. Desktop only; the phone is unchanged.
+- **The strip only says WHEN.** One dot per run, filled once it ran; amber with its time for what needs a look; the
+  now-line and its time. No names on it any more: the three label lanes read as a zig-zag, two dots piled up at 00:15,
+  and the Slack card (00:30 lock, 21:30 post) was named twice. A dot is still a button with the name on hover.
+- **Look cards lead with the runner's NAME,** then the amber word (`0/10`, `unfiled`), the why, and "Fix it with
+  Minami" first. "Open the log" / "Name it" open its card inside the look card.
+- **Every other runner is one table** (`RunnerTable`): Today in order · All day · At login · other days, columns name ·
+  project · when · how it went. A two-time runner is one row with both times. A row opens its `Card` right under it.
+  Tracks and the "At login / Not today" line are gone; the table carries both.
+- **Chats are threads in the Minami panel** (§31, `MinamiPanel.tsx`); a card's own ask box no longer draws rows.
+
 **The run record.** launchd keeps no history, and "last run" was the log's mtime. That can't tell a run that wrote
 nothing from one that never started, which is how the upload sync went quiet for 10 h and still looked fine.
 - **The wrapper** is `bin/minami-run`, installed as `~/.minami/bin/minami-run` so no plist points into a worktree.
