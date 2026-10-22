@@ -9,8 +9,9 @@
 //   • the RUNNER's health on its own line, apart from the goal's status: "behind" and "broken" are different news;
 //   • a ledger of every run: what it measured, each action with its outcome (done / queued / opened / refused…),
 //     and what it cost;
-//   • Thomas's part as a checklist (ticked on Today, where the heartbeat put it);
-//   • "Resolve with Minami", which hands all of the above to a vault chat that can fix what is broken.
+//   • Thomas's part as Today's own to-do rows, ticked right on the card (GoalTodos.tsx; stored on Today);
+//   • "Resolve with Minami", which hands all of the above to a vault chat that can fix what is broken. Its chat shows
+//     as a row on the card (Asks.tsx); nothing on this page navigates away any more (2026-10-22).
 // Many goals = the list on the left, behind/broken first, ending in "Add a goal" (2026-10-22: the list used to
 // appear only from the second goal on, so there was nowhere to add one).
 //
@@ -18,13 +19,13 @@
 // the detail is: one sentence, the numbers with their change vs yesterday and 7 days, the one thing that needs you,
 // and everything above folded behind one click (Scoreboard.tsx has the why).
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import type { Goal, GoalAction, GoalRun, Position } from "@/lib/goals";
 import type { Automation } from "@/lib/automations";
 import { K as TK, Glass } from "../today/ui";
 import { STATUS } from "./RunnersSection";
-import { useOpenChat } from "@/components/shell/Drawer";
 import { AskBox } from "./AskBox";
+import { useAsks } from "./Asks";
+import { GoalTodos } from "./GoalTodos";
 import { CountDelta, GoalDays, PageBars, RankLine, SC, ScoreCard, ScoreDeltas, headline, localDate, rankText, useScoreCards } from "./Scoreboard";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d" };
@@ -64,7 +65,7 @@ export function useGoals() {
     } finally { setBusy(false); }
   }, []);
 
-  return { goals, err, busy, runNow };
+  return { goals, err, busy, runNow, reload: load };
 }
 
 // ── outcomes ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -110,8 +111,8 @@ function health(g: Goal): { tone: Tone; text: string } {
 const rank = (g: Goal) => (health(g).tone === "bad" ? 0 : g.log.at(-1)?.decision.on_track === false ? 1 : 2);
 
 /** `goals` arrives already filtered; `total` is the unfiltered count, so "no goals" and "all filtered out" read differently. */
-export function GoalsSection({ goals, total, err, busy, runNow, runnersFor }: {
-  goals: Goal[] | null; total: number; err: string; busy: boolean; runNow: () => void; runnersFor: (g: Goal) => Automation[];
+export function GoalsSection({ goals, total, err, busy, runNow, reload, runnersFor }: {
+  goals: Goal[] | null; total: number; err: string; busy: boolean; runNow: () => void; reload: () => void; runnersFor: (g: Goal) => Automation[];
 }) {
   const sorted = useMemo(() => [...(goals ?? [])].sort((a, b) => rank(a) - rank(b)), [goals]);
   // The selection follows #goal-<id> (the shell's drawer links there), else the most urgent goal.
@@ -140,7 +141,7 @@ export function GoalsSection({ goals, total, err, busy, runNow, runnersFor }: {
             {sorted.map((x) => <GoalRow key={x.spec.id} g={x} on={x === g} onPick={() => { setSel(x.spec.id); history.replaceState(null, "", `#goal-${x.spec.id}`); }} />)}
             <li><AddGoal /></li>
           </ul>
-          <GoalDetail key={g.spec.id} g={g} busy={busy || g.runner.running} onRun={runNow} runners={runnersFor(g)} />
+          <GoalDetail key={g.spec.id} g={g} busy={busy || g.runner.running} onRun={runNow} onChanged={reload} runners={runnersFor(g)} />
         </div>
       )}
     </div>
@@ -172,13 +173,12 @@ function GoalRow({ g, on, onPick }: { g: Goal; on: boolean; onPick: () => void }
   );
 }
 
-function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun: () => void; runners: Automation[] }) {
+function GoalDetail({ g, busy, onRun, onChanged, runners }: { g: Goal; busy: boolean; onRun: () => void; onChanged: () => void; runners: Automation[] }) {
   const h = health(g);
   const { ranks, pages } = useScoreCards(g);
   const q = g.spec.target.queries ?? [];
-  const todo = g.today?.todos.find((t) => !t.done);
-  const asks = g.today ? g.today.todos.filter((t) => !t.done).length + g.today.questions.length : 0;
-  const openChat = useOpenChat();
+  const hasPart = !!g.today && (g.today.todos.length > 0 || g.today.questions.length > 0);
+  const { reload: reloadAsks } = useAsks();
   const [resolving, setResolving] = useState(false);
   const [rerr, setRerr] = useState("");
   const [more, setMore] = useState(false);
@@ -188,7 +188,7 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
     setResolving(true); setRerr("");
     try {
       const r = await fetch("/api/goals", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "resolve", id: g.spec.id }) }).then((r) => r.json());
-      if (r.error) setRerr(r.error); else openChat(r.sessionId);
+      if (r.error) setRerr(r.error); else reloadAsks(); // the chat appears as a row under the card's ask box
     } catch { setRerr("Couldn't reach the dashboard."); }
     finally { setResolving(false); }
   };
@@ -199,7 +199,7 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
       <Glass className="p-6 sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
           <div className="text-[12px] tracking-[.08em]" style={{ ...MONO, color: K.faint }}>
-            <a href={obsidian(`10-19 Projects/${g.note}`)} style={{ color: K.faint }}>{g.note.toUpperCase()}</a> · {g.spec.goal.toUpperCase()}
+            {g.note.toUpperCase()} · {g.spec.goal.toUpperCase()}
           </div>
           <GoalDays g={g} />
         </div>
@@ -225,17 +225,9 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
             )}
           </div>
           <div className="flex flex-col gap-3">
-            {todo ? (
-              <div className="rounded-2xl p-4" style={{ background: mix(SC.amber, 7), border: `1px solid ${mix(SC.amber, 32)}` }}>
-                <div className="text-[13px] font-semibold" style={{ color: SC.amber }}>Needs you{todo.est_min ? ` · ${todo.est_min} min` : ""}{asks > 1 ? ` · ${asks - 1} more` : ""}</div>
-                <p className="mt-1 text-[16px] font-semibold leading-snug">{todo.text}</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {/* Ticked on Today: the heartbeat copied it there, and Today is where the tick is stored. */}
-                  <Link href="/today" className="inline-flex h-9 items-center rounded-[11px] px-3.5 text-[14px] font-semibold text-white" style={{ background: K.accent }}>Tick on Today</Link>
-                  <button onClick={resolve} disabled={resolving} className="h-9 rounded-[11px] px-3.5 text-[14px] disabled:opacity-50" style={{ border: `1px solid ${K.line2}`, color: K.muted }}>{resolving ? "Starting…" : "Ask Minami"}</button>
-                </div>
-              </div>
-            ) : <p className="rounded-2xl px-4 py-3 text-[15px]" style={{ background: "rgba(255,255,255,.04)", color: K.muted }}>Nothing needs you today.</p>}
+            {/* His part, as Today's rows: tick, open, comment, "Do it with Minami" — all without leaving the card. */}
+            {hasPart ? <GoalTodos g={g} onChanged={onChanged} />
+              : <p className="rounded-2xl px-4 py-3 text-[15px]" style={{ background: "rgba(255,255,255,.04)", color: K.muted }}>Nothing needs you today.</p>}
             {/* The RUNNER's health on its own line: "behind" and "broken" are different news (§29). */}
             <div className="flex items-start gap-2 rounded-xl px-3.5 py-2.5 text-[14px]" style={{ background: mix(TONE[h.tone], 10), border: `1px solid ${mix(TONE[h.tone], 30)}` }}>
               <span className="mt-[6px] h-2 w-2 shrink-0 rounded-full" style={{ background: TONE[h.tone] }} />
@@ -243,7 +235,7 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
             </div>
             <div className="flex flex-wrap gap-2">
               <button onClick={onRun} disabled={busy} className="h-9 rounded-full px-3.5 text-[13.5px] font-semibold disabled:opacity-50" style={{ background: "rgba(255,255,255,.07)", border: `1px solid ${K.line2}` }}>{busy ? "Running…" : "Run now"}</button>
-              {!todo && <button onClick={resolve} disabled={resolving} className="h-9 rounded-full px-3.5 text-[13.5px] disabled:opacity-50" style={{ border: `1px solid ${K.line2}`, color: K.muted }}>{resolving ? "Starting…" : "Resolve with Minami"}</button>}
+              <button onClick={resolve} disabled={resolving} className="h-9 rounded-full px-3.5 text-[13.5px] disabled:opacity-50" style={{ border: `1px solid ${K.line2}`, color: K.muted }}>{resolving ? "Starting…" : "Resolve with Minami"}</button>
             </div>
             {rerr && <p className="text-[13px]" style={{ color: K.red }}>{rerr}</p>}
             {/* About THIS goal: the chat runs in the vault with the goal's whole context (lib/autopilot-ask.ts). */}
@@ -252,14 +244,15 @@ function GoalDetail({ g, busy, onRun, runners }: { g: Goal; busy: boolean; onRun
         </div>
 
         <button onClick={() => setMore((v) => !v)} className="mt-6 text-[13.5px]" style={{ ...MONO, color: K.faint }}>
-          {more ? "▾" : "▸"} Every run and what it tried · your part · rules · ranks.jsonl
+          {more ? "▾" : "▸"} Every run and what it tried · rules · ranks.jsonl
         </button>
         {more && (
           <div>
             {g.log.at(-1) && <p className="mt-4 text-[15px] leading-relaxed" style={{ color: K.muted }}>{g.log.at(-1)!.decision.assessment}</p>}
             <Ledger g={g} />
-            <YourPart g={g} />
             <More g={g} runners={runners} />
+            {/* Leaves the page by design, so it lives in the fold and says where it goes; the title is no longer a link. */}
+            <a href={obsidian(`10-19 Projects/${g.note}`)} className="mt-5 inline-block text-[12.5px] hover:text-white" style={{ ...MONO, color: K.faint }}>Open {g.note} in Obsidian ↗</a>
             {g.ranks.length > 0 && (
               <div className="mt-5">
                 <Label>{`ranks.jsonl · ~/.minami/goals/${g.spec.id} · ${g.ranks.length} line${g.ranks.length === 1 ? "" : "s"}`}</Label>
@@ -340,39 +333,6 @@ function RunActions({ r }: { r: GoalRun }) {
       </div>
     );
   })}</>;
-}
-
-function YourPart({ g }: { g: Goal }) {
-  const t = g.today;
-  if (!t || (!t.todos.length && !t.questions.length)) return null;
-  const min = t.todos.filter((x) => !x.done).reduce((s, x) => s + (x.est_min || 0), 0);
-  return (
-    <div className="mt-5">
-      <div className="flex items-baseline justify-between">
-        <Label>{`Your part today${min ? ` · ${min} min` : ""}`}</Label>
-        {/* Ticked on Today: the heartbeat copied these there, and Today is where the tick is stored. */}
-        <Link href="/today" className="text-[12px]" style={{ ...MONO, color: K.accentBright }}>Tick on Today →</Link>
-      </div>
-      <ul className="mt-2 space-y-2">
-        {t.todos.map((x) => (
-          <li key={x.text} className="flex gap-3 rounded-2xl px-4 py-3 text-[13.5px] leading-snug" style={{ background: "rgba(255,255,255,.04)", border: `1px solid ${K.line}` }}>
-            <span className="mt-[2px] inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] text-[11px]"
-              style={{ border: `1.5px solid ${x.done ? K.green : K.line2}`, background: x.done ? mix(K.green, 25) : "transparent", color: K.green }}>{x.done ? "✓" : ""}</span>
-            <span className="min-w-0 flex-1" style={{ color: x.done ? K.faint : K.ink, textDecoration: x.done ? "line-through" : undefined }}>
-              {x.text}
-              {x.why && <span className="mt-0.5 block text-[12px]" style={{ color: K.faint, textDecoration: "none" }}>{x.why}</span>}
-            </span>
-            {x.est_min ? <span className="shrink-0 text-[12px]" style={{ color: K.faint }}>{x.est_min}m</span> : null}
-          </li>
-        ))}
-        {t.questions.map((x) => (
-          <li key={x.question} className="rounded-2xl px-4 py-3 text-[13.5px]" style={{ background: mix(K.amber, 10), color: K.amber }}>
-            Question for you: {x.question} <span style={{ color: K.faint }}>— answer it on Today</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
 }
 
 // What the ledger leaves out: who is ahead on page 1, which automations serve the goal, and its rules.

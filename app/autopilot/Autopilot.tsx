@@ -15,6 +15,7 @@ import { GoalsSection, useGoals } from "./GoalsSection";
 import { RunnersSection, useAutomations } from "./RunnersSection";
 import { PhoneAutopilot } from "./PhoneAutopilot";
 import { AskBox } from "./AskBox";
+import { AsksProvider } from "./Asks";
 import { useCompact } from "@/lib/use-media";
 import { dayOf } from "./DayStrip";
 import { StorageSection, useStorage } from "./StorageSection";
@@ -115,11 +116,13 @@ export function Autopilot() {
   };
 
   return (
+    // One feed of the chats this page started, so each sits as a row on the card that started it (Asks.tsx).
+    <AsksProvider>
     <Ground>
       <TopBar title="Autopilot" />
       {/* Wider than the runners below: the goals are a list beside a run ledger (§29), the runners one column. */}
       {/* On a phone the stacked cards made an 8,918px page; the phone gets its own view (PhoneAutopilot.tsx). */}
-      {compact && tab !== "storage" ? <PhoneAutopilot goals={goals} runners={items} feed={feed} tab={tab} tabs={<Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} storage={storage} />} /> : (
+      {compact && tab !== "storage" ? <PhoneAutopilot goals={goals} runners={items} feed={feed} tab={tab} reloadGoals={g.reload} tabs={<Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} storage={storage} />} /> : (
       <div className="mx-auto max-w-[1160px] px-5 pb-28 pt-2 sm:pb-16">
         {pf && (
           <p className="mb-4 text-[12.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
@@ -133,7 +136,7 @@ export function Autopilot() {
         ) : tab === "goals" ? (
           <section id="goals" className="scroll-mt-6">
             <AskBox key="goals" url="/api/modules" body={{ op: "chat", id: "goals" }} field="ask" placeholder="Ask about your goals — which are behind, what the runner did, what to try next…" />
-            <GoalsSection goals={goals} total={g.goals?.length ?? 0} err={g.err} busy={g.busy} runNow={g.runNow} runnersFor={runnersFor} />
+            <GoalsSection goals={goals} total={g.goals?.length ?? 0} err={g.err} busy={g.busy} runNow={g.runNow} reload={g.reload} runnersFor={runnersFor} />
             {goals && g.goals && g.goals.length > 0 && goals.length === 0 && (
               <p className="mt-4 text-[13.5px]" style={{ color: K.muted }}>No goals in {pf}.</p>
             )}
@@ -147,5 +150,6 @@ export function Autopilot() {
       </div>
       )}
     </Ground>
+    </AsksProvider>
   );
 }

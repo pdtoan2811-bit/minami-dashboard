@@ -58,6 +58,14 @@ that folder any other way, from a terminal or with another tool, knows exactly a
 - **The dashboard never writes into a module.** It finds modules, shows them and opens chats.
 - The entry point was a "Chat here" button (`ModuleChat.tsx`). Later the same day it was replaced by the text
   inputs below.
+- **A chat started on /autopilot stays on /autopilot** (2026-10-22, `Asks.tsx`). Every start — a tab's box
+  (`kind: "module"`, id = the module, or `goals:new` for "Add a goal"), a card's box, "Resolve with Minami",
+  "Fix it with Minami" — is appended to `~/.minami/autopilot-asks.jsonl` by its route (`recordAsk()`), and
+  the box draws those chats as rows above itself: one state word from `/api/agent/live`, one line of what it
+  said, and it opens in place with the whole reply (`/api/glance/last`), single-pick answer buttons, and a
+  reply box (`POST /api/autopilot/ask {op:"reply"}` → the live chat's key, or a resume under a fresh key;
+  only chats in that file). The boxes used to `router.push("/?open=…")`, which dropped Thomas on the home grid
+  mid-decision. "Open the full chat →" is the opt-in, as on Today.
 
 ## The pilot: Goals (`~/.minami/goals`, 2026-10-22)
 

@@ -16,8 +16,32 @@ const FILE = path.join(HOME, ".minami", "autopilot-asks.jsonl");
 /** Asks older than this drop off the cards (the chats themselves stay on the board). */
 const KEEP_MS = 7 * 86400_000;
 
-export type AskKind = "goal" | "runner";
+/** "module" = a tab's own box and "Add a goal" (a chat in ~/.minami/<module>, §31); `id` is the module, or "goals:new". */
+export type AskKind = "goal" | "runner" | "module";
 export type Ask = { kind: AskKind; id: string; question: string; sessionId: string; at: string };
+
+/** Every chat started from /autopilot lands here, whichever route started it, so its row can sit on the card it came
+ *  from (2026-10-22, "dont redirect me out of the view"): the page no longer jumps to the chat, it shows the chat. */
+export function recordAsk(a: Omit<Ask, "at">) {
+  fs.mkdirSync(path.dirname(FILE), { recursive: true });
+  fs.appendFileSync(FILE, JSON.stringify({ ...a, at: new Date().toISOString() } satisfies Ask) + "\n");
+}
+
+/** A reply typed under an ask's row, sent into its chat the way a pane's composer would: a live chat takes it as its
+ *  next turn (queued if busy); one that closed or didn't survive a restart is resumed from its transcript under a
+ *  fresh key. Only chats in the asks file: this box is not a way to type into any session on the box. */
+export async function replyTo(sessionId: string, text: string): Promise<{ ok: true }> {
+  const body = text.trim().slice(0, 4000);
+  if (!body) throw new Error("empty reply");
+  if (!listAsks().some((a) => a.sessionId === sessionId)) throw new Error("that chat wasn't started from Autopilot");
+  const { sendMessage, liveStats } = await import("@/lib/agent/manager");
+  const owner = liveStats().details.find((d) => d.sessionId === sessionId);
+  if (owner) { sendMessage({ key: owner.key, cwd: owner.cwd, message: body }); return { ok: true }; }
+  const { getSession } = await import("@/lib/claude-sessions");
+  const cwd = getSession(sessionId).meta?.cwd || VAULT;
+  sendMessage({ key: `autopilot:reply:${sessionId}:${Date.now().toString(36)}`, cwd: fs.existsSync(cwd) ? cwd : VAULT, message: body, resume: sessionId });
+  return { ok: true };
+}
 
 export function listAsks(): Ask[] {
   try {
@@ -68,7 +92,6 @@ export async function askAbout(kind: AskKind, id: string, question: string): Pro
     sessionId = liveStats().details.find((d) => d.key === key)?.sessionId ?? null;
   }
   if (!sessionId) throw new Error("the chat didn't start in time — look for it on the board");
-  fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  fs.appendFileSync(FILE, JSON.stringify({ kind, id, question: q, sessionId, at: new Date().toISOString() } satisfies Ask) + "\n");
+  recordAsk({ kind, id, question: q, sessionId });
   return { sessionId };
 }

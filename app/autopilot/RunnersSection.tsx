@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Automation, Effect, Schedule } from "@/lib/automations";
 import { K as TK } from "../today/ui";
 import { AskBox } from "./AskBox";
+import { AskRows, useAsks } from "./Asks";
 import { AsideLine, DayStrip, DC, Tracks, dayOf, daySentence } from "./DayStrip";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d", pink: "#db6393", violet: "#a78bfa" };
@@ -190,11 +191,14 @@ export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: 
                 <div className="text-[30px] font-bold leading-none" style={{ color: DC.amber }}>{l.big}</div>
                 <div className="mt-2 text-[16px] font-semibold">{a.name}</div>
                 <p className="mt-1 text-[14.5px] leading-snug" style={{ color: K.muted }}>{l.why}</p>
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <Btn primary onClick={() => jump(a.id, "logs")}>Open the log</Btn>
                   {a.kind === "launchd" && a.status !== "running" && a.schedule.kind !== "always" && <Btn onClick={() => run(a, "run")}>Run now</Btn>}
                   {!a.project && <Btn onClick={() => jump(a.id, "edit")}>Name it</Btn>}
+                  <FixIt a={a} why={l.why} />
                 </div>
+                {/* The chat it started stays on the card, with its state, and opens in place (Asks.tsx). */}
+                <AskRows kind="runner" id={a.id} max={2} className="mt-3" />
               </div>
             ))}
           </div>
@@ -454,4 +458,22 @@ function Btn({ children, onClick, primary, busy }: { children: React.ReactNode; 
       {busy ? "…" : children}
     </button>
   );
+}
+
+// "Fix it with Minami" on a runner that needs a look: a chat in the runner's folder with its log tail (lib/autopilot-
+// ask.ts), which asks before changing anything. The page stays put; the chat becomes a row on this card.
+function FixIt({ a, why }: { a: Automation; why: string }) {
+  const { asks, reload } = useAsks();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  if (asks.some((x) => x.kind === "runner" && x.id === a.id && Date.now() - Date.parse(x.at) < 6 * 3600e3)) return null; // already on it
+  const go = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await fetch("/api/autopilot/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "runner", id: a.id, question: `Fix it: ${why}` }) }).then((r) => r.json());
+      if (r.error) setErr(r.error); else reload();
+    } catch { setErr("Couldn't reach the dashboard."); }
+    finally { setBusy(false); }
+  };
+  return <><Btn onClick={go} busy={busy}>{busy ? "Starting…" : "Fix it with Minami"}</Btn>{err && <span className="self-center text-[12px]" style={{ color: "#ff8a8d" }}>{err}</span>}</>;
 }

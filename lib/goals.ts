@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { readDay, localDate } from "@/lib/today";
+import { readDay, localDate, type TodayLoop, type TodayTodo } from "@/lib/today";
 
 const HOME = os.homedir();
 const VAULT = process.env.SECOND_BRAIN_DIR || path.join(HOME, "secondBrain");
@@ -49,8 +49,12 @@ export type GoalRun = {
  *  keyword per day). `rank` is always a number or null, and null means "read `read` results, not in them" — a failed
  *  check writes no line at all, so a missing day is "no reading", never a result. */
 export type RankRow = { date: string; keyword: string; rank: number | null; read: number; url: string | null; gsc_position: number | null };
-export type GoalTodo = { text: string; why?: string; est_min?: number; done?: boolean };
-export type GoalQuestion = { question: string; options: { label: string; description?: string }[] };
+/** `day` is the same to-do on Today's day file, when the heartbeat has put it there: its id is what /autopilot
+ *  ticks, comments on and hands off with, so the tick lives in one place and Today and Autopilot never disagree. */
+export type GoalTodo = { text: string; why?: string; est_min?: number; done?: boolean;
+  day?: Pick<TodayTodo, "id" | "handoff" | "comments" | "done_by" | "done_evidence"> };
+export type GoalQuestion = { question: string; options: { label: string; description?: string }[];
+  day?: Pick<TodayLoop, "id" | "resolved" | "handoff" | "multiSelect"> };
 export type Goal = {
   spec: GoalSpec; note: string; daysLeft: number; log: GoalRun[]; ranks: RankRow[];
   /** Thomas's part today, with the ticks from Today when the heartbeat has put them there. */
@@ -94,9 +98,21 @@ export function listGoals(): Goal[] {
     const dir = path.join(STATE, spec.id);
     const t = readJSON<{ date: string; todos?: GoalTodo[]; loops?: GoalQuestion[] }>(path.join(dir, "today.json"));
     // The tick comes from Today, matched on the text the runner wrote (the heartbeat keeps it verbatim).
-    const done = new Map(day.todos.filter((x) => (x as { goal?: string }).goal === spec.id).map((x) => [x.text, !!(x as { done?: boolean }).done]));
+    const mine = new Map(day.todos.filter((x) => (x as { goal?: string }).goal === spec.id).map((x) => [x.text, x]));
+    // Questions carry no goal tag on Today; the heartbeat copies them verbatim, so the text is the match.
+    const loops = new Map(day.loops.map((x) => [x.question, x]));
     const today = t && t.date === date
-      ? { date, todos: (t.todos || []).map((x) => ({ ...x, done: done.get(x.text) ?? false })), questions: t.loops || [] }
+      ? {
+          date,
+          todos: (t.todos || []).map((x) => {
+            const d = mine.get(x.text);
+            return { ...x, done: !!d?.done, ...(d ? { day: { id: d.id, handoff: d.handoff, comments: d.comments, done_by: d.done_by, done_evidence: d.done_evidence } } : {}) };
+          }),
+          questions: (t.loops || []).map((x) => {
+            const d = loops.get(x.question);
+            return { ...x, ...(d ? { day: { id: d.id, resolved: d.resolved, handoff: d.handoff, multiSelect: d.multiSelect } } : {}) };
+          }),
+        }
       : null;
     return {
       spec, note, log: jsonl<GoalRun>(path.join(dir, "log.jsonl")), ranks: jsonl<RankRow>(path.join(dir, "ranks.jsonl")), today, runner: r,

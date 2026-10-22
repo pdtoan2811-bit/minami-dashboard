@@ -27,10 +27,11 @@ import type { Goal, GoalRun, Position } from "@/lib/goals";
 import type { Automation } from "@/lib/automations";
 import type { AutomationsFeed } from "./RunnersSection";
 import { K } from "../today/ui";
-import { stateOf, useHandoffLive, type HandoffState } from "../today/live";
+import { useAsks as useAsksFeed } from "./Asks";
 import { useOpenChat } from "@/components/shell/Drawer";
 import { useBackLayer } from "@/lib/use-back";
 import { AskBox } from "./AskBox";
+import { GoalTodos } from "./GoalTodos";
 import type { Tab } from "./Autopilot";
 
 const C = { green: "#4ade80", amber: "#f0a868", red: "#ef7c7c", blue: "#7aa2ff" };
@@ -73,30 +74,26 @@ function machineTrouble(g: Goal): string | null {
 const behind = (g: Goal) => verdict(g).color !== C.green;
 const searches = (r: GoalRun | null, q: string[]) => (r ? q.reduce((s, x) => s + (r.gsc[x]?.impressions ?? 0), 0) : 0);
 
-// ── asks: questions sent from a card, and the chats they started ─────────────────────────────────────────
-type Ask = { kind: "goal" | "runner"; id: string; question: string; sessionId: string; at: string };
-function useAsks() {
-  const [asks, setAsks] = useState<Ask[]>([]);
+// ── asks: questions sent from a card ─────────────────────────────────────────────────────────────────────────
+// The chats themselves are rows under each card's ask box, opened in place (Asks.tsx, 2026-10-22); this only sends
+// the preset questions and says it did.
+function usePhoneAsks() {
+  const { reload } = useAsksFeed();
   const [toast, setToast] = useState<{ text: string; sid?: string; error?: boolean } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const load = useCallback(() => fetch("/api/autopilot/ask").then((r) => r.json()).then((j) => setAsks(j.asks ?? [])).catch(() => {}), []);
-  useEffect(() => { load(); }, [load]);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 7000); return () => clearTimeout(t); }, [toast]);
-  const ask = useCallback(async (kind: Ask["kind"], id: string, question: string) => {
+  const ask = useCallback(async (kind: "goal" | "runner", id: string, question: string) => {
     setBusy(`${kind}:${id}:${question}`);
     try {
       const r = await fetch("/api/autopilot/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind, id, question }) }).then((r) => r.json());
       if (r.error) setToast({ text: r.error, error: true });
-      else { setToast({ text: `Asked Minami: ${question}`, sid: r.sessionId }); load(); }
+      else { setToast({ text: `Asked Minami: ${question}`, sid: r.sessionId }); reload(); }
     } catch { setToast({ text: "Couldn't reach the dashboard.", error: true }); }
     finally { setBusy(null); }
-  }, [load]);
-  return { asks, ask, toast, setToast, busy };
+  }, [reload]);
+  return { ask, toast, setToast, busy, reload };
 }
-type Asks = ReturnType<typeof useAsks>;
-const CHAT_WORD: Record<HandoffState, [string, string]> = {
-  running: ["working", C.amber], needs: ["needs you", C.green], failed: ["failed", C.red], finished: ["ready", C.green], gone: ["ready", C.green],
-};
+type Asks = ReturnType<typeof usePhoneAsks>;
 
 // ── small parts ──────────────────────────────────────────────────────────────────────────────────────────
 const Pill = ({ v }: { v: Verdict }) => (
@@ -106,25 +103,6 @@ const Q = ({ children, onClick, busy }: { children: ReactNode; onClick: () => vo
   <button onClick={onClick} disabled={busy} className="inline-flex h-9 items-center whitespace-nowrap rounded-full px-3.5 text-[13px] transition-opacity active:opacity-70 disabled:opacity-50"
     style={{ background: tint(C.blue, 15), color: C.blue }}>{busy ? "Starting…" : children}</button>
 );
-function AskRows({ asks, live, kind, id, onOpen }: { asks: Ask[]; live: ReturnType<typeof useHandoffLive>; kind: Ask["kind"]; id: string; onOpen: (sid: string) => void }) {
-  const mine = asks.filter((a) => a.kind === kind && a.id === id).slice(-3).reverse();
-  if (!mine.length) return null;
-  return (
-    <div className="mt-3 space-y-1.5">
-      {mine.map((a) => {
-        const [w, c] = CHAT_WORD[stateOf(live[a.sessionId])];
-        return (
-          <button key={a.sessionId} onClick={() => onOpen(a.sessionId)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left active:bg-white/10" style={{ background: "rgba(0,0,0,.25)" }}>
-            <span className="text-[12px]">💬</span>
-            <span className="min-w-0 flex-1 truncate text-[13px]">{a.question}</span>
-            <span className="shrink-0 text-[12px]" style={{ color: c }}>{w === "working" ? "◌ working" : w}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // ── a goal: line, card, full screen ──────────────────────────────────────────────────────────────────────
 type Metric = "rank" | "indexed" | "searches" | "time";
 function GoalLine({ g, onGrow }: { g: Goal; onGrow: () => void }) {
@@ -138,14 +116,13 @@ function GoalLine({ g, onGrow }: { g: Goal; onGrow: () => void }) {
     </button>
   );
 }
-function GoalCard({ g, a, onShrink, onMetric, onResolve, resolving }: {
-  g: Goal; a: Asks & { live: ReturnType<typeof useHandoffLive>; open: (sid: string) => void };
-  onShrink: () => void; onMetric: (m: Metric) => void; onResolve: () => void; resolving: boolean;
+function GoalCard({ g, a, onShrink, onMetric, onResolve, resolving, onChanged }: {
+  g: Goal; a: Asks;
+  onShrink: () => void; onMetric: (m: Metric) => void; onResolve: () => void; resolving: boolean; onChanged: () => void;
 }) {
   const v = verdict(g);
   const trouble = machineTrouble(g);
   const cards = useScoreCards(g);
-  const todo = g.today?.todos.find((t) => !t.done);
   const ranking = v.word === "100+";
   const qs = [ranking ? "Why no rank yet?" : "What moved this week?", "What do I do this week?", "Report"];
   const ask = (s: string) => a.ask("goal", g.spec.id, s === "Report" ? "Write me a short report on this goal: where it stands, what changed day by day, and what's next." : s);
@@ -175,13 +152,9 @@ function GoalCard({ g, a, onShrink, onMetric, onResolve, resolving }: {
           </button>
         )}
       </div>
-      {todo && (
-        <div className="mt-3 flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: tint(C.green, 7), border: `1px solid ${tint(C.green, 25)}` }}>
-          <span className="min-w-0 flex-1"><span className="block text-[11px] font-semibold tracking-[.09em]" style={{ color: C.green }}>YOUR PART</span><span className="line-clamp-2 text-[13.5px] leading-snug">{todo.text}</span></span>
-          <button onClick={onResolve} disabled={resolving} className="h-9 shrink-0 rounded-[10px] px-3 text-[13px] disabled:opacity-50" style={{ color: C.blue, border: `1px solid ${tint(C.blue, 45)}` }}>{resolving ? "Starting…" : "Resolve with Minami"}</button>
-        </div>
-      )}
-      <AskRows asks={a.asks} live={a.live} kind="goal" id={g.spec.id} onOpen={a.open} />
+      {/* His part as Today's rows, ticked on the card (GoalTodos.tsx) — the same rows as desktop. */}
+      <div className="mt-3"><GoalTodos g={g} onChanged={onChanged} /></div>
+      <div className="mt-2"><button onClick={onResolve} disabled={resolving} className="h-9 rounded-[10px] px-3 text-[13px] disabled:opacity-50" style={{ color: C.blue, border: `1px solid ${tint(C.blue, 45)}` }}>{resolving ? "Starting…" : "Resolve with Minami"}</button></div>
       <div className="mt-3 flex flex-wrap gap-1.5">{qs.map((s) => <Q key={s} onClick={() => ask(s)} busy={a.busy?.startsWith(`goal:${g.spec.id}:`) && a.busy.endsWith(s === "Report" ? "next." : s)}>{s}</Q>)}</div>
       <div className="mt-2.5"><AskBox row url="/api/autopilot/ask" body={{ kind: "goal", id: g.spec.id }} field="question" placeholder="Ask about this goal…" /></div>
     </div>
@@ -308,7 +281,7 @@ function TimeView({ g, ds }: { g: Goal; ds: Day[] }) {
 // ── runners: the day, top to bottom ──────────────────────────────────────────────────────────────────────
 /** A runner opened where it sits in the day: what it does, its schedule, its last line, and what you can do. A
  *  runner that needs a look leads with why, in amber. */
-function RunnerOpen({ r, a, act }: { r: Automation; a: Asks & { live: ReturnType<typeof useHandoffLive>; open: (sid: string) => void }; act: AutomationsFeed["act"] }) {
+function RunnerOpen({ r, a, act }: { r: Automation; a: Asks; act: AutomationsFeed["act"] }) {
   const look = lookOf(r);
   const [ran, setRan] = useState(false);
   const pause = async () => {
@@ -323,7 +296,6 @@ function RunnerOpen({ r, a, act }: { r: Automation; a: Asks & { live: ReturnType
       {!look && r.description && <p className="text-[14px] leading-snug" style={{ color: K.muted }}>{r.description}</p>}
       <p className="mt-1.5 text-[13px]" style={{ color: K.faint }}>{[r.project, r.scheduleText].filter(Boolean).join(" · ")}{r.nextRun ? ` · next ${new Date(r.nextRun).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}` : ""}</p>
       {r.lastLine && <p className="mt-1 truncate text-[12px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>{r.lastLine}</p>}
-      <AskRows asks={a.asks} live={a.live} kind="runner" id={r.id} onOpen={a.open} />
       <div className="mt-2.5 flex flex-wrap gap-1.5">
         <Q onClick={() => a.ask("runner", r.id, q)} busy={a.busy === `runner:${r.id}:${q}`}>{look ? "Why?" : "What did it do last run?"}</Q>
         {r.kind === "launchd" && r.status !== "running" && r.schedule.kind !== "always" && <button onClick={async () => { await act({ op: "run", id: r.id }, `run:${r.id}`); setRan(true); }} className="h-9 rounded-full px-3.5 text-[13px]" style={{ border: `1px solid ${K.line}`, color: K.muted }}>{ran ? "Started" : "Run now"}</button>}
@@ -335,11 +307,10 @@ function RunnerOpen({ r, a, act }: { r: Automation; a: Asks & { live: ReturnType
 }
 
 // ── the page ─────────────────────────────────────────────────────────────────────────────────────────────
-export function PhoneAutopilot({ goals, runners, feed, tab, tabs }: { goals: Goal[] | null; runners: Automation[] | null; feed: AutomationsFeed; tab: Tab; tabs: ReactNode }) {
-  const asks = useAsks();
+export function PhoneAutopilot({ goals, runners, feed, tab, tabs, reloadGoals }: { goals: Goal[] | null; runners: Automation[] | null; feed: AutomationsFeed; tab: Tab; tabs: ReactNode; reloadGoals: () => void }) {
+  const asks = usePhoneAsks();
   const openChat = useOpenChat();
-  const live = useHandoffLive(asks.asks.map((x) => x.sessionId));
-  const a = { ...asks, live, open: openChat };
+  const a = asks;
   // Behind first; the first goal starts at card size and the rest as lines, until he taps one.
   const sorted = useMemo(() => [...(goals ?? [])].sort((x, y) => Number(behind(y)) - Number(behind(x))), [goals]);
   const [size, setSize] = useState<Record<string, "line" | "card">>({});
@@ -354,7 +325,7 @@ export function PhoneAutopilot({ goals, runners, feed, tab, tabs }: { goals: Goa
     setResolving(g.spec.id);
     try {
       const r = await fetch("/api/goals", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "resolve", id: g.spec.id }) }).then((r) => r.json());
-      if (r.error) asks.setToast({ text: r.error, error: true }); else asks.setToast({ text: "Minami is on your part", sid: r.sessionId });
+      if (r.error) asks.setToast({ text: r.error, error: true }); else { asks.setToast({ text: "Minami is on your part", sid: r.sessionId }); asks.reload(); }
     } catch { asks.setToast({ text: "Couldn't reach the dashboard.", error: true }); }
     finally { setResolving(null); }
   };
@@ -374,7 +345,7 @@ export function PhoneAutopilot({ goals, runners, feed, tab, tabs }: { goals: Goa
         <div className="px-3 pb-3"><AskBox key="goals" url="/api/modules" body={{ op: "chat", id: "goals" }} field="ask" placeholder="Ask about your goals…" /></div>
         {lagging > 0 && <p className="px-5 pb-2 text-[14.5px]" style={{ color: K.muted }}>{n(lagging, "goal")} behind.</p>}
         {sorted.map((g, i) => sizeOf(g, i) === "card"
-          ? <div key={g.spec.id} className="mb-2"><GoalCard g={g} a={a} onShrink={() => setSize((s) => ({ ...s, [g.spec.id]: "line" }))} onMetric={(m) => setFull({ id: g.spec.id, m })} onResolve={() => resolve(g)} resolving={resolving === g.spec.id} /></div>
+          ? <div key={g.spec.id} className="mb-2"><GoalCard g={g} a={a} onShrink={() => setSize((s) => ({ ...s, [g.spec.id]: "line" }))} onMetric={(m) => setFull({ id: g.spec.id, m })} onResolve={() => resolve(g)} resolving={resolving === g.spec.id} onChanged={reloadGoals} /></div>
           : <GoalLine key={g.spec.id} g={g} onGrow={() => setSize((s) => ({ ...s, [g.spec.id]: "card" }))} />)}
         <div className="px-3 pt-2"><AskBox row url="/api/modules" body={{ op: "chat", id: "goals", intent: "new" }} field="ask" placeholder="Add a goal" /></div>
       </> : (

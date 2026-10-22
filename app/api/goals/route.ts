@@ -1,4 +1,5 @@
 import { listGoals, runGoalsNow, resolveGoal } from "@/lib/goals";
+import { recordAsk } from "@/lib/autopilot-ask";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,7 +15,12 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const b = await req.json();
-    if (b.op === "resolve") return Response.json(await resolveGoal(String(b.id)));
+    if (b.op === "resolve") {
+      // Recorded as an ask so the chat shows as a row on the goal's card instead of the page jumping to it.
+      const r = await resolveGoal(String(b.id));
+      recordAsk({ kind: "goal", id: String(b.id), question: "Resolve with Minami — fix what's broken", sessionId: r.sessionId });
+      return Response.json(r);
+    }
     if (b.op !== "run") throw new Error(`unknown op: ${b.op}`);
     runGoalsNow();
     return Response.json({ goals: listGoals() });
