@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { sendMessage } from "@/lib/agent/manager";
 import { imageBlocksFor } from "@/lib/agent/images";
-import { rehomeStrandedTranscript, restoreRecycledTree } from "@/lib/worktree";
+import { isolate, rehomeStrandedTranscript, restoreRecycledTree } from "@/lib/worktree";
 import { primeRepoState } from "@/lib/repo-state";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +42,25 @@ export async function POST(req: Request) {
       const rehomed = rehomeStrandedTranscript(home, String(resume));
       if (rehomed) { home = rehomed; try { stat = fs.statSync(home); } catch { /* fall through */ } }
     }
+    // A NEW chat aimed at a recycled tree (2026-10-22, "folder does not exist: /Users/thomas/tiktok-…" on a new
+    // tiktok-studio chat). Birth isolation gives a blank pane its own worktree the moment the tab opens, and that
+    // tree can be recycled before the first message is typed: nobody's transcript points into it yet, so the
+    // pruners see an idle, empty tree. A blank chat has no conversation and no work tied to that tree, so nothing
+    // is lost by giving it a fresh one from the same base (or the base itself when isolation declines). The pane
+    // is told the folder it now runs in (`cwd` in the reply), so its next send and its header follow.
+    let movedTo: string | null = null;
+    if (!stat && !resume) {
+      const m = /^(.*)\/\.minami-worktrees\/[^/]+\/?$/.exec(String(cwd));
+      if (m) {
+        let base: fs.Stats | null = null;
+        try { base = fs.statSync(m[1]); } catch { /* base gone too — refused below */ }
+        if (base?.isDirectory()) {
+          const fresh = await isolate(m[1], "chat").catch(() => null);
+          home = fresh?.dir || m[1];
+          try { stat = fs.statSync(home); movedTo = home; } catch { /* refused below */ }
+        }
+      }
+    }
     if (!stat) return Response.json({ error: `folder does not exist: ${cwd}` }, { status: 400 });
     if (!stat.isDirectory()) return Response.json({ error: `not a folder: ${home}` }, { status: 400 });
     // Any image path the message mentions — pasted, or picked with the attach button — is read here
@@ -63,7 +82,7 @@ export async function POST(req: Request) {
     // choice actually changed. An id that isn't in the catalog no longer rides through to the SDK:
     // ensureSession coerces it back to the box pin and says so in the pane (see resolveModel).
     const { sessionId } = sendMessage({ key, cwd: home, message: String(message), mode, resume, images, model: typeof model === "string" && model ? model : undefined, hold: typeof hold === "boolean" ? hold : undefined, fanout: typeof fanout === "boolean" ? fanout : undefined, blacksmith: typeof blacksmith === "boolean" ? blacksmith : undefined });
-    return Response.json({ ok: true, sessionId });
+    return Response.json({ ok: true, sessionId, ...(movedTo ? { cwd: movedTo } : {}) });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e) }, { status: 500 });
   }
