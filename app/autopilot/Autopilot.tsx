@@ -17,6 +17,7 @@ import { PhoneAutopilot } from "./PhoneAutopilot";
 import { AskBox } from "./AskBox";
 import { useCompact } from "@/lib/use-media";
 import { dayOf } from "./DayStrip";
+import { StorageSection, useStorage } from "./StorageSection";
 
 // The vault's goal runner measures and acts on every goal, whatever project the goal belongs to (lib/goals.ts).
 const GOAL_RUNNER = "com.thomas.goal-runner";
@@ -30,12 +31,13 @@ const serves = (a: Automation, g: Goal) => a.id === GOAL_RUNNER || (!!projectKey
 // (§31): goals and runners have different writers and rules, so each tab is its own module. The tab follows the
 // URL: ?tab=runners, or a hash the rest of the app already links to (#runners, #auto-<id> → Runners; #goal-<id> →
 // Goals), so the bell drawer, the Day strip chips and a goal's "worked on by" links all land on the right tab.
-export type Tab = "goals" | "runners";
+export type Tab = "goals" | "runners" | "storage";
 function tabFromUrl(): Tab {
   const h = location.hash;
   if (/^#(runners|auto-)/.test(h)) return "runners";
   if (/^#goal-/.test(h)) return "goals";
-  return new URLSearchParams(location.search).get("tab") === "runners" ? "runners" : "goals";
+  const t = new URLSearchParams(location.search).get("tab");
+  return t === "runners" || t === "storage" ? t : "goals";
 }
 export function useTab(): [Tab, (t: Tab) => void] {
   const [tab, setTab] = useState<Tab>("goals");
@@ -46,11 +48,11 @@ export function useTab(): [Tab, (t: Tab) => void] {
     window.addEventListener("popstate", sync);
     return () => { window.removeEventListener("hashchange", sync); window.removeEventListener("popstate", sync); };
   }, []);
-  const pick = (t: Tab) => { setTab(t); history.replaceState(null, "", t === "runners" ? "?tab=runners" : location.pathname); };
+  const pick = (t: Tab) => { setTab(t); history.replaceState(null, "", t === "goals" ? location.pathname : `?tab=${t}`); };
   return [tab, pick];
 }
 
-export function Tabs({ tab, pick, goals, runners }: { tab: Tab; pick: (t: Tab) => void; goals: { n: number; bad: number }; runners: { n: number; bad: number } }) {
+export function Tabs({ tab, pick, goals, runners, storage }: { tab: Tab; pick: (t: Tab) => void; goals: { n: number; bad: number }; runners: { n: number; bad: number }; storage?: { label: string; bad: boolean } }) {
   const one = (t: Tab, label: string, c: { n: number; bad: number }) => (
     <button key={t} role="tab" aria-selected={tab === t} onClick={() => pick(t)}
       className="inline-flex h-10 items-center gap-2 rounded-full px-4 text-[15px] font-semibold transition-colors"
@@ -62,6 +64,12 @@ export function Tabs({ tab, pick, goals, runners }: { tab: Tab; pick: (t: Tab) =
   return (
     <div role="tablist" className="inline-flex gap-1 rounded-full p-1" style={{ background: "rgba(255,255,255,.04)", border: `1px solid ${K.line}` }}>
       {one("goals", "Goals", goals)}{one("runners", "Runners", runners)}
+      {/* Storage (§32) shows free GB instead of a count; amber when below the floor or the janitor has gone quiet. */}
+      <button role="tab" aria-selected={tab === "storage"} onClick={() => pick("storage")}
+        className="inline-flex h-10 items-center gap-2 rounded-full px-4 text-[15px] font-semibold transition-colors"
+        style={tab === "storage" ? { background: "rgba(255,255,255,.12)", color: K.ink } : { color: K.muted }}>
+        Storage{storage && <span className="text-[13px] font-medium" style={{ color: storage.bad ? "#f3c766" : K.faint }}>{storage.label}</span>}
+      </button>
     </div>
   );
 }
@@ -72,6 +80,9 @@ export function Autopilot() {
   const g = useGoals();
   const feed = useAutomations();
   const [tab, pick] = useTab();
+  const stFeed = useStorage();
+  const st = stFeed.s;
+  const storage = st && !st.error ? { label: `${st.freeGB.toFixed(0)} GB`, bad: st.stale || st.freeGB < st.thresholds.lowGB } : undefined;
 
   const goals = useMemo(() => g.goals?.filter((x) => matchesProject(pf, x.note)) ?? null, [g.goals, pf]);
   const all = feed.items;
@@ -108,16 +119,18 @@ export function Autopilot() {
       <TopBar title="Autopilot" />
       {/* Wider than the runners below: the goals are a list beside a run ledger (§29), the runners one column. */}
       {/* On a phone the stacked cards made an 8,918px page; the phone gets its own view (PhoneAutopilot.tsx). */}
-      {compact ? <PhoneAutopilot goals={goals} runners={items} feed={feed} tab={tab} tabs={<Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} />} /> : (
+      {compact && tab !== "storage" ? <PhoneAutopilot goals={goals} runners={items} feed={feed} tab={tab} tabs={<Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} storage={storage} />} /> : (
       <div className="mx-auto max-w-[1160px] px-5 pb-28 pt-2 sm:pb-16">
         {pf && (
           <p className="mb-4 text-[12.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
             Filtered to {pf} · {hidden} hidden
           </p>
         )}
-        <div className="mb-5"><Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} /></div>
+        <div className="mb-5"><Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} storage={storage} /></div>
         {/* Each tab opens with its module's input (§31): what's typed starts a chat inside that module's folder. */}
-        {tab === "goals" ? (
+        {tab === "storage" ? (
+          <section id="storage" className="scroll-mt-6"><StorageSection feed={stFeed} /></section>
+        ) : tab === "goals" ? (
           <section id="goals" className="scroll-mt-6">
             <AskBox key="goals" url="/api/modules" body={{ op: "chat", id: "goals" }} field="ask" placeholder="Ask about your goals — which are behind, what the runner did, what to try next…" />
             <GoalsSection goals={goals} total={g.goals?.length ?? 0} err={g.err} busy={g.busy} runNow={g.runNow} runnersFor={runnersFor} />

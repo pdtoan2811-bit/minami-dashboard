@@ -133,6 +133,9 @@ export const NODES: ModuleNode[] = [
   { id: "c/DayStrip", label: "app/autopilot/DayStrip.tsx", sub: "today's runners (§27)\nstraight line · now · needs a look", layer: "component", row: 43, pipeline: "read" },
   { id: "c/PhoneAutopilot", label: "app/autopilot/PhoneAutopilot.tsx", sub: "/autopilot on a phone (§29)\nline · card · full screen, ask → chat", layer: "component", row: 47, pipeline: "read" },
   { id: "r/autopilotask", label: "/api/autopilot/ask", sub: "start a chat about a goal\nor a runner; list asks", layer: "route", row: 47, pipeline: "live" },
+  { id: "c/Storage", label: "app/autopilot/StorageSection.tsx", sub: "the Storage tab (§32)\nhealth · gauge · asks · passes · ledger", layer: "component", row: 48, pipeline: "read" },
+  { id: "r/autopilotstorage", label: "/api/autopilot/storage", sub: "disk snapshot · start a pass\nor a tier-3 action (§32)", layer: "route", row: 48, pipeline: "live" },
+  { id: "l/storage", label: "autopilot/storage", sub: "storage duty (§32)\nwatermark · dead-man's switch", layer: "core", row: 48, pipeline: "live" },
   { id: "l/autopilotask", label: "autopilot-ask.ts", sub: "context → chat\n~/.minami/autopilot-asks.jsonl", layer: "core", row: 47, pipeline: "live" },
   { id: "c/AskBox", label: "app/autopilot/AskBox.tsx", sub: "Autopilot text inputs (§31)\ntab · add a goal · per card", layer: "component", row: 45, pipeline: "live" },
   { id: "r/modules", label: "/api/modules", sub: "list · chat", layer: "route", row: 45, pipeline: "live" },
@@ -187,7 +190,7 @@ export const NODES: ModuleNode[] = [
   { id: "x/metrics", label: "metrics server", sub: "Hetzner · Tailscale Funnel", layer: "runtime", row: 4, pipeline: "metrics" },
   // Written only by bin/deploy.sh and bin/task.mjs — processes that outlive the server, which is the
   // entire reason the alert log is a file instead of an in-memory queue. See KNOWLEDGE.md §10.
-  { id: "l/autopilot", label: "autopilot/runner", sub: "always-on merge · resolve · deploy\n(off by default) · freshness (on)", layer: "core", row: 19 },
+  { id: "l/autopilot", label: "autopilot/runner", sub: "always-on merge · resolve · deploy\n(off by default) · freshness (on) · storage", layer: "core", row: 19 },
   // KNOWLEDGE.md §19. Feeds the LIVE pipeline, but from the side: it writes nothing and decides
   // nothing — it fetches, measures, and hands the session's system prompt a paragraph of fact.
   { id: "l/repostate", label: "repo-state", sub: "which branch this checkout is on,\nand what has moved since", layer: "core", row: 23 },
@@ -318,6 +321,9 @@ export const EDGES: ModuleEdge[] = [
   { from: "c/TeamInbox", to: "r/teaminbox", kind: "http" },
   { from: "c/Today", to: "r/today", kind: "http" },
   { from: "c/Automations", to: "r/automations", kind: "http" },
+  { from: "c/Storage", to: "r/autopilotstorage", kind: "http" },
+  { from: "r/autopilotstorage", to: "l/storage", kind: "import" },
+  { from: "l/autopilot", to: "l/storage", kind: "import" },
   { from: "c/Ideas", to: "r/ideas", kind: "http" },
   { from: "r/ideas", to: "l/ideas", kind: "import" },
   { from: "r/automations", to: "l/automations", kind: "import" },

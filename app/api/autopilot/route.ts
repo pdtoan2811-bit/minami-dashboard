@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     // Whitelist: this file is the on-switch for something that rewrites the user's git history, so a
     // stray key from a future client must not become config it silently obeys.
     const patch: Partial<AutopilotConfig> = {};
-    for (const k of ["enabled", "merge", "deploy", "resolve"] as const) {
+    for (const k of ["enabled", "merge", "deploy", "resolve", "storage"] as const) {
       if (typeof body[k] === "boolean") patch[k] = body[k];
     }
     for (const k of ["settleMs", "everyMs"] as const) {

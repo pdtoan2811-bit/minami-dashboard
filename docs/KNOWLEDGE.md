@@ -64,6 +64,7 @@ recycle one.
 | [`27-automations.md`](knowledge/27-automations.md) | §27 | ~1,000 | Automations (on `/autopilot` since §30): every launchd job (`com.thomas.*`) and in-process loop on the Mac, with run · pause · edit · create · delete · restore. launchd is the source of truth; pause = disable + bootout; in-process loops pause through a flag file. |
 | [`30-shell.md`](knowledge/30-shell.md) | §30 | ~1,400 | The app shell: one grouped rail (Work / Day / Autopilot / Library) from `lib/nav.ts`, the phone top strip + bottom bar, the bell's "needs you" drawer, + capture, the project filter, Bento's Day strip, and the Today material on every page. Thomas's 20 design answers, 2026-10-16. |
 | [`31-modules.md`](knowledge/31-modules.md) | §31 | ~1,500 | Modules: a folder under `~/.minami` with `module.json` + `AGENTS.md` (door) + schemas + a CLI + `EXPERIENCE.md` describes itself, so any chat started in it (cwd = folder) reads the right rules and data. Built to outlive the dashboard and Claude Code (harness2, file-over-app, AGENTS.md). Pilot: Goals, then Runners; /autopilot tabs with a Today-style input per tab, per card and "Add a goal". |
+| [`32-storage.md`](knowledge/32-storage.md) | §32 | ~1,900 | Storage janitor: autopilot's `storage` duty (watermark + dead-man's switch) and `bin/janitor.mjs` (the only deleter: tiered, guard-tested, ledgered, never merges) + nightly launchd job + the Storage tab. Born from the disk filling twice in 3 days with no alert. |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~24,000 | Dated log of every change. Append here; don't read it to do work. |
 
 ---
@@ -134,6 +135,7 @@ The live and read pipelines meet only on disk. They never call each other.
 | Deploy wrapper | `bin/deploy.sh` + `Redeploy Minami.command` | **shipped** | detaches from its requester; mutually exclusive — see §8 |
 | Task isolation | `bin/task.mjs` | **shipped** | one task = one worktree = one branch = one agent — see §9 |
 | Out-of-pane alerts | `bin/minami-event.mjs` + `lib/events.ts` | **shipped** | disk-backed, survives the deploy that produces them — see §10 |
+| Storage janitor | `bin/janitor.mjs` + `lib/autopilot/storage.ts` | **shipped** | tiers 1–2 automatic, Docker asks; watch-only until `autopilot.json` `storage: true` — see §32 |
 | Images in a message | `lib/agent/images.ts` + `app/api/fs/paste` | **shipped** | paste a screenshot; path is the payload, so it survives a reload — see §11 |
 | Preview comments | `app/preview/[session]` + `public/inspect-core.js` (served as `/inspect.js`) + `lib/preview-comments.ts` | **shipped** | pop-out wrapping the localhost app; pins → one structured turn with crops — see §21 |
 | Rendering cost | `app/globals.css`, `ProjectIcon.tsx` | **shipped** | idle GPU 31% → 14%; never animate inside a backdrop-blur — see §12 |
