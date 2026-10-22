@@ -4,7 +4,7 @@ import { findCard, findCardByTopic } from "@/lib/team-inbox";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// POST { topic, asker? } | { ts } → the Minami chat answering that card, started on the first call and
+// POST { topic, asker? } | { ts } → the Minami chat talking you through that card, started on the first call and
 // the same one on every later call (§25). POST, not GET: the Slack button is a link to /team/minami, a
 // page that calls this — a link preview or a prefetch must never be what answers a teammate.
 export async function POST(req: Request) {

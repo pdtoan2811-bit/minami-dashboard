@@ -52,7 +52,7 @@ session first, worktrees skipped because they get recycled), then `~/<repo>`, `~
 home. The seed prompt carries the whole card and attached files and tells the chat **not** to call
 ask_team or post to Slack — you send the answer from the card.
 
-## "Để Minami trả lời" — the AI answers for you (2026-10-22)
+## "Để Minami trả lời" — the AI explains, then answers on your word (2026-10-22)
 
 The team-ask card carries a **link** button, `:robot_face: Để Minami trả lời`, for any recipient whose
 `team.json` entry has a `dashboard` URL (team-ask branch `feat/minami-answer-button`; Thomas's entry is
@@ -64,22 +64,47 @@ by `topic` + `asker`, and `findCardByTopic` picks the newest match from a fresh 
   answers a teammate: link previews and prefetches would.
 - **One chat per card**, recorded in `~/.minami/team-minami.json` (`lib/team-chat.ts`), plus an
   in-flight promise for two clicks that land together. A second click, the phone and then the Mac, or a
-  reload all land on the chat that already answered. On disk because a deploy can restart the server
+  reload all land on the chat that already exists. On disk because a deploy can restart the server
   between the click and the second look.
 - Only an **open** card gets a new chat. `sent` (you answered from the dashboard), `answered` and
   `expired` are refused with the reason. A second answer would contradict the first.
-- The chat (key `team-minami-<ts>`, in the repo's checkout like Explain) decides, then sends through
-  `/api/team/answer` with `minami: true`. The relay reads `:robot_face: Minami answered for @you`
-  instead of `answered from Minami`, so the asker knows no human read it. The note to the asker starts
-  `🤖 Minami trả lời thay <you>:`. Then it explains to you what went out and why.
-- The prompt has it **not send** only for money, a legal/contract term, a credential, or a choice that
-  needs facts only you have. Clicking is the go-ahead for everything else (Thomas, 2026-10-22: "send
-  it then explain to me").
+- The chat (key `team-minami-<ts>`, in the repo's checkout like Explain) **explains first and waits**.
+  It sends through `/api/team/answer` with `minami: true, approved: true` only after you tell it to
+  ("trả lời đi", "answer him", "ok send B"), using your picks where you gave them. The relay reads
+  `:robot_face: Minami answered for @you on their go-ahead`; the note to the asker starts
+  `🤖 Minami trả lời thay <you>:`.
 - The body goes by heredoc (`--data-binary @-`): a single-quoted `-d '…'` broke on the first apostrophe
   in the note.
 
-Not exercised against a real card: that would answer Đức's open question. The refusals, the lookup,
-the page and the relay body were checked against the live inbox on a dev server.
+### The Slack talk thread (2026-10-22)
+
+The first version answered on the click and explained afterwards ("send it then explain to me"). Used
+once, Thomas wanted the reverse: understand it first, ask from Slack, then order the answer. So the
+click now starts a conversation, carried on in Slack:
+
+- `minamiAnswers` posts a head message as the team-ask bot into its DM with you ("Minami đang đọc câu
+  hỏi của …") and records its ts as `thread` in `team-minami.json`. **Never the card's own thread**:
+  team-ask takes any reply there as the answer and closes the card. A thread under a non-card message is
+  ignored by team-ask on every machine (`pending.find` misses, nothing to reconcile).
+- The bridge (`startMinamiBridge` → `tick` every 5 s, started at boot from `instrumentation.ts` and on each
+  new talk) does three things per open thread. **Up:** a turn whose `ended.at` is newer than `posted` gets
+  its full final text read from the transcript (`ended.text` is cut at 400 chars) and posted in ≤3,800-char
+  chunks, markdown turned into Slack mrkdwn. **Down:** your replies newer than `seen`, only while the chat
+  is idle, are joined into one `[Slack] …` message, sent with `resume` (so a reaped or restarted session
+  comes back), and marked 👀. **Close:** once a minute it checks the card; answered or expired posts one
+  line and sets `done`.
+- It polls instead of subscribing, for the reason in `lib/agents/runner.ts`: a subscriber counts as a
+  connected client and switches off the idle reaper and the unanswered-prompt backstop.
+- Turns you take in the dashboard pane are mirrored to the thread too: the bridge keys on the session,
+  not on where the message came from. If the conversation is live under another pane's key, the manager
+  refuses the resume and the thread says so once.
+- `/team/minami` no longer jumps into the dashboard; it says the talk is in Slack, with "Back to Slack"
+  and "Open the chat here".
+- Old entries without `thread` (chats from the auto-answer version) are ignored by the bridge.
+
+Checked: the build, and the three Slack calls against the real DM (post, thread reply, reading replies
+with the bot's own filtered out, 👀 reaction; test messages deleted). Not yet run end to end: no card was
+open. The next card from Đức is the first real run.
 
 ## The card's layout (audit 2026-10-08)
 
