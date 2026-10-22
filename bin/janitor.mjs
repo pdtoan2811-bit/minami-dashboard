@@ -6,6 +6,8 @@
 //   node bin/janitor.mjs --why <reason>     nightly | watermark | manual | render-floor (recorded with the run)
 //   node bin/janitor.mjs --sample           record today's disk sample (free GB + biggest folders) and exit
 //   node bin/janitor.mjs --do docker        a tier-3 action Thomas approved from the bell / the Storage tab
+//   node bin/janitor.mjs --slack "<text>"   DM Thomas (the dead-man's switch in lib/autopilot/storage.ts uses it)
+//   node bin/janitor.mjs --selftest         assert the deletion guard refuses every protected path
 //
 // WHY A PLAIN SCRIPT, NOT CODE INSIDE THE AUTOPILOT TICK
 // On 2026-10-2x the disk sat at 3.3 GB free while five renders failed "need 6 GB", and nothing told anyone:
@@ -52,7 +54,7 @@ const DAY = 86_400_000;
 
 // Hand-editable at ~/.minami/janitor.json; every key optional. Thomas's target is ~80 GB free (2026-10-22).
 const DEFAULTS = {
-  lowGB: 60,            // below this, tier 2 runs (and the autopilot tick starts a pass)
+  lowGB: 40,            // below this, tier 2 runs and the tick starts a pass (Thomas, 2026-10-22: "can drop under 40gb")
   targetGB: 80,         // a pass stops once free space is back here
   criticalGB: 25,       // below this, the bell + a macOS notification, with the tier-3 list
   growthAlertGB: 8,     // a day that loses more than this gets an alert naming what grew
@@ -388,6 +390,14 @@ async function growthCheck(cfg, lines) {
     body: `Free: ${y.freeGB} → ${t.freeGB} GB.\nGrew most: ${grew.map((g) => `${g.path} +${g.d.toFixed(1)} GB`).join(", ") || "nothing in the sampled folders (system data or Docker?)"}` });
 }
 
+/** A Slack DM to Thomas through Minami's bot — the helper Video Studio already uses for its night alerts (it reads the
+ *  token from ~/Minami/.env and never prints it). Only for what needs him: critical, and "couldn't free". Best effort. */
+async function slack(text) {
+  const helper = path.join(HOME, "tiktok-studio/scripts/lib/slack.mjs");
+  if (!fs.existsSync(helper)) return;
+  try { const { notify: dm } = await import(helper); await dm(text); } catch { /* the bell already has it */ }
+}
+
 function notify(title, body) {
   sh("osascript", ["-e", `display notification ${JSON.stringify(body.slice(0, 180))} with title ${JSON.stringify(title)}`], { timeout: 10_000 });
 }
@@ -424,6 +434,7 @@ async function main() {
   const cfg = config();
   if (flag("--sample")) { await growthCheck(cfg, sample()); return; }
   if (flag("--selftest")) return selftest();
+  if (opt("--slack")) return slack(opt("--slack")); // storage.ts's dead-man's switch speaks through this
 
   // One pass at a time. A lock older than 2 h is a pass that died; take it over.
   const lk = readJSON(F.lock, null);
@@ -469,10 +480,12 @@ async function main() {
         (asks.map((a) => `${a.title}`).join("; ") || "nothing safe is left to clear automatically") + ". Open /autopilot?tab=storage.";
       await emit({ kind: "storage", level: "error", title: `Disk critical: ${endGB.toFixed(1)} GB free`, body });
       notify("Disk critical", body);
+      await slack(`💾 Disk critical: ${endGB.toFixed(1)} GB free. ${body}`);
     } else if (on && start < cfg.lowGB * GB && end - start < GB) {
       // The exact silent failure of the night five renders died: below the floor, ran, freed nothing.
       await emit({ kind: "storage", level: "warn", title: `Janitor couldn't free space: ${endGB.toFixed(1)} GB free`,
         body: `Below the ${cfg.lowGB} GB floor and nothing left in tiers 1–2. ${asks.length ? "Your call: " + asks.map((a) => a.title).join("; ") : ""}` });
+      await slack(`💾 The storage janitor couldn't free space: ${endGB.toFixed(1)} GB free (floor ${cfg.lowGB}). ${asks.map((a) => a.title).join("; ")} — /autopilot?tab=storage`);
     } else if (run.freedGB >= 1) {
       await emit({ kind: "storage", level: "success", title: `Janitor freed ${run.freedGB} GB — ${run.freeAfterGB} GB free`,
         body: Object.entries(byKind).map(([k, b]) => `${k} ${gb(b)} GB`).join(" · ") });

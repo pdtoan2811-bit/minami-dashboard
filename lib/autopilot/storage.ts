@@ -32,7 +32,7 @@ export function thresholds() {
   try { c = JSON.parse(fs.readFileSync(CONFIG, "utf8")); } catch { /* defaults */ }
   const n = (v: unknown, d: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
   // Same defaults as bin/janitor.mjs — kept by hand; the script is the authority, this only reads.
-  return { lowGB: n(c.lowGB, 60), targetGB: n(c.targetGB, 80), criticalGB: n(c.criticalGB, 25) };
+  return { lowGB: n(c.lowGB, 40), targetGB: n(c.targetGB, 80), criticalGB: n(c.criticalGB, 25) };
 }
 
 export function disk() {
@@ -86,6 +86,12 @@ export function startJanitor(root: string, args: string[]): boolean {
   return true;
 }
 
+/** Fire-and-forget DM via the janitor's --slack (the token helper lives outside the server bundle on purpose). */
+function startSlack(root: string, text: string) {
+  const p = spawn(process.execPath, [path.join(root, "bin", "janitor.mjs"), "--slack", text], { cwd: root, detached: true, stdio: "ignore" });
+  p.unref();
+}
+
 let lastSpawn = 0;
 let lastStaleAlarm = 0;
 
@@ -104,5 +110,7 @@ export async function storageTick(root: string, emit: (kind: string, level: stri
     await emit("storage", "warn", "The storage janitor hasn't run in over a day",
       `Last good pass: ${good ? good.at : "never"}. Check the "Storage janitor" runner on /autopilot?tab=runners ` +
       `(launchd com.thomas.minami-janitor) — ${freeGB.toFixed(1)} GB free now.`);
+    // and on Slack: a cleaner that stopped is the failure that went unnoticed for two days (§32)
+    startSlack(root, `💾 The storage janitor hasn't completed a pass since ${good ? good.at.slice(0, 16).replace("T", " ") : "it was installed"}. ${freeGB.toFixed(0)} GB free. /autopilot?tab=storage`);
   }
 }

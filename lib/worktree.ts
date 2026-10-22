@@ -23,7 +23,7 @@
 // other git repo gets a plain `git worktree`, which is enough for isolation and for the manual merge
 // button; the autopilot deliberately stays out of repos it has no gates for.
 
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
@@ -334,6 +334,45 @@ export function rehomeStrandedTranscript(cwd: string, sessionId: string): string
   const base = m[1];
   try { if (!fs.statSync(base).isDirectory()) return null; } catch { return null; }
   return moveTranscriptHome(sessionId, cwd, base) ? base : null;
+}
+
+/**
+ * A chat whose worktree the STORAGE JANITOR recycled comes back in its own tree, not in the base (§32).
+ *
+ * rehomeStrandedTranscript() above assumes the tree's work was merged before the tree went — true of
+ * prune-worktrees.sh, false of the janitor, which recycles idle trees whose branches are NOT merged (it saves
+ * their uncommitted work as a commit on the branch first, and never merges). Resuming such a chat in the base
+ * would hand it files without its own work in them. So: find the tree in the janitor's ledger, and if its
+ * branch still exists and isn't already in the base, `git worktree add` it back at the same path. The
+ * transcript never moved, so `--resume` finds it where it was. node_modules and build caches are not in git:
+ * the chat reinstalls when it needs them.
+ *
+ * Returns the restored folder, or null to fall through to the base rescue.
+ */
+export function restoreRecycledTree(cwd: string): string | null {
+  const m = new RegExp(`^(.*)/${TREES_DIR.replace(/\./g, "\\.")}/[^/]+/?$`).exec(cwd);
+  if (!m) return null;
+  const base = m[1];
+  const short = cwd.replace(os.homedir(), "~").replace(/\/$/, "");
+  let branch = "";
+  try {
+    const ledger = path.join(process.env.MINAMI_JANITOR_DIR || path.join(os.homedir(), ".minami", "janitor"), "ledger.jsonl");
+    const lines = fs.readFileSync(ledger, "utf8").trim().split("\n").reverse();
+    for (const l of lines) {
+      const e = JSON.parse(l) as { kind?: string; path?: string; restore?: string };
+      if (e.kind === "worktree" && e.path === short && e.restore) { branch = e.restore.trim().split(/\s+/).pop() || ""; break; }
+    }
+  } catch { return null; }
+  if (!branch) return null;
+  const run = (args: string[]) => execFileSync("git", ["-C", base, ...args], { encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    run(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
+  } catch { return null; } // branch gone (merged and deleted by hand): the base rescue is right
+  try { run(["merge-base", "--is-ancestor", branch, "HEAD"]); return null; } catch { /* not merged: restore */ }
+  try {
+    run(["worktree", "add", cwd, branch]);
+    return fs.statSync(cwd).isDirectory() ? cwd : null;
+  } catch { return null; }
 }
 
 /**

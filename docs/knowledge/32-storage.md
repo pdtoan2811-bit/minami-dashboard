@@ -31,8 +31,8 @@ somehow it failed to do so."
   (dead-man's switch). The split is the bug's lesson: the dashboard restarts on every deploy and must not be the
   only clock. `com.thomas.minami-janitor` (launchd, 00:15, `bin/install-janitor.sh`) is the other clock. It runs
   before the video renders and catches up on wake.
-- **Thresholds** in `~/.minami/janitor.json` (hand-editable, all optional): `lowGB` 60 (below → tier 2 runs and
-  the tick starts a pass), `targetGB` 80 (a pass stops here: Thomas's target), `criticalGB` 25 (bell + macOS
+- **Thresholds** in `~/.minami/janitor.json` (hand-editable, all optional): `lowGB` 40 (below → tier 2 runs and
+  the tick starts a pass; was 60 until Thomas: "can drop under 40gb", 2026-10-22), `targetGB` 80 (a pass stops here: Thomas's target), `criticalGB` 25 (bell + macOS
   notification with the tier-3 list), `growthAlertGB` 8/day, `worktreeCap` 12 per repo, `idleDays`
   {cache 1, worktree 3, nodeModules 7}, `protect` (node_modules other projects load without cd-ing in:
   `~/hyperframes` is the Video Studio preview's fork), `projectTidy` (each project's own cleanup).
@@ -67,12 +67,17 @@ somehow it failed to do so."
   it now runs one janitor pass (`--why render-floor`) before skipping the render.
 
 ### Gotchas
+- **Slack.** "Critical" and "couldn't free" also DM Thomas, and so does the dead-man's switch (via `janitor.mjs
+  --slack`), through Video Studio's `scripts/lib/slack.mjs` — the one helper that already holds Minami's bot token
+  and his DM. Not tested with a live send on the day it was wired (that would have messaged him unasked).
+- **Reopening a chat whose tree was recycled** (`restoreRecycledTree()` in `lib/worktree.ts`, called first by the
+  send route): if the janitor's ledger names the tree's branch and that branch is not in the base yet, the tree is
+  `git worktree add`-ed back at the same path and the chat resumes in it with its saved work. Otherwise the older
+  rescue (`rehomeStrandedTranscript`, resume in the base) applies — right for trees whose work was merged.
 - Thresholds are defined twice, in the script (authority) and in `storage.ts` (reader for the tab). Change both.
 - `findDirs()` prunes `node_modules` while searching; searching *for* `node_modules` must drop it from the prune
   list, or `find` prunes every match before it can print it. That bug was in the first draft.
 - GiB throughout (`2**30`), the unit `df -h` prints and the number Thomas has been reading. Finder shows GB
   (1e9), about 7% higher.
-- A resumed chat whose worktree was recycled has no folder: restore it with the ledger's `git worktree add` line.
-  Auto-restore on resume (Codex does that) is not built.
-- Bell events don't reach Slack. Nothing relays `events.jsonl` there yet, so "critical" is the bell + a macOS
-  notification.
+- A restored tree has no `node_modules` or build caches (not in git): the chat reinstalls when it needs them.
+- Other bell events still don't reach Slack; only the janitor's three alarms do.

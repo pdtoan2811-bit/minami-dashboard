@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { sendMessage } from "@/lib/agent/manager";
 import { imageBlocksFor } from "@/lib/agent/images";
-import { rehomeStrandedTranscript } from "@/lib/worktree";
+import { rehomeStrandedTranscript, restoreRecycledTree } from "@/lib/worktree";
 import { primeRepoState } from "@/lib/repo-state";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,12 @@ export async function POST(req: Request) {
     // transcript into the base folder's project dir and resume against the repo its work became
     // part of. Only with `resume`: a NEW chat aimed at a dead worktree path really is an error.
     let home = String(cwd);
+    if (!stat && resume) {
+      // First: a tree the storage janitor recycled with its work still on an unmerged branch comes back in
+      // place (§32) — the base rescue below would resume it against files without that work.
+      const restored = restoreRecycledTree(home);
+      if (restored) { try { stat = fs.statSync(restored); } catch { /* fall through */ } }
+    }
     if (!stat && resume) {
       const rehomed = rehomeStrandedTranscript(home, String(resume));
       if (rehomed) { home = rehomed; try { stat = fs.statSync(home); } catch { /* fall through */ } }
