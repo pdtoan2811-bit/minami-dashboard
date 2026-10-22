@@ -120,7 +120,37 @@ function cwds() {
   const r = sh("lsof", ["-d", "cwd", "-Fn"], { timeout: 30_000 });
   return new Set(r.out.split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1)));
 }
-const inUse = (dir, used) => { for (const c of used) if (c === dir || c.startsWith(dir + "/")) return true; return false; };
+// Folders Docker containers use. A container's processes live in Docker's VM, so lsof never sees them: a project a
+// running `docker compose up` bind-mounts would look idle and lose its node_modules or its worktree underneath the
+// container (Thomas, 2026-10-22: "when I activate docker — will it mess up since docker is not in the equation").
+// Matched in BOTH directions: a mount of ~/ecvision covers ~/ecvision/frontend, and a mount of ~/ecvision/frontend
+// makes ~/ecvision in use too.
+let DOCKER = [];
+const inUse = (dir, used) => {
+  for (const c of used) if (c === dir || c.startsWith(dir + "/")) return true;
+  for (const d of DOCKER) if (d === dir || d.startsWith(dir + "/") || dir.startsWith(d + "/")) return true;
+  return false;
+};
+
+/** What running containers mount. Docker up but not answering (it hangs on this box) → every project with a compose
+ *  file counts as in use: we can't see what's running, and keeping is the safe wrong answer. */
+function dockerPaths() {
+  if (!sh("pgrep", ["-f", "com.docker.backend"]).ok) return { up: false, paths: [] };
+  const ids = sh("docker", ["ps", "-q"], { timeout: 15_000 });
+  if (ids.ok) {
+    const list = ids.out.split("\n").filter((x) => /^[0-9a-f]{6,}$/.test(x));
+    if (!list.length) return { up: true, paths: [] };
+    const fmt = '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}\n{{end}}{{end}}{{index .Config.Labels "com.docker.compose.project.working_dir"}}\n';
+    const ins = sh("docker", ["inspect", "--format", fmt, ...list], { timeout: 15_000 });
+    if (ins.ok) return { up: true, paths: [...new Set(ins.out.split("\n").map((x) => x.trim()).filter((x) => x.startsWith("/")))] };
+  }
+  const composes = sh("find", [HOME, "-xdev", "-maxdepth", "4", "(", "-name", "Library", "-o", "-name", "node_modules", "-o", "-name", ".git", ")",
+    "-prune", "-o", "-type", "f", "(", "-name", "docker-compose*.yml", "-o", "-name", "docker-compose*.yaml", "-o", "-name", "compose.y*ml", ")", "-print"],
+    { timeout: 120_000 }).out.split("\n").filter((l) => l.startsWith("/"));
+  // the repo root, not the compose file's folder: ecvision keeps its compose in infra/ and mounts ../frontend
+  const roots = composes.map((c) => { const t = git(path.dirname(c), "rev-parse", "--show-toplevel"); return t.ok && t.out.startsWith("/") ? t.out : path.dirname(c); });
+  return { up: true, hung: true, paths: [...new Set(roots)] };
+}
 
 /** Newest mtime under `dir`, skipping regenerables, at most `depth` levels and `cap` entries. */
 function newest(dir, depth = 4, skip = new Set(["node_modules", ".next", ".git", "dist", "out", ".turbo"])) {
@@ -338,8 +368,8 @@ function tier3() {
   if (fs.existsSync(raw)) {
     const b = sizeOf(raw);
     if (b > 5 * GB) ask({ id: "docker", title: `Docker holds ${gb(b)} GB`, gb: +gb(b), action: "docker",
-      detail: "Prune unused images, stopped containers and build cache, then give the space back to macOS. " +
-        "Database volumes are never touched by this button." });
+      detail: "Removes images no container uses and the build cache, then gives the space back to macOS. " +
+        "Containers (running or stopped) and their volumes are never touched by this button." });
   }
   fs.mkdirSync(DIR, { recursive: true });
   if (!DRY) fs.writeFileSync(F.asks, JSON.stringify({ at: new Date().toISOString(), asks }, null, 2));
@@ -349,10 +379,13 @@ function doDocker() {
   const ping = sh("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 20_000 });
   if (!ping.ok) return { ok: false, msg: "Docker isn't answering. Open Docker Desktop (or restart it), then press again." };
   const before = freeBytes();
-  const p = sh("docker", ["system", "prune", "-af"], { timeout: 900_000 }); // -a images, NOT --volumes
+  // NOT `system prune`: that also deletes stopped containers (a stopped database is still somebody's database).
+  // `image prune -a` keeps every image a container — running or stopped — still references. Volumes: never.
+  const p = sh("docker", ["image", "prune", "-af"], { timeout: 900_000 });
+  sh("docker", ["builder", "prune", "-af"], { timeout: 900_000 });
   sh("docker", ["run", "--rm", "--privileged", "--pid=host", "docker/desktop-reclaim-space"], { timeout: 900_000 });
   const freed = Math.max(0, freeBytes() - before);
-  append(F.ledger, { at: new Date().toISOString(), run: RUN, tier: 3, kind: "docker", path: "docker system prune -af + reclaim",
+  append(F.ledger, { at: new Date().toISOString(), run: RUN, tier: 3, kind: "docker", path: "docker image prune -af + builder prune + reclaim",
     bytes: freed, why: "approved by Thomas", restore: "images re-pulled on next use; volumes untouched" });
   return { ok: p.ok, msg: `Docker cleaned: ${gb(freed)} GB back to macOS.` };
 }
@@ -397,6 +430,8 @@ async function slack(text) {
   if (!fs.existsSync(helper)) return;
   try { const { notify: dm } = await import(helper); await dm(text); } catch { /* the bell already has it */ }
 }
+
+const DK = (ps) => ps.map(short).join(", ");
 
 function notify(title, body) {
   sh("osascript", ["-e", `display notification ${JSON.stringify(body.slice(0, 180))} with title ${JSON.stringify(title)}`], { timeout: 10_000 });
@@ -453,6 +488,10 @@ async function main() {
     const on = storageOn() || flag("--force-on");
     const below = start < cfg.lowGB * GB;
     const used = cwds();
+    const dk = dockerPaths();
+    DOCKER = dk.paths;
+    if (dk.hung) errors.push(`Docker is running but not answering: left ${DK(dk.paths)} alone`);
+    else if (dk.paths.length) console.log(`docker: ${dk.paths.length} folder(s) mounted by running containers, kept`);
     if (on || DRY) {
       tier1(cfg, used, below);
       if ((below || WHY === "nightly" || WHY === "render-floor") && !enough(cfg, start)) tier2(cfg, used, start);

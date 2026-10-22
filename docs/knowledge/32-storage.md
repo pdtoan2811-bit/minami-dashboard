@@ -39,7 +39,8 @@ somehow it failed to do so."
 - **Tiers.** 1, always: leaked `$TMPDIR` dirs by prefix, `.next/dev` + `.next/cache` of apps no process sits in
   and idle ≥ 1 d, `git worktree prune`; package caches only below `lowGB`. 2, below `lowGB` / nightly /
   render-floor: each project's own tidy, then **worktree recycling**, then idle `node_modules` with a lockfile.
-  3, asks only: Docker (prune -af + `docker/desktop-reclaim-space`; **volumes never**), written to `asks.json` and
+  3, asks only: Docker (`image prune -af` + `builder prune -af` + `docker/desktop-reclaim-space`; containers,
+  running or stopped, and volumes are never touched — not `system prune`, which deletes stopped containers), written to `asks.json` and
   shown on the Storage tab with a button.
 - **Worktree recycling never merges** (that's §13's job, behind task.mjs's gates). A tree that is unclaimed (no
   claim heartbeat < 30 min, the rule `prune-worktrees.sh` uses), has no process cwd inside it, is not mid-merge
@@ -65,6 +66,17 @@ somehow it failed to do so."
   merge state can't mute it).
 - **Video Studio** (`~/tiktok-studio/scripts/overnight.mjs` `room()`): under its 6 GB floor after its own tidy,
   it now runs one janitor pass (`--why render-floor`) before skipping the render.
+
+- **Docker counts as "in use".** Containers run in Docker's VM, so `lsof` never sees their cwd. A pass asks
+  Docker for every running container's bind-mount sources and compose working dir and treats them as in use,
+  matched both ways (a mount of `~/ecvision` covers `~/ecvision/frontend` and vice versa). Docker running but
+  not answering (it hangs on this box) → every repo holding a compose file is left alone, and the pass says so.
+
+> 🐛 **The first janitor would have recycled worktrees under a running `docker compose` (caught 2026-10-22,
+> before it ever ran).** Thomas asked "when I activate docker — will it mess up since docker is not in the
+> equation". It would have: the in-use test was `lsof` cwds only, and the first dry run planned to recycle 3.5 GB of
+> ecvision and oe-central-ver2 worktrees — both compose projects. Fixed with the Docker check above; the same dry
+> run now leaves both alone.
 
 ### Gotchas
 - **Slack.** "Critical" and "couldn't free" also DM Thomas, and so does the dead-man's switch (via `janitor.mjs

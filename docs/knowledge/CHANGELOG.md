@@ -9,6 +9,8 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-22
+- **Storage janitor: Docker-aware** (§32; `bin/janitor.mjs`). Folders mounted by running containers count as in use; with Docker hung, every compose repo is left alone. The Docker button prunes images + build cache only, never containers or volumes.
+  *Reported by user: "when I activate docker — will it mess up since docker is not in the equation"*
 - **Storage janitor, round 2** (§32; `bin/janitor.mjs`, `lib/autopilot/storage.ts`, `lib/worktree.ts`, `app/api/agent/send/route.ts`). Floor 60 → 40 GB. Critical, couldn't-free and the dead-man's switch now DM Thomas on Slack. Reopening a chat whose tree the janitor recycled restores the tree from its unmerged branch instead of resuming in the base.
   *Reported by user: "can drop under 40gb — do what's left"*
 - **Storage janitor: autopilot keeps the disk clean** (§32; new `bin/janitor.mjs`, `bin/install-janitor.sh`, `lib/autopilot/storage.ts`, `app/api/autopilot/storage/route.ts`, `app/autopilot/StorageSection.tsx`; `lib/autopilot/{config,runner}.ts`, `app/api/autopilot/route.ts`, `Autopilot.tsx`, `lib/automations.ts`). New `storage` duty starts a pass below 60 GB free and alarms when the janitor hasn't run in 26 h. A nightly launchd job runs it too. Storage tab on /autopilot. Video Studio's overnight runner calls it before skipping a render.
