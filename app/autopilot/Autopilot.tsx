@@ -14,6 +14,7 @@ import { Ground, TopBar, K } from "../today/ui";
 import { GoalsSection, useGoals } from "./GoalsSection";
 import { RunnersSection, useAutomations } from "./RunnersSection";
 import { PhoneAutopilot } from "./PhoneAutopilot";
+import { ModuleChat } from "./ModuleChat";
 import { useCompact } from "@/lib/use-media";
 
 // The vault's goal runner measures and acts on every goal, whatever project the goal belongs to (lib/goals.ts).
@@ -67,7 +68,10 @@ export function Autopilot() {
           </p>
         )}
         <section id="goals" className="scroll-mt-6">
-          <h2 className="text-[22px] font-semibold tracking-tight">Goals</h2>
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-[22px] font-semibold tracking-tight">Goals</h2>
+            <ModuleChat id="goals" />
+          </div>
           <p className="mt-1 text-[14px]" style={{ color: K.muted }}>Targets an agent works on every morning at 06:45. Your part lands on Today.</p>
           <GoalsSection goals={goals} total={g.goals?.length ?? 0} err={g.err} busy={g.busy} runNow={g.runNow} runnersFor={runnersFor} />
           {goals && g.goals && g.goals.length > 0 && goals.length === 0 && (

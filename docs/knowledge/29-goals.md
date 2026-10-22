@@ -38,6 +38,11 @@ jobs, but not the other way round. Each row links to `#auto-<id>` in Runners.
 - The shell's project filter hides goals whose note doesn't match and prints "Filtered to <pf> · N
   hidden", so an empty page reads as filtered and not as broken.
 
+## As a module (§31, 2026-10-22)
+
+`~/.minami/goals` is the first module. Its `AGENTS.md`, `module.json`, `schema/`, `bin/goals` and `EXPERIENCE.md` sit beside the
+data and change nothing the runner or this page reads. "Chat here" beside the Goals heading opens a chat inside that folder.
+
 ## Gotchas
 
 - **A failed check is not a result.** A position is a number, `null` (Google showed results and we weren't among

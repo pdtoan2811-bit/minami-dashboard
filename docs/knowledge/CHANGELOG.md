@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-22
+- **Modules: folders that describe themselves; Goals is the pilot** (§31; new `lib/modules.ts`, `app/api/modules/route.ts`, `app/autopilot/ModuleChat.tsx`; `Autopilot.tsx`). A folder under `~/.minami` with a `module.json` is a module. "Chat here" beside the Goals heading starts a chat whose cwd is `~/.minami/goals`, so the chat loads that folder's own `AGENTS.md`. Added to `~/.minami/goals` beside the data (none moved): `module.json`, `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `schema/{run,rank,today}.v1.json`, `bin/goals`, `EXPERIENCE.md`. Design from harness2, file-over-app and the AGENTS.md standard.
+
 ### 2026-10-21
 - **🐛 Agent cards showed no model** (§3; `lib/claude-sessions.ts` `subagentModel()`). It read a 64KB head, but the CLI's ~140KB of attachment rows push the first assistant row past it in every current transcript. It now reads forward to that row (cap 2MB).
 - **Chat agent board shows each subagent's model** (§3; `app/page.tsx`, `lib/model-catalog.ts`, `lib/agent/manager.ts`, `lib/use-agent.ts`). Running and finished rows name the model, e.g. "Sonnet 5.5". The finish notice carries it, and the tasks panel and the board share `shortModelLabel()`.
