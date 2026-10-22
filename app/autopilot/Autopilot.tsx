@@ -6,7 +6,7 @@
 //
 // Both feeds are fetched here, not inside their sections, so the goal ↔ runner match and the shell's project
 // filter are computed once over the same data the sections draw.
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Goal } from "@/lib/goals";
 import type { Automation } from "@/lib/automations";
 import { matchesProject, projectKey, useProjectFilter } from "@/lib/project-filter";
@@ -14,8 +14,9 @@ import { Ground, TopBar, K } from "../today/ui";
 import { GoalsSection, useGoals } from "./GoalsSection";
 import { RunnersSection, useAutomations } from "./RunnersSection";
 import { PhoneAutopilot } from "./PhoneAutopilot";
-import { ModuleChat } from "./ModuleChat";
+import { AskBox } from "./AskBox";
 import { useCompact } from "@/lib/use-media";
+import { dayOf } from "./DayStrip";
 
 // The vault's goal runner measures and acts on every goal, whatever project the goal belongs to (lib/goals.ts).
 const GOAL_RUNNER = "com.thomas.goal-runner";
@@ -25,11 +26,52 @@ const GOAL_RUNNER = "com.thomas.goal-runner";
 // and matchesProject's one-way prefix lets an "ecvision" goal claim the "ecvisionContent" jobs, not the reverse.
 const serves = (a: Automation, g: Goal) => a.id === GOAL_RUNNER || (!!projectKey(g.note) && !!projectKey(a.project) && matchesProject(g.note, a.project));
 
+// Tabs (2026-10-22): "need tab navigation rather than goal and runners on same page". One page and two data folders
+// (§31): goals and runners have different writers and rules, so each tab is its own module. The tab follows the
+// URL: ?tab=runners, or a hash the rest of the app already links to (#runners, #auto-<id> → Runners; #goal-<id> →
+// Goals), so the bell drawer, the Day strip chips and a goal's "worked on by" links all land on the right tab.
+export type Tab = "goals" | "runners";
+function tabFromUrl(): Tab {
+  const h = location.hash;
+  if (/^#(runners|auto-)/.test(h)) return "runners";
+  if (/^#goal-/.test(h)) return "goals";
+  return new URLSearchParams(location.search).get("tab") === "runners" ? "runners" : "goals";
+}
+export function useTab(): [Tab, (t: Tab) => void] {
+  const [tab, setTab] = useState<Tab>("goals");
+  useEffect(() => {
+    const sync = () => setTab(tabFromUrl());
+    sync();
+    window.addEventListener("hashchange", sync);
+    window.addEventListener("popstate", sync);
+    return () => { window.removeEventListener("hashchange", sync); window.removeEventListener("popstate", sync); };
+  }, []);
+  const pick = (t: Tab) => { setTab(t); history.replaceState(null, "", t === "runners" ? "?tab=runners" : location.pathname); };
+  return [tab, pick];
+}
+
+export function Tabs({ tab, pick, goals, runners }: { tab: Tab; pick: (t: Tab) => void; goals: { n: number; bad: number }; runners: { n: number; bad: number } }) {
+  const one = (t: Tab, label: string, c: { n: number; bad: number }) => (
+    <button key={t} role="tab" aria-selected={tab === t} onClick={() => pick(t)}
+      className="inline-flex h-10 items-center gap-2 rounded-full px-4 text-[15px] font-semibold transition-colors"
+      style={tab === t ? { background: "rgba(255,255,255,.12)", color: K.ink } : { color: K.muted }}>
+      {label}<span className="text-[13px] font-medium" style={{ color: K.faint }}>{c.n}</span>
+      {c.bad > 0 && <span className="rounded-full px-1.5 text-[11.5px] font-semibold" style={{ background: "rgba(243,199,102,.18)", color: "#f3c766" }}>{c.bad}</span>}
+    </button>
+  );
+  return (
+    <div role="tablist" className="inline-flex gap-1 rounded-full p-1" style={{ background: "rgba(255,255,255,.04)", border: `1px solid ${K.line}` }}>
+      {one("goals", "Goals", goals)}{one("runners", "Runners", runners)}
+    </div>
+  );
+}
+
 export function Autopilot() {
   const [pf] = useProjectFilter();
   const compact = useCompact();
   const g = useGoals();
   const feed = useAutomations();
+  const [tab, pick] = useTab();
 
   const goals = useMemo(() => g.goals?.filter((x) => matchesProject(pf, x.note)) ?? null, [g.goals, pf]);
   const all = feed.items;
@@ -54,34 +96,41 @@ export function Autopilot() {
   }, [ready]);
 
   const hidden = (g.goals && goals ? g.goals.length - goals.length : 0) + (all && items ? all.length - items.length : 0);
+  // The amber count on a tab: goals whose last run is behind, runners that need a look.
+  const counts = {
+    goals: { n: goals?.length ?? 0, bad: (goals ?? []).filter((x) => x.log.at(-1)?.decision.on_track === false).length },
+    // the same rule as the strip's "N need a look" sentence, so the badge and the page never disagree
+    runners: { n: items?.length ?? 0, bad: items ? dayOf(items).looks.length : 0 },
+  };
 
   return (
     <Ground>
       <TopBar title="Autopilot" />
       {/* Wider than the runners below: the goals are a list beside a run ledger (§29), the runners one column. */}
       {/* On a phone the stacked cards made an 8,918px page; the phone gets its own view (PhoneAutopilot.tsx). */}
-      {compact ? <PhoneAutopilot goals={goals} runners={items} feed={feed} /> : (
+      {compact ? <PhoneAutopilot goals={goals} runners={items} feed={feed} tab={tab} tabs={<Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} />} /> : (
       <div className="mx-auto max-w-[1160px] px-5 pb-28 pt-2 sm:pb-16">
         {pf && (
           <p className="mb-4 text-[12.5px]" style={{ fontFamily: "var(--today-mono)", color: K.faint }}>
             Filtered to {pf} · {hidden} hidden
           </p>
         )}
-        <section id="goals" className="scroll-mt-6">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-[22px] font-semibold tracking-tight">Goals</h2>
-            <ModuleChat id="goals" />
-          </div>
-          <p className="mt-1 text-[14px]" style={{ color: K.muted }}>Targets an agent works on every morning at 06:45. Your part lands on Today.</p>
-          <GoalsSection goals={goals} total={g.goals?.length ?? 0} err={g.err} busy={g.busy} runNow={g.runNow} runnersFor={runnersFor} />
-          {goals && g.goals && g.goals.length > 0 && goals.length === 0 && (
-            <p className="mt-4 text-[13.5px]" style={{ color: K.muted }}>No goals in {pf}.</p>
-          )}
-        </section>
-        {/* Full width since the Day strip (2026-10-21): 24 hours on one line need the room the old card list didn't. */}
-        <section id="runners" className="mt-14 scroll-mt-6">
-          <RunnersSection feed={feed} items={items} serving={serving} />
-        </section>
+        <div className="mb-5"><Tabs tab={tab} pick={pick} goals={counts.goals} runners={counts.runners} /></div>
+        {/* Each tab opens with its module's input (§31): what's typed starts a chat inside that module's folder. */}
+        {tab === "goals" ? (
+          <section id="goals" className="scroll-mt-6">
+            <AskBox key="goals" url="/api/modules" body={{ op: "chat", id: "goals" }} field="ask" placeholder="Ask about your goals — which are behind, what the runner did, what to try next…" />
+            <GoalsSection goals={goals} total={g.goals?.length ?? 0} err={g.err} busy={g.busy} runNow={g.runNow} runnersFor={runnersFor} />
+            {goals && g.goals && g.goals.length > 0 && goals.length === 0 && (
+              <p className="mt-4 text-[13.5px]" style={{ color: K.muted }}>No goals in {pf}.</p>
+            )}
+          </section>
+        ) : (
+          <section id="runners" className="scroll-mt-6">
+            <AskBox key="runners" url="/api/modules" body={{ op: "chat", id: "runners" }} field="ask" placeholder="Ask about your runners — what failed, what runs tonight, pause the video jobs…" />
+            <div className="mt-6"><RunnersSection feed={feed} items={items} serving={serving} /></div>
+          </section>
+        )}
       </div>
       )}
     </Ground>

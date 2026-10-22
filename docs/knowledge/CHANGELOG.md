@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-22
+- **Autopilot: Goals and Runners tabs, text inputs, the runners module, one run at a time** (§31, §27; new `app/autopilot/AskBox.tsx`; `Autopilot.tsx`, `GoalsSection.tsx`, `RunnersSection.tsx`, `PhoneAutopilot.tsx`, `lib/modules.ts`, `bin/minami-run`; removed `ModuleChat.tsx`). Tabs follow `?tab=` and the existing hashes. Today-style inputs: one per tab (a chat in the module folder), "Add a goal" (drafts, then asks before writing), and one per goal and runner card. `~/.minami/automations` got its module door. `minami-run` holds `~/.harness/locks/run-<id>.lock`, so a second copy of a runner logs a `skip` and exits 0. It was installed to `~/.minami/bin` the same day, prompted by the 2026-10-21 duplicate posts.
 - **Modules: folders that describe themselves; Goals is the pilot** (§31; new `lib/modules.ts`, `app/api/modules/route.ts`, `app/autopilot/ModuleChat.tsx`; `Autopilot.tsx`). A folder under `~/.minami` with a `module.json` is a module. "Chat here" beside the Goals heading starts a chat whose cwd is `~/.minami/goals`, so the chat loads that folder's own `AGENTS.md`. Added to `~/.minami/goals` beside the data (none moved): `module.json`, `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `schema/{run,rank,today}.v1.json`, `bin/goals`, `EXPERIENCE.md`. Design from harness2, file-over-app and the AGENTS.md standard.
 
 ### 2026-10-21

@@ -41,7 +41,8 @@ jobs, but not the other way round. Each row links to `#auto-<id>` in Runners.
 ## As a module (§31, 2026-10-22)
 
 `~/.minami/goals` is the first module. Its `AGENTS.md`, `module.json`, `schema/`, `bin/goals` and `EXPERIENCE.md` sit beside the
-data and change nothing the runner or this page reads. "Chat here" beside the Goals heading opens a chat inside that folder.
+data and change nothing the runner or this page reads. On /autopilot the Goals tab opens with an input that starts a chat inside that folder, and the
+goal list ends in "Add a goal" (§31).
 
 ## Gotchas
 
