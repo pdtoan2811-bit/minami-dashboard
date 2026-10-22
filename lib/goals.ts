@@ -143,6 +143,9 @@ function outcomeOf(a: GoalAction): string {
   if (a.skipped) return `skipped: ${a.skipped}`;
   if (a.queued) return `queued "${a.queued}"`;
   if (a.note) return `drafted "${a.note}"`;
+  // request-indexing writes `result`, not one of the fields above; without this every successful request
+  // read "no outcome recorded" in the hand-off (2026-10-22).
+  if (a.result) return `${a.result}${a.url ? ` ${a.url}` : ""}`;
   return "no outcome recorded";
 }
 
