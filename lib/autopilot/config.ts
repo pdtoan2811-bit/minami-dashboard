@@ -23,6 +23,9 @@ export type AutopilotConfig = {
   /** Keep the remote-tracking refs of folders with live sessions fetched, so what a chat is told
    *  about its checkout is current. The one duty here that changes nothing — see lib/repo-state.ts. */
   freshness: boolean;
+  /** Keep the disk above its floor (§32): start bin/janitor.mjs when free space drops under lowGB, and alarm
+   *  when the janitor stops running. Off = the janitor only watches and reports; it deletes nothing. */
+  storage: boolean;
   /** How long a task must sit still after its last commit before it counts as finished, ms. */
   settleMs: number;
   /** Tick interval, ms. */
@@ -39,6 +42,9 @@ export const DEFAULTS: AutopilotConfig = {
   // and no commit. The risk it guards against is the opposite of autopilot's usual one — not "it did
   // something I didn't ask for" but "it confidently told me something three weeks out of date".
   freshness: true,
+  // Off by default like every other write. It deletes (regenerable caches, and worktrees only after saving
+  // their work to a branch), so it is switched on per box, in the file, by someone who meant to.
+  storage: false,
   // Two minutes: long enough that a run of commits a few seconds apart reads as one piece of work,
   // short enough that "I'm done" doesn't feel like it went unnoticed.
   settleMs: 120_000,

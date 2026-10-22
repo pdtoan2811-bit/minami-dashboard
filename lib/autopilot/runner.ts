@@ -242,9 +242,15 @@ async function tick(): Promise<void> {
     // Inside the re-entrancy guard, before the merge gate: freshness is a duty of its own, and it must
     // keep running on a box where merging is switched off.
     if (cfg.freshness) await freshenLiveRepos();
-    if (!cfg.merge) return;
 
     const root = await mainRoot();
+    // Storage (§32) is its own duty too, and only the main server runs it: a worktree preview on :30xx starting
+    // janitor passes would race the real one (the janitor's lock makes it harmless, not sensible).
+    if (cfg.storage && root) {
+      const { storageTick } = await import("./storage");
+      await storageTick(root, emit).catch((e) => emit("storage", "error", "Storage duty failed this tick", String(e?.message || e)));
+    }
+    if (!cfg.merge) return;
     if (!root) return;
     // Someone else is mid-merge or mid-deploy. Both are serialised for good reasons; queue behind them.
     if (held(MERGE_LOCK) || held(DEPLOY_LOCK)) return;
