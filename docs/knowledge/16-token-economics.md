@@ -180,12 +180,19 @@ takes about a minute; the board shows progress meanwhile. `/api/usage?days=N` se
 
 The board shows:
 - plan limits (5h / 7d from `tok status`, sampled to `~/.minami/limit-samples.jsonl` at most every 10
-  minutes, *only while the board or the API is being read*);
+  minutes, *only while the board or the API is being read*), each drawn as a race to its reset (`LimitRace`,
+  2026-10-23): time from the window's start to the reset with hour/day ticks, the used line, an even-pace diagonal
+  (0% → 100% by the reset), and a dotted forecast at the recent rate, with the sentence "at this pace ~N% at the
+  reset" or "hits 100% at HH:MM". The recent rate is the last hour (5h) or day (7d) of samples, but only when the
+  samples cover ≥ 75% of that span; otherwise the window's own average. The first cut carried five daytime hours
+  through the nights and told him the week would hit 100% the next morning. Samples are filtered to the active
+  account so a failover doesn't read as a jump;
 - KPIs against the previous window;
-- usage per day by model, main vs subagent, or context band;
+- usage per day in **tokens** (the default since 2026-10-23: input + output + cache writes + cache reads), **$**, or
+  **tasks** (chats started, subagent runs, headless runs), split by model, main vs subagent, or context band;
 - subagent runs per model with the routing-change marker;
 - a weekday × hour heatmap;
-- usage by app (entrypoint) and by project;
+- usage by app (entrypoint) and by project (each project's bar split by model, with tokens and calls);
 - the heaviest sessions, linked with `/?open=`.
 
 > 🐛 **Count each API response once, box-wide.** It repeats in two ways. A response is written as
