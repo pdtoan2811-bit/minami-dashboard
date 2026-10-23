@@ -46,6 +46,8 @@ export default function Settings() {
   // Same key the shell's rail reads (lib/nav.ts, §30). Client-only: it decides what this browser shows, not what the server runs
   // — agents already on the roster keep working with this off.
   const [agentMode, setAgentMode] = useSetting<boolean>("agentMode", false);
+  // Read by the loader in app/layout.tsx straight from localStorage (`bento:inspectSelf`), before React: this browser only.
+  const [inspectSelf, setInspectSelf] = useSetting<boolean>("inspectSelf", false);
 
   return (
     <div className="min-h-dvh text-neutral-100">
@@ -88,6 +90,10 @@ export default function Settings() {
           <div className="space-y-2">
             <Row title="Show tool logs" desc="Show each turn's tool calls (Bash, Edit, Read…) inline in the chat. Off keeps the read cleaner.">
               <Toggle on={showTools} onChange={setShowTools} />
+            </Row>
+            <Row title="Comment on the dashboard itself"
+              desc="Loads the preview's inspect script into this dashboard, so a preview of localhost:3000 takes pins and comments like any app in development. This browser only. Reload the preview after switching.">
+              <Toggle on={inspectSelf} onChange={setInspectSelf} />
             </Row>
             <Row title="Approval level for new chats"
               desc="Bypass auto-runs every tool with no prompt — the default here, and the reason this dashboard is local-only. Existing chats keep the level shown on their own pills.">
