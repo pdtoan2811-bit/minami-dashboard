@@ -135,6 +135,8 @@ export function coverOf(pid: number, n: string): string | null {
 export type PublishVideo = { n: string; title: string; cover: boolean; state: UploadState; why?: string; slot?: string; pct?: number; leftMin?: number; lateMin?: number };
 export type Publish = {
   pid: number; label: string; session: string | null; sessionId?: string | null; live: boolean; endedAt?: number;
+  /** `publish:<pid>:<startedAt>`, the key of its comments and Minami chats in the attention store (§34). */
+  key: string; cwd: string;
   /** ok: on time · late: the video uploading now finishes after its slot · stuck: under 20 KB/s (the 10-19 hang ran
    *  at 12–15; a normal Post for Me upload is 44–150) · done: ended clean · trouble: ended with a failure */
   tone: "ok" | "late" | "stuck" | "done" | "trouble";
@@ -163,8 +165,18 @@ export function publishOf(p: UploadProgress, now = Date.now()): Publish {
   const tone: Publish["tone"] = !live ? (t.failed ? "trouble" : "done")
     : cur?.lateMin ? "late" : t.rateKBs != null && t.rateKBs < STUCK_KBS ? "stuck" : "ok";
   return {
-    pid: p.pid, label: p.label, session: p.session, live, endedAt: p.endedAt, tone, cur, videos,
+    pid: p.pid, label: p.label, session: p.session, live, endedAt: p.endedAt, key: `publish:${p.pid}:${p.startedAt}`, cwd: p.cwd, tone, cur, videos,
     rateKBs: t.rateKBs, leftMin: t.leftMin, tryNo: curRow?.try, tries: curRow?.tries,
     done: t.done, count: t.count, held: t.held, failed: t.failed,
   };
+}
+
+/** The publish as a few plain lines, for the chat Minami starts from the tile: what it is doing, video by video. */
+export function publishBrief(p: Publish): string {
+  const hm = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Ho_Chi_Minh" }) : "");
+  const head = p.live
+    ? `Running (pid ${p.pid}), ${p.done} of ${p.count} done, ${p.rateKBs ?? "?"} KB/s${p.leftMin != null ? `, about ${Math.round(p.leftMin)} min left` : ""}, tone: ${p.tone}.`
+    : `Ended ${p.endedAt ? new Date(p.endedAt).toISOString() : ""}: ${p.done} of ${p.count} posted, ${p.failed} failed, ${p.held} held.`;
+  const rows = p.videos.map((v) => `- ${v.n} · ${v.title} · ${v.state}${v.slot ? ` · slot ${hm(v.slot)} (UTC+7)` : ""}${v.pct != null ? ` · ${v.pct}%` : ""}${v.lateMin ? ` · ${v.lateMin} min late` : ""}${v.why ? ` · ${v.why}` : ""}`);
+  return [`${p.label}: ${head}`, ...rows].join("\n");
 }

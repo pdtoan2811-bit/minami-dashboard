@@ -47,6 +47,9 @@ honest: the moment the source moves, the flag ticks itself.
   asks about all of them at once: `askAbout` adds every open video to the overnight runner's context
   (`waitingVideos()` in lib/autopilot-ask.ts).
 
+- **The publish tile on Bento** (§33, `app/api/uploads`, `components/PublishTile.tsx`): scope `publish`, comment and
+  Minami ↵ only (no resolve: a publish ends on its own, and `track` ticks it AUTO "the publish ended").
+
 ## Not yet adopted (inventory, 2026-10-23)
 
 Indicators that show a stored condition with no way to mark it handled — the next candidates:
