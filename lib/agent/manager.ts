@@ -2237,9 +2237,9 @@ export function isBusy(key: string): boolean {
 /** The pane key the session was spawned under (what its children see as MINAMI_SESSION_KEY) and its cwd,
  *  from any key the client holds — a pane switches to `live:<sid>` after its first turn, but the env
  *  was set at spawn with the original key. */
-export function sessionIdentity(key: string): { key: string; cwd: string } | null {
+export function sessionIdentity(key: string): { key: string; cwd: string; sessionId: string | null } | null {
   const s = store.get(key);
-  return s ? { key: s.key, cwd: s.cwd } : null;
+  return s ? { key: s.key, cwd: s.cwd, sessionId: s.sessionId } : null;
 }
 
 /**
