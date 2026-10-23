@@ -12,7 +12,11 @@
  * Polls /api/uploads: 4 s while a publish is live (the writer flushes every 2 s), 30 s otherwise. It's one readdir.
  */
 import { useEffect, useState } from "react";
-import type { Publish, PublishVideo } from "@/lib/upload-progress";
+import type { AttnView } from "@/lib/attention";
+import type { Publish as PublishBase, PublishVideo } from "@/lib/upload-progress";
+
+/** As /api/uploads sends it: with its attention entry (§34), which holds comments and the Minami chats. */
+type Publish = PublishBase & { att?: AttnView };
 
 const C = { ink: "#f2f2f2", mute: "#9a9a9a", faint: "#5f5f5f", ok: "#5fd39a", warn: "#f3c766", bad: "#ff7b7f", up: "#7aa2ff" };
 const DISMISSED = "bento:publishDismissed";
@@ -20,8 +24,9 @@ const DISMISSED = "bento:publishDismissed";
 const hm = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 const mins = (m: number) => (m < 1 ? "<1 min" : m < 60 ? `${Math.round(m)} min` : `${Math.floor(m / 60)} h ${Math.round(m % 60)} min`);
 
-function usePublishes(): Publish[] {
+function usePublishes(): [Publish[], () => void] {
   const [list, setList] = useState<Publish[]>([]);
+  const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let on = true, t: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
@@ -34,8 +39,8 @@ function usePublishes(): Publish[] {
     tick();
     return () => { on = false; if (t) clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return list;
+  }, [nonce]);
+  return [list, () => setNonce((n) => n + 1)];
 }
 
 /** A cover with its state: a ring that fills while it uploads, a badge when posted, held or failed. */
@@ -63,7 +68,50 @@ function Btn({ children, onClick, tone }: { children: React.ReactNode; onClick: 
   );
 }
 
-function Tile({ p, span, onOpen, onDismiss }: { p: Publish; span: string; onOpen: (sid: string) => void; onDismiss: () => void }) {
+/** The same hand as every flagged item (§34, AttentionRow): type, Enter asks Minami, Comment only saves the note.
+ *  Minami's answer is a new chat in the publish's folder with the publish as its subject; it opens as soon as it starts. */
+function AskBox({ p, onOpen, onChanged }: { p: Publish; onOpen: (sid: string) => void; onChanged: () => void }) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState<"ask" | "comment" | null>(null);
+  const [err, setErr] = useState("");
+  const run = async (op: "ask" | "comment") => {
+    const text = note.trim() || (op === "ask" ? "Look at this publish and tell me if anything needs me" : "");
+    if (!text || busy) return;
+    setBusy(op); setErr("");
+    const r = await fetch("/api/uploads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op, key: p.key, text }) })
+      .then((x) => x.json()).catch((e) => ({ error: String(e) }));
+    setBusy(null);
+    if (r.error) { setErr(r.error); return; }
+    setNote(""); onChanged();
+    // the board learns about a new chat on its next poll; give it a moment before opening
+    if (r.sessionId) setTimeout(() => onOpen(r.sessionId), 1500);
+  };
+  const bad = p.tone === "late" || p.tone === "stuck" || p.tone === "trouble";
+  const n = p.att?.comments.length ?? 0;
+  return (
+    <div className="mt-3">
+      <form className="flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); run("ask"); }}>
+        <input value={note} onChange={(e) => setNote(e.target.value.slice(0, 500))} disabled={busy === "ask"}
+          placeholder={busy === "ask" ? "Starting a chat…" : bad ? `Tell Minami what to do about ${p.cur?.n ?? "it"}, or comment…` : "Tell Minami what to do, or comment…"}
+          className="h-8 min-w-0 flex-1 rounded-full bg-transparent px-3.5 text-[13px] outline-none placeholder:text-white/35 disabled:opacity-60"
+          style={{ border: "1px solid rgba(255,255,255,.12)", color: C.ink }} />
+        {note.trim() && <button type="button" disabled={!!busy} onClick={() => run("comment")}
+          className="h-8 shrink-0 rounded-full px-3 text-[12px] hover:text-white" style={{ background: "rgba(255,255,255,.06)", color: C.mute }}>{busy === "comment" ? "…" : "Comment"}</button>}
+        <button type="submit" disabled={!!busy} className="h-8 shrink-0 rounded-full px-3.5 text-[12px] font-semibold text-white disabled:opacity-60"
+          style={{ background: bad ? C.bad : "#5b7cf0", color: bad ? "#13161c" : "#fff" }}>{busy === "ask" ? "…" : "Minami ↵"}</button>
+      </form>
+      {(err || n > 0 || p.att?.chat) && (
+        <div className="mt-1 flex min-w-0 items-center gap-2 px-1 text-[12px]" style={{ color: C.faint }}>
+          {err ? <span style={{ color: C.bad }}>{err}</span>
+            : n > 0 ? <span className="min-w-0 truncate" title={p.att!.comments.map((c) => c.text).join("\n")}>💬 {n} · {p.att!.comments[n - 1].text}</span> : null}
+          {p.att?.chat && <button onClick={() => onOpen(p.att!.chat!)} className="ml-auto shrink-0 hover:text-white" style={{ color: C.up }}>Minami's chat →</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Tile({ p, span, onOpen, onDismiss, onChanged }: { p: Publish; span: string; onOpen: (sid: string) => void; onDismiss: () => void; onChanged: () => void }) {
   const bad = p.tone === "late" || p.tone === "stuck";
   const day = p.label.match(/\d{4}-\d{2}-\d{2}/)?.[0];
   const today = day === new Date().toLocaleDateString("en-CA");
@@ -79,6 +127,7 @@ function Tile({ p, span, onOpen, onDismiss }: { p: Publish; span: string; onOpen
     <div className={`${span} flex min-w-0 flex-col overflow-hidden rounded-2xl px-[18px] py-4`}
       style={{ background: "#13161c", border: `1px solid ${bad || p.tone === "trouble" ? "rgba(255,123,127,.35)" : "rgba(255,255,255,.08)"}`, color: C.ink }}>
       {head}{body}
+      <AskBox p={p} onOpen={onOpen} onChanged={onChanged} />
     </div>
   );
 
@@ -88,7 +137,7 @@ function Tile({ p, span, onOpen, onDismiss }: { p: Publish; span: string; onOpen
     const notes = p.videos.filter((v) => v.state === "held" || v.state === "failed" || v.state === "skipped");
     const ok = !p.failed;
     return frame(<>
-      <div className="mt-5 flex items-center gap-4">
+      <div className="mt-4 flex items-center gap-4">
         <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full text-[26px] font-bold" style={{ background: (ok ? C.ok : C.bad) + "22", color: ok ? C.ok : C.bad }}>{ok ? "✓" : "!"}</span>
         <span className="min-w-0">
           <span className="block text-[24px] font-semibold leading-tight">{posted === p.count ? `All ${posted} posted` : `${posted} of ${p.count} posted`}</span>
@@ -98,8 +147,8 @@ function Tile({ p, span, onOpen, onDismiss }: { p: Publish; span: string; onOpen
         </span>
       </div>
       <div className="mt-auto flex items-end gap-2.5">
-        {p.videos.map((v) => <Cover key={v.n} p={p} v={v} w={30} ring={false} />)}
-        <span className="ml-auto flex gap-2">{!ok && open && <Btn tone={C.bad} onClick={open}>Ask Minami</Btn>}<Btn onClick={onDismiss}>Dismiss</Btn></span>
+        {p.videos.map((v) => <Cover key={v.n} p={p} v={v} w={24} ring={false} />)}
+        <span className="ml-auto flex gap-2"><Btn onClick={onDismiss}>Dismiss</Btn></span>
       </div>
     </>);
   }
@@ -116,18 +165,17 @@ function Tile({ p, span, onOpen, onDismiss }: { p: Publish; span: string; onOpen
     : p.tone === "stuck" ? `left · very slow, ${p.rateKBs} KB/s${tryTxt}${slotAt ? ` · posts ${hm(slotAt)}` : ""}`
     : `left${slotAt && etaAt ? ` · posts at ${hm(slotAt)}, ${mins((slotAt - etaAt) / 60e3)} to spare` : ""}`;
   return frame(<>
-    <div className="mt-4 flex min-w-0 gap-4">
-      {cur && <Cover p={p} v={cur} w={84} />}
+    <div className="mt-3 flex min-w-0 gap-4">
+      {cur && <Cover p={p} v={cur} w={64} />}
       <span className="min-w-0 flex-1">
         <span className="block text-[13px]" style={{ color: C.mute }}>{p.tone === "stuck" ? "Stuck uploading" : p.cur ? "Uploading now" : "Up first"} · {cur?.n}</span>
         <span className="block truncate text-[15px] font-medium">{cur?.title}</span>
-        <span className="mt-2 block text-[38px] font-semibold leading-none tracking-[-.02em]" style={{ color: bad ? C.bad : C.ink, fontVariantNumeric: "tabular-nums" }}>{big}</span>
+        <span className="mt-1.5 block text-[34px] font-semibold leading-none tracking-[-.02em]" style={{ color: bad ? C.bad : C.ink, fontVariantNumeric: "tabular-nums" }}>{big}</span>
         <span className="mt-1 block text-[13px] leading-snug" style={{ color: C.mute }}>{sub}</span>
-        {bad && open && <span className="mt-3 flex gap-2"><Btn tone={C.bad} onClick={open}>Ask Minami</Btn></span>}
       </span>
     </div>
     <div className="mt-auto flex min-w-0 items-end gap-2.5">
-      {rest.map((v) => <Cover key={v.n} p={p} v={v} w={30} ring={v.state !== "queued"} />)}
+      {rest.map((v) => <Cover key={v.n} p={p} v={v} w={24} ring={v.state !== "queued"} />)}
       <span className="ml-auto shrink-0 self-center text-[12.5px]" style={{ color: C.mute }}>
         {bad ? `the rest wait for ${cur?.n}` : p.leftMin ? `all by ${hm(Date.now() + p.leftMin * 60e3)}` : ""}
       </span>
@@ -136,7 +184,7 @@ function Tile({ p, span, onOpen, onDismiss }: { p: Publish; span: string; onOpen
 }
 
 export function PublishTiles({ onOpen, span = "col-span-2 row-span-2" }: { onOpen: (sid: string) => void; span?: string }) {
-  const list = usePublishes();
+  const [list, reload] = usePublishes();
   const [gone, setGone] = useState<number[]>([]);
   useEffect(() => { try { setGone(JSON.parse(localStorage.getItem(DISMISSED) || "[]")); } catch { /* none */ } }, []);
   const dismiss = (pid: number) => {
@@ -150,6 +198,6 @@ export function PublishTiles({ onOpen, span = "col-span-2 row-span-2" }: { onOpe
   // A finished one only while nothing is live: once the next publish starts, the last one's result is history.
   const last = live.length ? undefined : list.find((p) => !p.live && !gone.includes(p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4)));
   return <>{[...live, ...(last ? [last] : [])].map((p) => (
-    <Tile key={`${p.pid}-${p.endedAt ?? "live"}`} p={p} span={span} onOpen={onOpen} onDismiss={() => dismiss(p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4))} />
+    <Tile key={`${p.pid}-${p.endedAt ?? "live"}`} p={p} span={span} onOpen={onOpen} onChanged={reload} onDismiss={() => dismiss(p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4))} />
   ))}</>;
 }

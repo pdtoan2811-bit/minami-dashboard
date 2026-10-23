@@ -50,6 +50,13 @@ Post for Me upload is 44–150), with **Ask Minami** opening the chat that start
 says how it ended ("All 5 posted · VI4 held: …") for 6 hours, until the next publish starts, or until Dismiss.
 The agent card keeps only the one-line headline on the bash row.
 
+Under it, the input every flagged item has (§34), asked for the same evening ("also have input for my comment and do it
+with minami button like other feature"): type, **Minami ↵** (Enter) starts a chat in the publish's folder with the
+publish as its subject (`publishBrief()`: every video's state, slot, % and why), and opens it; **Comment** only saves the
+note. Both live in the attention store under scope `publish`, key `publish:<pid>:<startedAt>`; the last comment and
+"Minami's chat →" show under the input. A new chat rather than a message into the chat that started the publish: that
+one may be mid-turn, and two drivers on one conversation is what `sendMessage` refuses.
+
 ## The pieces
 
 | Where | What |
@@ -61,7 +68,7 @@ The agent card keeps only the one-line headline on the bash row.
 | `lib/upload-progress.ts` | `readUploads()` (live pids only), `uploadsFor()` (by session key; a writer with no key falls back to the same repo, worktrees folded and paths realpath'd), `trayOf()` (pure: totals, and every ETA from the current rate with uploads strictly one after another). |
 | `app/api/agent/uploads` | `GET ?key&cwd` → `{ trays }`: the agent card's headline. |
 | `lib/upload-progress.ts` (tile) | `readFinished()` (done/ copies, 6 h), `publishOf()` (pure: the video in flight, minutes left, minutes late against its slot, one tone), `coverOf(pid, n)`. |
-| `app/api/uploads` | `GET` → `{ publishes }`: every live publish on the machine, whichever chat started it, then the finished ones, each with the `sessionId` of its chat. |
+| `app/api/uploads` | `GET` → `{ publishes }`: every live publish on the machine, whichever chat started it, then the finished ones, each with the `sessionId` of its chat and `att` (§34). `POST {op: comment \| ask, key, text}`: the tile's input. |
 | `app/api/uploads/cover` | `GET ?pid&n` → that video's cover. The path comes only from that publish's own progress file and must be an image; the first request makes a 320 px JPEG with `sips` (~13 KB instead of ~750 KB), cached in `$TMPDIR/minami-covers`. |
 | `components/PublishTile.tsx` | `PublishTiles`: first in the Bento grid in every mode but the flow canvas (a topic open and the compact split included: hiding it there was the first bug, "cant find the tile anywhere"), 2×2, one column wide in the split. Polls 4 s while live, 30 s otherwise. Dismissals in `localStorage` `bento:publishDismissed`. |
 | `components/UploadTray.tsx` | `UploadPaneContext` (provided once per `ChatColumn`), `useUploadTrays()` (polls 2 s while a run is on screen, 6 s while there's none, only while an AgentBoard is mounted), `UploadTray`, `trayHeadline`. |
