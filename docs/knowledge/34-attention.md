@@ -42,6 +42,10 @@ honest: the moment the source moves, the flag ticks itself.
 
 - **Runners → Up next → videos that won't go out on their own** (`lib/upnext.ts`, `app/autopilot/UpNext.tsx`):
   scope `video`, reasons Fixed / Dropped / Posting by hand, Ask Minami in the overnight runner's folder.
+  The input and the **Minami ↵** button sit on every row, not behind the tap (he looked at the first version and
+  asked "Minami button and input text please??"); Enter asks Minami, Comment only saves the note. A box above the list
+  asks about all of them at once: `askAbout` adds every open video to the overnight runner's context
+  (`waitingVideos()` in lib/autopilot-ask.ts).
 
 ## Not yet adopted (inventory, 2026-10-23)
 
