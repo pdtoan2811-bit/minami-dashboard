@@ -31,7 +31,8 @@ import { rankTopics, type RecentTopic } from "@/lib/topic-rank";
 import BrowserLightbox from "@/components/BrowserLightbox";
 import { FlowStrip } from "@/components/FlowStrip";
 import { TaskProgressBar } from "@/components/TaskProgressBar";
-import { UploadPaneContext, UploadTray, trayHeadline, useUploadTrays } from "@/components/UploadTray";
+import { UploadPaneContext, trayHeadline, useUploadTrays } from "@/components/UploadTray";
+import { PublishTiles } from "@/components/PublishTile";
 import type { TaskProgress } from "@/lib/task-progress";
 import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
@@ -374,7 +375,6 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
           <span key={`c${k.toolUses || 0}`} className={`${k.toolUses ? "agent-tick" : ""} text-right font-mono text-[9px] tabular-nums text-neutral-600`}>{k.toolUses ? `${k.toolUses} tools` : ""}</span>
           <span className="text-right font-mono text-[9px] tabular-nums text-neutral-500">{k.since ? fmtElapsed(Date.now() - k.since) : ""}</span>
         </span>
-        {k === host && <UploadTray tray={trays[0]} />}
         </Fragment>
       ))}
       {/* Trays with no bash row to hang from: a foreground publish, or a second run. */}
@@ -387,7 +387,6 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
             <span className="col-span-2 min-w-0 truncate text-neutral-300">{trayHeadline(t)}</span>
             <span className="col-span-2 text-right font-mono text-[9px] tabular-nums text-neutral-400">{t.rateKBs != null ? `${t.rateKBs} KB/s` : ""}</span>
           </span>
-          <UploadTray tray={t} />
         </span>
       ))}
       {finished.map((n, i) => {
@@ -1485,6 +1484,9 @@ export default function BentoHome() {
             // With the flow open, this becomes a single full-height cell rather than a grid: the canvas is
             // the screen, so it should get all of it instead of three fixed rows with dead space below.
             <div className={`grid gap-3 ${flowFor ? "h-full grid-cols-1 grid-rows-1" : `auto-rows-[10.5rem] [grid-auto-flow:dense] ${split ? "grid-cols-1" : proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}`}>
+              {/* A running TikTok publish, first on the board (§33): it used to live only in the agent card of the chat
+                  that started it, which scrolls away and closes with the pane. */}
+              {!proj && !split && !flowFor && <PublishTiles onOpen={(sid) => { openChat(sid); }} />}
               {projects.map((p, i) => {
                 const r = p.weight / maxW;
                 // No featured 2×2 tile on a phone: at 412px it was half a screen of empty card. It drops
