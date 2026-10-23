@@ -63,7 +63,7 @@ function Btn({ children, onClick, tone }: { children: React.ReactNode; onClick: 
   );
 }
 
-function Tile({ p, onOpen, onDismiss }: { p: Publish; onOpen: (sid: string) => void; onDismiss: () => void }) {
+function Tile({ p, span, onOpen, onDismiss }: { p: Publish; span: string; onOpen: (sid: string) => void; onDismiss: () => void }) {
   const bad = p.tone === "late" || p.tone === "stuck";
   const day = p.label.match(/\d{4}-\d{2}-\d{2}/)?.[0];
   const today = day === new Date().toLocaleDateString("en-CA");
@@ -76,7 +76,7 @@ function Tile({ p, onOpen, onDismiss }: { p: Publish; onOpen: (sid: string) => v
     </div>
   );
   const frame = (body: React.ReactNode) => (
-    <div className="col-span-2 row-span-2 flex min-w-0 flex-col overflow-hidden rounded-2xl px-[18px] py-4"
+    <div className={`${span} flex min-w-0 flex-col overflow-hidden rounded-2xl px-[18px] py-4`}
       style={{ background: "#13161c", border: `1px solid ${bad || p.tone === "trouble" ? "rgba(255,123,127,.35)" : "rgba(255,255,255,.08)"}`, color: C.ink }}>
       {head}{body}
     </div>
@@ -135,7 +135,7 @@ function Tile({ p, onOpen, onDismiss }: { p: Publish; onOpen: (sid: string) => v
   </>);
 }
 
-export function PublishTiles({ onOpen }: { onOpen: (sid: string) => void }) {
+export function PublishTiles({ onOpen, span = "col-span-2 row-span-2" }: { onOpen: (sid: string) => void; span?: string }) {
   const list = usePublishes();
   const [gone, setGone] = useState<number[]>([]);
   useEffect(() => { try { setGone(JSON.parse(localStorage.getItem(DISMISSED) || "[]")); } catch { /* none */ } }, []);
@@ -150,6 +150,6 @@ export function PublishTiles({ onOpen }: { onOpen: (sid: string) => void }) {
   // A finished one only while nothing is live: once the next publish starts, the last one's result is history.
   const last = live.length ? undefined : list.find((p) => !p.live && !gone.includes(p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4)));
   return <>{[...live, ...(last ? [last] : [])].map((p) => (
-    <Tile key={`${p.pid}-${p.endedAt ?? "live"}`} p={p} onOpen={onOpen} onDismiss={() => dismiss(p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4))} />
+    <Tile key={`${p.pid}-${p.endedAt ?? "live"}`} p={p} span={span} onOpen={onOpen} onDismiss={() => dismiss(p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4))} />
   ))}</>;
 }

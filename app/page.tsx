@@ -1486,7 +1486,9 @@ export default function BentoHome() {
             <div className={`grid gap-3 ${flowFor ? "h-full grid-cols-1 grid-rows-1" : `auto-rows-[10.5rem] [grid-auto-flow:dense] ${split ? "grid-cols-1" : proj ? "grid-cols-3" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}`}>
               {/* A running TikTok publish, first on the board (§33): it used to live only in the agent card of the chat
                   that started it, which scrolls away and closes with the pane. */}
-              {!proj && !split && !flowFor && <PublishTiles onOpen={(sid) => { openChat(sid); }} />}
+              {/* Every grid mode but the flow canvas: the moment you're in a chat (a topic open, or the compact split) is
+                  exactly when you're waiting on the publish, and the first version hid it there. */}
+              {!flowFor && <PublishTiles span={split ? "row-span-2" : "col-span-2 row-span-2"} onOpen={(sid) => { openChat(sid); }} />}
               {projects.map((p, i) => {
                 const r = p.weight / maxW;
                 // No featured 2×2 tile on a phone: at 412px it was half a screen of empty card. It drops
