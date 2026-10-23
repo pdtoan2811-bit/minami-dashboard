@@ -6,12 +6,14 @@ import type { UpEvent, UpNext, UpWait } from "@/lib/upnext";
 import { K as TK } from "../today/ui";
 import { DC, dur } from "./DayStrip";
 import { AttentionFold, AttentionRow } from "@/components/AttentionRow";
+import { AskBox } from "./AskBox";
 
 const K = { ...TK, amber: "#f3c766", pink: "#db6393" };
 const MONO = { fontFamily: "var(--today-mono)" } as const;
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
 const ICON: Record<UpEvent["kind"], string> = { runner: "◷", post: "📤", card: "💬" };
 const WAIT: Record<UpWait["state"], string> = { held: "Held", "not-booked": "Not booked", "not-made": "Not made", failed: "Failed" };
+const VIDEO_RUNNER = "com.thomas.video-overnight";
 const LANG = (l?: string) => (l === "vi" ? K.pink : K.accent2);
 const Tag = ({ n, lang }: { n: string; lang?: string }) => (
   <span className="shrink-0 rounded px-1.5 text-center text-[11px] font-bold" style={{ ...MONO, background: mix(LANG(lang), 22), color: LANG(lang) }}>{n}</span>
@@ -83,13 +85,17 @@ export function UpNextPanel({ up, visible, jump, reload, now: _tick }: { up: UpN
             {waiting.length ? <>{waiting.length} video{waiting.length === 1 ? "" : "s"} <span style={{ color: DC.amber }}>won't go out on their own</span></> : "Every flagged video is handled"}
           </h3>
           <p className="mt-0.5 text-[13px]" style={{ color: K.muted }}>{waiting.length ? "None of these has a TikTok slot. Tick one when it's handled; one that gets booked or posted ticks itself." : "Booked, posted or resolved. A video comes back here if its problem changes."}</p>
-          <ul className="mt-3 flex flex-col gap-2">
+          {/* One ask for the whole list (Thomas's "sort things out and give me a recommendation"): the chat gets every open
+              video in its context (lib/autopilot-ask.ts), where a per-row ask gets one. */}
+          {waiting.length > 0 && <div className="mt-3"><AskBox row rows={false} url="/api/autopilot/ask" body={{ kind: "runner", id: VIDEO_RUNNER }} field="question"
+            placeholder="Tell Minami what to do with these videos…" /></div>}
+          <ul className="mt-3 flex flex-col gap-3">
             {waiting.map((w, i) => (<Fragment key={w.day + w.n}>
               {w.day !== waiting[i - 1]?.day && <li className="mt-1 text-[11.5px] font-semibold uppercase tracking-[.06em]" style={{ ...MONO, color: K.faint }}>{w.day.slice(5)}</li>}
               {w.att ? <AttentionRow att={w.att} onChanged={reload} reasons={["Fixed", "Dropped", "Posting by hand"]}
                 tag={<Tag n={w.n} lang={w.lang} />} title={<span title={w.title}>{w.title}</span>}
                 line={<><b style={{ color: DC.amber }}>{WAIT[w.state]}</b> · {w.why}</>}
-                ask={{ runner: "com.thomas.video-overnight", context: `${w.n} (${w.day}) “${w.title}”: ${WAIT[w.state]}. ${w.why}` }} />
+                ask={{ runner: VIDEO_RUNNER, context: `${w.n} (${w.day}) “${w.title}”: ${WAIT[w.state]}. ${w.why}` }} />
               : <li className="text-[13px]" style={{ color: K.muted }}><Tag n={w.n} lang={w.lang} /> {w.title}</li>}
             </Fragment>))}
           </ul>

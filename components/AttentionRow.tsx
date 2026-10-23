@@ -7,7 +7,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { AttnView } from "@/lib/attention";
-import { EASE, K, PillButton, hhmm, mix } from "@/app/today/ui";
+import { EASE, K, hhmm, mix } from "@/app/today/ui";
 
 const MONO = { fontFamily: "var(--today-mono)" } as const;
 const AMBER = "#f3c766", GREEN = "#8fe0b8";
@@ -40,6 +40,7 @@ export function AttentionRow({ att, tag, title, line, detail, reasons = ["Fixed"
     if (r.error) { setErr(r.error); return false; }
     setNote(""); onChanged(); return true;
   };
+  const askMinami = () => ask && run("ask", { op: "ask", text: note.trim() || "Look into this and tell me how to clear it", runner: ask.runner, context: ask.context });
   const resolve = (how?: string) => run(how || "resolve", { op: "resolve", how, note: note.trim() || undefined });
 
   return (
@@ -56,6 +57,20 @@ export function AttentionRow({ att, tag, title, line, detail, reasons = ["Fixed"
           <span className="shrink-0 text-[12px] transition-transform" style={{ color: K.faint, transform: open ? "rotate(90deg)" : "none" }}>›</span>
         </button>
         {line && !open && <span className="line-clamp-2 block text-[12.5px] leading-snug" style={{ color: K.muted }}>{line}</span>}
+        {/* Always there, not behind the tap (Thomas, 2026-10-23: "Minami button and input text please??"). Enter asks
+            Minami; Comment only saves the note on the flag. */}
+        <form className="mt-1.5 flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); if (!busy) askMinami(); }}>
+          <input value={note} onChange={(e) => setNote(e.target.value.slice(0, 500))} disabled={busy === "ask"}
+            placeholder={busy === "ask" ? "Starting a chat…" : ask ? "Tell Minami what to do, or comment…" : "Comment…"}
+            className="h-8 min-w-0 flex-1 rounded-full bg-transparent px-3.5 text-[13px] outline-none placeholder:text-white/35 disabled:opacity-60"
+            style={{ border: `1px solid ${K.line2}`, color: K.ink }} />
+          {note.trim() && <button type="button" disabled={!!busy} onClick={() => run("comment", { op: "comment", text: note.trim() })}
+            className="h-8 shrink-0 rounded-full px-3 text-[12px] hover:text-white" style={{ background: "rgba(255,255,255,.06)", color: K.muted }}>Comment</button>}
+          {ask && <button type="submit" disabled={!!busy} className="h-8 shrink-0 rounded-full px-3.5 text-[12px] font-semibold text-white disabled:opacity-60"
+            style={{ background: K.accent }}>{busy === "ask" ? "…" : "Minami ↵"}</button>}
+          {att.chat && !open && <Link href={`/?open=${att.chat}`} title="Open Minami's chat about this" className="shrink-0 text-[12px] hover:text-white" style={{ color: K.accentBright }}>chat →</Link>}
+        </form>
+        {err && !open && <span className="mt-1 block text-[12.5px]" style={{ color: "#ff8a8d" }}>{err}</span>}
         {open && (
           <span className="mt-1.5 flex flex-col gap-2.5">
             {(detail ?? line) && <span className="block whitespace-pre-line text-[13px] leading-snug" style={{ color: K.muted }}>{detail ?? line}</span>}
@@ -63,15 +78,7 @@ export function AttentionRow({ att, tag, title, line, detail, reasons = ["Fixed"
             {!!att.comments.length && <ul className="flex flex-col gap-1">{att.comments.map((c, i) => (
               <li key={i} className="text-[13px] leading-snug" style={{ color: K.muted }}>
                 <span style={{ ...MONO, color: K.faint, fontSize: 11 }}>{when(c.at)}{c.to === "chat" ? " · to Minami" : ""} </span>{c.text}</li>))}</ul>}
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={note.length > 60 ? 3 : 1}
-              placeholder={ask ? "Comment, or tell Minami what to do…" : "Comment…"}
-              className="w-full resize-none rounded-2xl bg-transparent px-3.5 py-2 text-[13.5px] leading-snug outline-none placeholder:text-white/35"
-              style={{ border: `1px solid ${K.line2}`, color: K.ink }} />
             <span className="flex flex-wrap items-center gap-2">
-              {ask && <PillButton tone="accent" cap small disabled={!!busy}
-                onClick={() => run("ask", { op: "ask", text: note.trim() || "Look into this and tell me how to clear it", runner: ask.runner, context: ask.context })}>
-                {busy === "ask" ? "Starting…" : note.trim() ? "Ask Minami + this" : "Ask Minami"}</PillButton>}
-              {note.trim() && <PillButton tone="paper" small disabled={!!busy} onClick={() => run("comment", { op: "comment", text: note.trim() })}>Comment</PillButton>}
               {att.chat && <Link href={`/?open=${att.chat}`} className="text-[12.5px] hover:text-white" style={{ color: K.accentBright }}>Open Minami's chat →</Link>}
               <span className="ml-auto flex flex-wrap items-center gap-1.5">
                 <span className="text-[11.5px]" style={{ color: K.faint }}>Resolve:</span>

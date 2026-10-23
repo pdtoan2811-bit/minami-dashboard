@@ -5,6 +5,7 @@
 // Each ask is appended to ~/.minami/autopilot-asks.jsonl. That file is the only link between a card and its
 // chats: the session has no idea which card it came from, and the board shouldn't have to parse first lines.
 import fs from "node:fs";
+import { upNext } from "@/lib/upnext";
 import os from "node:os";
 import path from "node:path";
 import { listGoals, resolveContext } from "@/lib/goals";
@@ -52,6 +53,14 @@ export function listAsks(): Ask[] {
   } catch { return []; }
 }
 
+/** The Runners tab's "won't go out on their own" list, open ones only — what an ask from that panel is about (§34). */
+function waitingVideos(): string {
+  const open = upNext([]).waiting.filter((w) => w.att?.status !== "resolved");
+  if (!open.length) return "";
+  return `Videos with no TikTok slot (state in ~/tiktok-studio/uploads/<day>/.state.json; Thomas can resolve each on the Runners tab):\n` +
+    open.map((w) => `- ${w.day} ${w.n} “${w.title}” — ${w.state}: ${w.why.slice(0, 220)}`).join("\n");
+}
+
 function runnerContext(id: string): { cwd: string; name: string; context: string } {
   const a = listAutomations().find((x) => x.id === id);
   if (!a) throw new Error(`no runner ${id}`);
@@ -67,6 +76,7 @@ function runnerContext(id: string): { cwd: string; name: string; context: string
     `Command: ${a.command}${a.workdir ? ` (in ${a.workdir})` : ""}`,
     a.log && `Log: ${a.log}`,
     tail && `Last lines of its log:\n${tail}`,
+    id === "com.thomas.video-overnight" && waitingVideos(),
   ].filter(Boolean).join("\n");
   return { cwd, name: a.name, context };
 }
