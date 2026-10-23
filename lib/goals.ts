@@ -149,12 +149,16 @@ function outcomeOf(a: GoalAction): string {
   return "no outcome recorded";
 }
 
+// Run times in Thomas's clock (UTC+7). The raw ISO is UTC, so a 06:47 ICT run read "2026-10-18T23:47Z"
+// beside the 2026-10-19 date and looked like the wrong day (2026-10-23).
+const ict = (iso: string) => new Date(iso).toLocaleString("sv-SE", { timeZone: "Asia/Ho_Chi_Minh", hour12: false }).slice(0, 16) + " UTC+7";
+
 export function resolveContext(g: Goal): string {
   const q = g.spec.target.queries;
   const runs = g.log.slice(-6).map((r) => {
     const pos = q.map((x) => `"${x}" ${r.positions[x] == null ? `not in the top ${r.depth?.[x] ?? 10}` : r.positions[x]}`).join(", ");
     const acts = r.actions.length ? r.actions.map((a) => `    - ${a.lever}: ${outcomeOf(a)}${a.usd ? ` ($${a.usd.toFixed(2)})` : ""}`).join("\n") : "    - measured only";
-    return `- ${r.date} ${r.at}: ${pos}; indexed ${r.index ? `${r.index.indexed}/${r.index.total}` : "?"}; ${r.decision.on_track ? "on track" : "behind"}\n${acts}`;
+    return `- ${ict(r.at)}: ${pos}; indexed ${r.index ? `${r.index.indexed}/${r.index.total}` : "?"}; ${r.decision.on_track ? "on track" : "behind"}\n${acts}`;
   }).join("\n");
   const asks = g.today ? [...g.today.todos.map((t) => `- [${t.done ? "x" : " "}] ${t.text}${t.why ? ` (why: ${t.why})` : ""}`),
     ...g.today.questions.map((x) => `- question: ${x.question}`)].join("\n") : "";
