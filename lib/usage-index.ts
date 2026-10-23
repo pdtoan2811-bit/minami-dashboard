@@ -301,10 +301,14 @@ export const ENTRY_LABEL: Record<string, string> = {
 export type UsageView = {
   builtAt: number; building: boolean; progress: { done: number; total: number }; days: number;
   total: Agg; prevTotal: Agg;
-  daily: { day: string; fam: Record<Family, number>; main: number; sub: number; band: number[] }[];
+  daily: { day: string; fam: Record<Family, number>; main: number; sub: number; band: number[];
+    /** The same splits in tokens (input + output + cache writes + cache reads), and the day's task counts:
+     *  chats started, subagent runs, headless runs. Metrics board's Tokens / Tasks views (2026-10-23). */
+    tok: { fam: Record<Family, number>; main: number; sub: number; band: number[] };
+    tasks: { chats: number; subagents: number; headless: number } }[];
   heat: number[][]; // [weekday 0=Mon][hour] usd
   entries: { key: string; label: string; usd: number; calls: number }[];
-  projects: { name: string; usd: number; calls: number; sub: number }[];
+  projects: { name: string; usd: number; calls: number; sub: number; tok: number; fam: Record<Family, number> }[];
   famTotals: Record<Family, number>;
   bandTotals: number[];
   subRuns: { day: string; fam: Record<Family, number> }[];
@@ -345,10 +349,12 @@ export function view(days: number): UsageView {
   const fams: Family[] = ["opus", "sonnet", "haiku", "fable", "other"];
   const famZero = () => Object.fromEntries(fams.map((f) => [f, 0])) as Record<Family, number>;
   const dayMap = new Map<string, UsageView["daily"][number]>();
-  for (let t = from; t <= now + 1; t += 864e5) { const d = dayKey(t); dayMap.set(d, { day: d, fam: famZero(), main: 0, sub: 0, band: [0, 0, 0, 0] }); }
+  for (let t = from; t <= now + 1; t += 864e5) { const d = dayKey(t); dayMap.set(d, { day: d, fam: famZero(), main: 0, sub: 0, band: [0, 0, 0, 0],
+    tok: { fam: famZero(), main: 0, sub: 0, band: [0, 0, 0, 0] }, tasks: { chats: 0, subagents: 0, headless: 0 } }); }
+  const tokOf = (b: Agg) => b.tin + b.tout + b.cr + b.cw;
   const heat = Array.from({ length: 7 }, () => Array(24).fill(0));
   const entries = new Map<string, { usd: number; calls: number }>();
-  const projects = new Map<string, { usd: number; calls: number; sub: number }>();
+  const projects = new Map<string, { usd: number; calls: number; sub: number; tok: number; fam: Record<Family, number> }>();
   const famTotals = famZero(); const bandTotals = [0, 0, 0, 0];
   const addAgg = (a: Agg, b: Agg) => { a.calls += b.calls; a.tin += b.tin; a.tout += b.tout; a.cr += b.cr; a.cw += b.cw; a.usd += b.usd; };
   for (const [k, b] of Object.entries(S.buckets)) {
@@ -359,15 +365,22 @@ export function view(days: number): UsageView {
     addAgg(total, b);
     const ts = h * 3_600_000; const d = new Date(ts);
     const row = dayMap.get(dayKey(ts));
-    if (row) { row.fam[fam as Family] += b.usd; if (sub === "1") row.sub += b.usd; else row.main += b.usd; row.band[Number(band)] += b.usd; }
+    if (row) {
+      row.fam[fam as Family] += b.usd; if (sub === "1") row.sub += b.usd; else row.main += b.usd; row.band[Number(band)] += b.usd;
+      const t = tokOf(b); row.tok.fam[fam as Family] += t; if (sub === "1") row.tok.sub += t; else row.tok.main += t; row.tok.band[Number(band)] += t;
+    }
     heat[(d.getDay() + 6) % 7][d.getHours()] += b.usd;
     const e = entries.get(entry) || { usd: 0, calls: 0 }; e.usd += b.usd; e.calls += b.calls; entries.set(entry, e);
-    const p = projects.get(proj) || { usd: 0, calls: 0, sub: 0 }; p.usd += b.usd; p.calls += b.calls; if (sub === "1") p.sub += b.usd; projects.set(proj, p);
+    const p = projects.get(proj) || { usd: 0, calls: 0, sub: 0, tok: 0, fam: famZero() }; p.usd += b.usd; p.calls += b.calls; if (sub === "1") p.sub += b.usd;
+    p.tok += tokOf(b); p.fam[fam as Family] += b.usd; projects.set(proj, p);
     famTotals[fam as Family] += b.usd; bandTotals[Number(band)] += b.usd;
   }
   const runMap = new Map<string, Record<Family, number>>();
   for (const d of dayMap.keys()) runMap.set(d, famZero());
-  for (const r of S.runs) { const m = runMap.get(r.day); if (m) m[r.fam]++; }
+  for (const r of S.runs) { const m = runMap.get(r.day); if (m) m[r.fam]++; const row = dayMap.get(r.day); if (row) row.tasks.subagents++; }
+  // A chat counts on the day it started (subagent transcripts fold into their parent session, so these are chats).
+  for (const s of Object.values(S.sessions)) { const row = s.first >= from ? dayMap.get(dayKey(s.first)) : undefined; if (row) row.tasks.chats++; }
+  for (const a of Object.values(S.auto)) { const row = dayMap.get(a.day); if (row) row.tasks.headless += a.runs; }
   const sessions = Object.values(S.sessions).filter((s) => s.last >= from).sort((a, b) => b.usd - a.usd).slice(0, 12)
     .map((s) => ({ ...s, href: `/?open=${s.sid}` }));
   return {

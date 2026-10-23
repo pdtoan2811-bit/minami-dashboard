@@ -25,6 +25,11 @@ const BANDS = [
   { label: "200–400k", color: "rgba(122,162,255,0.68)" },
   { label: "400k +", color: "#7aa2ff" },
 ];
+const TASKS = [
+  { key: "chats", label: "Chats started", color: "#7aa2ff" },
+  { key: "subagents", label: "Subagent runs", color: "#c9a3ff" },
+  { key: "headless", label: "Headless runs", color: "#5fd0a0" },
+];
 const WHERE = [
   { key: "main", label: "Main threads", color: "#7aa2ff" },
   { key: "sub", label: "Subagents", color: "#c9a3ff" },
@@ -34,6 +39,8 @@ const WHERE = [
 const ROUTING_DAY = "2026-10-21";
 
 const usd = (n: number) => (n >= 100 ? `$${Math.round(n).toLocaleString()}` : n >= 10 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`);
+/** tokens, short: 1.2B · 340M · 12k */
+const tok = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
 const pct = (a: number, b: number) => (b > 0 ? `${Math.round((100 * a) / b)}%` : "—");
 const shortDay = (d: string) => { const [, m, dd] = d.split("-"); return `${Number(dd)}/${Number(m)}`; };
 const weekday = (d: string) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" });
@@ -86,28 +93,90 @@ function until(ts?: number) {
   return h < 48 ? `${h}h ${m % 60}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-function LimitBar({ label, value, reset, trail }: { label: string; value?: number; reset?: number; trail: number[] }) {
-  const v = value ?? null;
+const hm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+
+/**
+ * One limit window as a race against its reset (Thomas, 2026-10-23: the old sparkline was "so hard to see the changes
+ * without proper size + legend like time … I want to visualize how usage are racing with time till reset + predict how
+ * it will be at the end"). Time runs left → right from the window's start to its reset, on a straight strip with a
+ * now-line (his rule: time is a straight line, not a dial). Three lines: what's USED, the EVEN PACE diagonal (0% at
+ * the start to 100% at the reset — above it means ahead of the clock), and the FORECAST from now to the reset at the
+ * recent rate. The sentence on top says what the picture says.
+ */
+function LimitRace({ label, samples, pick, reset, windowMs, rateMs, ticks }: {
+  label: string; samples: LimitSample[]; pick: (s: LimitSample) => number | undefined; reset?: number;
+  windowMs: number; rateMs: number; ticks: "hours" | "days";
+}) {
+  const [ref, w] = useWidth<HTMLDivElement>();
+  const now = Date.now();
+  const last = samples.at(-1), v = last ? pick(last) ?? null : null;
   const tone = v == null ? "#8a8f98" : v >= 90 ? "#ff6b6b" : v >= 70 ? "#f0b45a" : "#7aa2ff";
-  const max = Math.max(1, ...trail);
+  if (!reset || v == null) return (
+    <div className="flex flex-col gap-1"><span className="text-xs text-neutral-400">{label}</span>
+      <span className="text-3xl font-semibold tabular-nums" style={{ color: v == null ? undefined : tone }}>{v == null ? "—" : `${Math.round(v)}%`}</span></div>
+  );
+  const start = reset - windowMs, span = reset - start;
+  // This window only: a sample from before the start belongs to the previous window (a reset drops the value).
+  const pts = samples.filter((s) => s.ts >= start && s.ts <= now && pick(s) != null).map((s) => ({ t: s.ts, v: pick(s)! }));
+  // The recent rate (per ms) over the last `rateMs` — but only when the samples really cover that much. With less (sampling
+  // only runs while a dashboard is open, and a failover starts a new account's history), a busy afternoon would be carried
+  // through the nights: the first version said the 7-day window "hits 100% Sat 11:56" from five daytime hours. Then the
+  // window's own average is the honest rate: what's used so far over the time gone.
+  const recent = pts.filter((p) => p.t >= now - rateMs);
+  const covered = recent.length >= 2 && recent.at(-1)!.t - recent[0].t >= rateMs * 0.75;
+  const rate = covered ? Math.max(0, (recent.at(-1)!.v - recent[0].v) / (recent.at(-1)!.t - recent[0].t)) : v / Math.max(1, now - start);
+  const atReset = v + rate * (reset - now);
+  const full = rate > 0 && atReset >= 100 ? now + (100 - v) / rate : null;
+  const even = (100 * (now - start)) / span;
+
+  const H = 120, padL = 30, padR = 10, padT = 8, padB = 18, W = Math.max(w, 220);
+  const x = (t: number) => padL + ((Math.min(Math.max(t, start), reset) - start) / span) * (W - padL - padR);
+  const y = (p: number) => padT + (H - padT - padB) * (1 - Math.min(100, Math.max(0, p)) / 100);
+  const tickTs: number[] = [];
+  if (ticks === "hours") { const d = new Date(start); d.setMinutes(0, 0, 0); for (let t = d.getTime() + 3_600_000; t < reset; t += 3_600_000) tickTs.push(t); }
+  else { const d = new Date(start); d.setHours(0, 0, 0, 0); for (let t = d.getTime() + 864e5; t < reset; t += 864e5) tickTs.push(t); }
+  const used = [...pts, { t: now, v }];
+  const fEnd = full ?? reset, fVal = full ? 100 : atReset;
+
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-baseline justify-between gap-2">
         <span className="text-xs text-neutral-400">{label}</span>
-        <span className="text-[11px] text-neutral-500">{until(reset) ? `resets in ${until(reset)}` : ""}</span>
+        <span className="text-[11px] tabular-nums text-neutral-500">resets {ticks === "days" ? new Date(reset).toLocaleDateString(undefined, { weekday: "short" }) + " " : ""}{hm(reset)} · in {until(reset)}</span>
       </div>
-      <div className="flex items-end gap-3">
-        <span className="text-3xl font-semibold tabular-nums tracking-tight" style={{ color: v == null ? undefined : tone }}>{v == null ? "—" : `${Math.round(v)}%`}</span>
-        {trail.length > 1 && (
-          <svg viewBox={`0 0 ${trail.length - 1} 20`} preserveAspectRatio="none" className="mb-1.5 h-6 flex-1 overflow-visible">
-            <polyline fill="none" stroke={tone} strokeOpacity={0.7} strokeWidth={1.5} vectorEffect="non-scaling-stroke"
-              points={trail.map((t, i) => `${i},${20 - (20 * t) / Math.max(100, max)}`).join(" ")} />
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <span className="text-3xl font-semibold tabular-nums tracking-tight" style={{ color: tone }}>{Math.round(v)}%</span>
+        <span className="text-[12px] leading-snug" style={{ color: full ? "#ff6b6b" : atReset >= 80 ? "#f0b45a" : "#a3a3a3" }}>
+          {full ? <>at this pace it <b>hits 100% at {hm(full)}</b>, {until(now + reset - full)} before the reset</>
+            : <>at this pace <b className="text-neutral-200">~{Math.round(atReset)}%</b> at the reset</>}
+          <span className="text-neutral-500"> · {v >= even ? `${Math.round(v - even)} pts ahead of even pace` : `${Math.round(even - v)} pts under even pace`}</span>
+        </span>
+      </div>
+      <div ref={ref}>
+        {w > 0 && (
+          <svg width={W} height={H} className="block overflow-visible">
+            {[0, 50, 100].map((p) => (
+              <g key={p}>
+                <line x1={padL} x2={W - padR} y1={y(p)} y2={y(p)} stroke={p === 100 ? "#ff6b6b" : "white"} strokeOpacity={p === 100 ? 0.35 : p === 0 ? 0.15 : 0.06} />
+                <text x={padL - 5} y={y(p) + 3} textAnchor="end" className="fill-neutral-500 text-[10px] tabular-nums">{p}%</text>
+              </g>
+            ))}
+            {tickTs.map((t) => (
+              <text key={t} x={x(t)} y={H - 4} textAnchor="middle" className="fill-neutral-500 text-[10px] tabular-nums">
+                {ticks === "hours" ? hm(t) : new Date(t).toLocaleDateString(undefined, { weekday: "short" })}
+              </text>
+            ))}
+            <line x1={x(start)} y1={y(0)} x2={x(reset)} y2={y(100)} stroke="white" strokeOpacity={0.28} strokeDasharray="2 4" />
+            <path d={`M${x(used[0].t)},${y(0)} ` + used.map((p) => `L${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ") + ` L${x(now)},${y(0)} Z`} fill={tone} fillOpacity={0.12} />
+            <polyline fill="none" stroke={tone} strokeWidth={2} strokeLinejoin="round" points={used.map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")} />
+            <line x1={x(now)} y1={y(v)} x2={x(fEnd)} y2={y(fVal)} stroke={full ? "#ff6b6b" : tone} strokeWidth={1.75} strokeDasharray="1 4" strokeLinecap="round" />
+            {full && <circle cx={x(full)} cy={y(100)} r={3} fill="#ff6b6b" />}
+            {!full && <text x={x(reset) - 2} y={y(atReset) - 5} textAnchor="end" className="text-[10px] tabular-nums" fill={tone}>~{Math.round(atReset)}%</text>}
+            <line x1={x(now)} x2={x(now)} y1={padT - 4} y2={H - padB} stroke="white" strokeOpacity={0.5} />
+            <circle cx={x(now)} cy={y(v)} r={3} fill={tone} />
+            <text x={x(now)} y={padT - 6} textAnchor={x(now) > W - 40 ? "end" : "middle"} className="fill-neutral-300 text-[10px]">now</text>
           </svg>
         )}
-      </div>
-      <div className="relative h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
-        <div className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-700" style={{ width: `${Math.min(100, v ?? 0)}%`, background: tone }} />
-        {[50, 80].map((t) => <div key={t} className="absolute inset-y-0 w-px bg-white/20" style={{ left: `${t}%` }} />)}
       </div>
     </div>
   );
@@ -117,7 +186,7 @@ function LimitBar({ label, value, reset, trail }: { label: string; value?: numbe
 
 type Series = { key: string; label: string; color: string };
 function StackedDays({ days, series, value, marker, unit = "usd", height = 180 }: {
-  days: string[]; series: Series[]; value: (dayIdx: number, key: string) => number; marker?: { day: string; label: string }; unit?: "usd" | "count"; height?: number;
+  days: string[]; series: Series[]; value: (dayIdx: number, key: string) => number; marker?: { day: string; label: string }; unit?: "usd" | "count" | "tok"; height?: number;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -127,7 +196,7 @@ function StackedDays({ days, series, value, marker, unit = "usd", height = 180 }
   const padL = 40, padB = 20, padT = 10, H = height, W = Math.max(w, 200);
   const bw = (W - padL) / Math.max(1, days.length);
   const y = (v: number) => padT + (H - padB - padT) * (1 - v / nice);
-  const fmt = (v: number) => (unit === "usd" ? usd(v) : String(Math.round(v)));
+  const fmt = (v: number) => (unit === "usd" ? usd(v) : unit === "tok" ? tok(v) : String(Math.round(v)));
   const mIdx = marker ? days.indexOf(marker.day) : -1;
   const every = Math.ceil(days.length / Math.max(1, Math.floor((W - padL) / 44)));
   return (
@@ -172,7 +241,7 @@ function StackedDays({ days, series, value, marker, unit = "usd", height = 180 }
           {series.map((s) => { const v = value(hover, s.key); return v > 0 && (
             <div key={s.key} className="flex items-center justify-between gap-3 text-neutral-400">
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm" style={{ background: s.color }} />{s.label}</span>
-              <span className="tabular-nums text-neutral-300">{fmt(v)}{unit === "usd" ? ` · ${pct(v, totals[hover])}` : ""}</span>
+              <span className="tabular-nums text-neutral-300">{fmt(v)}{unit !== "count" ? ` · ${pct(v, totals[hover])}` : ""}</span>
             </div>); })}
         </div>
       )}
@@ -238,6 +307,36 @@ function Ranked({ rows, total, color = "#7aa2ff" }: { rows: { label: string; usd
   );
 }
 
+// One project per row: $ and share, tokens, calls, and the bar split by model (Thomas, 2026-10-23: "add tokens and
+// models"). It used to split main vs subagent; that split is on the per-day chart's "Main vs subagent" view.
+function ProjectRows({ rows, total }: { rows: UsageView["projects"]; total: number }) {
+  const max = Math.max(0.01, ...rows.map((r) => r.usd));
+  return (
+    <div className="flex flex-col gap-2.5">
+      {rows.map((r) => {
+        const fams = FAM.filter((f) => r.fam[f.key] > 0);
+        return (
+          <div key={r.name} className="flex flex-col gap-1">
+            <div className="flex items-baseline justify-between gap-2 text-xs">
+              <span className="truncate text-neutral-300">{r.name}</span>
+              <span className="shrink-0 tabular-nums text-neutral-400">{usd(r.usd)} <span className="text-neutral-600">· {pct(r.usd, total)}</span></span>
+            </div>
+            <div className="flex h-1.5 overflow-hidden rounded-full bg-white/[0.05]" style={{ width: "100%" }}>
+              <div className="flex h-full" style={{ width: `${(100 * r.usd) / max}%` }}>
+                {fams.map((f) => <div key={f.key} title={`${f.label} ${usd(r.fam[f.key])}`} style={{ width: `${(100 * r.fam[f.key]) / Math.max(0.0001, r.usd)}%`, background: f.color }} />)}
+              </div>
+            </div>
+            <span className="text-[10.5px] tabular-nums text-neutral-500">
+              {tok(r.tok)} tokens · {r.calls.toLocaleString()} calls · {fams.map((f) => `${f.label} ${pct(r.fam[f.key], r.usd)}`).join(" · ")}
+              {r.sub > 0 ? ` · subagents ${pct(r.sub, r.usd)}` : ""}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ---- the board ---------------------------------------------------------------------------------------
 
 function Kpi({ label, value, sub, delta }: { label: string; value: string; sub?: string; delta?: number | null }) {
@@ -260,6 +359,8 @@ function Kpi({ label, value, sub, delta }: { label: string; value: string; sub?:
 export function UsageBoard() {
   const [days, setDays] = useState<7 | 14 | 28>(7);
   const [mode, setMode] = useState<"model" | "where" | "context">("model");
+  // Tokens by default (Thomas, 2026-10-23: "default by number of tokens, add tokens + number of tasks too").
+  const [unit, setUnit] = useState<"tok" | "usd" | "tasks">("tok");
   const [data, setData] = useState<UsageView | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -292,8 +393,8 @@ export function UsageBoard() {
   }, [d]);
 
   const last = d?.limits.at(-1) as LimitSample | undefined;
-  const trail7 = (d?.limits || []).map((s) => s.seven ?? 0);
-  const trail5 = (d?.limits || []).slice(-36).map((s) => s.five ?? 0);
+  // The active account's samples only: a failover to another account mid-window would read as a jump.
+  const acct = (d?.limits || []).filter((s) => !last?.email || s.email === last.email);
   const dayKeys = d?.daily.map((x) => x.day) || [];
 
   return (
@@ -322,15 +423,16 @@ export function UsageBoard() {
             <Card>
               <CardHeader><Gauge className="h-4 w-4 text-[var(--sakura)]" /><CardTitle>Plan limits{last?.email ? ` · ${last.email}` : ""}</CardTitle></CardHeader>
               <CardContent className="flex flex-col gap-5">
-                <LimitBar label="5-hour window" value={last?.five} reset={last?.fiveReset} trail={trail5} />
-                <LimitBar label="7-day, all models" value={last?.seven} reset={last?.sevenReset} trail={trail7} />
+                <LimitRace label="5-hour window" samples={acct} pick={(s) => s.five} reset={last?.fiveReset} windowMs={5 * 3_600_000} rateMs={60 * 60_000} ticks="hours" />
+                <LimitRace label="7-day, all models" samples={acct} pick={(s) => s.seven} reset={last?.sevenReset} windowMs={7 * 864e5} rateMs={24 * 3_600_000} ticks="days" />
+                <Legend items={[{ label: "Used", color: "#7aa2ff" }, { label: "Even pace (0% → 100% by the reset)", color: "rgba(255,255,255,.35)" }, { label: "Forecast at the recent rate", color: "rgba(122,162,255,.55)" }]} />
                 <p className="text-[11px] leading-relaxed text-neutral-500">
-                  {last ? `Sampled from token-slayer every 10 minutes, last at ${new Date(last.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. The line is the history since sampling began.`
+                  {last ? `Sampled from token-slayer every 10 minutes, last at ${new Date(last.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. Forecast: the last hour's rate (5-hour window) or the last day's (7-day), carried to the reset; the window's average while there's less history than that.`
                     : "No limit sample yet. The first one is taken within a minute of opening this page (it needs `tok` on PATH)."}
                 </p>
               </CardContent>
             </Card>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+            <div className="grid grid-cols-2 content-start gap-3 md:grid-cols-3">
               <Kpi label={`Usage · last ${days} days`} value={usd(derived.T)} delta={derived.delta} sub={`vs ${usd(d.prevTotal.usd)} the ${days} days before`} />
               <Kpi label="Calls" value={d.total.calls.toLocaleString()} sub={`${usd(derived.T / Math.max(1, d.total.calls))} per call`} />
               <Kpi label="On Opus" value={pct(d.famTotals.opus, derived.T)} sub={`Sonnet ${pct(d.famTotals.sonnet, derived.T)} · Haiku ${pct(d.famTotals.haiku, derived.T)}`} />
@@ -343,22 +445,35 @@ export function UsageBoard() {
           <Card>
             <CardHeader className="flex-wrap">
               <Activity className="h-4 w-4 text-[var(--sakura)]" /><CardTitle className="flex-1">Usage per day</CardTitle>
-              <Seg value={mode} onChange={setMode} options={[{ v: "model", label: "By model" }, { v: "where", label: "Main vs subagent" }, { v: "context", label: "By context size" }]} />
+              <Seg value={unit} onChange={setUnit} options={[{ v: "tok", label: "Tokens" }, { v: "usd", label: "$" }, { v: "tasks", label: "Tasks" }]} />
+              {unit !== "tasks" && <Seg value={mode} onChange={setMode} options={[{ v: "model", label: "By model" }, { v: "where", label: "Main vs subagent" }, { v: "context", label: "By context size" }]} />}
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              {mode === "model" && <>
-                <StackedDays days={dayKeys} series={FAM.filter((f) => d.famTotals[f.key] > 0)} value={(i, k) => d.daily[i].fam[k as Family]} />
-                <Legend items={FAM.filter((f) => d.famTotals[f.key] > 0).map((f) => ({ ...f, value: pct(d.famTotals[f.key], derived.T) }))} />
-              </>}
-              {mode === "where" && <>
-                <StackedDays days={dayKeys} series={WHERE} value={(i, k) => (k === "main" ? d.daily[i].main : d.daily[i].sub)} />
-                <Legend items={WHERE.map((s) => ({ ...s, value: pct(s.key === "sub" ? derived.sub : derived.T - derived.sub, derived.T) }))} />
-              </>}
-              {mode === "context" && <>
-                <StackedDays days={dayKeys} series={BANDS.map((b, i) => ({ key: String(i), ...b }))} value={(i, k) => d.daily[i].band[Number(k)]} />
-                <Legend items={BANDS.map((b, i) => ({ ...b, value: pct(d.bandTotals[i], derived.T) }))} />
-                <p className="text-[11px] text-neutral-500">How much context each call carried. Main chats compact at 300k. Opus advice in Build mode switches off past 120k.</p>
-              </>}
+              {unit === "tasks" ? <>
+                <StackedDays days={dayKeys} unit="count" series={TASKS} value={(i, k) => d.daily[i].tasks[k as keyof typeof d.daily[number]["tasks"]]} />
+                <Legend items={TASKS.map((t) => ({ ...t, value: String(d.daily.reduce((a, x) => a + x.tasks[t.key as keyof typeof x.tasks], 0)) }))} />
+                <p className="text-[11px] text-neutral-500">Chats count on the day they started. Subagent runs are Task/Agent spawns inside them; headless runs are the scheduled jobs that log to the ledger{d.ledgerSince ? `, counted from ${new Date(d.ledgerSince).toLocaleDateString(undefined, { day: "numeric", month: "short" })} when logging began` : ""}.</p>
+              </> : (() => {
+                const get = (i: number) => (unit === "tok" ? d.daily[i].tok : d.daily[i]);
+                const sum = (f: (x: UsageView["daily"][number]["tok"]) => number) => d.daily.reduce((a, x) => a + f(unit === "tok" ? x.tok : x), 0);
+                const all = sum((x) => x.main + x.sub);
+                return <>
+                  {mode === "model" && <>
+                    <StackedDays days={dayKeys} unit={unit} series={FAM.filter((f) => d.famTotals[f.key] > 0)} value={(i, k) => get(i).fam[k as Family]} />
+                    <Legend items={FAM.filter((f) => d.famTotals[f.key] > 0).map((f) => ({ ...f, value: pct(sum((x) => x.fam[f.key]), all) }))} />
+                  </>}
+                  {mode === "where" && <>
+                    <StackedDays days={dayKeys} unit={unit} series={WHERE} value={(i, k) => (k === "main" ? get(i).main : get(i).sub)} />
+                    <Legend items={WHERE.map((w) => ({ ...w, value: pct(sum((x) => (w.key === "sub" ? x.sub : x.main)), all) }))} />
+                  </>}
+                  {mode === "context" && <>
+                    <StackedDays days={dayKeys} unit={unit} series={BANDS.map((b, i) => ({ key: String(i), ...b }))} value={(i, k) => get(i).band[Number(k)]} />
+                    <Legend items={BANDS.map((b, i) => ({ ...b, value: pct(sum((x) => x.band[i]), all) }))} />
+                    <p className="text-[11px] text-neutral-500">How much context each call carried. Main chats compact at 300k. Opus advice in Build mode switches off past 120k.</p>
+                  </>}
+                  {unit === "tok" && <p className="text-[11px] text-neutral-500">Tokens are everything a call moved: input, output, cache writes and cache reads. Cache reads are most of it and the cheapest, which is why tokens and $ don't move together.</p>}
+                </>;
+              })()}
             </CardContent>
           </Card>
 
@@ -386,10 +501,10 @@ export function UsageBoard() {
             </Card>
             <Card className="lg:col-span-2">
               <CardHeader><Boxes className="h-4 w-4 text-[var(--sakura)]" /><CardTitle className="flex-1">Projects</CardTitle>
-                <Legend items={[{ label: "main", color: "#7aa2ff" }, { label: "subagents", color: "#c9a3ff" }]} />
+                <Legend items={FAM.filter((f) => d.projects.some((p) => p.fam[f.key] > 0)).map((f) => ({ label: f.label, color: f.color }))} />
               </CardHeader>
               <CardContent>
-                <Ranked total={derived.T} rows={d.projects.map((p) => ({ label: p.name, usd: p.usd, split: p.sub }))} />
+                <ProjectRows total={derived.T} rows={d.projects} />
               </CardContent>
             </Card>
           </div>
