@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-23
+- **Upload progress on the agent card** (§33; `lib/upload-progress.ts`, `app/api/agent/uploads`, `components/UploadTray.tsx`, `AgentBoard`, `MINAMI_SESSION_KEY` in `lib/agent/manager.ts`). A TikTok publish now shows as the batch tray Thomas picked (pitch upload-progress V2): "Publishing 1 of 5 done · ~54 min left", the rate, one bar for the batch, and a line per video (scheduled, uploading with its own bar and try, queued with a start time, held and why). The writer is tiktok-studio's `scripts/lib/upload-progress.mjs` (merged there as 79f8b2d).
+
 ### 2026-10-22
 - **"Để Minami trả lời" explains first, answers on your word** (§25; `lib/team-chat.ts`, `lib/team-inbox.ts`, `app/team/minami`, `instrumentation.ts`). The click starts a talk in a Slack thread under the team-ask DM (never the card's thread, which team-ask reads as the answer): finished turns go up, your replies come down as `[Slack] …` turns, and the answer is sent only when you say "trả lời đi". Relay says "on their go-ahead".
 - **🐛 Dashboard was reachable from the Wi-Fi without auth** (§23; `package.json`, `bin/serve.sh`). `next start`/`next dev` bound `0.0.0.0`, so any LAN device could hit `/api/agent/send` and spawn a `bypassPermissions` agent. All three scripts now pass `-H 127.0.0.1`; the phone goes through `tailscale serve` as before.
