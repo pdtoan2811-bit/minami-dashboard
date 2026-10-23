@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-23
+- **Comment on the dashboard itself** (§21; `app/layout.tsx`, Settings → Chat). A per-browser switch, off by default, loads the inspect script into the production dashboard so a preview of :3000 takes pins. And `next dev` works again for every route that imports the manager: `next.config.mjs` now cuts every module `instrumentation.ts` imports from the edge pass, read from the file, instead of a hand list that had missed `lib/team-chat`.
 - **Upload progress on the agent card** (§33; `lib/upload-progress.ts`, `app/api/agent/uploads`, `components/UploadTray.tsx`, `AgentBoard`, `MINAMI_SESSION_KEY` in `lib/agent/manager.ts`). A TikTok publish now shows as the batch tray Thomas picked (pitch upload-progress V2): "Publishing 1 of 5 done · ~54 min left", the rate, one bar for the batch, and a line per video (scheduled, uploading with its own bar and try, queued with a start time, held and why). The writer is tiktok-studio's `scripts/lib/upload-progress.mjs` (merged there as 79f8b2d).
 
 ### 2026-10-22

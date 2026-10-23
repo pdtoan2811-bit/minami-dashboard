@@ -1,6 +1,13 @@
-/** @type {import('next').NextConfig} */
+import fs from "node:fs";
+
+// Every module instrumentation.ts loads with `await import("@/...")`, read from the file itself — see the
+// edge cut in `webpack` below for why, and why a hand-kept list of names wasn't enough.
+const INSTRUMENTATION_IMPORTS = new Set(
+  [...fs.readFileSync(new URL("./instrumentation.ts", import.meta.url), "utf8").matchAll(/import\(\s*["'](@\/[^"']+)["']\s*\)/g)].map((m) => m[1]),
+);
 // Deployed on Vercel (native Next.js runtime) — no static export / basePath needed.
 // The Agent SDK spawns the local `claude` CLI and must not be bundled by Next's server build.
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   serverExternalPackages: ["@anthropic-ai/claude-agent-sdk"],
   // Let a second instance use its own build dir so `next dev` (iteration) and `next start` (the stable
@@ -44,8 +51,11 @@ const nextConfig = {
         // `var` rather than `module`: the edge target is compiled as a script, and an external of type
         // `module` there fails with "The target environment doesn't support dynamic import() syntax".
         // The reference is never dereferenced on edge — the runtime guard returns first.
-        // lib/push/server is the same shape (node:crypto, the manager) behind the same guard.
-        ({ request }, cb) => (request === "@/lib/autopilot/runner" || request === "@/lib/push/server" ? cb(null, `var {}`) : cb()),
+        // Every `@/` module instrumentation imports is cut, read from instrumentation.ts at config load:
+        // the list used to be by name (runner, push/server), and lib/team-chat (the Slack bridge, added
+        // there 2026-10-22) wasn't on it — so `next dev` 500'd every route that imports the manager
+        // again, on `node:child_process` via lib/repo-state.ts, until 2026-10-23.
+        ({ request }, cb) => (INSTRUMENTATION_IMPORTS.has(request) ? cb(null, `var {}`) : cb()),
       ];
     }
     return config;

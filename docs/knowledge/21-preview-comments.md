@@ -192,6 +192,21 @@ to the root layout (or the equivalent for a non-Next app) — and the session ma
 Manual copy of the snippet stays available for repos Claude shouldn't touch. No auto-injecting
 proxy.
 
+**The dashboard itself, in production (2026-10-23).** The "Enable comments" ask aimed at :3000 lands
+on a `next start` build, where the development-only tag ships nothing, so the reload changed nothing.
+Settings → Chat → "Comment on the dashboard itself" (`bento:inspectSelf`, this browser only, off by
+default) makes `app/layout.tsx`'s inline loader add `/inspect.js` on load; the preview frame is
+same-origin with the dashboard, so the switch reaches it. Off costs one localStorage read.
+
+> 🐛 **`next dev` 500'd every route that imports the session manager (found 2026-10-23).** Same
+> failure as the 2026-10 autopilot one (`next.config.mjs`'s edge cut): Next compiles
+> `instrumentation.ts` for the edge runtime too, and its `await import()`s are resolved statically.
+> The cut named its modules by hand (runner, push/server); `lib/team-chat` was added to
+> instrumentation on 10-22 and wasn't on the list, so the edge pass hit `node:child_process` via
+> `lib/repo-state.ts`. A dev instance of the dashboard — the only thing the development tag above
+> ever loads in — couldn't stream a chat. Fix: the cut now reads every `@/` import out of
+> `instrumentation.ts` at config load, so the next module added there is covered without a list.
+
 **Targets** (Q13): Next.js/React dev servers and the static studios (Kit, Deck, Guide). Shopify
 embedded apps are out of scope — they render inside `admin.shopify.com`, which cannot be framed;
 if that need materialises, the fallback is the script drawing its own toolbar in the app tab

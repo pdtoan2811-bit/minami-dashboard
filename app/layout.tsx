@@ -41,8 +41,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* The dashboard is its own first preview target (§21): in development the inspect script
             is included so a dev instance of this app can be commented on from a pop-out. A relative
             src is enough — the script learns the dashboard's origin from the handshake, not the URL.
-            Never in production: `next build` evaluates this to false and ships nothing. */}
-        {process.env.NODE_ENV === "development" && <script src="/inspect.js" />}
+            In production only behind the Settings switch below (2026-10-23: Thomas wanted to comment on :3000 itself). */}
+        {process.env.NODE_ENV === "development" ? <script src="/inspect.js" /> : (
+          // In production only on request: Settings → "Comment on the dashboard itself" writes
+          // `bento:inspectSelf` (useSetting's JSON) to this browser's localStorage, and this loader adds the
+          // script when it reads true. Off by default, and off costs one localStorage read: nothing is
+          // fetched. The preview frame is same-origin with the dashboard, so the switch reaches it.
+          <script dangerouslySetInnerHTML={{ __html: `try{if(localStorage.getItem("bento:inspectSelf")==="true"){var s=document.createElement("script");s.src="/inspect.js";document.body.appendChild(s)}}catch(e){}` }} />
+        )}
       </body>
     </html>
   );
