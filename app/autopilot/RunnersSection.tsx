@@ -101,7 +101,7 @@ export function useAutomations() {
     } finally { setBusy(null); }
   }, []);
 
-  return { items, bin, err, busy, act, up };
+  return { items, bin, err, busy, act, up, reload: load };
 }
 export type AutomationsFeed = ReturnType<typeof useAutomations>;
 
@@ -182,7 +182,7 @@ export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: 
       </div>
 
       {items && <EffectsLine items={items} jump={jump} />}
-      {items && feed.up && <UpNextPanel up={feed.up} visible={new Set(items.map((a) => a.id))} jump={jump} now={now} />}
+      {items && feed.up && <UpNextPanel up={feed.up} visible={new Set(items.map((a) => a.id))} jump={jump} reload={feed.reload} now={now} />}
       {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
       {creating && <div className="mt-4">
         <Editor onCancel={() => setCreating(false)} busy={busy === "create"}

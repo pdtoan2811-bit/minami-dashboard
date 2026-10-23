@@ -158,6 +158,9 @@ export const NODES: ModuleNode[] = [
   { id: "r/uploads", label: "/api/agent/uploads", sub: "a pane's live publishes\n(~/.harness/progress, §33)", layer: "route", row: 24, pipeline: "live" },
   { id: "l/upload-progress", label: "upload-progress.ts", sub: "progress files → batch tray\n(ETAs at the current rate)", layer: "core", row: 24, pipeline: "live" },
   { id: "c/UploadTray", label: "UploadTray", sub: "the publish's videos under\nits bash row (§33)", layer: "component", row: 24, pipeline: "live" },
+  { id: "l/attention", label: "attention.ts", sub: "resolve · comment · auto-check\nfor every flag (§34)", layer: "core", row: 25 },
+  { id: "r/attention", label: "/api/attention", sub: "resolve · reopen · comment\n· ask Minami", layer: "route", row: 25 },
+  { id: "c/AttentionRow", label: "AttentionRow", sub: "Today's row for a flag\n+ the Resolved fold", layer: "component", row: 25 },
   { id: "l/useagent", label: "use-agent.ts", sub: "client SSE + reconnect", layer: "core", row: 2, pipeline: "live" },
   // Forwarding a question. Split in two on purpose: the roster read uses node:fs, the instruction
   // text is rendered by AskCard in the browser, and one module would drag fs into the client bundle.
@@ -546,6 +549,8 @@ export const EDGES: ModuleEdge[] = [
   { from: "app/page", to: "c/UploadTray", kind: "import" },
   { from: "c/UploadTray", to: "r/uploads", kind: "http", label: "poll 2 s" },
   { from: "r/uploads", to: "l/upload-progress", kind: "import" },
+  { from: "c/AttentionRow", to: "r/attention", kind: "http" },
+  { from: "r/attention", to: "l/attention", kind: "import" },
   { from: "r/uploads", to: "l/manager", kind: "import", label: "sessionIdentity" },
   { from: "l/useagent", to: "l/labels", kind: "import" },
   { from: "l/sessions", to: "l/labels", kind: "import" },

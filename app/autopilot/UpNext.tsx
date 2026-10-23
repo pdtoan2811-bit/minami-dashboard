@@ -5,6 +5,7 @@ import { Fragment } from "react";
 import type { UpEvent, UpNext, UpWait } from "@/lib/upnext";
 import { K as TK } from "../today/ui";
 import { DC, dur } from "./DayStrip";
+import { AttentionFold, AttentionRow } from "@/components/AttentionRow";
 
 const K = { ...TK, amber: "#f3c766", pink: "#db6393" };
 const MONO = { fontFamily: "var(--today-mono)" } as const;
@@ -12,6 +13,9 @@ const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparen
 const ICON: Record<UpEvent["kind"], string> = { runner: "◷", post: "📤", card: "💬" };
 const WAIT: Record<UpWait["state"], string> = { held: "Held", "not-booked": "Not booked", "not-made": "Not made", failed: "Failed" };
 const LANG = (l?: string) => (l === "vi" ? K.pink : K.accent2);
+const Tag = ({ n, lang }: { n: string; lang?: string }) => (
+  <span className="shrink-0 rounded px-1.5 text-center text-[11px] font-bold" style={{ ...MONO, background: mix(LANG(lang), 22), color: LANG(lang) }}>{n}</span>
+);
 
 const dayKey = (d: Date) => d.toDateString();
 function dayLabel(d: Date, now: Date) {
@@ -20,12 +24,14 @@ function dayLabel(d: Date, now: Date) {
   return dayKey(d) === dayKey(t) ? "Tomorrow" : d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "short" });
 }
 
-export function UpNextPanel({ up, visible, jump, now: _tick }: { up: UpNext; visible: Set<string>; jump: (id: string) => void; now: number }) {
+export function UpNextPanel({ up, visible, jump, reload, now: _tick }: { up: UpNext; visible: Set<string>; jump: (id: string) => void; reload: () => void; now: number }) {
   const now = new Date();
   const videos = visible.has("com.thomas.video-overnight");
   const events = up.events.filter((e) => (e.kind === "post" ? videos : !e.id || visible.has(e.id)));
-  const waiting = videos ? up.waiting : [];
-  if (!events.length && !waiting.length) return null;
+  // Open flags only: a video Thomas resolved stays out of the list until its problem changes (lib/attention.ts, §34).
+  const waiting = videos ? up.waiting.filter((w) => w.att?.status !== "resolved") : [];
+  const settled = videos ? [...up.waiting.filter((w) => w.att?.status === "resolved").map((w) => w.att!), ...(up.settled ?? [])] : [];
+  if (!events.length && !waiting.length && !settled.length) return null;
   let lastDay = "";
 
   return (
@@ -71,26 +77,24 @@ export function UpNextPanel({ up, visible, jump, now: _tick }: { up: UpNext; vis
         )}
       </section>
 
-      {waiting.length > 0 && (
+      {(waiting.length > 0 || settled.length > 0) && (
         <section className="rounded-2xl px-5 py-4" style={{ background: mix(DC.amber, 6), border: `1px solid ${mix(DC.amber, 30)}` }}>
           <h3 className="text-[16px] font-semibold">
-            {waiting.length} video{waiting.length === 1 ? "" : "s"} <span style={{ color: DC.amber }}>won't go out on their own</span>
+            {waiting.length ? <>{waiting.length} video{waiting.length === 1 ? "" : "s"} <span style={{ color: DC.amber }}>won't go out on their own</span></> : "Every flagged video is handled"}
           </h3>
-          <p className="mt-0.5 text-[13px]" style={{ color: K.muted }}>None of these has a TikTok slot. Each needs a fix, a publish, or a drop.</p>
+          <p className="mt-0.5 text-[13px]" style={{ color: K.muted }}>{waiting.length ? "None of these has a TikTok slot. Tick one when it's handled; one that gets booked or posted ticks itself." : "Booked, posted or resolved. A video comes back here if its problem changes."}</p>
           <ul className="mt-3 flex flex-col gap-2">
             {waiting.map((w, i) => (<Fragment key={w.day + w.n}>
               {w.day !== waiting[i - 1]?.day && <li className="mt-1 text-[11.5px] font-semibold uppercase tracking-[.06em]" style={{ ...MONO, color: K.faint }}>{w.day.slice(5)}</li>}
-              <li className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-2">
-                <span className="mt-0.5 h-fit rounded px-1.5 text-center text-[11px] font-bold" style={{ ...MONO, background: mix(LANG(w.lang), 22), color: LANG(w.lang) }}>{w.n}</span>
-                <span className="min-w-0">
-                  <span className="block truncate text-[14px] font-medium" title={w.title}>{w.title}</span>
-                  <span className="line-clamp-2 block text-[12.5px] leading-snug" title={w.why} style={{ color: K.muted }}>
-                    <b style={{ color: DC.amber }}>{WAIT[w.state]}</b> · {w.why}
-                  </span>
-                </span>
-              </li>
+              {w.att ? <AttentionRow att={w.att} onChanged={reload} reasons={["Fixed", "Dropped", "Posting by hand"]}
+                tag={<Tag n={w.n} lang={w.lang} />} title={<span title={w.title}>{w.title}</span>}
+                line={<><b style={{ color: DC.amber }}>{WAIT[w.state]}</b> · {w.why}</>}
+                ask={{ runner: "com.thomas.video-overnight", context: `${w.n} (${w.day}) “${w.title}”: ${WAIT[w.state]}. ${w.why}` }} />
+              : <li className="text-[13px]" style={{ color: K.muted }}><Tag n={w.n} lang={w.lang} /> {w.title}</li>}
             </Fragment>))}
           </ul>
+          <AttentionFold items={settled} onChanged={reload}
+            render={(a) => ({ tag: <Tag n={a.meta?.n ?? "?"} lang={a.meta?.lang} />, title: `${a.meta?.day?.slice(5) ?? ""} · ${a.meta?.title ?? a.key}` })} />
         </section>
       )}
     </div>
