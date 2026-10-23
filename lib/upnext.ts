@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Automation } from "./automations";
+import { track, type AttnView } from "./attention";
 
 const UPLOADS = process.env.MINAMI_UPLOADS_DIR || path.join(os.homedir(), "tiktok-studio", "uploads");
 const CHANNEL: Record<string, string> = { en: "EN · 2 Boys 1 Company", vi: "VI · 2 Ông Cháu 1 Công Ty" };
@@ -32,8 +33,10 @@ export type UpEvent = {
   lang?: string; n?: string; // posts: channel and EN1/VI2…
   local?: string;           // posts: the slot in the audience's own time, "15:30 US"
 };
-export type UpWait = { day: string; n: string; lang: string; title: string; state: "held" | "not-booked" | "not-made" | "failed"; why: string };
-export type UpNext = { events: UpEvent[]; waiting: UpWait[]; repeating: string[]; posted: { day: string; done: number; of: number }[] };
+/** `key`/`att`: the flag's resolve + comment state (lib/attention.ts, §34). */
+export type UpWait = { day: string; n: string; lang: string; title: string; state: "held" | "not-booked" | "not-made" | "failed"; why: string; key: string; att?: AttnView };
+/** `settled`: videos this panel flagged that are resolved — by Thomas, or because the studio no longer flags them. */
+export type UpNext = { events: UpEvent[]; waiting: UpWait[]; settled: AttnView[]; repeating: string[]; posted: { day: string; done: number; of: number }[] };
 
 const readJ = (f: string) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
 const firstSentence = (s: string) => (s.split(/(?<=[.:])\s/)[0] || s).replace(/[.:]$/, "");
@@ -49,7 +52,10 @@ function nextAt(hhmm: string, now: Date) {
 
 export function upNext(items: Automation[], now = new Date(), hours = 24): UpNext {
   const until = now.getTime() + hours * 3600e3;
-  const events: UpEvent[] = [], waiting: UpWait[] = [], posted: UpNext["posted"] = [];
+  const events: UpEvent[] = [], posted: UpNext["posted"] = [];
+  const waiting: Omit<UpWait, "key">[] = [];
+  // what became of a video the panel used to flag, for its AUTO tick: by key, from the same state files
+  const fate = new Map<string, string>();
   const off = (a: Automation) => a.status === "paused" || a.status === "not-loaded";
 
   for (const a of items) {
@@ -75,9 +81,11 @@ export function upNext(items: Automation[], now = new Date(), hours = 24): UpNex
     const day = dir; // "2026-10-22 Thu"
     posted.push({ day: dir, done: st.items.filter((i: any) => i.posted).length, of: st.items.length });
     for (const i of st.items) {
-      if (i.posted) continue;
+      const fkey = `video:${day}:${i.n}`;
+      if (i.posted) { fate.set(fkey, "posted"); continue; }
       const lang = i.lang ?? "en", aud = AUDIENCE_TZ[lang];
       if (i.scheduled?.at) {
+        fate.set(fkey, `booked for ${new Date(i.scheduled.at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })}`);
         events.push({ at: new Date(i.scheduled.at).toISOString(), kind: "post", title: i.title, n: i.n, lang,
           what: `Goes live on ${CHANNEL[lang] ?? lang}${i.cover && !i.cover_set ? " · set the cover by hand after" : ""}`,
           local: aud ? `${inTz(i.scheduled.at, aud.tz)} ${aud.label}` : undefined });
@@ -93,5 +101,9 @@ export function upNext(items: Automation[], now = new Date(), hours = 24): UpNex
     }
   }
   events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  return { events, waiting, repeating, posted };
+  // A day folder that archived itself took its videos with it: anything still flagged from it is no longer waiting.
+  const keyed = waiting.map((w) => ({ ...w, key: `video:${w.day}:${w.n}` }));
+  const { flagged, settled } = track("video", keyed.map((w) => ({ key: w.key, sig: `${w.state}|${w.why}`, meta: { n: w.n, lang: w.lang, title: w.title, day: w.day } })),
+    (k) => fate.get(k) ?? (days.some((d) => k.startsWith(`video:${d}:`)) ? "the studio stopped listing it" : "its day was archived"));
+  return { events, waiting: keyed.map((w) => ({ ...w, att: flagged[w.key] })), settled, repeating, posted };
 }
