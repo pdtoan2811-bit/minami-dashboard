@@ -1025,6 +1025,10 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
       // subprocess already needs (PATH, HOME, ANTHROPIC_API_KEY, token-slayer's active credential).
       env: {
         ...process.env, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: AUTOCOMPACT_PCT,
+        // Which chat a child process belongs to. A script that reports progress (tiktok-studio's publish writes
+        // ~/.harness/progress/<pid>.json) stamps this in, so the agent card that shows it is the one whose chat
+        // started it — a background Bash has no other link back to its pane (lib/upload-progress.ts, §33).
+        MINAMI_SESSION_KEY: key,
         // `smith` on PATH for a Blacksmith session — see smithShimDir(). Prepended, so a real link
         // added later still loses to the shim only for the lifetime of this session, never globally.
         ...(pre && !pre.missing.length && smithShimDir() ? { PATH: `${smithShimDir()}${pathMod.delimiter}${process.env.PATH || ""}` } : {}),
@@ -2228,6 +2232,14 @@ export function subscribe(key: string, sub: Sub): { replay: AgentEvent[]; unsubs
 export function isBusy(key: string): boolean {
   const s = store.get(key);
   return !!s && !s.closed && s.busy;
+}
+
+/** The pane key the session was spawned under (what its children see as MINAMI_SESSION_KEY) and its cwd,
+ *  from any key the client holds — a pane switches to `live:<sid>` after its first turn, but the env
+ *  was set at spawn with the original key. */
+export function sessionIdentity(key: string): { key: string; cwd: string } | null {
+  const s = store.get(key);
+  return s ? { key: s.key, cwd: s.cwd } : null;
 }
 
 /**

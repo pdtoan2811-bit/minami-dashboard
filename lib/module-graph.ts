@@ -155,6 +155,9 @@ export const NODES: ModuleNode[] = [
   { id: "l/labels", label: "agent/labels.ts", sub: "activity phases + labels", layer: "core", row: 1, pipeline: "live" },
   { id: "l/taskprogress", label: "task-progress.ts", sub: "per-ask plan → bar + ETA", layer: "core", row: 2, pipeline: "live" },
   { id: "c/TaskProgressBar", label: "TaskProgressBar", sub: "per-ask bar + ETA\n(tile + pane)", layer: "component", row: 23, pipeline: "live" },
+  { id: "r/uploads", label: "/api/agent/uploads", sub: "a pane's live publishes\n(~/.harness/progress, §33)", layer: "route", row: 24, pipeline: "live" },
+  { id: "l/upload-progress", label: "upload-progress.ts", sub: "progress files → batch tray\n(ETAs at the current rate)", layer: "core", row: 24, pipeline: "live" },
+  { id: "c/UploadTray", label: "UploadTray", sub: "the publish's videos under\nits bash row (§33)", layer: "component", row: 24, pipeline: "live" },
   { id: "l/useagent", label: "use-agent.ts", sub: "client SSE + reconnect", layer: "core", row: 2, pipeline: "live" },
   // Forwarding a question. Split in two on purpose: the roster read uses node:fs, the instruction
   // text is rendered by AskCard in the browser, and one module would drag fs into the client bundle.
@@ -540,6 +543,10 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/labels", to: "l/taskprogress", kind: "import" },
   { from: "app/page", to: "c/TaskProgressBar", kind: "import" },
   { from: "c/TaskProgressBar", to: "l/taskprogress", kind: "import" },
+  { from: "app/page", to: "c/UploadTray", kind: "import" },
+  { from: "c/UploadTray", to: "r/uploads", kind: "http", label: "poll 2 s" },
+  { from: "r/uploads", to: "l/upload-progress", kind: "import" },
+  { from: "r/uploads", to: "l/manager", kind: "import", label: "sessionIdentity" },
   { from: "l/useagent", to: "l/labels", kind: "import" },
   { from: "l/sessions", to: "l/labels", kind: "import" },
   { from: "l/sessions", to: "l/enrich", kind: "import" },

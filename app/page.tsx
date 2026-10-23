@@ -31,6 +31,7 @@ import { rankTopics, type RecentTopic } from "@/lib/topic-rank";
 import BrowserLightbox from "@/components/BrowserLightbox";
 import { FlowStrip } from "@/components/FlowStrip";
 import { TaskProgressBar } from "@/components/TaskProgressBar";
+import { UploadPaneContext, UploadTray, trayHeadline, useUploadTrays } from "@/components/UploadTray";
 import type { TaskProgress } from "@/lib/task-progress";
 import { FlowCanvas } from "@/components/FlowCanvas";
 import { buildJourney } from "@/lib/flow-model";
@@ -325,7 +326,12 @@ function ModelTag({ id }: { id?: string }) {
 }
 
 function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[] }) {
-  if (!tasks.length && !finished.length) return null;
+  // A publish's videos hang under the bash row that runs it (§33): the one whose description says so, else
+  // the first bash. A publish run in the FOREGROUND has no task row at all — its tray then stands alone at the
+  // foot of the card, which is why the hook runs before the empty check below.
+  const trays = useUploadTrays();
+  const host = trays.length ? (tasks.find((k) => k.kind === "bash" && /publish|upload|post/i.test(k.description)) || tasks.find((k) => k.kind === "bash")) : undefined;
+  if (!tasks.length && !finished.length && !trays.length) return null;
   // One shared grid so four agents read as a table without being one — ragged flex rows made a
   // fleet scannable only by reading every row. Columns: status dot · type · assignment (flexes) ·
   // model · current tool · tool count · per-agent clock. Meta cells render even when empty so the columns
@@ -345,11 +351,12 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
           ))}
         </span>
         <span className="text-[9px] font-semibold uppercase tracking-[0.09em] text-neutral-500">
-          agents · {tasks.length ? `${tasks.length} working` : "all landed"}{finished.length ? ` · ${finished.length} done` : ""}
+          agents · {tasks.length ? `${tasks.length} working` : trays.length ? "publishing" : "all landed"}{finished.length ? ` · ${finished.length} done` : ""}
         </span>
       </span>
       {tasks.map((k, i) => (
-        <span key={k.id} className={`agent-in ${grid} border-t border-white/[0.04]`}>
+        <Fragment key={k.id}>
+        <span className={`agent-in ${grid} border-t border-white/[0.04]`}>
           <span className="flex justify-center">
             <span className="agent-dot h-1.5 w-1.5 rounded-full" style={{ background: TOOL_TINT.task, animationDelay: `${-i * 0.35}s` }} />
           </span>
@@ -358,13 +365,29 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
               alone can't say: a general-purpose agent inherits this pane's model, an Explore runs on
               whatever its definition pins. Blank until the first transcript row lands. */}
           <ModelTag id={k.model} />
-          <span className="min-w-0 truncate text-neutral-300" title={k.description}>{k.description}</span>
+          <span className="min-w-0 truncate text-neutral-300" title={k.description}>{k === host ? trayHeadline(trays[0]) : k.description}</span>
           {/* Keyed by the tool text: the span REMOUNTS when the agent moves to a new tool, so the
               swap itself is the animation — motion exactly when something real happened, per the
               house rule. Same trick on the counter. */}
-          <span key={k.lastTool || "-"} className={`${k.lastTool ? "agent-tick" : ""} hidden truncate text-right italic text-neutral-500 sm:inline`}>{k.lastTool || ""}</span>
+          {k === host ? <span className="hidden truncate text-right font-mono text-[9px] tabular-nums text-neutral-400 sm:inline">{trays[0].rateKBs != null ? `${trays[0].rateKBs} KB/s` : ""}</span>
+            : <span key={k.lastTool || "-"} className={`${k.lastTool ? "agent-tick" : ""} hidden truncate text-right italic text-neutral-500 sm:inline`}>{k.lastTool || ""}</span>}
           <span key={`c${k.toolUses || 0}`} className={`${k.toolUses ? "agent-tick" : ""} text-right font-mono text-[9px] tabular-nums text-neutral-600`}>{k.toolUses ? `${k.toolUses} tools` : ""}</span>
           <span className="text-right font-mono text-[9px] tabular-nums text-neutral-500">{k.since ? fmtElapsed(Date.now() - k.since) : ""}</span>
+        </span>
+        {k === host && <UploadTray tray={trays[0]} />}
+        </Fragment>
+      ))}
+      {/* Trays with no bash row to hang from: a foreground publish, or a second run. */}
+      {trays.slice(host ? 1 : 0).map((t, i) => (
+        <span key={`up-${i}`} className="flex flex-col border-t border-white/[0.04]">
+          <span className={`${grid}`}>
+            <span className="flex justify-center"><span className="agent-dot h-1.5 w-1.5 rounded-full" style={{ background: "#6c9cf5" }} /></span>
+            <span className="rounded px-1 py-px font-mono text-[9px] font-medium" style={{ background: "#6c9cf51e", color: "#6c9cf5" }}>upload</span>
+            <span />
+            <span className="col-span-2 min-w-0 truncate text-neutral-300">{trayHeadline(t)}</span>
+            <span className="col-span-2 text-right font-mono text-[9px] tabular-nums text-neutral-400">{t.rateKBs != null ? `${t.rateKBs} KB/s` : ""}</span>
+          </span>
+          <UploadTray tray={t} />
         </span>
       ))}
       {finished.map((n, i) => {
@@ -3334,6 +3357,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // hand, or because this pane is too small to hold it. The two cases need different buttons: one
   // reopens, the other has to make room first.
   const slotHidden = !!activeSlot && (slotClosed || !roomForSlot);
+  // Whose publishes the agent card shows (§33). Memoised so the card's poll restarts only when the pane
+  // really changes chat or folder, not on every render of this column.
+  const uploadWho = useMemo(() => ({ key: effectiveKey, cwd }), [effectiveKey, cwd]);
   const openSlot = (which: Slot) => {
     setSlot(which);
     showSlot();
@@ -3344,6 +3370,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     // `collapsed` is display:none, NOT unmounted — see the grid in BentoHome. A collapsed pane keeps
     // streaming, keeps its draft, keeps its scroll position, and costs one style bit.
     <DensityContext.Provider value={d}>
+    <UploadPaneContext.Provider value={uploadWho}>
     <div ref={paneRef} className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-neutral-900/40 compact:rounded-none compact:border-0 ${collapsed ? "hidden " : ""}${focused ? "border-[var(--sakura)]/30" : "border-white/10"} ${browserDrag ? "select-none" : ""} ${count === 3 && idx === 2 && !focused ? "col-span-2" : ""}`}>
       {/* The header is chrome about the pane, not content in it, so it is the first thing to thin out.
           Sized off `d` rather than `dc`: the title bar must not twitch every time the composer takes
@@ -3912,6 +3939,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
       {attachOpen && <FolderPicker pickFiles start={cwd} onClose={() => setAttachOpen(false)}
         onPick={(p) => { appendPath(p); setAttachOpen(false); }} />}
     </div>
+    </UploadPaneContext.Provider>
     </DensityContext.Provider>
   );
 }
