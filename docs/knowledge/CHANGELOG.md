@@ -9,6 +9,8 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-24
+- **Restarts read `.env.local` again** (§8; `bin/serve.sh`). A deploy from a pane inherited `__NEXT_PROCESSED_ENV` and the old server's values, so Next skipped the file and new keys never loaded. serve.sh now drops both before starting.
+- **Growth leaves the team out** (§35; `lib/growth.ts` `notTeam()`). The project's internal cohort (`MINAMI_GROWTH_EXCLUDE_COHORT`) and anyone who opened /admin.
 - **Growth page: traffic → signup → paid by source, from PostHog, daily** (§35; `lib/growth.ts`, `app/api/growth`, `app/growth`, `lib/nav.ts`). Pitch posthog-growth F2. Totals cards, the picked source's days, and a ledger whose rows are the filter. One read-only HogQL pull a day cached in `~/.minami/growth.json`; first-touch attribution; signups/paid "not tracked yet" until ecvision sends the events.
 
 ### 2026-10-23
