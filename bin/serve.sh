@@ -150,6 +150,15 @@ if [ -n "$OLD_PIDS" ]; then
   fi
 fi
 
+# Start from .env.local, not from whoever called us (§8). A restart from a chat pane runs as a child of
+# the OLD next-server, so it inherits `__NEXT_PROCESSED_ENV=true` and every value the old server loaded.
+# Next sees that marker and skips .env.local entirely, so a key added to the file since the last
+# Finder/Terminal start never loads (MINAMI_GROWTH_ENV_FILE, 2026-10-24: "PostHog isn't configured" after
+# two deploys). Dropping the marker and the file's own keys makes the file the one source again.
+unset __NEXT_PROCESSED_ENV
+if [ -f .env.local ]; then
+  for k in $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' .env.local | tr -d '='); do unset "$k"; done
+fi
 PORT="$PORT" nohup npm start >"$LOG" 2>&1 &
 
 for i in $(seq 1 40); do

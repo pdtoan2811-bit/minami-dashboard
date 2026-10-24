@@ -139,6 +139,16 @@ accept alternatives: `/api/fs/mkdir:400|405`. The defaults live in `bin/deploy.s
   this environment) — which silently removes `typescript` and `tailwindcss` and breaks the build.
   Use `npm install --include=dev`.
 
+> 🐛 **A restart from a pane never read new keys in `.env.local`** (found 2026-10-24). A pane's shell is
+> a child of the running `next-server`, so it carries `__NEXT_PROCESSED_ENV=true` and every value that
+> server had loaded. `serve.sh`, launched from it, passed both on to the new server. Next treats the
+> marker as "env already loaded" and **skips `.env.local` entirely**. The old values kept working because
+> they were inherited, which hid the problem. A key added to the file after the last Finder/Terminal start
+> never loaded, however many times you deployed. Changed values stayed stale too. It surfaced as §35's
+> "PostHog isn't configured" after two clean deploys, while `MINAMI_GROWTH_ENV_FILE` sat in the file. The
+> tell: `next start` prints no `- Environments: .env.local` line. Fix: `serve.sh` unsets the marker and
+> every key the file defines before `npm start`, so the file is the one source.
+
 > 🐛 **A deploy can wait forever for a box that will never go quiet.** `deploy.sh --wait` polls
 > `/api/agent/health` for `busy == 0` **across every session on the machine** — correct, since the
 > restart kills all of them, but it means quiet is a property of the *box*, not the repo. A pane at
