@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-24
+- **Growth page: traffic → signup → paid by source, from PostHog, daily** (§35; `lib/growth.ts`, `app/api/growth`, `app/growth`, `lib/nav.ts`). Pitch posthog-growth F2. Totals cards, the picked source's days, and a ledger whose rows are the filter. One read-only HogQL pull a day cached in `~/.minami/growth.json`; first-touch attribution; signups/paid "not tracked yet" until ecvision sends the events.
+
 ### 2026-10-23
 - **Comment and Minami ↵ on the publish tile** (§33/§34; `app/api/uploads` POST, `PublishTile.tsx` `AskBox`, `publishBrief()`). The same input as the flagged videos: Enter starts a chat in tiktok-studio about the publish and opens it, Comment saves a note.
 - **The publish tile on Bento** (§33; `components/PublishTile.tsx`, `app/api/uploads`, `app/api/uploads/cover`, `lib/upload-progress.ts` `publishOf`/`readFinished`/`coverOf`). A running TikTok publish is now the first tile on Bento, the one Thomas picked after three pitch rounds (upload-place C, the delivery tracker): the video uploading now as its cover, with minutes left, or "11 min late" in red for its post slot, and the rest of the batch as small covers. It says how the publish ended for 6 hours after. The agent card keeps only the headline. tiktok-studio's writer now sends titles and covers and keeps a `done/<pid>.json` on exit.

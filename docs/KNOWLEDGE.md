@@ -67,6 +67,7 @@ recycle one.
 | [`32-storage.md`](knowledge/32-storage.md) | §32 | ~1,900 | Storage janitor: autopilot's `storage` duty (watermark + dead-man's switch) and `bin/janitor.mjs` (the only deleter: tiered, guard-tested, ledgered, never merges) + nightly launchd job + the Storage tab + Slack alarms + recycled-tree restore on resume. Born from the disk filling twice in 3 days with no alert. |
 | [`33-upload-progress.md`](knowledge/33-upload-progress.md) | §33 | ~1,900 | Upload progress: tiktok-studio's publish writes `~/.harness/progress/<pid>.json` (and `done/` on exit). Shown as the publish tile first on Bento (pitch upload-place C, the delivery tracker: the video in flight as its cover, minutes left or late) and a one-line headline on the agent card. |
 | [`34-attention.md`](knowledge/34-attention.md) | §34 | ~1,100 | Attention items: one resolve + comment + auto-check store (`~/.minami/attention.json`) for every "needs you" flag. Resolved stays resolved until the problem changes; a flag the source drops ticks itself AUTO with evidence. First user: the Runners videos panel; the list of flags still to adopt it. |
+| [`35-growth.md`](knowledge/35-growth.md) | §35 | ~1,000 | Growth: `/growth`, traffic → signup → paid by traffic source from PostHog (pitch posthog-growth F2). One read-only HogQL pull a day cached on disk, first-touch attribution, colour only on a real move, untracked events said as "not tracked yet". |
 | [`CHANGELOG.md`](knowledge/CHANGELOG.md) | — | ~24,000 | Dated log of every change. Append here; don't read it to do work. |
 
 ---

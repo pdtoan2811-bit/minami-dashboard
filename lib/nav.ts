@@ -25,6 +25,7 @@ export const NAV: NavGroup[] = [
   ] },
   { id: "day", label: "Day", items: [
     { href: "/today", label: "Today", icon: "☀" },
+    { href: "/growth", label: "Growth", icon: "↗" },
   ] },
   { id: "autopilot", label: "Autopilot", items: [
     { href: "/autopilot", label: "Goals & runners", icon: "◎", also: ["/goals", "/automations"] },
