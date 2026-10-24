@@ -65,6 +65,15 @@ const lit = (s: string) => `'${s.replace(/[^\w $.:-]/g, "")}'`;
 
 const SRC = `coalesce(nullIf(person.properties.$initial_referring_domain, ''), nullIf(properties.$referring_domain, ''), '$direct')`;
 const NOT_LOCAL = `coalesce(properties.$host, '') NOT LIKE 'localhost%' AND coalesce(properties.$host, '') NOT LIKE '127.%'`;
+// The team, left out of every count: anyone in the project's internal cohort (MINAMI_GROWTH_EXCLUDE_COHORT,
+// PostHog's own "Internal / Test users" — email @ecvision.ai or $internal_or_test_user), and anyone who
+// has opened /admin in 90 days. On 24 Oct the cohort matched nobody (ecvision identified people without
+// an email), so the /admin rule is what held until ecvision's identify started sending those properties.
+function notTeam(): string {
+  const cohort = Number(process.env.MINAMI_GROWTH_EXCLUDE_COHORT) || 0;
+  const admin = `person_id NOT IN (SELECT person_id FROM events WHERE event = '$pageview' AND properties.$pathname LIKE '/admin%' AND timestamp >= now() - INTERVAL 90 DAY)`;
+  return cohort ? `${admin} AND person_id NOT IN COHORT ${cohort}` : admin;
+}
 
 /** Referring domain → the name a growth manager says. Null = internal (dropped from the list). */
 export function sourceName(dom: string, site: string): string | null {
@@ -95,7 +104,7 @@ async function pull(): Promise<Growth> {
     paid ? `uniqIf(person_id, event = ${lit(paid)}${cond})` : "0",
   ];
   const from = `toStartOfDay(now()) - INTERVAL ${DAYS - 1} DAY`, wk = `toStartOfDay(now()) - INTERVAL 6 DAY`;
-  const where = `event IN (${evs}) AND timestamp >= ${from} AND ${NOT_LOCAL}`;
+  const where = `event IN (${evs}) AND timestamp >= ${from} AND ${NOT_LOCAL} AND ${notTeam()}`;
   const windows = [...count(` AND timestamp >= ${wk}`), ...count(` AND timestamp < ${wk}`)].join(", ");
 
   const [daily, bySrc, total, host] = await Promise.all([
