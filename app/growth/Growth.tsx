@@ -163,6 +163,7 @@ export function Growth() {
         <div className="hidden gap-3 px-2 pb-1.5 text-[11px] text-neutral-500 sm:grid" style={{ gridTemplateColumns: cols }}><span>Source</span><span>Traffic · share</span><span>Signups · rate</span><span className="text-center">Paid</span><span className="text-right">Visit → paid</span></div>
         <div className="flex flex-col gap-0.5">{rows.map((r) => row(r))}{row(all, true)}</div>
       </div>
+      <p className="text-[11.5px] text-neutral-500">The team is left out: PostHog&apos;s internal cohort and anyone who has opened /admin. Each person counts under the source they first came from.</p>
       {(!g.events.signup || !g.events.paid) && (
         <p className="text-[11.5px] text-neutral-500">{[!g.events.signup && "signup", !g.events.paid && "payment"].filter(Boolean).join(" and ")} events aren&apos;t in PostHog yet: set MINAMI_GROWTH_SIGNUP_EVENT / MINAMI_GROWTH_PAID_EVENT once ecvision sends them.</p>
       )}

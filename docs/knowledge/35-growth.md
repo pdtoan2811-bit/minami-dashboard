@@ -45,6 +45,15 @@ wave (A) and named the focus ("Traffic > sign up > paid + filter by traffic sour
   row, and the ledger's rates are coherent. `sourceName()` maps domains to names (Google, Bing,
   LinkedIn, ChatGPT…). It drops `localhost`, `127.*` and the site's own domain, and the queries skip
   events whose `$host` is local.
+- **The team is left out** (`notTeam()`). Anyone in `MINAMI_GROWTH_EXCLUDE_COHORT` is excluded. On the
+  author's box that is 635950, PostHog's "Internal / Test users": email ending `@ecvision.ai`, or the
+  person property `$internal_or_test_user`. Anyone who opened `/admin*` in 90 days is excluded too. On 24 Oct
+  the cohort matched nobody, because ecvision's identify sent no email. Only one person had opened /admin,
+  so 30 became 29. The remaining "team" traffic is anonymous visitors in Hanoi (40 of 51 people in two
+  weeks). They can't be told from customers until they log in, so the page doesn't guess by country.
+  ecvision's backend marks admins with `$internal_or_test_user` on login (branch
+  `feature/posthog-server-events`, 24 Oct), which fills the cohort once that ships. Emails are never sent:
+  ecvision's rule is that a person in PostHog is an opaque id.
 - **Event names.** These come from `MINAMI_GROWTH_SIGNUP_EVENT` / `MINAMI_GROWTH_PAID_EVENT`. If those
   are unset, the first common name that PostHog has seen in 90 days is used (`SIGNUP_GUESS`,
   `PAID_GUESS`). Names are stripped to `[\w $.:-]` before going into HogQL.
