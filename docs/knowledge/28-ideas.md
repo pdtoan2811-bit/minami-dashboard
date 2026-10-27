@@ -84,6 +84,8 @@ browser. The dashboard's chats get the same cookies (§3, `MCP_SERVERS()` in `li
 `--storage-state`, checked per session), plus a prompt line: view only, never post, like, follow or
 DM unless asked in that chat.
 
+> **2026-10-27:** that separate Chrome profile is retired. The one logged-in browser is now the **harness browser** (§36); `browser login` opens its window and it exports the same `state.json`, so `readLink` is unchanged.
+
 > 🐛 **The login window flashed every 4 s.** `context.storageState()` collects localStorage by opening a
 > page per origin. Saving it on a timer opened and closed tabs in front of him while he typed his
 > password. Fix: save `context.cookies()` only, which opens nothing. These sites keep their sessions in

@@ -8,6 +8,10 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-27
+- **One logged-in browser, one name: the harness browser** (§36, §28, §3; `lib/harness.ts`, `app/harness`, `app/api/harness/window`, `lib/agent/manager.ts` comment, `.env.example`; tiktok-studio `scripts/browser.mjs` + new `scripts/lib/logins.mjs`; toolshed `browser`). The toolshed's separate Chrome is retired: its Instagram/Facebook logins were copied into the harness browser, which now exports `~/.minami/browser/state.json` for the chat browser. `/harness` gets Show on this Mac / Hide and a signed-in row.
+- **Harness browser page** (§36; `app/harness`, `app/api/harness`, `lib/harness.ts`, `lib/nav.ts`, `.env.example`; tiktok-studio `scripts/browser.mjs`). `/harness` shows the shared Chrome's state, opens/closes its login page, and lists visits from the new `~/.harness/usage.jsonl` the daemon writes.
+
 ### 2026-10-24
 - **Restarts read `.env.local` again** (§8; `bin/serve.sh`). A deploy from a pane inherited `__NEXT_PROCESSED_ENV` and the old server's values, so Next skipped the file and new keys never loaded. serve.sh now drops both before starting.
 - **Growth leaves the team out** (§35; `lib/growth.ts` `notTeam()`). The project's internal cohort (`MINAMI_GROWTH_EXCLUDE_COHORT`) and anyone who opened /admin.
