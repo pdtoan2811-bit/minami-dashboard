@@ -81,7 +81,17 @@ somehow it failed to do so."
 ### Gotchas
 - **Slack.** "Critical" and "couldn't free" also DM Thomas, and so does the dead-man's switch (via `janitor.mjs
   --slack`), through Video Studio's `scripts/lib/slack.mjs` — the one helper that already holds Minami's bot token
-  and his DM. Not tested with a live send on the day it was wired (that would have messaged him unasked).
+  and his DM. "Critical" and "couldn't free" are de-duplicated across passes by `isNews()` (state in
+  `~/.minami/janitor/alerted.json`): they speak on entering the state, on 5 GB worse, on stuck → critical, or once a
+  day, and the file is cleared once a pass ends above `lowGB`. The bell and the macOS banner follow the same rule.
+
+> 🐛 **35 Slack DMs overnight from a disk that wasn't moving (2026-10-26 18:46 → 10-27 08:28 UTC).** Free space slid
+> under the 40 GB floor (~/ecvision's worktrees +8 GB in a day to 21 GB, a new 4 GB ~/ScreenPal, Docker steady at
+> 28 GB). Everything left was either under 3 days idle or Docker, which is Thomas's call, so every watermark pass
+> freed nothing. The tick starts a pass every 20 min while under the floor, each pass is a new process with no
+> memory of the last, and "couldn't free" DM'd each time. Fix: `isNews()` above. Same night, every pass also spent
+> 300 s waiting on uv's cache lock, held for as long as the StoreLeads Grafana MCP (`uvx mcp-grafana`) runs: `uv
+> cache prune` now gets `UV_LOCK_TIMEOUT=10`.
 - **Reopening a chat whose tree was recycled** (`restoreRecycledTree()` in `lib/worktree.ts`, called first by the
   send route): if the janitor's ledger names the tree's branch and that branch is not in the base yet, the tree is
   `git worktree add`-ed back at the same path and the chat resumes in it with its saved work. Otherwise the older

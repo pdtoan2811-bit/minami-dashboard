@@ -47,6 +47,7 @@ const F = {
   disk: path.join(DIR, "disk.jsonl"),         // one sample a day: free GB + the biggest folders (the trend)
   asks: path.join(DIR, "asks.json"),          // tier 3: what only Thomas can decide, with sizes
   lock: path.join(DIR, "run.lock"),
+  alerted: path.join(DIR, "alerted.json"),    // the last disk alert sent: which state, when, at what free GB
 };
 const AUTOPILOT = process.env.MINAMI_AUTOPILOT_CONFIG || path.join(HOME, ".minami", "autopilot.json");
 const GB = 2 ** 30; // GiB, the unit `df -h` prints — the number Thomas has been reading all along
@@ -226,7 +227,9 @@ function tier1(cfg, used, below) {
   for (const [c, a] of caches) {
     if (!sh("which", [c]).ok) continue;
     if (DRY) { actions.push({ tier: 1, kind: "pkg-cache", path: `${c} ${a.join(" ")}`, bytes: 0, why: "below lowGB", dry: true }); continue; }
-    const r = sh(c, a, { timeout: 600_000 });
+    // uv's cache lock is held for as long as any `uvx` runs, and the StoreLeads Grafana MCP is a long-lived uvx: without
+    // a short timeout every pass sat 300 s on it and then gave up anyway (2026-10-27).
+    const r = sh(c, a, { timeout: 600_000, env: c === "uv" ? { UV_LOCK_TIMEOUT: "10" } : undefined });
     if (!r.ok) errors.push(`${c}: ${r.out.split("\n").pop()}`);
   }
   if (!DRY) {
@@ -431,6 +434,17 @@ async function slack(text) {
   try { const { notify: dm } = await import(helper); await dm(text); } catch { /* the bell already has it */ }
 }
 
+/** Whether a disk alert is news. The tick starts a pass every 20 min while free space is under the floor, and each pass
+ *  is a fresh process, so without a memory on disk a disk that just sits at 31 GB DM'd Thomas 35 times overnight
+ *  (2026-10-26/27). Speak on entering a state, on getting worse by 5 GB, on stuck → critical, or once a day. */
+const RANK = { stuck: 1, critical: 2 };
+function isNews(state, freeGB) {
+  const last = readJSON(F.alerted, null);
+  const news = !last || RANK[state] > (RANK[last.state] ?? 0) || last.freeGB - freeGB >= 5 || Date.now() - Date.parse(last.at) > DAY;
+  if (news) fs.writeFileSync(F.alerted, JSON.stringify({ state, at: new Date().toISOString(), freeGB: +freeGB.toFixed(1) }));
+  return news;
+}
+
 const DK = (ps) => ps.map(short).join(", ");
 
 function notify(title, body) {
@@ -514,17 +528,23 @@ async function main() {
     if (DRY) return;
 
     const endGB = end / GB;
+    if (endGB >= cfg.lowGB) fs.rmSync(F.alerted, { force: true }); // back above the floor: the next dip is news again
+    // The exact silent failure of the night five renders died: below the floor, ran, freed nothing.
+    const stuck = on && start < cfg.lowGB * GB && end - start < GB;
     if (endGB < cfg.criticalGB) {
-      const body = `Only ${endGB.toFixed(1)} GB free after the janitor's pass. Waiting on you: ` +
-        (asks.map((a) => `${a.title}`).join("; ") || "nothing safe is left to clear automatically") + ". Open /autopilot?tab=storage.";
-      await emit({ kind: "storage", level: "error", title: `Disk critical: ${endGB.toFixed(1)} GB free`, body });
-      notify("Disk critical", body);
-      await slack(`💾 Disk critical: ${endGB.toFixed(1)} GB free. ${body}`);
-    } else if (on && start < cfg.lowGB * GB && end - start < GB) {
-      // The exact silent failure of the night five renders died: below the floor, ran, freed nothing.
-      await emit({ kind: "storage", level: "warn", title: `Janitor couldn't free space: ${endGB.toFixed(1)} GB free`,
-        body: `Below the ${cfg.lowGB} GB floor and nothing left in tiers 1–2. ${asks.length ? "Your call: " + asks.map((a) => a.title).join("; ") : ""}` });
-      await slack(`💾 The storage janitor couldn't free space: ${endGB.toFixed(1)} GB free (floor ${cfg.lowGB}). ${asks.map((a) => a.title).join("; ")} — /autopilot?tab=storage`);
+      if (isNews("critical", endGB)) {
+        const body = `Only ${endGB.toFixed(1)} GB free after the janitor's pass. Waiting on you: ` +
+          (asks.map((a) => `${a.title}`).join("; ") || "nothing safe is left to clear automatically") + ". Open /autopilot?tab=storage.";
+        await emit({ kind: "storage", level: "error", title: `Disk critical: ${endGB.toFixed(1)} GB free`, body });
+        notify("Disk critical", body);
+        await slack(`💾 Disk critical: ${endGB.toFixed(1)} GB free. ${body}`);
+      }
+    } else if (stuck) {
+      if (isNews("stuck", endGB)) {
+        await emit({ kind: "storage", level: "warn", title: `Janitor couldn't free space: ${endGB.toFixed(1)} GB free`,
+          body: `Below the ${cfg.lowGB} GB floor and nothing left in tiers 1–2. ${asks.length ? "Your call: " + asks.map((a) => a.title).join("; ") : ""}` });
+        await slack(`💾 The storage janitor couldn't free space: ${endGB.toFixed(1)} GB free (floor ${cfg.lowGB}). ${asks.map((a) => a.title).join("; ")} — /autopilot?tab=storage`);
+      }
     } else if (run.freedGB >= 1) {
       await emit({ kind: "storage", level: "success", title: `Janitor freed ${run.freedGB} GB — ${run.freeAfterGB} GB free`,
         body: Object.entries(byKind).map(([k, b]) => `${k} ${gb(b)} GB`).join(" · ") });
