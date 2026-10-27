@@ -1,5 +1,7 @@
 // The harness browser (§36): the ONE shared Chrome that tiktok-studio's scripts, the goal runners and agents drive
-// over CDP on :9333, with its own profile (~/.harness/profiles/web) holding the logins they all ride on. This module
+// over CDP on :9333, with its own profile (~/.harness/profiles/web) holding the logins they all ride on. Since
+// 2026-10-27 it is the only logged-in browser on the Mac: the dashboard's chat browser starts from the cookies it
+// exports to ~/.minami/browser/state.json (MINAMI_BROWSER_STATE), and "harness browser" is the one name for it. This module
 // only reads it — status, open tabs, the usage log its daemon writes — and starts/stops the phone login page
 // through the studio's own CLI. It never launches Chrome itself: two launchers on one profile corrupt it.
 import { execFile } from "node:child_process";
@@ -26,6 +28,8 @@ export type HarnessState = {
   /** Browser up/down and login opened/closed, newest first. */
   marks: { at: string; ev: string; url?: string }[];
   daemonLog: string[]; loginLog: string[];
+  /** Signed in or not per site, from the exported cookie file (names only — values are never read out). */
+  logins: { site: string; on: boolean }[]; loginsAt: string | null;
   /** The daemon only started writing usage.jsonl on 2026-10-27; before that there's just browser.log. */
   logStarted: string | null;
 };
@@ -73,6 +77,22 @@ function visitsOf(events: UsageEvent[]): Visit[] {
   return [...out.values()].filter((v) => v.steps.length).sort((a, b) => b.start.localeCompare(a.start));
 }
 
+// Same table as tiktok-studio's scripts/lib/logins.mjs: the cookie that means "signed in" on each site.
+const SITES: [string, string[], string[]][] = [
+  ["Google / YouTube", ["google.com", "youtube.com"], ["SAPISID", "__Secure-3PAPISID", "LOGIN_INFO"]],
+  ["TikTok", ["tiktok.com"], ["sessionid", "sid_tt"]], ["Instagram", ["instagram.com"], ["sessionid"]],
+  ["X", ["x.com", "twitter.com"], ["auth_token"]], ["Facebook", ["facebook.com"], ["c_user"]],
+  ["LinkedIn", ["linkedin.com"], ["li_at"]], ["Pinterest", ["pinterest.com"], ["_pinterest_sess"]], ["Reddit", ["reddit.com"], ["reddit_session", "token_v2"]],
+];
+const STATE = process.env.MINAMI_BROWSER_STATE || path.join(os.homedir(), ".minami", "browser", "state.json");
+function logins(): { list: { site: string; on: boolean }[]; at: string | null } {
+  try {
+    const { cookies } = JSON.parse(fs.readFileSync(STATE, "utf8")) as { cookies: { name: string; domain: string }[] };
+    const on = (d: string[], names: string[]) => cookies.some((c) => names.includes(c.name) && d.some((x) => c.domain.replace(/^\./, "") === x || c.domain.endsWith("." + x)));
+    return { list: SITES.map(([site, d, names]) => ({ site, on: on(d, names) })), at: fs.statSync(STATE).mtime.toISOString() };
+  } catch { return { list: [], at: null }; }
+}
+
 export async function harnessState(): Promise<HarnessState> {
   const events = tail(path.join(HARNESS_DIR, "usage.jsonl")).map((l) => { try { return JSON.parse(l) as UsageEvent; } catch { return null; } }).filter((e): e is UsageEvent => !!e);
   const [ver, list, loginUp] = await Promise.all([
@@ -93,13 +113,14 @@ export async function harnessState(): Promise<HarnessState> {
     marks: events.filter((e) => ["up", "down", "login", "login-off"].includes(e.ev)).slice(-60).reverse().map((e) => ({ at: e.at, ev: e.ev, ...(e.url ? { url: e.url } : {}) })),
     daemonLog: tail(path.join(HARNESS_DIR, "browser.log"), 20_000).slice(-40),
     loginLog: tail(path.join(HARNESS_DIR, "login.log"), 20_000).slice(-40),
+    ...(({ list, at }) => ({ logins: list, loginsAt: at }))(logins()),
     logStarted: events[0]?.at ?? null,
   };
 }
 
-/** Open or close the phone login page through the studio's CLI — the one place that knows how. */
-export async function harnessLogin(on: boolean, url?: string): Promise<{ ok: boolean; out: string }> {
-  const args = [path.join(STUDIO, "scripts", "browser.mjs"), "login", ...(on ? (url ? [url] : []) : ["off"])];
+/** Run the studio's harness browser CLI — the one place that knows how to start, show, hide and export it. */
+async function cli(...rest: string[]): Promise<{ ok: boolean; out: string }> {
+  const args = [path.join(STUDIO, "scripts", "browser.mjs"), ...rest];
   try {
     const { stdout, stderr } = await exec(process.execPath, args, { cwd: STUDIO, timeout: 60_000 });
     return { ok: true, out: (stdout + stderr).trim().slice(-600) };
@@ -107,3 +128,8 @@ export async function harnessLogin(on: boolean, url?: string): Promise<{ ok: boo
     return { ok: false, out: String((e as { stderr?: string }).stderr || (e as Error).message).trim().slice(-600) };
   }
 }
+
+/** Login: the window on this Mac's screen AND the phone page. Off: close the page, park the window, export cookies. */
+export const harnessLogin = (on: boolean, url?: string) => cli("login", ...(on ? (url ? [url] : []) : ["off"]));
+/** Just the window: on this Mac's screen, or parked off-screen (which also exports the cookies). */
+export const harnessWindow = (show: boolean) => cli(show ? "show" : "hide");

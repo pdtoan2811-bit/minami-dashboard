@@ -92,7 +92,8 @@ function autocompactLabel(key: string): string {
 // guess from `cwd`.
 const BROWSER_TOOL_ENABLED = process.env.MINAMI_DISABLE_BROWSER_TOOL !== "1";
 //
-// Logged in (2026-10-14): when the toolshed's `browser login` has saved Thomas's cookies, each session's
+// Logged in (2026-10-14): when the harness browser (tiktok-studio's shared Chrome, §36 — the ONE logged-in browser
+// since 2026-10-27) has exported Thomas's cookies to this file, each session's
 // browser starts from them (`--storage-state`, still `--isolated`, so nothing a session does is written
 // back), and can see Instagram/X/TikTok as him — a logged-out bot gets a bare login page. Checked per
 // session, not at boot: he logs in after the server started and the next chat should already see it.

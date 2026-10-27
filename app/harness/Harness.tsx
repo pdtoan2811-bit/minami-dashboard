@@ -66,10 +66,12 @@ export function Harness() {
   const load = useCallback(() => fetch("/api/harness").then((r) => r.json()).then((x) => { setD(x); setErr(null); }).catch(() => setErr("Couldn't read the harness.")), []);
   useEffect(() => { load(); const t = setInterval(load, 10_000); return () => clearInterval(t); }, [load]);
 
-  const login = async (on: boolean) => {
+  const post = async (what: "login" | "window", on: boolean) => {
     setBusy(true); setNote(null);
-    const r = await fetch("/api/harness/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ on }) }).then((x) => x.json()).catch(() => ({ ok: false, out: "request failed" }));
-    setNote(r.ok ? (on ? "Login page is starting — give it a few seconds." : "Login page closed. The browser keeps the session.") : r.out);
+    const r = await fetch(`/api/harness/${what}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(what === "login" ? { on } : { show: on }) }).then((x) => x.json()).catch(() => ({ ok: false, out: "request failed" }));
+    setNote(!r.ok ? r.out
+      : what === "window" ? (on ? "The harness browser is in front on this Mac. Log in there, then Hide — that saves the logins for the chats too." : "Parked off-screen; logins saved for the chats.")
+      : on ? "On this Mac the window is in front; the phone page is starting — give it a few seconds." : "Phone page closed, window parked, logins saved.");
     setBusy(false);
     setTimeout(load, on ? 4000 : 500);
   };
@@ -98,11 +100,20 @@ export function Harness() {
             <span style={{ color: K.faint }}>{d.browser || "Chrome"} · :9333</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <PillButton tone="accent" small disabled={busy} onClick={() => post("window", true)}>Show on this Mac</PillButton>
+            <PillButton tone="paper" small disabled={busy} onClick={() => post("window", false)}>Hide</PillButton>
             {d.login.up ? <>
-              <a href={d.login.url!} target="_blank" rel="noreferrer"><PillButton tone="accent" small>Open the login page ↗</PillButton></a>
-              <PillButton tone="paper" small disabled={busy} onClick={() => login(false)}>Close it</PillButton>
-            </> : <PillButton tone="accent" small disabled={busy} onClick={() => login(true)}>{busy ? "Starting…" : "Check logins"}</PillButton>}
-            <span className="text-[12px]" style={{ color: K.faint }}>Remote-controls the harness Chrome from any tailnet device; logging in there logs in every script.</span>
+              <a href={d.login.url!} target="_blank" rel="noreferrer"><PillButton tone="paper" small>Phone login page ↗</PillButton></a>
+              <PillButton tone="paper" small disabled={busy} onClick={() => post("login", false)}>Close phone page</PillButton>
+            </> : <PillButton tone="paper" small disabled={busy} onClick={() => post("login", true)}>Log in from phone</PillButton>}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Eyebrow>SIGNED IN{d.loginsAt ? ` · SAVED ${hhmm(d.loginsAt)}` : ""}</Eyebrow>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[13px]">
+              {d.logins.length ? d.logins.map((l) => <span key={l.site} style={{ color: l.on ? K.ink : K.faint }}>{l.on ? "✓" : "·"} {l.site}</span>)
+                : <span style={{ color: K.faint }}>No saved logins yet — Show on this Mac, log in, then Hide.</span>}
+            </div>
+            <span className="text-[12px]" style={{ color: K.faint }}>One logged-in browser for everything: scripts, agents and every chat's browser use these logins.</span>
           </div>
           {note && <p className="text-[12.5px]" style={{ color: K.muted }}>{note}</p>}
           {!!d.tabs.length && <div className="flex flex-col gap-1">
