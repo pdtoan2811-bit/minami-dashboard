@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-28
+- **How a task runs: auto, your pick, asks you** (§37; `lib/task-pace.ts`, `app/api/threads`, `TaskCard.tsx`, `lib/threads.ts`). Every done-item gets a gate from Haiku: UI/UX looks wait for a pitch pick, things that leave the machine ask first, the rest run. ▶ Run sends every item up to the first gate in one message, task_status tells chats to run that way, and the server nudges a chat that stops early (only from the hosting process, only after progress, 6 max). A task stopped at a gate reads as waiting, so it lands in Needs you. Tested end to end on an isolated :3027 server.
 - **A topic with no tasks expands too** (§37; `app/page.tsx`, `components/home/TopicTasks.tsx`). Its click opened the chat panel and its corner was ▶ Preview, so there was no way to start a first task from the tile. Now the click and the **+ Task** corner open the expanded tile with the New task box focused.
 - **A dismissed publish tile can be reopened** (§33; `LastChip` in `components/PublishTile.tsx`, `/api/uploads`). Dismissed or older than 6 h, the last publish folds to a small tile instead of disappearing; the API keeps the newest finished one for 3 days.
 - **Autopilot tidies merged worktrees and branches** (§13 `tidy`; `bin/task.mjs tidy`, `lib/autopilot/runner.ts`).

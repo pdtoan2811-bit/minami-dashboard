@@ -18,7 +18,12 @@ export type FlowDod = { id: string; t: string; done: boolean; at?: number; by?: 
   quote?: string; quoteBy?: "Thomas" | "Minami";
   /** When this item became the one being worked on — by ▶ Do it, or Minami reading the chat. At most
    *  one open item carries it; the card turns it into "Minami working" / "needs you" / "started". */
-  doing?: number };
+  doing?: number;
+  /** Where a run stops for Thomas (lib/task-pace.ts): "pitch" = versions to pick from, "ok" = ask before
+   *  it leaves the machine, null = the chat just does it. Absent = not classified yet (runs like null). */
+  gate?: "pitch" | "ok" | null; gateWhy?: string;
+  /** He set the gate by tapping it: Haiku never reclassifies it. */
+  gateBy?: "thomas" };
 export type FlowThread = {
   id: string; title: string; project: string; cwd: string;
   /** Session ids, oldest first. A session belongs to at most one stored thread. */
@@ -42,6 +47,11 @@ export type FlowThread = {
   /** Last time the task's own chat reported progress itself (`task_report`, lib/task-report.ts). A report
    *  newer than `evalAt` stands in for Minami's reading, so the Haiku check is skipped for that quiet. */
   reportAt?: number;
+  /** Last time Haiku was asked to gate items that had none, so a failed call isn't repeated every poll. */
+  gateTriedAt?: number;
+  /** Auto-continue (ensure in /api/threads): when the server last nudged the chat on to the next item,
+   *  how many nudges since Thomas last typed, and how many items were met at that nudge. */
+  nudgeAt?: number; nudges?: number; nudgeMet?: number;
   createdAt: number; updatedAt: number; archived?: boolean; doneAt?: number;
   /** Archived by itself: the last done-item got ticked (by Minami or him). The page celebrates these
    *  once, and a reply in the chat afterwards brings the task back. */

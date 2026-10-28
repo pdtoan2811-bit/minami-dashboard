@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useSetting } from "@/lib/use-settings";
 import { doDodItem, openThread, threadPost, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
+import { GATE_LABEL, nextGate, paceLine, runPlan } from "@/lib/task-pace";
 
 export const TINT = { working: "#f0a868", waiting: "var(--sakura)", idle: "rgba(255,255,255,0.22)", queued: "rgba(255,255,255,0.12)" } as const;
 const STATE = { working: "working", waiting: "waiting on you", idle: "", queued: "to do" } as const;
@@ -57,7 +58,8 @@ function statusesOf(t: ThreadView): Map<string, ItemStatus> {
   const next = cur ? undefined : dod.find((d) => !d.done);
   return new Map(dod.map((d): [string, ItemStatus] => [d.id, d.done ? "done"
     : d === cur ? (t.state === "working" ? "on" : t.state === "waiting" ? "asks" : "started")
-    : d === next ? "next" : "todo"]));
+    // A run stopped at a gate is his move: the gated next item says so, not just "next".
+    : d === next ? (d.gate && t.state === "waiting" ? "asks" : "next") : "todo"]));
 }
 
 function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[number]; status: ItemStatus; onDo?: () => void; doing: boolean }) {
@@ -89,6 +91,7 @@ function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<
           </span>
         )}
       </span>
+      {!d.done && <GateChip t={t} d={d} />}
       {!d.done && onDo && status !== "on" && (
         <button onClick={onDo} disabled={doing} title="Send this item to the task's chat and let Minami do it"
           className={`shrink-0 rounded-md border border-[var(--sakura)]/40 px-1.5 py-0.5 text-[10px] text-[var(--sakura)] transition-opacity hover:bg-[var(--sakura)]/10 disabled:opacity-50 ${lead ? "" : "opacity-0 group-hover/item:opacity-100 pointer-coarse:opacity-100"}`}>
@@ -98,6 +101,22 @@ function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<
     </li>
   );
 }
+
+/** Where a run stops for him (lib/task-pace.ts). A gated item shows its chip; an ungated one shows "auto"
+ *  on hover only, so the usual case adds nothing to read. One tap cycles auto → your pick → asks you, and
+ *  his choice is never reclassified by Haiku. */
+function GateChip({ t, d }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[number] }) {
+  const g = d.gate ?? null;
+  const tip = `${g ? `${GATE_LABEL[g]}${d.gateWhy ? ` — ${d.gateWhy}` : ""}` : "Minami does this one and moves on"}${d.gateBy ? " (your setting)" : ""}. Tap to change.`;
+  return (
+    <button onClick={() => void threadPost({ action: "gate", id: t.id, dodId: d.id, gate: nextGate(g) })} title={tip}
+      className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wider transition-opacity ${g ? "bg-[var(--sakura)]/15 text-[var(--sakura)]" : "text-neutral-600 opacity-0 hover:text-neutral-300 group-hover/item:opacity-100 pointer-coarse:opacity-100"}`}>
+      {g ? `✋ ${GATE_LABEL[g]}` : "auto"}
+    </button>
+  );
+}
+
+const RUN = "__run";
 
 export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; compact?: boolean; fold?: boolean }) {
   const [draft, setDraft] = useState("");
@@ -130,9 +149,11 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
   const status = statusesOf(t);
   const leadId = dod.find((d) => { const x = status.get(d.id); return x !== "done" && x !== "todo"; })?.id;
   const canDo = t.sessions.length > 0 && !t.archived;
+  const plan = runPlan(dod);
+  const pace = paceLine(dod);
   const doIt = canDo ? (id: string) => async () => {
     setDoing(id); setErr(null);
-    const e = await doDodItem(t, id, { mode: perm, model });
+    const e = await doDodItem(t, id === RUN ? null : id, { mode: perm, model });
     setDoing(null); if (e) setErr(e);
   } : null;
   const shown = open ? dod : dod.filter((d) => d.id === leadId);
@@ -148,6 +169,19 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
             title={`Minami's done-list${busy ? " (checking…)" : ""} — keep it`}>Keep</button>
         )}
       </div>
+      {/* How the task runs: on its own to the end, or to a gate where it waits for him. ▶ Run sends the
+          whole stretch in one message, so the ungated items need no click each (Thomas, 2026-10-28). */}
+      {!compact && pace && (
+        <div className="mt-1 flex items-center gap-2 text-[11px] text-neutral-500">
+          <span className="min-w-0 flex-1 truncate">{pace}</span>
+          {doIt && plan.run.length > 0 && t.state !== "working" && (
+            <button onClick={doIt(RUN)} disabled={!!doing} title="Send every item up to the first gate to the task's chat, in one go"
+              className="shrink-0 rounded-md bg-[var(--sakura)]/15 px-2 py-0.5 text-[10px] font-semibold text-[var(--sakura)] hover:bg-[var(--sakura)]/25 disabled:opacity-50 pointer-coarse:py-1.5">
+              {doing === RUN ? "sending…" : plan.run.length > 1 ? `▶ Run ${plan.run.length}` : "▶ Run"}
+            </button>
+          )}
+        </div>
+      )}
       {!compact && shown.length > 0 && (
         <ul className="-mx-1.5 mt-1.5 space-y-0.5">
           {shown.map((d) => <DodItem key={d.id} t={t} d={d} status={status.get(d.id) ?? "todo"} doing={doing === d.id} onDo={doIt ? doIt(d.id) : undefined} />)}

@@ -67,9 +67,10 @@ export function ensureDod(ts: ThreadView[]) {
   void fetch("/api/threads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "ensure", ids }) });
 }
 
-/** "Minami, do it" on one done-item: send it to the task's chat and open that chat. */
-export async function doDodItem(t: ThreadView, dodId: string, opts: { mode?: string; model?: string | null } = {}): Promise<string | null> {
-  const r = await fetch("/api/threads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "do", id: t.id, dodId }) }).then((x) => x.json()).catch(() => null);
+/** "Minami, do it" on one done-item (or the whole run): send it to the task's chat and open that chat. */
+/** `dodId` null = ▶ Run: every open item up to the first gate, in one message (lib/task-pace.ts). */
+export async function doDodItem(t: ThreadView, dodId: string | null, opts: { mode?: string; model?: string | null } = {}): Promise<string | null> {
+  const r = await fetch("/api/threads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(dodId ? { action: "do", id: t.id, dodId } : { action: "run", id: t.id }) }).then((x) => x.json()).catch(() => null);
   if (!r?.key) return r?.error ?? "couldn't reach the task's chat";
   const s = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ key: r.key, cwd: r.cwd, message: r.message, resume: r.resume, mode: opts.mode, model: opts.model ?? undefined }) });

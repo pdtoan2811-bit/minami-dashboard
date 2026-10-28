@@ -239,6 +239,57 @@ work already knows which item it just finished, so it now says so itself (`lib/t
   (terminal, Minami bot) don't have the tool and are only ever read.
 - `MINAMI_DASHBOARD_TASK_TOOLS=0` turns the tools and the prompt line off.
 
+## How a task runs: auto, your pick, asks you
+
+Round 9 (Thomas: "some task can automatically go through all to-do in one go without my click on to-do,
+but some task need my confirmation … UI UX, I usually ask for pitches … make it rare for me to actually
+need input"). `lib/task-pace.ts`, pure, so the card, `task_status` and the server read one plan.
+
+- **Every done-item has a gate** (`FlowDod.gate`):
+  - `null` (auto): the chat does it and moves on. This is most items.
+  - `"pitch"` (**✋ your pick**): it decides how something looks or how a person uses it. The chat
+    pitches versions and asks him to pick.
+  - `"ok"` (**✋ asks you**): it leaves the machine or can't be undone (publish, post, send, spend,
+    delete, a customer-facing prod push). Local commits, merges and deploys of his own tools are auto.
+  - Haiku sets the gate when it writes the list (`suggest` returns `{t, gate, why}`, and UI work gets a
+    first item for his pick). Items added later are labelled by `classify` in `ensure`. **When unsure,
+    auto.** His tap on the chip cycles auto → your pick → asks you, sets `gateBy: "thomas"` and is never
+    re-guessed. Ticks keep the gate (`gateOf`).
+- **A run** is every open item up to the first gate (`runPlan`):
+  - **The card** says it in one line ("Runs A→Z on its own" / "Runs 2 on its own, then your pick" /
+    "Waits on your pick first") and has **▶ Run n**, which sends the whole stretch in one message
+    (`action: "run"`). ▶ Do it on a single item is unchanged.
+  - **`task_status`** ends with a "How to run it" line naming the gated items, and `TASK_PROMPT` tells
+    every chat to follow it. So a chat started from a typed prompt also runs straight through.
+- **Auto-continue** (`maybeContinue` in `/api/threads`) is the net for a chat that stops early anyway.
+  When the task is idle and its next open item is labelled auto, the server sends the run message to
+  the chat, prefixed "(Minami, auto-continue)". Every one of these guards is needed:
+  - Only the process hosting the chat sends it (`sessionIdentity`). The `:3001` preview never drives a
+    `:3000` chat.
+  - The first nudge needs a `task_report` after his last message (the chat is working the list). Every
+    later nudge needs a newly met item since the one before. A chat that answers with no progress is
+    left alone; seen in testing, it explained the blocker and stopped.
+  - At most 6 nudges since he last typed. A message of his more than 30 s after a nudge resets the
+    count.
+  - It waits 8 s after the turn ends, then decides again from disk.
+  - `MINAMI_TASK_AUTORUN=0` turns it off.
+  - It runs on `ensure`, so it needs a page that polls (the tile, the board, Home or a chat's Task
+    strip) to be open somewhere.
+- **Only a gate flags him.** A quiet task whose next open item is gated derives as `waiting`
+  (`lib/threads.ts`). That puts it in the board's Needs you column with the sakura tint, and the item
+  shows "needs you". An auto item never flags, because auto-continue moves it.
+
+> 🐛 2026-10-28 (found in testing): an item still waiting for its label ran as auto, so a "page layout
+> chosen" item was nudged on seconds before Haiku labelled it `pitch`. Auto-continue now waits for the
+> label. ▶ Run, which he presses himself, still treats an unlabelled item as auto.
+
+Tested end to end on an isolated server (`:3027`, `MINAMI_FLOW_FILE` in `/tmp`):
+- A 3-item task whose chat was told to stop after item 1 was nudged once, did items 2–3 and closed
+  itself.
+- With item 2 labelled `pitch`, there was no nudge and the task read `waiting`.
+- Haiku labelled "layout chosen" / "API returns values" / "tests pass" / "post published on X" as
+  pitch / auto / auto / ok.
+
 ## Threads
 
 A thread is derived, not declared (`lib/threads.ts`):

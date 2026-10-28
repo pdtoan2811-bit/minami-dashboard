@@ -9,8 +9,14 @@
 // never report: `reportAt` newer than `evalAt` skips its reading for that quiet (see `ensure` in the route).
 import { fid, mutateFlow, type FlowDod, type FlowState, type FlowThread } from "@/lib/flow-store";
 import { threads, type ThreadView } from "@/lib/threads";
+import { GATE_LABEL, runRules } from "@/lib/task-pace";
 
 export const allDone = (dod?: FlowDod[]) => !!dod?.length && dod.every((d) => d.done);
+
+/** An item's gate fields, carried over when a tick rebuilds it: a dropped gate would be re-guessed by Haiku
+ *  and could overwrite the one Thomas tapped. */
+export const gateOf = (d: FlowDod): Pick<FlowDod, "gate" | "gateWhy" | "gateBy"> =>
+  d.gate === undefined ? {} : { gate: d.gate, ...(d.gateWhy ? { gateWhy: d.gateWhy } : {}), ...(d.gateBy ? { gateBy: d.gateBy } : {}) };
 
 // Done closes itself (Thomas, 2026-10-28: "I don't want to check the subtask done manually"). Only on
 // the TRANSITION to all-met, never on a list that was already all met: a task he reopened, or one that
@@ -36,7 +42,7 @@ export function storedFor(s: FlowState, v: ThreadView): FlowThread {
 }
 
 const itemLine = (d: FlowDod, i: number) =>
-  `${i + 1}. [${d.done ? "x" : " "}] ${d.t}${d.done ? (d.by === "minami" ? " (ticked by Minami)" : " (ticked by Thomas)") : d.doing ? " (on now)" : ""}`;
+  `${i + 1}. [${d.done ? "x" : " "}] ${d.t}${d.done ? (d.by === "minami" ? " (ticked by Minami)" : " (ticked by Thomas)") : `${d.gate ? ` (gate: ${GATE_LABEL[d.gate]})` : ""}${d.doing ? " (on now)" : ""}`}`;
 
 /** What `task_status` hands the chat: the task and its numbered done-list. */
 export function taskStatus(sessionId: string | null): string {
@@ -48,7 +54,8 @@ export function taskStatus(sessionId: string | null): string {
     dod.length
       ? `Done-list${v.dodPending ? " (Minami's suggestion, not yet kept by Thomas)" : ""}:\n${dod.map(itemLine).join("\n")}`
       : "No done-list yet. You may add 2-4 checkable outcomes with task_report's `add`.",
-  ].join("\n");
+    runRules(dod),
+  ].filter(Boolean).join("\n");
 }
 
 export type TaskReport = {
@@ -82,12 +89,12 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
       if (cur.done && cur.by !== "minami") continue; // his tick stands
       // `by: "minami"` keeps the card's mark and lets him untick it; no `quote`, because the chat is
       // reporting its own work, not quoting evidence someone has to check against a transcript.
-      dod[d.n - 1] = { id: cur.id, t: cur.t, done: true, by: "minami", why: String(d.why ?? "").slice(0, 120) || "reported by the chat", at: cur.done ? cur.at : Date.now() };
+      dod[d.n - 1] = { id: cur.id, t: cur.t, ...gateOf(cur), done: true, by: "minami", why: String(d.why ?? "").slice(0, 120) || "reported by the chat", at: cur.done ? cur.at : Date.now() };
       said.push(`ticked ${d.n}`);
     }
     for (const n of r.undone ?? []) {
       if (!valid(n) || dod[n - 1].by !== "minami" || !dod[n - 1].done) continue;
-      dod[n - 1] = { id: dod[n - 1].id, t: dod[n - 1].t, done: false };
+      dod[n - 1] = { id: dod[n - 1].id, t: dod[n - 1].t, ...gateOf(dod[n - 1]), done: false };
       said.push(`unticked ${n}`);
     }
     // The chat's own word on which item is on beats Haiku's reading, and holds like a ▶ Do it (10 min).
