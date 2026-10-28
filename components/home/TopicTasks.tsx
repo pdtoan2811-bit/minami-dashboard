@@ -53,7 +53,8 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
 
       {/* A new task is just a new chat in this topic: it becomes a card here the moment it has a reply. */}
       <form onSubmit={(e) => { e.preventDefault(); const t = draft.trim(); if (t) { setDraft(""); send(t); } }} className="mt-3 flex gap-2">
-        <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={`New task in ${project}…`}
+        {/* Empty topic: the only reason to have expanded it is to start one, so the box is ready to type in. */}
+        <input autoFocus={open.length === 0} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={`New task in ${project}…`}
           className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/20 px-3 py-1.5 text-[16px] text-neutral-100 outline-none focus:border-[var(--sakura)]/50 md:text-[13px]" />
         <button type="submit" disabled={!draft.trim()} className={`${btn} disabled:opacity-40`}>Start</button>
       </form>
