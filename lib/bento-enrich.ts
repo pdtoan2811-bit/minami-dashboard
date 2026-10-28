@@ -25,7 +25,7 @@ export type Digest = { id: string; project: string; title: string; lastPrompt: s
 // Run Haiku via the local `claude` CLI WITHOUT blocking the Node event loop. spawnSync used to freeze
 // the entire server (every request — including transcript loads) for the whole call; this returns a
 // promise so the server keeps serving while the label is computed.
-function runHaiku(prompt: string): Promise<string> {
+export function runHaiku(prompt: string): Promise<string> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try { child = spawn("claude", ["-p", prompt, "--model", CHEAP_MODEL, "--output-format", "json"], { cwd: DIR }); }

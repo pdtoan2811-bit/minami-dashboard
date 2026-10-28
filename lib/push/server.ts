@@ -105,3 +105,9 @@ export async function markPresence(sessionId: string, gone?: boolean) {
   n.markPresence(sessionId, gone);
   if (gone) ensureTicking(); // a deferred need for this chat is owed now
 }
+
+/** One notification to every subscribed device — the morning "pick up" digest (lib/morning-push.ts). */
+export function broadcast(title: string, body: string, url: string, tag: string) {
+  const payload: PushPayload = { t: "show", tag, title, body, silent: false, url, actions: [], nonces: {}, ts: Date.now() };
+  for (const d of devices()) deliver(d, payload, { urgency: "normal", ttl: 4 * 3600 });
+}

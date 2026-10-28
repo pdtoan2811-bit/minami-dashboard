@@ -43,6 +43,14 @@ export async function register() {
     console.error("[minami] web push failed to start (the app is fine without it):", e);
   }
 
+  // The 07:30 "pick up where you left off" push (lib/morning-push.ts, §37).
+  try {
+    const { startMorningPush } = await import("@/lib/morning-push");
+    startMorningPush();
+  } catch (e) {
+    console.error("[minami] morning push failed to start:", e);
+  }
+
   // "Để Minami trả lời" Slack talk threads (lib/team-chat.ts, §25). Here because a deploy restarts the
   // server mid-conversation, and your next reply in the thread should still reach the chat.
   try {

@@ -1,0 +1,192 @@
+// Threads (§37). GET: open threads (tasks), the Done column, and the project list the Ask line routes to.
+// POST: the edits a task can take — name it, keep/tick/add to its Definition of Done, queue a To-do,
+// start one, archive (Done) and reopen — plus `ensure`, which asks Minami to write a done-list for a
+// task that has none and to tick the items its chats show are met.
+import { sessionIdentity } from "@/lib/agent/manager";
+import { runHaiku } from "@/lib/bento-enrich";
+import { fid, mutateFlow, readFlow, type FlowDod } from "@/lib/flow-store";
+import { listSessions, topicOf } from "@/lib/claude-sessions";
+import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+export async function GET(req: Request) {
+  // `?key=` → the session id a just-started chat got (the Ask line waits on this before opening it: a
+  // pane attaches by session id, and a key-only pane would sit on an empty "new chat").
+  const key = new URL(req.url).searchParams.get("key");
+  if (key) return Response.json({ sessionId: sessionIdentity(key)?.sessionId ?? null });
+  const t = threads();
+  return Response.json({ threads: t.threads, done: t.done, projects: t.projects, dismissed: t.dismissed, busy: [...inflight] });
+}
+
+type Body =
+  | { action: "name"; sessionId: string; title: string }
+  | { action: "dismiss"; sessionId: string }
+  | { action: "dod.accept"; id: string }
+  | { action: "dod.toggle"; id: string; dodId: string }
+  | { action: "dod.add"; id: string; t: string }
+  | { action: "archive"; id: string }
+  | { action: "unarchive"; id: string }
+  | { action: "drop"; id: string }
+  | { action: "queue"; project: string; cwd: string; title: string }
+  | { action: "start"; id: string; sessionId: string }
+  | { action: "ensure"; ids: string[] };
+
+// ── Minami's done-lists ──────────────────────────────────────────────────────────────────────────
+// Both jobs are cheap Haiku side calls, never on the request path: `ensure` returns at once and the
+// result lands on a later poll. Two at a time, one per task, so opening a board of twenty tasks queues
+// twenty small calls rather than firing them together. `inflight` is per process; two servers may
+// duplicate a call, which costs a cent and writes the same answer twice.
+const inflight = new Set<string>();
+const queue: (() => Promise<void>)[] = [];
+let running = 0;
+function enqueue(id: string, job: () => Promise<void>) {
+  if (inflight.has(id)) return;
+  inflight.add(id);
+  queue.push(async () => { try { await job(); } finally { inflight.delete(id); } });
+  pump();
+}
+function pump() {
+  while (running < 2 && queue.length) {
+    const j = queue.shift()!;
+    running++;
+    void j().finally(() => { running--; pump(); });
+  }
+}
+const RETRY_EMPTY_MS = 6 * 3600e3;
+
+function haikuJSON(raw: string): unknown {
+  try {
+    const result = JSON.parse(raw)?.result ?? raw;
+    return JSON.parse(String(result).match(/[[{][\s\S]*[\]}]/)?.[0] ?? "null");
+  } catch { return null; }
+}
+
+function chatOf(v: ThreadView): string {
+  return v.sessions.slice(-2).map((x) => recentText(x.id, x.cwd, 4000)).filter(Boolean).join("\n\n---\n\n").slice(-7000);
+}
+
+/** Write a proposed done-list for a task. A derived task is stored (`auto`) to hold it. */
+async function suggest(v: ThreadView) {
+  const firstAsks = v.sessions.length ? (listSessions().find((x) => x.id === v.sessions[0].id)?.asks ?? []).slice(0, 3) : [];
+  const prompt = `A piece of work is called "${v.title}" (project ${v.project}).\n${firstAsks.length ? `It started with:\n${firstAsks.map((a) => "- " + a.slice(0, 300)).join("\n")}\n` : ""}${v.sessions.length ? `The end of its chat:\n${chatOf(v).slice(-3000)}\n` : ""}\nWrite its Definition of Done: 2 to 4 outcomes Thomas can check by looking (a page renders, a number is right, a file exists, it is merged). Each under 10 words, no verbs in the imperative. Reply with ONLY a JSON array of strings.`;
+  const arr = haikuJSON(await runHaiku(prompt));
+  const items = (Array.isArray(arr) ? arr : []).map(String).map((s) => s.trim()).filter(Boolean).slice(0, 4);
+  mutateFlow((s) => {
+    let t = s.threads.find((x) => x.id === v.id);
+    if (!t) {
+      if (!items.length) return;
+      t = { id: v.id.startsWith("s:") ? fid() : v.id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), auto: true, createdAt: Date.now(), updatedAt: Date.now() };
+      s.threads.unshift(t);
+    }
+    if (t.dod?.length) return;
+    if (!items.length) { t.dodTriedAt = Date.now(); return; }
+    t.dod = items.map((x, i) => ({ id: t!.id + "-" + i, t: x, done: false }));
+    t.dodPending = true;
+    t.evalAt = 0; // tick right away against what the chat already says
+  });
+}
+
+/** Tick the items the chat shows are met. Never unticks what Thomas ticked; may untick its own. */
+async function evaluate(v: ThreadView) {
+  const dod = v.dod ?? [];
+  const chat = chatOf(v);
+  if (!dod.length || !chat) { mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) t.evalAt = v.at; }); return; }
+  const prompt = `Definition of Done for "${v.title}":\n${dod.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\nThe end of the work chat:\n${chat}\n\nWhich items does the chat show are actually met (done and confirmed, not planned or promised)? Reply with ONLY JSON: {"met":[{"n":<item number>,"why":"<under 12 words: what in the chat shows it>"}]}`;
+  const j = haikuJSON(await runHaiku(prompt)) as { met?: { n?: number; why?: string }[] } | null;
+  const met = new Map<number, string>();
+  for (const x of j?.met ?? []) if (typeof x?.n === "number") met.set(x.n - 1, String(x.why ?? "").slice(0, 120));
+  mutateFlow((s) => {
+    const t = s.threads.find((x) => x.id === v.id);
+    if (!t?.dod) return;
+    t.evalAt = v.at;
+    if (!j) return; // a failed call says nothing about the items
+    t.dod = t.dod.map((d, i): FlowDod => {
+      if (d.done && d.by !== "minami") return d; // his tick stands
+      if (met.has(i)) return { ...d, done: true, by: "minami", why: met.get(i), at: d.done ? d.at : Date.now() };
+      return d.by === "minami" ? { id: d.id, t: d.t, done: false } : d;
+    });
+  });
+}
+
+function ensure(ids: string[]) {
+  const store = readFlow();
+  const all = threads(14);
+  const byId = new Map([...all.threads, ...all.done].map((v) => [v.id, v]));
+  for (const id of ids.slice(0, 40)) {
+    const v = byId.get(id);
+    if (!v || v.archived) continue;
+    const st = store.threads.find((x) => x.id === v.id);
+    if (!v.dod?.length) {
+      if (st?.dodTriedAt && Date.now() - st.dodTriedAt < RETRY_EMPTY_MS) continue;
+      enqueue(v.id, () => suggest(v));
+    } else if (v.state !== "working" && v.sessions.length && (st?.evalAt ?? 0) < v.at) {
+      // Checked when the chat goes quiet, not mid-turn: a half-finished reply reads as "not yet".
+      enqueue(v.id, () => evaluate(v));
+    }
+  }
+}
+
+export async function POST(req: Request) {
+  const b = (await req.json().catch(() => null)) as Body | null;
+  if (!b || typeof b !== "object" || !("action" in b)) return Response.json({ error: "bad body" }, { status: 400 });
+  try {
+    if (b.action === "ensure") { ensure(Array.isArray(b.ids) ? b.ids.map(String) : []); return Response.json({ ok: true }); }
+    if (b.action === "name") {
+      const m = listSessions().find((x) => x.id === b.sessionId);
+      if (!m) throw new Error("no such session");
+      // Naming the thread a session is in: the whole derived thread (it and its continuations) is
+      // stored under the name, so a continuation found later still joins it.
+      const view = threads(30).threads.find((t) => t.sessions.some((x) => x.id === b.sessionId));
+      const ids = view?.sessions.map((x) => x.id) ?? [b.sessionId];
+      const title = String(b.title || "").trim().slice(0, 90) || m.task || m.title;
+      let id = "";
+      mutateFlow((s) => {
+        const existing = view?.stored ? s.threads.find((t) => t.id === view.id) : undefined;
+        if (existing) { existing.title = title; existing.auto = false; existing.updatedAt = Date.now(); id = existing.id; return; }
+        id = fid();
+        s.threads.unshift({ id, title, project: topicOf(baseCwd(m.cwd)).project || m.project, cwd: baseCwd(m.cwd), sessions: ids, createdAt: Date.now(), updatedAt: Date.now() });
+      });
+      const v = threads(30).threads.find((t) => t.id === id);
+      if (v && !v.dod?.length) enqueue(id, () => suggest(v));
+      return Response.json({ ok: true, id });
+    }
+    if (b.action === "queue") {
+      const title = String(b.title || "").trim().slice(0, 140);
+      if (!title || !b.project || !b.cwd) throw new Error("title, project and cwd");
+      const id = fid();
+      mutateFlow((s) => { s.threads.unshift({ id, title, project: b.project, cwd: baseCwd(b.cwd), sessions: [], queued: true, createdAt: Date.now(), updatedAt: Date.now() }); });
+      const v = threads().threads.find((t) => t.id === id);
+      if (v) enqueue(id, () => suggest(v));
+      return Response.json({ ok: true, id });
+    }
+    // A derived task (id "s:…") has nothing stored yet; the edits below that need a record make one.
+    if ("id" in b && b.id.startsWith("s:") && (b.action === "archive" || b.action === "dod.add" || b.action === "drop")) {
+      const v = threads(14).threads.find((t) => t.id === b.id);
+      if (!v) throw new Error("no such task");
+      const id = fid();
+      mutateFlow((s) => { s.threads.unshift({ id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), auto: true, createdAt: Date.now(), updatedAt: Date.now() }); });
+      b.id = id;
+    }
+    mutateFlow((s) => {
+      const t = "id" in b ? s.threads.find((x) => x.id === b.id) : undefined;
+      switch (b.action) {
+        case "dismiss": if (!s.dismissed.includes(b.sessionId)) s.dismissed = [...s.dismissed, b.sessionId].slice(-500); break;
+        case "dod.accept": if (t) t.dodPending = false; break;
+        // His tap is his: it clears Minami's mark either way, so Minami won't untick it later.
+        case "dod.toggle": if (t?.dod) { t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, done: !d.done, at: Date.now() } : d)); t.dodPending = false; } break;
+        case "dod.add": if (t && b.t.trim()) { t.dod = [...(t.dod ?? []), { id: fid(), t: b.t.trim().slice(0, 140), done: false }]; t.dodPending = false; } break;
+        case "archive": if (t) { t.archived = true; t.doneAt = Date.now(); t.auto = false; } break;
+        // A To-do never started is just deleted; anything with chats is hidden, so they stay claimed.
+        case "drop": if (t) { if (!t.sessions.length) s.threads = s.threads.filter((x) => x !== t); else t.hidden = true; } break;
+        case "unarchive": if (t) { t.archived = false; delete t.doneAt; } break;
+        case "start": if (t) { t.queued = false; if (!t.sessions.includes(b.sessionId)) t.sessions.push(b.sessionId); } break;
+      }
+      if (t) t.updatedAt = Date.now();
+    });
+    return Response.json({ ok: true });
+  } catch (e) {
+    return Response.json({ error: String((e as Error).message) }, { status: 400 });
+  }
+}
