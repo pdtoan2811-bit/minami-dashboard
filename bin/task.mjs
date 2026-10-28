@@ -18,6 +18,7 @@
 //   node bin/task.mjs preview <name>                 build, then serve it on its own port
 //   node bin/task.mjs merge <name> [--keep] [--json] verify → build → merge into base (serialised)
 //   node bin/task.mjs rm <name> [--force]            drop the worktree (and its branch)
+//   node bin/task.mjs tidy [--dry] [--json]          remove merged, idle worktrees and merged branches
 //
 // Ports are derived from the task name, never assigned round-robin: a preview must land on the same
 // port every time or you cannot bookmark it, and two tasks must not silently collide on one.
@@ -426,6 +427,117 @@ async function cmdRm(name, force) {
   console.log(`✓ removed ${name}` + (d.ok ? ` and ${branch}` : ` (branch ${branch} kept: ${d.out.trim().split("\n")[0]})`));
 }
 
+// ── Tidy ─────────────────────────────────────────────────────────────────────────────────────────────
+// Removes what is provably finished: a worktree whose every commit is already in the base, and a branch
+// that is fully merged with no worktree on it. Nothing it deletes holds a commit the base lacks, so it
+// cannot lose work. Unmerged branches, dirty trees and stashes are reported, never touched.
+//
+// WHY THIS EXISTS (2026-10-28): `merge` removes its tree and branch, but most merges don't go through it.
+// A chat merges its own branch by hand (`git merge` in the base) and has to keep the folder it is
+// running in, and nothing came back for it after the chat ended. The janitor only recycles trees idle
+// 3+ days, only when the disk is low, and never deletes branches. That left 8 trees and 19 branches,
+// all merged. The autopilot runs this every few minutes (lib/autopilot/runner.ts) so nobody has to ask.
+//
+// "In use" is any one of: a fresh claim, a live session cwd (dashboard), a process whose cwd is inside
+// (lsof — this covers Claude Code's own `.claude/worktrees/` sessions, which never claim), a
+// mid-operation, a `git worktree lock`, or activity in the last QUIET_MS. The quiet window protects a
+// tree `new` just made: it is clean and has nothing ahead of the base, so it looks exactly like a
+// finished one until its session starts.
+const QUIET_MS = 30 * 60_000;
+const TIDY_CLAIM_TTL_MS = 30 * 60_000; // the janitor's figure; longer than CLAIM_TTL_MS on purpose
+
+function processCwds() {
+  try {
+    const out = execFileSync("lsof", ["-d", "cwd", "-Fn"], { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "ignore"] });
+    return out.split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1));
+  } catch (e) {
+    // lsof exits 1 when some processes can't be read, with a perfectly good list on stdout
+    const out = String(e.stdout || "");
+    if (!out) return null;
+    return out.split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1));
+  }
+}
+
+function worktreeEntries() {
+  return tryGit(["worktree", "list", "--porcelain"]).out.split("\n\n").map((b) => ({
+    path: b.match(/^worktree (.+)$/m)?.[1],
+    branch: b.match(/^branch refs\/heads\/(.+)$/m)?.[1] || null,
+    locked: /^locked/m.test(b),
+  })).filter((w) => w.path && w.path !== ROOT);
+}
+
+async function cmdTidy({ json = false, dry = false } = {}) {
+  const out = { removed: [], branches: [], kept: [], stashes: 0, dry };
+  const base = currentBranch(ROOT);
+  if (isMerging(ROOT) || base === "HEAD") {
+    out.skipped = isMerging(ROOT) ? "base mid-merge" : "base detached";
+    if (json) console.log(JSON.stringify(out)); else console.log(`tidy skipped: ${out.skipped}`);
+    return;
+  }
+  const live = await liveCwds();
+  const procs = processCwds();
+  // Unknown occupancy is not "free": without lsof we cannot see Claude Code's own sessions at all.
+  if (procs === null) {
+    out.skipped = "lsof unavailable";
+    if (json) console.log(JSON.stringify(out)); else console.log("tidy skipped: lsof unavailable");
+    return;
+  }
+  const inside = (dir) => procs.some((c) => c === dir || c.startsWith(dir + "/"));
+  const merged = (ref) => tryGit(["merge-base", "--is-ancestor", ref, base]).ok;
+  const now = Date.now();
+
+  for (const w of worktreeEntries()) {
+    const ours = w.path.startsWith(TREES + "/") || w.path.startsWith(path.join(ROOT, ".claude", "worktrees") + "/");
+    if (!ours) continue; // somebody else's layout — not ours to judge
+    const name = path.relative(ROOT, w.path);
+    const keep = (why) => out.kept.push({ tree: name, why });
+    if (!fs.existsSync(w.path)) continue; // `worktree prune` below handles a vanished folder
+    if (w.locked) { keep("locked"); continue; }
+    if (!w.branch) { keep("detached HEAD"); continue; }
+    if (isMerging(w.path)) { keep("mid-merge"); continue; }
+    if (isDirty(w.path)) { keep("uncommitted changes"); continue; }
+    if (!merged(w.branch)) { keep(`${tryGit(["rev-list", "--count", `${base}..${w.branch}`]).out.trim()} commit(s) not in ${base}`); continue; }
+    const c = readClaim(w.path);
+    if (c && now - c.heartbeatAt < TIDY_CLAIM_TTL_MS) { keep("claimed by a pane"); continue; }
+    if (live && live.has(w.path)) { keep("live session"); continue; }
+    if (inside(w.path)) { keep("a process is running in it"); continue; }
+    let last = Math.max(lastCommitTs(w.path), c?.heartbeatAt || 0);
+    try { last = Math.max(last, fs.statSync(path.join(w.path, ".git")).mtimeMs); } catch { /* ignore */ }
+    if (now - last < QUIET_MS) { keep("active in the last 30 min"); continue; }
+
+    if (!dry) {
+      // no --force: the tree is clean, so a refusal means something changed under us — keep it
+      const r = tryGit(["worktree", "remove", w.path]);
+      if (!r.ok) { keep(`remove refused: ${r.out.trim().split("\n").pop()}`); continue; }
+    }
+    out.removed.push({ tree: name, branch: w.branch });
+  }
+  if (!dry) tryGit(["worktree", "prune"]);
+
+  // Branches: fully merged, checked out nowhere, not tracking a remote (a pushed branch is someone's).
+  const checkedOut = new Set([base, ...worktreeEntries().map((w) => w.branch).filter(Boolean)]);
+  const refs = tryGit(["for-each-ref", "--format=%(refname:short)\t%(upstream)", "refs/heads/"]).out.trim().split("\n").filter(Boolean);
+  for (const line of refs) {
+    const [b, upstream] = line.split("\t");
+    if (checkedOut.has(b) || upstream || ["main", "master"].includes(b)) continue;
+    if (!merged(b)) { out.kept.push({ branch: b, why: `not merged into ${base}` }); continue; }
+    if (!dry) {
+      const r = tryGit(["branch", "-d", b]);
+      if (!r.ok) { out.kept.push({ branch: b, why: r.out.trim().split("\n").pop() }); continue; }
+    }
+    out.branches.push(b);
+  }
+  out.stashes = tryGit(["stash", "list"]).out.trim().split("\n").filter(Boolean).length;
+
+  if (json) { console.log(JSON.stringify(out)); return; }
+  const verb = dry ? "would remove" : "removed";
+  console.log(`${verb} ${out.removed.length} worktree(s), ${out.branches.length} branch(es)`);
+  for (const r of out.removed) console.log(`  − ${r.tree} (${r.branch})`);
+  for (const b of out.branches) console.log(`  − branch ${b}`);
+  for (const k of out.kept) console.log(`  · kept ${k.tree || "branch " + k.branch}: ${k.why}`);
+  if (out.stashes) console.log(`  · ${out.stashes} stash entr${out.stashes === 1 ? "y" : "ies"} — not touched (git stash list)`);
+}
+
 // --- main -------------------------------------------------------------------------------------------
 const [cmd, arg] = process.argv.slice(2);
 const has = (f) => process.argv.includes(f);
@@ -442,5 +554,6 @@ switch (cmd) {
   case "preview": await cmdPreview(arg); break;
   case "merge": await cmdMerge(arg, has("--keep"), { json: has("--json") }); break;
   case "rm": case "remove": await cmdRm(arg, has("--force")); break;
+  case "tidy": await cmdTidy({ json: has("--json"), dry: has("--dry") }); break;
   default: help();
 }
