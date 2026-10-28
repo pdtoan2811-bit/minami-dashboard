@@ -7,6 +7,7 @@ import { runHaiku } from "@/lib/bento-enrich";
 import { fid, mutateFlow, readFlow, type FlowDod, type FlowThread } from "@/lib/flow-store";
 import { listSessions, topicOf } from "@/lib/claude-sessions";
 import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
+import { allDone, closeIfDone, taskReport, type TaskReport } from "@/lib/task-report";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,7 +35,9 @@ type Body =
   | { action: "ensure"; ids: string[] }
   | { action: "do"; id: string; dodId: string }
   /** Close a task from inside its chat: by session id, or by the chat's own MINAMI_SESSION_KEY. */
-  | { action: "close"; sessionId?: string; key?: string };
+  | { action: "close"; sessionId?: string; key?: string }
+  /** The chat reports its own progress (lib/task-report.ts) — the HTTP twin of its `task_report` tool. */
+  | ({ action: "report"; sessionId?: string; key?: string } & TaskReport);
 
 // ── Minami's done-lists ──────────────────────────────────────────────────────────────────────────
 // Both jobs are cheap Haiku side calls, never on the request path: `ensure` returns at once and the
@@ -59,15 +62,6 @@ function pump() {
 }
 const RETRY_EMPTY_MS = 6 * 3600e3;
 const FOCUS_EVERY_MS = 2 * 60e3;
-
-// Done closes itself (Thomas, 2026-10-28: "I don't want to check the subtask done manually"). Only on
-// the TRANSITION to all-met, never on a list that was already all met: a task he reopened, or one that
-// came back because he replied in it (lib/threads.ts `revived`), stays open with Close until he says.
-const allDone = (dod?: FlowDod[]) => !!dod?.length && dod.every((d) => d.done);
-function closeIfDone(t: FlowThread, wasDone: boolean) {
-  if (wasDone || !allDone(t.dod)) return;
-  t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false;
-}
 
 function haikuJSON(raw: string): unknown {
   try {
@@ -167,6 +161,10 @@ function ensure(ids: string[]) {
     if (!v.dod?.length) {
       if (st?.dodTriedAt && Date.now() - st.dodTriedAt < RETRY_EMPTY_MS) continue;
       enqueue(v.id, () => suggest(v));
+    } else if (st?.reportAt && st.reportAt > (st.evalAt ?? 0)) {
+      // The chat reported for itself since the last reading: its word stands in for Haiku's this quiet.
+      // Marked checked as of now, so a later stretch of work that goes unreported is read as usual.
+      if (v.state !== "working") mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) t.evalAt = Math.max(v.at, t.reportAt ?? 0); });
     } else if (v.state !== "working" && v.sessions.length && (st?.evalAt ?? 0) < v.at) {
       // Checked when the chat goes quiet, not mid-turn: a half-finished reply reads as "not yet".
       enqueue(v.id, () => evaluate(v));
@@ -212,6 +210,10 @@ export async function POST(req: Request) {
         t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = "closed from the chat"; t.updatedAt = Date.now();
       });
       return Response.json({ ok: true, id, title: v.title });
+    }
+    if (b.action === "report") {
+      const sid = b.sessionId || (b.key ? sessionIdentity(b.key)?.sessionId : null);
+      return Response.json({ ok: true, said: taskReport(sid ?? null, b) });
     }
     if (b.action === "ensure") { ensure(Array.isArray(b.ids) ? b.ids.map(String) : []); return Response.json({ ok: true }); }
     if (b.action === "name") {
