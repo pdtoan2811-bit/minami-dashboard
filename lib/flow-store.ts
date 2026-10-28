@@ -13,7 +13,12 @@ import path from "node:path";
 const FILE = process.env.MINAMI_FLOW_FILE || path.join(os.homedir(), ".minami", "flow.json");
 
 /** `by: "minami"` — ticked by Minami reading the chat (`why` says what it saw); a tap by Thomas clears it. */
-export type FlowDod = { id: string; t: string; done: boolean; at?: number; by?: "minami"; why?: string };
+export type FlowDod = { id: string; t: string; done: boolean; at?: number; by?: "minami"; why?: string;
+  /** Words copied from the chat that show the item is met; kept only if they really are in the chat. */
+  quote?: string; quoteBy?: "Thomas" | "Minami";
+  /** When this item became the one being worked on — by ▶ Do it, or Minami reading the chat. At most
+   *  one open item carries it; the card turns it into "Minami working" / "needs you" / "started". */
+  doing?: number };
 export type FlowThread = {
   id: string; title: string; project: string; cwd: string;
   /** Session ids, oldest first. A session belongs to at most one stored thread. */
@@ -30,6 +35,8 @@ export type FlowThread = {
   queued?: boolean;
   /** Last activity Minami checked the DoD against; a newer reply means check again. */
   evalAt?: number;
+  /** Last time Minami read a RUNNING chat to see which item it is on (throttled, see ensure). */
+  focusAt?: number;
   /** When a done-list was asked for and none came back, so it isn't asked for on every poll. */
   dodTriedAt?: number;
   createdAt: number; updatedAt: number; archived?: boolean; doneAt?: number;

@@ -152,6 +152,29 @@ subtask and button to let Minami do it for me").
   - The browser sends "Next on the done-list for …: <item>. Do this now…" through `/api/agent/send`, so
     a chat whose worktree is gone is re-homed as usual, and then opens the chat. Resuming under a second
     key would be two processes writing one transcript.
+- **Each Minami tick shows its evidence**: Haiku returns the met items with a reason AND a quote copied
+  word for word from the chat, plus who said it. The quote is kept only if it is really in the chat
+  (case, whitespace and quote marks ignored). Otherwise the tick keeps just its reason, because a made-up
+  quote under a tick is worse than none. The card shows it as an indented italic line ("— you" /
+  "— Minami"); tapping it opens the chat. Ticks made before this keep only their reason until the next check.
+- **Each item has a status**, so the card shows what is being worked on, not only what's next:
+  - **Minami on it** (orange, pulsing): the task's chat is running on this item.
+  - **needs you**: the chat stopped and is asking about it.
+  - **started**: it was being worked on and the chat is now quiet.
+  - **next**: nothing is on, and this is the first open item.
+  - **done** ✓.
+  - **Which item is on** is the `doing` field on the item. ▶ Do it sets it, and it wins for 10 minutes.
+    Otherwise Minami's reading sets it: every check returns `now`, the open item the end of the chat is
+    on. While a chat is running, a focus-only check (no ticks) runs at most every 2 minutes per task
+    (`focusAt`).
+- **Minami's ticks stay.** It reads only the end of a chat, so "not in this reading" can't mean "not
+  done". A Minami tick is removed only when the chat says that thing broke or was reverted (`undone`), or
+  when he unticks it.
+
+> 🐛 2026-10-28: Minami's ticks fell off as a chat went on. The check reads the last ~7k characters of a
+> chat and used to untick any of its own items not confirmed in that window, so a 3/4 task dropped to
+> 0/4 an hour later with nothing undone. Ticks are now sticky unless the chat reports the item undone.
+
 - The home list's threads call `ensureDod` too, so tasks get done-lists and ticks without the board
   being opened.
 
