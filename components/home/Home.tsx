@@ -154,7 +154,10 @@ function useToday() {
   return [todos, setTodos] as const;
 }
 
-export function Home({ filter }: { filter?: (project: string) => boolean }) {
+/** `only` splits Home across the unfolded N5's two columns: "focus" = Needs you + Where you left off,
+ *  "today" = Today. The data hooks are shared stores (useThreads, useShellData), so two instances
+ *  still make one poll each; only Today's own fetch runs twice. */
+export function Home({ filter, only }: { filter?: (project: string) => boolean; only?: "focus" | "today" }) {
   const d = useThreads();
   const shell = useShellData();
   const [todos, setTodos] = useToday();
@@ -186,7 +189,7 @@ export function Home({ filter }: { filter?: (project: string) => boolean }) {
 
   return (
     <div className="mb-4 flex flex-col gap-4">
-      {needs.length > 0 && (
+      {only !== "today" && needs.length > 0 && (
         <section>
           <p className={head}><span className="h-1.5 w-1.5 rounded-full bg-[var(--sakura)]" />Needs you · {needs.length}</p>
           <div className={box}>
@@ -205,7 +208,7 @@ export function Home({ filter }: { filter?: (project: string) => boolean }) {
         </section>
       )}
 
-      {shown.length > 0 && (
+      {only !== "today" && shown.length > 0 && (
         <section>
           <p className={head}>Where you left off</p>
           <div className={box}>{shown.map((t, i) => <ThreadRow key={t.id} t={t} first={i === 0} />)}</div>
@@ -213,7 +216,7 @@ export function Home({ filter }: { filter?: (project: string) => boolean }) {
         </section>
       )}
 
-      {todos && (open.length > 0 || doneN > 0) && (
+      {only !== "focus" && todos && (open.length > 0 || doneN > 0) && (
         <section>
           <p className={head}>☀ Today · {open.length ? `${open.length} left` : "all done"}{doneN ? ` · ${doneN} done` : ""}<a href="/today" className="ml-auto normal-case tracking-normal text-neutral-600 hover:text-neutral-300">plan ›</a></p>
           {open.length > 0 && (

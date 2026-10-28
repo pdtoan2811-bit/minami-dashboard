@@ -32,7 +32,7 @@ Thomas's answers to the verdict's questions:
 ## What's on `/`
 
 Above the tiles, in this order (desktop: in the bento column with no panel open; phone: the default
-"Home" view, with Inbox one tap away):
+"Home" view, with Inbox one tap away; the unfolded Find N5 shows it in two columns, see §23):
 
 | Section | What it is |
 |---|---|

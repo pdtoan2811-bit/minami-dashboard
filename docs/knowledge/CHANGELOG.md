@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-28
+- **Find N5: the new Home reaches both screens** (§23, §37; `app/page.tsx`, `components/home/Home.tsx`, `Celebrate.tsx`). Unfolded: two-column Home instead of a 288px tile list beside an empty pane. Folded: the Home | Inbox switch is at the top, Search moved into the Inbox, and the second bottom bar is gone. The toast no longer sits on the tab bar at 813px or runs off the edge at 380px.
 - **Phone: ＋ Task is a tab on every page** (§37; `components/home/PhoneNewTask.tsx`, `AppShell.tsx`). Thomas's pick from the `phone-new-task` pitch (V3): full-screen composer, project guessed from the text. Replaces the Bento-bar pill. The celebrate toast no longer covers the phone's bottom bars.
 - **Phone: ＋ Task in the bottom bar** (§37; `components/home/NewTask.tsx` `NewTaskButton`, `app/page.tsx`). Opens the New task sheet from Home or Inbox, full-height, with a project chip to change where it lands.
 - **Autopilot no longer asks for a hand on its own conflict resolve** (§13; `lib/autopilot/runner.ts`). The mid-merge "someone is resolving by hand" warning is suppressed while autopilot holds a fresh claim. A merge finished by hand mid-resolve is recorded as merged, not as a conflict. The resolver pane says nothing is needed from Thomas.

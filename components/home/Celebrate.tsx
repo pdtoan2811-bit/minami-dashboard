@@ -50,13 +50,14 @@ export function Celebrate() {
   return (
     <AnimatePresence>
       {now && (
-        // Above the phone's two bars (the shell nav + Bento's Home|Inbox row), not on them: at a flat
-        // bottom-24 it sat over ＋ Task for its 7 seconds, and a tap there hit the toast instead.
-        <motion.div key={now.id} className="fixed inset-x-0 bottom-[calc(var(--shell-bottom,0px)+4.75rem)] z-[60] flex justify-center px-4 md:bottom-8"
+        // Above the phone's tab bar, not on it: at a flat bottom-24 it sat over ＋ Task for its 7 seconds,
+        // and a tap there hit the toast instead. The desk's `bottom-8` is for a mouse only — `md:` alone
+        // also matched the unfolded N5 (813px), and dropped it back onto the tabs.
+        <motion.div key={now.id} className="fixed inset-x-0 bottom-[calc(var(--shell-bottom,0px)+1rem)] z-[60] flex justify-center px-4 md:pointer-fine:bottom-8"
           initial={{ opacity: 0, y: 24, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12 }}
           transition={{ type: "spring", stiffness: 340, damping: 26 }}>
           {!reduce && <Burst />}
-          <div role="status" className="flex max-w-md items-center gap-3 rounded-2xl border border-[#4ade80]/40 bg-neutral-900/95 px-4 py-3 shadow-[0_20px_60px_-20px_rgba(74,222,128,0.5)]">
+          <div role="status" className="flex w-full max-w-md items-center gap-3 rounded-2xl border border-[#4ade80]/40 bg-neutral-900/95 px-4 py-3 shadow-[0_20px_60px_-20px_rgba(74,222,128,0.5)]">
             <motion.span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#4ade80]/15 text-lg text-[#4ade80]"
               initial={{ scale: 0.4, rotate: -30 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: "spring", stiffness: 420, damping: 14, delay: 0.1 }}>✓</motion.span>
             <span className="min-w-0 flex-1">

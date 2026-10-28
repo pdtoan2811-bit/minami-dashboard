@@ -277,10 +277,26 @@ chats, newest first (left = next), instead of recently visited chats across topi
 hand-offs per topic, "the other chat in this project" had no route but the all-chats sheet.
 Cross-topic hops are the inbox's and ☰'s job.
 
-**List-detail on the N5 unfolded** (`split` = compact and ≥700px): a 288px list (Inbox | Topics,
-icon-only nav) beside the chat. There is no nav rail, because at 750px a rail would leave the chat
-under 400px. With no chat selected, the right side says so. While the keyboard is up, the list
-collapses to a 72px icon strip.
+**The N5 unfolded's home** (`split` = compact and ≥700px; the device reports 813×842, touch, as an
+installed app). With no chat open it is the §37 Home in two columns: Ask, Needs you and Where you left
+off on the left; Today, the publish tile and the topic tiles on the right (`splitHome` in `app/page.tsx`,
+`Home only="focus" | "today"`). Opening a chat gives the full-width reading desk (round 9); Back returns
+to Home. There is no empty "pick a chat" pane any more.
+
+**Home | Inbox on the phone** is a small switch at the top of the page, which scrolls away with it. Search
+lives in the Inbox and filters chats by title, project and last line. The phone has no board header and
+no bar of its own above the shell's tab bar.
+
+> 🐛 **The unfolded N5 never got the new Home (2026-10-28).** Reported: "UI Ux on the find n5 is
+> annoying… a lot of old UI UX are getting in the way". Measured at 813×842 with touch, the §37 Home was
+> gated on `!split`, so the unfolded screen showed the old list-detail layout. That meant topic tiles in
+> a 288px column (icons over the Tasks button, sort pills running past the divider, Search squeezed to a
+> blank 20px box) and ~525px of "Pick a chat on the left". The folded screen showed the new Home but kept
+> the old Home | Inbox + Search bar docked above the new tab bar: two stacked bars, with a Search that
+> filtered tiles below the fold. The done toast's `md:bottom-8` also matched 813px and sat on the tabs,
+> and at 380px it ran off both edges because it had no `w-full`. Fix: the two-column Home, the switch at
+> the top, Search in the Inbox, and the toast's desk position limited to `md:pointer-fine:`. Checked at
+> 813×842 and 380×872 with touch, and at 1440×900 with a mouse (unchanged).
 
 **Controls chip.** In the phone shell the control row is always folded. The chip shows only what you
 changed (the model when it isn't the default, plan/code, the approval level, held). Pause is its own
