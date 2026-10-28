@@ -47,7 +47,12 @@ import { Inbox, type InboxLive } from "@/components/Inbox";
 import { taskKeyOf } from "@/lib/task-groups";
 import { TeamButton, TeamRow, TeamSheet, useTeamInbox } from "@/components/TeamInbox";
 import { useShellFullscreen } from "@/components/shell/use-shell";
-import { DayStrip } from "@/components/shell/DayStrip";
+import { AskLine, Home } from "@/components/home/Home";
+import { ChatHints } from "@/components/home/ChatHints";
+import { TopicTasks } from "@/components/home/TopicTasks";
+import { Board } from "@/components/home/Board";
+import { startAsk } from "@/lib/ask";
+import { useThreads } from "@/lib/use-threads";
 import { matchesProject, useProjectFilter } from "@/lib/project-filter";
 import { VoiceButton } from "@/components/VoiceButton";
 import { useBackLayer } from "@/lib/use-back";
@@ -93,6 +98,10 @@ type RenderTurn = { role: "user" | "assistant"; text: string; tools: AgentToolCa
 type Pane = { key: string; sid: string; switchGen?: number; cwd?: string };
 let paneSeq = 0;
 const mkPane = (sid = ""): Pane => ({ key: `pane-${Date.now().toString(36)}-${paneSeq++}-${Math.random().toString(36).slice(2, 7)}`, sid });
+// A blank pane born for a task-layer role (§37): `flow-lead-…` / `flow-topic-…` (sub-sessions are
+// `flow-sub-…`, made by their card). The prefix is what tells ChatColumn not to offer continue-on-open —
+// a new lead that silently resumed the topic's last chat would be that chat, not the task's lead.
+const mkFlowPane = (kind: "lead" | "topic"): Pane => ({ key: `flow-${kind}-${Date.now().toString(36)}-${paneSeq++}-${Math.random().toString(36).slice(2, 7)}`, sid: "" });
 const asPanes = (v: unknown): Pane[] => Array.isArray(v)
   ? v.map((x) => (typeof x === "string" ? mkPane(x) : (x && typeof x === "object" && "key" in (x as object) ? (x as Pane) : mkPane())))
   : [];
@@ -525,6 +534,32 @@ export default function BentoHome() {
   // while this tab isn't visible/focused. Mounted once, here, not per-pane — see lib/use-notify.ts.
   useTitleFlash("Minami Bento");
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  // Threads (§37): the tiles' Resume and which sessions are Thomas's own (openProject prefers those).
+  const threadsData = useThreads();
+  const threadsRef = useRef(threadsData);
+  threadsRef.current = threadsData;
+  // The one tile expanded in place to show its tasks (§37). One at a time: two open task lists would
+  // push every other topic off the screen, and keeping the others in view was the point.
+  const [expandFor, setExpandFor] = useState<string | null>(null);
+  // One project's board (§37), in place of the grid. In the URL (`?focus=`) so a reload or a phone
+  // bookmark lands back on it.
+  const [focusFor, setFocusFor] = useState<string | null>(null);
+  useEffect(() => { const f = new URLSearchParams(location.search).get("focus"); if (f) setFocusFor(f); }, []);
+  const boardRef = useRef(focusFor);
+  boardRef.current = focusFor;
+  useEffect(() => {
+    const sync = () => {
+      const u = new URL(location.href);
+      if (boardRef.current) u.searchParams.set("focus", boardRef.current); else u.searchParams.delete("focus");
+      if (u.href !== location.href) history.replaceState(history.state, "", u.pathname + u.search);
+    };
+    sync();
+    // Closing the board rewinds the back-layer's history entry (lib/use-back), which restores the URL
+    // that entry was pushed with — `?focus=` included — so re-sync after any history move.
+    const onPop = () => setTimeout(sync, 0);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [focusFor]);
   const [loaded, setLoaded] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [q, setQ] = useState("");
@@ -558,7 +593,9 @@ export default function BentoHome() {
   // 700px is where a 288px list still leaves the chat ~460px — below that, code blocks wrap to mush.
   const split = useMediaQuery("(min-width: 700px)") && compact;
   // What the phone opens to: the cross-topic inbox (default) or the topic board.
-  const [homeView, setHomeView] = useSetting<"inbox" | "topics">("homeView", "inbox");
+  // The phone's two homes. "topics" is labelled Home now (§37): Ask · Needs you · Where you left off ·
+  // Today, then the tiles. A new setting key, because every phone had "inbox" stored as the old default.
+  const [homeView, setHomeView] = useSetting<"inbox" | "topics">("homeView2", "topics");
   const paneView = gridFits && !compact ? savedPaneView : "tabs";
   const [activePane, setActivePane] = useState(0);
   // `compact` (declared above): the tab strip gives way to one bottom chat bar + a sheet
@@ -838,7 +875,11 @@ export default function BentoHome() {
     }
     // Default: open the recent combination (up to 4 sessions active within the date filter). If the
     // user has customized which chats are open for this topic before, restore that instead.
-    const recent = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity).slice(0, MAX_PANES).map((s) => s.id);
+    // Thomas's own chats first (§37): 71% of sessions are machine-made, and a topic that opened on the
+    // four newest classifier runs buried the conversation he came to continue.
+    const mine = new Set((threadsRef.current?.threads ?? []).flatMap((t) => t.sessions.map((x) => x.id)));
+    const own = p.sessions.filter((x) => mine.has(x.id));
+    const recent = [...(own.length ? own : p.sessions)].sort((a, b) => b.lastActivity - a.lastActivity).slice(0, MAX_PANES).map((s) => s.id);
     // Keep every remembered pane (blank or an existing session). We deliberately don't drop panes whose
     // session isn't in the current window/list — that used to silently discard a brand-new running chat
     // on a project switch. A pane reattaches by session id, so a running one resumes streaming.
@@ -1011,6 +1052,38 @@ export default function BentoHome() {
     setActivePane(0); // same reason as openProject: a stale index from the topic you left is not a choice
     closedTabs.current = [];
   };
+  // ── threads and the Ask line (§37) ────────────────────────────────────────────────────────────
+  // Both land in this same panel. A thread opens its topic with its sessions as the tabs (newest four);
+  // an ask from the Ask line, a split or a wrong-project hint opens through `minami:open-chat` once its
+  // session has an id (lib/ask.ts) — a pane only attaches by id.
+  // `name`, not `project`: that is the open panel's state, which this compares against.
+  const openTopicFor = (name: string, cwd: string) => {
+    const p = allProjects.find((x) => x.name === name) ?? groupProjects(sessionsRef.current.filter((x) => x.project === name))[0];
+    if (p) { if (project !== p.name) openProject(p); return p.cwd; }
+    startTopic(cwd, name);
+    return cwd;
+  };
+  const expandTile = useCallback((name: string) => {
+    setExpandFor(name);
+    // The tile may sit below the fold once Home's sections are above it; bring the opened list into view.
+    requestAnimationFrame(() => setTimeout(() => document.querySelector("[data-expanded]")?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 80));
+  }, []);
+  const threadOpeners = useRef({
+    thread: (_d: { project: string; cwd: string; sessions: { id: string; cwd: string }[] }) => {},
+  });
+  threadOpeners.current = {
+    thread: (d) => {
+      const base = openTopicFor(d.project, d.cwd);
+      const list = d.sessions.slice(-MAX_PANES).map((x) => ({ ...mkPane(x.id), ...(x.cwd && x.cwd !== base ? { cwd: x.cwd } : {}) }));
+      if (!list.length) return;
+      setPanes(list); setActivePane(list.length - 1); setPaneView("tabs"); closedTabs.current = [];
+    },
+  };
+  useEffect(() => {
+    const onThread = (e: Event) => threadOpeners.current.thread((e as CustomEvent).detail);
+    window.addEventListener("minami:open-thread", onThread);
+    return () => { window.removeEventListener("minami:open-thread", onThread); };
+  }, []);
   // ── adding a chat, and the one moment isolation can happen ────────────────────────────────────
   // Every pane that is added by hand goes through here, because the decision to isolate can only be
   // taken now: a session's cwd is fixed at spawn, so a conversation that is already running cannot be
@@ -1317,6 +1390,7 @@ export default function BentoHome() {
   useBackLayer(chatSheet, () => setChatSheet(false));
   useBackLayer(topicSheet, () => setTopicSheet(false));
   useBackLayer(!!flowFor, () => setFlowFor(null));
+  useBackLayer(!!focusFor, () => setFocusFor(null));
   useBackLayer(picker, () => setPicker(false));
   useBackLayer(teamOpen, () => setTeamOpen(false));
   useBackLayer(addMenu, () => setAddMenu(false));
@@ -1440,9 +1514,9 @@ export default function BentoHome() {
                 Topics: the bento board. 44px tall, in the thumb band. */}
             {compact && (
               <div className="flex shrink-0 rounded-xl border border-white/10 p-0.5">
-                {(["inbox", "topics"] as const).map((v) => (
+                {(["topics", "inbox"] as const).map((v) => (
                   <button key={v} onClick={() => setHomeView(v)}
-                    className={`min-h-11 rounded-lg px-3 py-2 text-[13px] font-medium ${homeView === v ? "bg-[var(--accent-fill)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Topics"}</button>
+                    className={`min-h-11 rounded-lg px-3 py-2 text-[13px] font-medium ${homeView === v ? "bg-[var(--accent-fill)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Home"}</button>
                 ))}
               </div>
             )}
@@ -1471,9 +1545,17 @@ export default function BentoHome() {
           </div>
         ) : (
         <div className={`min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3 ${split ? "" : "compact:pb-24"}`}>
-          {!proj && !split && <DayStrip />}
+          {/* Ask · Needs you · Where you left off · Today, above the tiles (§37). The phone pins the Ask
+              line to the bottom instead, where the thumb is. */}
+          {!proj && !split && !focusFor && <><AskLine /><Home filter={pf ? (x) => matchesProject(pf, x) : undefined} /></>}
           {pf && !proj && <p className="mb-2 text-[12px] text-neutral-500">Filtered to {pf} · <button onClick={() => setPf("")} className="underline underline-offset-2 hover:text-neutral-300">show all</button></p>}
-          {!loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
+          {focusFor ? (() => {
+            const fp = projects.find((x) => x.name === focusFor);
+            const fcwd = fp?.cwd ?? threadsData?.threads.find((t) => t.project === focusFor)?.cwd ?? threadsData?.projects.find((x) => x.project === focusFor)?.cwd ?? "";
+            return <div className="h-full min-h-[70vh]"><Board project={focusFor} cwd={fcwd} onSwitch={(n) => setFocusFor(n)} onClose={() => { setExpandFor(focusFor); setFocusFor(null); }} onAllChats={() => { if (fp) openProject(fp); }}
+              openSids={proj ? panes.map((x) => x.sid).filter(Boolean) as string[] : []} focusSid={proj && focusPane != null ? panes[focusPane]?.sid ?? null : null} /></div>;
+          })()
+          : !loaded ? <p className="mt-24 text-center text-sm text-neutral-500">Reading local sessions…</p>
           : projects.length === 0 ? (
             <div className="mx-auto mt-24 max-w-md text-center text-sm text-neutral-500">
               No local Claude Code sessions in this window. Bento mirrors <code className="text-xs">~/.claude/projects</code> — run it locally.
@@ -1526,6 +1608,8 @@ export default function BentoHome() {
                 // exactly the bento behaviour asked for. A separate overlay would have covered them
                 // instead of moving them.
                 const flowing = flowFor?.project === p.name;
+                const ts = (threadsData?.threads ?? []).filter((t) => t.project === p.name);
+                const expanded = expandFor === p.name && !flowFor;
                 // The flow screen is a screen, not a big tile: while it's open every OTHER tile is gone.
                 // It used to reflow them around the expanded cell, which read as "one tile got bigger"
                 // and left the rest competing for attention with the graph you opened to read.
@@ -1539,16 +1623,18 @@ export default function BentoHome() {
                   // viewport width. The same tile renders at ~175px in the narrow column beside an open
                   // chat and at ~725px as the featured tile, and a viewport breakpoint can't tell those
                   // apart — it's the same viewport.
-                  <motion.div layout key={p.name} className={`@container relative ${flowing ? "h-full min-h-0" : span}`}
+                  <motion.div layout key={p.name} data-expanded={expanded || undefined} className={`@container relative ${flowing ? "h-full min-h-0" : expanded ? (split || proj ? "col-span-full row-span-3" : "col-span-full row-span-3 sm:col-span-2 lg:col-span-3") : span}`}
                     initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: flowing ? 1 : dim, scale: 1 }}
-                    whileHover={flowing ? undefined : { y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
-                  {flowing ? (
+                    whileHover={flowing || expanded ? undefined : { y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
+                  {expanded ? (
+                    <TopicTasks project={p.name} cwd={p.cwd} tasks={ts} onAllChats={() => openProject(p)} onBoard={() => setFocusFor(p.name)} onClose={() => setExpandFor(null)} />
+                  ) : flowing ? (
                     <div className="h-full overflow-hidden rounded-[1.4rem] border border-[#c47f18]/40 bg-black/30">
                       <FlowCanvas sessionId={flowFor!.sid} project={p.name} busy={!!liveAct[flowFor!.sid]?.busy} onClose={() => setFlowFor(null)} />
                     </div>
                   ) : (
                   <>
-                  <button data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => openProject(p)}
+                  <button data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => (ts.length ? expandTile(p.name) : openProject(p))}
                     style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)` }}
                     // NO backdrop-blur here — it was measured as the single biggest CPU cost in the app.
                     // A `backdrop-filter` must re-blur everything beneath it whenever anything inside its
@@ -1614,16 +1700,14 @@ export default function BentoHome() {
                     </div>
                   </button>
 
-                  {/* The switch. Visible at rest — the whole reason the previous two attempts went
-                      unfound is that their control only appeared on hover, or lived in another screen. */}
-                  {p.sessions.length > 0 && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); const best = [...p.sessions].sort((a, b) => b.lastActivity - a.lastActivity); setFlowFor({ project: p.name, sid: (best.find((x) => x.active) || best[0]).id }); }}
-                      title={`See ${p.name}'s journey — every ask, what it did, what's still open`}
-                      className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-lg border border-white/15 bg-black/30 px-1.5 py-0.5 text-[9px] pointer-coarse:px-2.5 pointer-coarse:py-1.5 pointer-coarse:text-[10px] uppercase tracking-wider text-neutral-400 transition-colors hover:border-[#c47f18]/60 hover:text-[#c47f18]">
-                      <Workflow className="h-2.5 w-2.5" />flow
-                    </button>
-                  )}
+                  {/* The corner the Flow switch used to hold (§37): how many tasks this topic has. A
+                      sibling of the tile for the nested-button reason above. With no tasks the tile
+                      click opens the chat panel as it always did, and this offers a preview instead. */}
+                  <button onClick={(e) => { e.stopPropagation(); if (ts.length) expandTile(p.name); else void startAsk({ project: p.name, cwd: p.cwd, at: 0 }, "Pull the latest code and let me preview it."); }}
+                    title={ts.length ? `${ts.length} task${ts.length > 1 ? "s" : ""} — show them here` : "Preview the latest code"}
+                    className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-lg border border-white/15 bg-black/30 px-2 py-0.5 text-[10px] text-neutral-300 transition-colors hover:border-[var(--sakura)]/60 pointer-coarse:px-2.5 pointer-coarse:py-1.5">
+                    {ts.length ? <>Tasks <span className="text-neutral-500">{ts.length}</span></> : "▶ Preview"}
+                  </button>
                   </>
                   )}
                   </motion.div>
@@ -2931,7 +3015,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // resume a conversation recorded in one directory while the SDK runs it in another — same history,
   // wrong CLAUDE.md, wrong relative paths. `claude --continue` is explicitly scoped to the current
   // directory, and so is this.
-  const continueTarget = isNew ? chats.find((s) => s.cwd === cwd && !openSids.includes(s.id)) || null : null;
+  const continueTarget = isNew && !paneKey.startsWith("flow-") ? chats.find((s) => s.cwd === cwd && !openSids.includes(s.id)) || null : null;
   // Persisted, because it's a decision about THIS pane that must outlive a remount: a project switch or
   // refresh remounts ChatColumn, and an ephemeral useState would quietly revert "start fresh" back to
   // continuing — re-attaching context the user had explicitly declined.
@@ -3786,6 +3870,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         {/* Preview what's attached BEFORE sending. Same component, same path-detection as the
             transcript — so a pasted screenshot, a picked file, and the message you eventually send all
             agree by construction rather than by three code paths staying in sync. */}
+        <ChatHints sessionId={agent.sessionId || sessionId} project={proj} input={input} clearInput={() => setInput("")} title={cur ? (cur.now || cur.task || cur.title) : ""} />
         <div className="px-1"><ImageRefs text={input} /></div>
         {/* The macOS panel is modal on the Mac and invisible in this tab. Without a word here, a pane
             opened from another device looks like the 📎 did nothing at all. */}
