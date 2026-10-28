@@ -175,6 +175,9 @@ subtask and button to let Minami do it for me").
     They must really be in the chat (the same rule as the quotes on ticks), and the task closes with
     `closedWhy` = those words. The toast quotes them. A task that came back after a new reply doesn't
     re-close on the same old words.
+  - **A done task shows no open items** anywhere (`Dod` in `TaskCard.tsx` returns one "✓ Done — “his words”"
+    line for an archived task): not on the Done card, not in the chat's Task strip, which used to show the
+    Next item and "all n items" under a task he had closed. Reopen brings the list back.
   - **✓ Done by hand:** on every open card (the tile had none) and in the chat's Task strip.
   - **From the chat itself:** `POST /api/threads {"action":"close","key":"$MINAMI_SESSION_KEY"}` (or
     `sessionId`) closes the task holding that chat. Toast: "Closed from the chat".
