@@ -156,8 +156,15 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     if (!ms.length) continue;
     ms.sort((a, b) => a.lastActivity - b.lastActivity);
     const last = ms[ms.length - 1];
-    // A task that closed itself and then got a new reply is open again: the work wasn't over.
-    const revived = !!st?.archived && !!st.autoDone && last.lastActivity > (st.doneAt ?? 0) + 120_000;
+    // A task that closed itself on its last tick and then got a new message from Thomas is open again:
+    // the work wasn't over. Two things deliberately do NOT revive it (🐛 2026-10-28, §37):
+    //  - any write to the transcript. This used `lastActivity`, which is the file's mtime too, so the
+    //    chat's own sign-off, a metadata row or a deploy bumped it and every self-closed task came back
+    //    after a deploy. Only a typed message counts (`lastUserAt`).
+    //  - a task closed by words ("this one is done", task_report finished, the close API — `closedWhy`).
+    //    He said the whole thing is done; open items don't overrule that, and Reopen is one tap.
+    const typed = Math.max(0, ...ms.map((m) => m.lastUserAt ?? 0));
+    const revived = !!st?.archived && !!st.autoDone && !st.closedWhy && typed > (st.doneAt ?? 0) + 120_000;
     if (st?.archived && !revived) {
       // Done keeps two weeks, so a finished task is still there to reopen the next week.
       if ((st.doneAt ?? st.updatedAt) > Date.now() - 14 * 86_400_000) done.push({

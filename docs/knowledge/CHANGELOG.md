@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-28
+- **Closed tasks stop coming back after a deploy** (§37; `lib/threads.ts` `revived`, `lib/claude-sessions.ts` `lastUserAt`). Revival needed only a transcript write after the close, so every self-closed task reopened; it now needs a message typed by Thomas, and a task closed by his words never revives.
 - **The chat reports its own task progress** (§37; new `lib/task-report.ts`, `lib/agent/manager.ts` `taskMcpServer` + `TASK_PROMPT`, `app/api/threads` `report` + Haiku skip, `lib/flow-store.ts` `reportAt`, `package.json` declares `zod`). Dashboard sessions get `minami_task` tools (`task_status`, `task_report`) to tick items, set the item on now and close the task as they work. A report since the last reading skips Haiku's check, so Haiku is now the backup for chats that don't report. `MINAMI_DASHBOARD_TASK_TOOLS=0` turns it off.
 - **Ticks land as soon as a turn ends** (§37). The browser's `ensureDod` throttle is now keyed on the task's state as well as its last activity, so a chat going quiet triggers Minami's re-read right away instead of up to a minute later.
 - **A task closes when the chat says it's done** (§37). Minami closes a task when the chat calls the whole task done (exact words, verified, quoted in the toast). Every card and the chat's Task strip get ✓ Done, and `action: close` by session id or `MINAMI_SESSION_KEY` lets a chat close its own task.
