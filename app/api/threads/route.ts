@@ -2,12 +2,13 @@
 // POST: the edits a task can take — name it, keep/tick/add to its Definition of Done, queue a To-do,
 // start one, archive (Done) and reopen — plus `ensure`, which asks Minami to write a done-list for a
 // task that has none and to tick the items its chats show are met.
-import { sessionIdentity } from "@/lib/agent/manager";
+import { isBusy, sendMessage, sessionIdentity } from "@/lib/agent/manager";
 import { runHaiku } from "@/lib/bento-enrich";
 import { fid, mutateFlow, readFlow, type FlowDod, type FlowThread } from "@/lib/flow-store";
 import { listSessions, topicOf } from "@/lib/claude-sessions";
 import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
-import { allDone, closeIfDone, taskReport, type TaskReport } from "@/lib/task-report";
+import { allDone, closeIfDone, gateOf, taskReport, type TaskReport } from "@/lib/task-report";
+import { GATE_RULES, parseGate, runMessage, runPlan } from "@/lib/task-pace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,6 +35,10 @@ type Body =
   | { action: "start"; id: string; sessionId: string }
   | { action: "ensure"; ids: string[] }
   | { action: "do"; id: string; dodId: string }
+  /** ▶ Run: every open item up to the first gate, in one message (lib/task-pace.ts). */
+  | { action: "run"; id: string }
+  /** His tap on an item's gate chip: auto / "pitch" / "ok". Haiku never reclassifies it after. */
+  | { action: "gate"; id: string; dodId: string; gate: "pitch" | "ok" | null }
   /** Close a task from inside its chat: by session id, or by the chat's own MINAMI_SESSION_KEY. */
   | { action: "close"; sessionId?: string; key?: string }
   /** The chat reports its own progress (lib/task-report.ts) — the HTTP twin of its `task_report` tool. */
@@ -77,9 +82,11 @@ function chatOf(v: ThreadView): string {
 /** Write a proposed done-list for a task. A derived task is stored (`auto`) to hold it. */
 async function suggest(v: ThreadView) {
   const firstAsks = v.sessions.length ? (listSessions().find((x) => x.id === v.sessions[0].id)?.asks ?? []).slice(0, 3) : [];
-  const prompt = `A piece of work is called "${v.title}" (project ${v.project}).\n${firstAsks.length ? `It started with:\n${firstAsks.map((a) => "- " + a.slice(0, 300)).join("\n")}\n` : ""}${v.sessions.length ? `The end of its chat:\n${chatOf(v).slice(-3000)}\n` : ""}\nWrite its Definition of Done: 2 to 4 outcomes Thomas can check by looking (a page renders, a number is right, a file exists, it is merged). Each under 10 words, no verbs in the imperative. Reply with ONLY a JSON array of strings.`;
+  const prompt = `A piece of work is called "${v.title}" (project ${v.project}).\n${firstAsks.length ? `It started with:\n${firstAsks.map((a) => "- " + a.slice(0, 300)).join("\n")}\n` : ""}${v.sessions.length ? `The end of its chat:\n${chatOf(v).slice(-3000)}\n` : ""}\nWrite its Definition of Done: 2 to 4 outcomes Thomas can check by looking (a page renders, a number is right, a file exists, it is merged). Each under 10 words, no verbs in the imperative. If the work needs a look decided (see "pitch" below), make the first outcome Thomas's pick of a version.\n\n${GATE_RULES}\n\nReply with ONLY a JSON array: [{"t":"<outcome>","gate":"pitch"|"ok"|null,"why":"<under 8 words, only when gated>"}]`;
   const arr = haikuJSON(await runHaiku(prompt));
-  const items = (Array.isArray(arr) ? arr : []).map(String).map((s) => s.trim()).filter(Boolean).slice(0, 4);
+  // Strings are still accepted (an older-style answer): they come in unclassified and get gated later.
+  const items = (Array.isArray(arr) ? arr : []).map((x) => typeof x === "string" ? { t: x.trim() } : { t: String((x as { t?: unknown })?.t ?? "").trim(), gate: parseGate((x as { gate?: unknown })?.gate), why: String((x as { why?: unknown })?.why ?? "").slice(0, 80) })
+    .filter((x) => x.t).slice(0, 4);
   mutateFlow((s) => {
     let t = s.threads.find((x) => x.id === v.id);
     if (!t) {
@@ -89,7 +96,7 @@ async function suggest(v: ThreadView) {
     }
     if (t.dod?.length) return;
     if (!items.length) { t.dodTriedAt = Date.now(); return; }
-    t.dod = items.map((x, i) => ({ id: t!.id + "-" + i, t: x, done: false }));
+    t.dod = items.map((x, i): FlowDod => ({ id: t!.id + "-" + i, t: x.t, done: false, ...("gate" in x ? { gate: x.gate, ...(x.gate && x.why ? { gateWhy: x.why } : {}) } : {}) }));
     t.dodPending = true;
     t.evalAt = 0; // tick right away against what the chat already says
   });
@@ -136,18 +143,83 @@ async function evaluate(v: ThreadView, focusOnly = false) {
     const was = allDone(t.dod);
     t.dod = t.dod.map((d, i): FlowDod => {
       if (d.done && d.by !== "minami") return d; // his tick stands
-      if (met.has(i)) return { id: d.id, t: d.t, done: true, by: "minami", why: met.get(i), quote: ev.get(i)?.quote, quoteBy: ev.get(i)?.quoteBy, at: d.done ? d.at : Date.now() };
+      if (met.has(i)) return { id: d.id, t: d.t, ...gateOf(d), done: true, by: "minami", why: met.get(i), quote: ev.get(i)?.quote, quoteBy: ev.get(i)?.quoteBy, at: d.done ? d.at : Date.now() };
       // Minami's own tick also stands unless the chat now says that thing is broken (`undone`). It used
       // to be unticked whenever the item wasn't in this reading — but Minami reads only the END of the
       // chat, so every tick fell off once the evidence scrolled out of the window (seen 2026-10-28: a
       // 3/4 task went to 0/4 an hour later with nothing undone).
-      return d.by === "minami" && undone.has(i) ? { id: d.id, t: d.t, done: false } : d;
+      return d.by === "minami" && undone.has(i) ? { id: d.id, t: d.t, ...gateOf(d), done: false } : d;
     });
     if (!t.archived) closeIfDone(t, was);
     if (!t.archived && finished && finished !== t.closedWhy) {
       t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = finished;
     }
   });
+}
+
+/** Gate the open items that have none yet: a list written before gates existed, or items added by hand or
+ *  by the chat's task_report `add`. Items he gated by tap are never sent. */
+async function classify(v: ThreadView) {
+  const todo = (v.dod ?? []).filter((d) => !d.done && d.gate === undefined);
+  if (!todo.length) return;
+  const prompt = `Work: "${v.title}" (project ${v.project}). Its open done-items:\n${todo.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\n${GATE_RULES}\n\nReply with ONLY JSON: [{"n":<item number>,"gate":"pitch"|"ok"|null,"why":"<under 8 words, only when gated>"}] with one entry per item.`;
+  const j = haikuJSON(await runHaiku(prompt));
+  const got = new Map<string, { gate: "pitch" | "ok" | null; why: string }>();
+  for (const x of Array.isArray(j) ? j : []) {
+    const n = (x as { n?: unknown })?.n;
+    if (typeof n === "number" && todo[n - 1]) got.set(todo[n - 1].id, { gate: parseGate((x as { gate?: unknown }).gate), why: String((x as { why?: unknown }).why ?? "").slice(0, 80) });
+  }
+  mutateFlow((s) => {
+    const t = s.threads.find((x) => x.id === v.id);
+    if (!t?.dod) return;
+    t.gateTriedAt = Date.now();
+    t.dod = t.dod.map((d) => { const g = got.get(d.id); return g && d.gate === undefined ? { ...d, gate: g.gate, ...(g.gate && g.why ? { gateWhy: g.why } : {}) } : d; });
+  });
+}
+
+// ── Auto-continue ────────────────────────────────────────────────────────────────────────────────
+// "Some task can automatically go through all to-do in one go without my click" (Thomas, 2026-10-28).
+// The run rules in task_status and the ▶ Run message already ask the chat to do every open item up to the
+// first gate in one turn; this is the net for a chat that stops early anyway. When the task's chat goes
+// quiet with the next open item ungated, the server sends it on. Guards, all needed:
+//   - only the process that HOSTS the chat sends (sessionIdentity) — the :3001 preview never drives a
+//     :3000 chat, and nobody resumes a transcript a second process is writing;
+//   - the chat must be working the list: it reported progress (task_report) after his last message, and
+//     every later nudge needs a new met item since the one before, so a chat that answers a nudge with
+//     no progress is left alone;
+//   - a turn that ended on a question is "waiting", not idle, and a gated next item is his — neither moves;
+//   - at most MAX_NUDGES since he last typed. `MINAMI_TASK_AUTORUN=0` turns it off.
+const AUTORUN = process.env.MINAMI_TASK_AUTORUN !== "0";
+const MAX_NUDGES = 6;
+const SETTLE_MS = 8_000;
+const settling = new Set<string>();
+function maybeContinue(id: string) {
+  if (!AUTORUN || settling.has(id)) return;
+  const v = threads(14).threads.find((t) => t.id === id);
+  const st = readFlow().threads.find((x) => x.id === id);
+  if (!v || !st?.dod?.length || st.archived || v.state !== "idle") return;
+  const plan = runPlan(st.dod);
+  if (!plan.run.length) return; // the next open item is gated: his move
+  // Not labelled yet: wait for Haiku's label (enqueued in the same ensure) rather than push on. Seen in
+  // testing 2026-10-28: a "page layout chosen" item was nudged through seconds before it came back "pitch".
+  // ▶ Run, which he presses himself, still treats an unlabelled item as auto.
+  if (plan.run[0].d.gate === undefined) return;
+  const last = v.sessions[v.sessions.length - 1];
+  const owner = last ? sessionIdentity("live:" + last.id) : null;
+  if (!owner || isBusy(owner.key)) return;
+  // The nudge is itself a user row, so "he typed" means a message well after the last nudge.
+  const userAt = listSessions().find((x) => x.id === last.id)?.lastUserAt ?? 0;
+  const his = userAt > (st.nudgeAt ?? 0) + 30_000;
+  const met = st.dod.filter((d) => d.done).length;
+  const nudges = his ? 0 : st.nudges ?? 0;
+  if (nudges >= MAX_NUDGES) return;
+  if (his ? !(st.reportAt && st.reportAt > userAt) : met <= (st.nudgeMet ?? 0)) return;
+  // Let the turn's last writes and its final report land before deciding; then decide again from disk.
+  if (Date.now() - v.at < SETTLE_MS) { settling.add(id); setTimeout(() => { settling.delete(id); maybeContinue(id); }, SETTLE_MS); return; }
+  const message = runMessage(v.title, st.dod);
+  if (!message) return;
+  mutateFlow((s) => { const t = s.threads.find((x) => x.id === id); if (t) { t.nudgeAt = Date.now(); t.nudges = nudges + 1; t.nudgeMet = met; } });
+  try { sendMessage({ key: owner.key, cwd: owner.cwd, message: `(Minami, auto-continue) ${message}` }); } catch { /* the next quiet tries again within the budget */ }
 }
 
 function ensure(ids: string[]) {
@@ -158,6 +230,9 @@ function ensure(ids: string[]) {
     const v = byId.get(id);
     if (!v || v.archived) continue;
     const st = store.threads.find((x) => x.id === v.id);
+    // Gates are their own small call, independent of ticking; `enqueue` keeps it to one job per task.
+    if (v.dod?.some((d) => !d.done && d.gate === undefined) && Date.now() - (st?.gateTriedAt ?? 0) > RETRY_EMPTY_MS / 6) enqueue(v.id + ":gate", () => classify(v));
+    if (v.dod?.length && v.state === "idle") maybeContinue(v.id);
     if (!v.dod?.length) {
       if (st?.dodTriedAt && Date.now() - st.dodTriedAt < RETRY_EMPTY_MS) continue;
       enqueue(v.id, () => suggest(v));
@@ -180,10 +255,12 @@ function ensure(ids: string[]) {
  *  under a second key is two processes writing one transcript (manager.sendMessage refuses it). With no
  *  owner, a fresh key resumes it from disk and the panel attaches by session id. The browser does the
  *  send through /api/agent/send, so a chat whose worktree is gone is re-homed there as usual. */
-function doItem(b: { id: string; dodId: string }): { key?: string; cwd?: string; resume?: string; message?: string; error?: string } {
+function doItem(b: { id: string; dodId?: string }): { key?: string; cwd?: string; resume?: string; message?: string; error?: string } {
   const v = threads(14).threads.find((t) => t.id === b.id);
-  const item = v?.dod?.find((d) => d.id === b.dodId);
-  if (!v || !item) return { error: "no such task or item" };
+  // ▶ Run (no dodId): the first item of the run plan is the one on now, and the message is the whole run.
+  const plan = runPlan(v?.dod);
+  const item = b.dodId ? v?.dod?.find((d) => d.id === b.dodId) : (plan.run[0] ?? plan.stop)?.d;
+  if (!v || !item) return { error: b.dodId ? "no such task or item" : "nothing open to run" };
   const last = v.sessions[v.sessions.length - 1];
   if (!last) return { error: "the task has no chat yet — start it first" };
   const owner = sessionIdentity("live:" + last.id);
@@ -191,7 +268,9 @@ function doItem(b: { id: string; dodId: string }): { key?: string; cwd?: string;
   // The item's NUMBER rides along: task_report ticks by number, and with only the text a chat once
   // guessed n=1 and ticked an item that was already met, leaving this one open (2026-10-28).
   const n = v.dod!.indexOf(item) + 1;
-  const message = `Next on the done-list for "${v.title}" — item ${n} of ${v.dod!.length}: ${item.t}\n\nDo this now. When it's done and checked, tick item ${n} (task_report done n=${n}) and say so plainly.`;
+  const message = b.dodId
+    ? `Next on the done-list for "${v.title}" — item ${n} of ${v.dod!.length}: ${item.t}\n\nDo this now. When it's done and checked, tick item ${n} (task_report done n=${n}) and say so plainly.${item.gate === "pitch" ? " It's a look to decide: pitch versions and let Thomas pick." : ""}`
+    : runMessage(v.title, v.dod)!;
   // This item is the one on now: he just handed it over.
   mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t?.dod) t.dod = t.dod.map((d) => (d.id === item.id ? { ...d, doing: Date.now() } : d.doing ? (({ doing: _, ...r }) => r)(d) : d)); });
   return { key, cwd: owner?.cwd ?? last.cwd, resume: last.id, message };
@@ -202,6 +281,7 @@ export async function POST(req: Request) {
   if (!b || typeof b !== "object" || !("action" in b)) return Response.json({ error: "bad body" }, { status: 400 });
   try {
     if (b.action === "do") return Response.json(doItem(b));
+    if (b.action === "run") return Response.json(doItem({ id: b.id }));
     if (b.action === "close") {
       const sid = b.sessionId || (b.key ? sessionIdentity(b.key)?.sessionId : null);
       const v = sid ? threads(14).threads.find((t) => t.sessions.some((x) => x.id === sid)) : undefined;
@@ -248,7 +328,7 @@ export async function POST(req: Request) {
       return Response.json({ ok: true, id });
     }
     // A derived task (id "s:…") has nothing stored yet; the edits below that need a record make one.
-    if ("id" in b && b.id.startsWith("s:") && (b.action === "archive" || b.action === "dod.add" || b.action === "drop")) {
+    if ("id" in b && b.id.startsWith("s:") && (b.action === "archive" || b.action === "dod.add" || b.action === "drop" || b.action === "gate")) {
       const v = threads(14).threads.find((t) => t.id === b.id);
       if (!v) throw new Error("no such task");
       const id = fid();
@@ -261,8 +341,9 @@ export async function POST(req: Request) {
         case "dismiss": if (!s.dismissed.includes(b.sessionId)) s.dismissed = [...s.dismissed, b.sessionId].slice(-500); break;
         case "dod.accept": if (t) t.dodPending = false; break;
         // His tap is his: it clears Minami's mark either way, so Minami won't untick it later.
-        case "dod.toggle": if (t?.dod) { const was = allDone(t.dod); t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, done: !d.done, at: Date.now() } : d)); t.dodPending = false; if (!t.archived) closeIfDone(t, was); } break;
+        case "dod.toggle": if (t?.dod) { const was = allDone(t.dod); t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, ...gateOf(d), done: !d.done, at: Date.now() } : d)); t.dodPending = false; if (!t.archived) closeIfDone(t, was); } break;
         case "dod.add": if (t && b.t.trim()) { t.dod = [...(t.dod ?? []), { id: fid(), t: b.t.trim().slice(0, 140), done: false }]; t.dodPending = false; } break;
+        case "gate": if (t?.dod) t.dod = t.dod.map((d) => (d.id === b.dodId ? { ...d, gate: b.gate === "pitch" || b.gate === "ok" ? b.gate : null, gateBy: "thomas" as const, gateWhy: undefined } : d)); break;
         case "archive": if (t) { t.archived = true; t.doneAt = Date.now(); t.auto = false; } break;
         // A To-do never started is just deleted; anything with chats is hidden, so they stay claimed.
         case "drop": if (t) { if (!t.sessions.length) s.threads = s.threads.filter((x) => x !== t); else t.hidden = true; } break;

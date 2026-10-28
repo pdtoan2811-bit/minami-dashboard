@@ -8,6 +8,7 @@
 //   · that session plus the continuation that picked it up after its context ran out, or
 //   · whatever he joined by hand / named (lib/flow-store.ts keeps only those).
 // Nothing has to be created for this list to be right on the first morning.
+import { runPlan } from "@/lib/task-pace";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -176,7 +177,10 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     }
     if (last.lastActivity < since && (!g.stored || g.stored.auto)) continue;
     const busy = ms.some((m) => isBusy("live:" + m.id));
-    const waiting = !busy && (!!last.review || last.lastRole === "assistant" && /\?\s*$/.test(last.tail || ""));
+    // A run stopped at a gate (lib/task-pace.ts) needs him even when the chat's last line isn't a question:
+    // that is the one place a task should flag him, and an ungated next item never does (auto-continue).
+    const gated = !!g.stored?.dod && (({ run, stop }) => !run.length && !!stop)(runPlan(g.stored.dod));
+    const waiting = !busy && (!!last.review || gated || last.lastRole === "assistant" && /\?\s*$/.test(last.tail || ""));
     const state: ThreadState = busy ? "working" : waiting ? "waiting" : "idle";
     const tail = plain(last.tail || "");
     views.push({
