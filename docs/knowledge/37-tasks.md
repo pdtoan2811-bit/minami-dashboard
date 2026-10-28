@@ -54,6 +54,15 @@ The tile header has **All chats** (the old tile click: the topic's panel), **▶
 a **＋ New task** trigger (focused when the topic is empty) opens the **New task sheet**
 (`components/home/NewTask.tsx`). A new task is still just a new chat in that topic, via `startAsk`.
 
+**On a phone** (2026-10-28, Thomas: "the experience on phone to start a new task is not there") the
+trigger was five screens down — under Ask, Needs you, Where you left off, Today and the grid — and one
+tap behind expanding a tile. So the phone's bottom bar (the Home | Inbox band, `compact` only) carries
+a **＋ Task** button (`NewTaskButton`) that opens the same sheet from either view. It starts on the
+expanded or open topic, else the last-worked one; the project is a chip with a menu (every bento topic
+merged with the threads feed's projects, which alone only knew the few with a task this week). Switching
+project carries the written text across and moves its draft key. The sheet is full height on a phone
+(`h-[92dvh]`), which follows the keyboard because the viewport is `interactive-widget=resizes-content`.
+
 **The New task sheet** (2026-10-28, Thomas: "a task description can be long, can have image etc"). The
 trigger used to be a one-line `<input>`, which could hold "fix the favicon" but not a real brief.
 - The editor is the chat `Composer` itself (`roomy`, `sendOnMod`, `maxHeight` props), so paste, drop and 📎
