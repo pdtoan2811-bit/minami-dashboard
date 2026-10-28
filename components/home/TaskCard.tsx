@@ -108,6 +108,13 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
   const [model] = useSetting<string | null>("chatModel", null);
   const [, bump] = useState(0);
   const dod = t.dod ?? [];
+  // A done task shows no open items, on any surface (Thomas, 2026-10-28: the board "shows … those still
+  // have to do subtask even when I told that the mother task is done"). His word closes the whole task;
+  // listing what was left, or a 2/3 bar, reads as unfinished work. Reopen brings the list back.
+  if (t.archived) {
+    if (!dod.length) return null;
+    return <p className="text-[11px] text-[#4ade80]/80">✓ Done{t.closedWhy && t.closedWhy !== "closed from the chat" ? <span className="italic text-neutral-500"> — “{t.closedWhy}”</span> : ""}</p>;
+  }
   if (!dod.length) {
     if (compact) return null;
     return busy
