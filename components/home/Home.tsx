@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useShellData } from "@/components/shell/use-shell";
 import { guessProject, splitAsks, startAsk } from "@/lib/ask";
 import { useSetting } from "@/lib/use-settings";
-import { openThread, threadPost, useThreads, type ProjectRef, type ThreadView } from "@/lib/use-threads";
+import { ensureDod, openThread, threadPost, useThreads, type ProjectRef, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
 import { DodBar, TINT } from "./TaskCard";
 
@@ -166,6 +166,9 @@ export function Home({ filter }: { filter?: (project: string) => boolean }) {
   const waitingSids = new Set(needs.flatMap((n) => (n.kind === "chat" ? [n.sid] : [])));
   const threads = (d?.threads ?? []).filter((t) => ok(t.project) && t.state !== "queued");
   const shown = threads.slice(0, more ? 10 : 4);
+  // The morning list is where most tasks are seen first: keep their done-lists written and ticked too,
+  // so a task can close itself (and celebrate) without the board ever being opened.
+  useEffect(() => { ensureDod(shown); }, [shown.map((t) => t.id + t.at).join()]); // eslint-disable-line react-hooks/exhaustive-deps
   const open = (todos ?? []).filter((t) => !t.done);
   const doneN = (todos ?? []).length - open.length;
 

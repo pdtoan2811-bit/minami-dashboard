@@ -4,10 +4,11 @@
 //     2026-10-28 — a message stays where he typed it unless he moves it);
 //   · a long chat that isn't a named thread yet → "Name this thread?", once. Naming is what makes it
 //     findable tomorrow, and Minami then suggests a done-list he can accept with one tap.
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Dod } from "./TaskCard";
 import { guessProject, startAsk } from "@/lib/ask";
 import { useSetting } from "@/lib/use-settings";
-import { threadPost, useThreads } from "@/lib/use-threads";
+import { ensureDod, threadPost, useThreads } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
 
 const NAME_AFTER_ASKS = 6;
@@ -20,6 +21,9 @@ export function ChatHints({ sessionId, project, input, clearInput, title }: {
   const [model] = useSetting<string | null>("chatModel", null);
   const [name, setName] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
+  const task = sessionId && d ? [...d.threads, ...d.done].find((t) => t.sessions.some((x) => x.id === sessionId)) : undefined;
+  useEffect(() => { if (task) ensureDod([task]); }, [task?.id, task?.at]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!d) return null;
 
   const other = input.trim().length > 12 ? guessProject(input, d.projects) : null;
@@ -28,9 +32,25 @@ export function ChatHints({ sessionId, project, input, clearInput, title }: {
   const thread = sessionId ? d.threads.find((t) => t.sessions.some((x) => x.id === sessionId)) : undefined;
   const offer = !gone && !!thread && !thread.stored && thread.asks >= NAME_AFTER_ASKS && !d.dismissed.includes(sessionId);
 
-  if (!elsewhere && !offer) return null;
+  // Which task this chat is, how far along, and what's next — so the done-list is in view while he
+  // chats, not one tap away on the board (Thomas, 2026-10-28: "indicate which task I am chatting with").
+  const strip = task && (task.dod?.length || task.stored) ? (
+    <div className="mx-1 mb-1 rounded-xl border border-white/[0.08] bg-white/[0.025] px-2.5 py-1.5">
+      <button onClick={() => setTaskOpen((v) => !v)} className="flex w-full items-center gap-2 text-left" title={taskOpen ? "Fold" : "Show the whole done-list"}>
+        <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.1em] text-neutral-500">Task</span>
+        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-200">{task.title}</span>
+        {task.archived && <span className="shrink-0 text-[11px] text-[#4ade80]">done ✓</span>}
+        <span className="shrink-0 text-[11px] text-neutral-600">{taskOpen ? "▾" : "▸"}</span>
+      </button>
+      <div className="mt-1"><Dod key={taskOpen ? "open" : "fold"} t={task} busy={(d.busy ?? []).includes(task.id)} fold={!taskOpen} /></div>
+    </div>
+  ) : null;
+
+  if (!elsewhere && !offer) return strip;
   const pill = "shrink-0 rounded-lg border border-white/12 px-2 py-0.5 text-[11px] text-neutral-200 hover:border-white/30 pointer-coarse:py-1.5";
   return (
+    <>
+    {strip}
     <div className="flex flex-col gap-1 px-1 pb-1 text-[12px] text-neutral-400">
       {elsewhere && (
         <div className="flex items-center gap-2">
@@ -53,5 +73,6 @@ export function ChatHints({ sessionId, project, input, clearInput, title }: {
         )
       )}
     </div>
+    </>
   );
 }

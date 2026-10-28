@@ -51,6 +51,7 @@ import { AskLine, Home } from "@/components/home/Home";
 import { ChatHints } from "@/components/home/ChatHints";
 import { TopicTasks } from "@/components/home/TopicTasks";
 import { Board } from "@/components/home/Board";
+import { Celebrate } from "@/components/home/Celebrate";
 import { startAsk } from "@/lib/ask";
 import { useThreads } from "@/lib/use-threads";
 import { matchesProject, useProjectFilter } from "@/lib/project-filter";
@@ -1547,6 +1548,7 @@ export default function BentoHome() {
         <div className={`min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3 ${split ? "" : "compact:pb-24"}`}>
           {/* Ask · Needs you · Where you left off · Today, above the tiles (§37). The phone pins the Ask
               line to the bottom instead, where the thumb is. */}
+          <Celebrate />
           {!proj && !split && !focusFor && <><AskLine /><Home filter={pf ? (x) => matchesProject(pf, x) : undefined} /></>}
           {pf && !proj && <p className="mb-2 text-[12px] text-neutral-500">Filtered to {pf} · <button onClick={() => setPf("")} className="underline underline-offset-2 hover:text-neutral-300">show all</button></p>}
           {focusFor ? (() => {
@@ -1627,7 +1629,8 @@ export default function BentoHome() {
                     initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: flowing ? 1 : dim, scale: 1 }}
                     whileHover={flowing || expanded ? undefined : { y: -4, opacity: 1 }} transition={{ type: "spring", stiffness: 320, damping: 30 }}>
                   {expanded ? (
-                    <TopicTasks project={p.name} cwd={p.cwd} tasks={ts} onAllChats={() => openProject(p)} onBoard={() => setFocusFor(p.name)} onClose={() => setExpandFor(null)} />
+                    <TopicTasks project={p.name} cwd={p.cwd} tasks={ts} onAllChats={() => openProject(p)} onBoard={() => setFocusFor(p.name)} onClose={() => setExpandFor(null)}
+                      openSids={proj ? panes.map((x) => x.sid).filter(Boolean) as string[] : []} />
                   ) : flowing ? (
                     <div className="h-full overflow-hidden rounded-[1.4rem] border border-[#c47f18]/40 bg-black/30">
                       <FlowCanvas sessionId={flowFor!.sid} project={p.name} busy={!!liveAct[flowFor!.sid]?.busy} onClose={() => setFlowFor(null)} />

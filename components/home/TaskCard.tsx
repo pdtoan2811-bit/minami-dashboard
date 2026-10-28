@@ -5,7 +5,9 @@
 // as a suggestion with Keep; Minami also ticks items the chat shows are met, marked so he can tell its
 // ticks from his and see why. Progress is that list and nothing else: no phases, no percentages of work.
 import { useState } from "react";
-import { openThread, threadPost, type ThreadView } from "@/lib/use-threads";
+import { useSetting } from "@/lib/use-settings";
+import { doDodItem, openThread, threadPost, type ThreadView } from "@/lib/use-threads";
+import type { AgentMode } from "@/lib/use-agent";
 
 export const TINT = { working: "#f0a868", waiting: "var(--sakura)", idle: "rgba(255,255,255,0.22)", queued: "rgba(255,255,255,0.12)" } as const;
 const STATE = { working: "working", waiting: "waiting on you", idle: "", queued: "to do" } as const;
@@ -35,9 +37,42 @@ const seenKey = (id: string) => `minami.dodSeen.${id}`;
 const seenAt = (id: string) => { try { return Number(localStorage.getItem(seenKey(id)) || 0); } catch { return 0; } };
 const markSeen = (id: string) => { try { localStorage.setItem(seenKey(id), String(Date.now())); } catch { /* private mode */ } };
 
-function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; compact?: boolean; fold?: boolean }) {
+/** One done-item, readable at a glance: a round check, the words at full size, Minami's reason under a
+ *  tick it made, and on the open items a "Minami, do it" that hands the item to the task's chat.
+ *  "Next" marks the first open item — clicking the bar to remember what to do next was the habit this
+ *  replaces (Thomas, 2026-10-28). */
+function DodItem({ t, d, next, onDo, doing }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[number]; next: boolean; onDo?: () => void; doing: boolean }) {
+  return (
+    <li className={`group/item flex items-start gap-2 rounded-lg px-1.5 py-1 ${next ? "bg-[var(--sakura)]/[0.07]" : ""}`}>
+      <button onClick={() => void threadPost({ action: "dod.toggle", id: t.id, dodId: d.id })} aria-label={d.done ? "Mark not done" : "Mark done"}
+        title={d.by === "minami" ? `Ticked by Minami: ${d.why || "the chat says so"}. Tap to change.` : undefined}
+        className={`mt-[2px] flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] leading-none ${d.done ? "border-[#4ade80] bg-[#4ade80]/20 text-[#4ade80]" : next ? "border-[var(--sakura)]/70" : "border-white/25 hover:border-white/50"}`}>
+        {d.done ? "✓" : ""}
+      </button>
+      <span className="min-w-0 flex-1">
+        <span className={`block text-[13px] leading-[1.35] ${d.done ? "text-neutral-500" : t.dodPending ? "text-neutral-300" : "text-neutral-100"}`}>
+          {next && <span className="mr-1.5 rounded bg-[var(--sakura)]/20 px-1 py-px align-[1px] text-[9px] font-semibold uppercase tracking-wider text-[var(--sakura)]">Next</span>}
+          {d.t}
+        </span>
+        {d.by === "minami" && d.done && <span className="mt-0.5 block text-[11px] leading-snug text-neutral-500"><span className="text-[#4ade80]/80">Minami:</span> {d.why || "the chat says so"}</span>}
+      </span>
+      {!d.done && onDo && (
+        <button onClick={onDo} disabled={doing} title="Send this item to the task's chat and let Minami do it"
+          className={`shrink-0 rounded-md border border-[var(--sakura)]/40 px-1.5 py-0.5 text-[10px] text-[var(--sakura)] transition-opacity hover:bg-[var(--sakura)]/10 disabled:opacity-50 ${next ? "" : "opacity-0 group-hover/item:opacity-100 pointer-coarse:opacity-100"}`}>
+          {doing ? "sending…" : "▶ Do it"}
+        </button>
+      )}
+    </li>
+  );
+}
+
+export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; compact?: boolean; fold?: boolean }) {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(!fold);
+  const [doing, setDoing] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [perm] = useSetting<Exclude<AgentMode, "plan">>("permMode", "bypassPermissions");
+  const [model] = useSetting<string | null>("chatModel", null);
   const [, bump] = useState(0);
   const dod = t.dod ?? [];
   if (!dod.length) {
@@ -52,10 +87,18 @@ function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; compact
   }
   const fresh = dod.filter((d) => d.by === "minami" && d.done && (d.at ?? 0) > seenAt(t.id)).length;
   const toggle = () => { if (!open) { markSeen(t.id); bump((n) => n + 1); } setOpen((v) => !v); };
+  const nextId = dod.find((d) => !d.done)?.id;
+  const canDo = t.sessions.length > 0 && !t.archived;
+  const doIt = canDo ? (id: string) => async () => {
+    setDoing(id); setErr(null);
+    const e = await doDodItem(t, id, { mode: perm, model });
+    setDoing(null); if (e) setErr(e);
+  } : null;
+  const shown = open ? dod : dod.filter((d) => d.id === nextId);
   return (
     <div>
       <div className="flex items-center gap-2">
-        <button onClick={toggle} className="block min-w-0 flex-1 text-left" title={open ? "Hide the done-list" : "Show the done-list"}><DodBar t={t} /></button>
+        <button onClick={toggle} className="block min-w-0 flex-1 text-left" title={open ? "Fold the done-list" : "Show the whole done-list"}><DodBar t={t} /></button>
         {fresh > 0 && !open && !compact && (
           <button onClick={toggle} className="shrink-0 rounded bg-[#4ade80]/10 px-1.5 py-0.5 text-[10px] text-[#4ade80]/90" title="Minami ticked items from the chat — see why">Minami ✓{fresh}</button>
         )}
@@ -64,25 +107,22 @@ function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; compact
             title={`Minami's done-list${busy ? " (checking…)" : ""} — keep it`}>Keep</button>
         )}
       </div>
-      {open && !compact && (
-        <ul className="mt-1.5 space-y-0.5">
-          {dod.map((d) => (
-            <li key={d.id}>
-              <label className="flex cursor-pointer items-start gap-2 text-[12px] leading-snug" title={d.by === "minami" ? `Ticked by Minami: ${d.why || "the chat says so"}. Tap to change.` : undefined}>
-                <input type="checkbox" checked={d.done} onChange={() => void threadPost({ action: "dod.toggle", id: t.id, dodId: d.id })} className="mt-[2px] shrink-0 accent-[#4ade80]" />
-                <span className={`min-w-0 flex-1 ${d.done ? "text-neutral-500 line-through" : t.dodPending ? "text-neutral-400" : "text-neutral-200"}`}>{d.t}</span>
-                {d.by === "minami" && <span className="shrink-0 rounded bg-[#4ade80]/10 px-1 text-[9px] text-[#4ade80]/80">Minami</span>}
-              </label>
-              {d.by === "minami" && d.why && <p className="ml-5 text-[10px] leading-snug text-neutral-600">{d.why}</p>}
+      {!compact && shown.length > 0 && (
+        <ul className="-mx-1.5 mt-1.5 space-y-0.5">
+          {shown.map((d) => <DodItem key={d.id} t={t} d={d} next={d.id === nextId} doing={doing === d.id} onDo={doIt ? doIt(d.id) : undefined} />)}
+          {open && (
+            <li>
+              <form onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { void threadPost({ action: "dod.add", id: t.id, t: draft }); setDraft(""); } }}>
+                <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="+ add" className="ml-7 w-[calc(100%-1.75rem)] bg-transparent py-0.5 text-[16px] text-neutral-300 outline-none placeholder:text-neutral-600 md:text-[12px]" />
+              </form>
             </li>
-          ))}
-          <li>
-            <form onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { void threadPost({ action: "dod.add", id: t.id, t: draft }); setDraft(""); } }}>
-              <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="+ add" className="ml-5 w-[calc(100%-1.25rem)] bg-transparent py-0.5 text-[16px] text-neutral-300 outline-none placeholder:text-neutral-600 md:text-[12px]" />
-            </form>
-          </li>
+          )}
         </ul>
       )}
+      {!open && !compact && dod.length > shown.length && (
+        <button onClick={toggle} className="mt-0.5 pl-5 text-[11px] text-neutral-600 hover:text-neutral-300">all {dod.length} items</button>
+      )}
+      {err && <p className="mt-1 text-[11px] text-red-300/80">{err}</p>}
     </div>
   );
 }
@@ -105,6 +145,7 @@ export function TaskCard({ t, busy, compact, fold, active, actions, drag }: {
           <span className={`min-w-0 flex-1 font-medium leading-snug text-neutral-100 ${compact ? "truncate text-[13px]" : "line-clamp-2 text-[13.5px]"}`}>{t.title}</span>
         </span>
         <span className="mt-0.5 block truncate pl-4 text-[11px] text-neutral-500">
+          {active && <span className="font-medium text-[var(--sakura)]">● chatting now · </span>}
           {!t.archived && STATE[st] && <span style={{ color: st === "queued" ? undefined : TINT[st] }}>{STATE[st]} · </span>}
           {t.archived ? `done ${ago(t.doneAt ?? t.at)} ago` : ago(t.at)}
           {t.sessions.length > 0 && ` · ${t.sessions.length} chat${t.sessions.length > 1 ? "s" : ""}`}

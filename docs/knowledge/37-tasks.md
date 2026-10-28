@@ -120,6 +120,41 @@ was on almost no card. Now (`components/home/TaskCard.tsx`, `ensure` in `app/api
 - **Calls:** at most two at a time, one in flight per task, and an empty answer isn't retried for six
   hours. The `busy` ids in GET drive the "writing a done-list…" / "checking…" lines.
 
+## Done closes itself · the checklist in view · Minami, do it
+
+Round 7 (Thomas: "I don't want to check the subtask done manually"; "I click on the progress bar a lot
+to … see what I need to do next … indicate which task I am chatting with … better readability for
+subtask and button to let Minami do it for me").
+
+- **Done is automatic.** When a task's last done-item is ticked (by Minami reading the chat, or by him),
+  the server archives it to Done with `autoDone` (`closeIfDone` in `app/api/threads`).
+  - **It fires only on the transition to all-met.** A task reopened by hand, or brought back by a new
+    reply (`revived` in `lib/threads.ts`: new activity more than 2 minutes after `doneAt`), stays open
+    with Close and doesn't close itself again.
+  - **The page celebrates it once** (`components/home/Celebrate.tsx`): a burst of confetti and a toast
+    "Done — nice." with Open and **Reopen**, because Minami's reading of "done" can be wrong.
+  - **Limits:** once per task per browser, only within 15 minutes of closing, and no burst under reduced
+    motion.
+  - **The archive** is the board's Done column (14 days). The tile header links to it ("✓ n done today").
+- **The checklist is in view** (`Dod` in `TaskCard.tsx`):
+  - The expanded tile and the wide board show the whole list. The narrow board shows the bar plus the
+    **Next** item and "all n items".
+  - Items have a round check, full-size text and Minami's reason under its ticks.
+  - The first open item is marked **Next**.
+- **The task you're chatting with**:
+  - **Its card:** ringed, says "● chatting now", and the tile scrolls to it.
+  - **The chat:** shows a **Task** strip above the composer with the title, the bar, the Next item and
+    Do it. Tapping the strip unfolds the whole list. It's in `ChatHints`, so it shows in every pane whose
+    session belongs to a task.
+- **▶ Do it**, on the Next item (and on hover/touch for the rest):
+  - The `do` action works out where to send: the key that already owns the task's latest chat, else
+    `live:<id>` (the alias a panel attaches through).
+  - The browser sends "Next on the done-list for …: <item>. Do this now…" through `/api/agent/send`, so
+    a chat whose worktree is gone is re-homed as usual, and then opens the chat. Resuming under a second
+    key would be two processes writing one transcript.
+- The home list's threads call `ensureDod` too, so tasks get done-lists and ticks without the board
+  being opened.
+
 ## Threads
 
 A thread is derived, not declared (`lib/threads.ts`):
@@ -142,7 +177,7 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 | `lib/use-threads.ts` | One shared poll per tab; `openThread()` (event `minami:open-thread`). |
 | `lib/ask.ts` | `guessProject`, `splitAsks`, `startAsk` (isolate → send → wait for the id → `minami:open-chat`). |
 | `components/home/Home.tsx` | Ask line, Needs you, Where you left off, Today. |
-| `components/home/TopicTasks.tsx`, `TaskCard.tsx`, `Board.tsx` | The expanded tile, the shared task card (done-list always visible), the project board. |
+| `components/home/TopicTasks.tsx`, `TaskCard.tsx`, `Board.tsx`, `Celebrate.tsx` | The expanded tile, the shared task card (done-list always visible), the project board. |
 | `lib/morning-push.ts` | The 07:30 digest; `broadcast()` in `lib/push/server.ts`. |
 
 ## Decisions
