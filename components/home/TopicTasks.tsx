@@ -11,6 +11,7 @@ import { useSetting } from "@/lib/use-settings";
 import { ensureDod, useThreads, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
 import { TaskCard } from "./TaskCard";
+import { NewTask, readDraft } from "./NewTask";
 
 const btn = "shrink-0 rounded-lg border border-white/12 px-2.5 py-1 text-[12px] text-neutral-200 transition-colors hover:border-white/30 pointer-coarse:py-2";
 
@@ -24,7 +25,10 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
   const td = useThreads();
   const busy = new Set(td?.busy ?? []);
   const doneToday = (td?.done ?? []).filter((t) => t.project === project && (t.doneAt ?? 0) > Date.now() - 86_400_000).length;
+  const [writing, setWriting] = useState(false);
+  // Re-read when the sheet closes, so the trigger shows the draft that was just left behind.
   const [draft, setDraft] = useState("");
+  useEffect(() => { if (!writing) setDraft(readDraft(project)); }, [writing, project]);
   const [more, setMore] = useState(false);
   const open = tasks.filter((t) => t.state !== "queued");
   const shown = more ? open : open.slice(0, 6);
@@ -51,13 +55,19 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
         <button onClick={onClose} className="shrink-0 px-1.5 text-neutral-500 hover:text-neutral-200" aria-label="Collapse">✕</button>
       </div>
 
-      {/* A new task is just a new chat in this topic: it becomes a card here the moment it has a reply. */}
-      <form onSubmit={(e) => { e.preventDefault(); const t = draft.trim(); if (t) { setDraft(""); send(t); } }} className="mt-3 flex gap-2">
-        {/* Empty topic: the only reason to have expanded it is to start one, so the box is ready to type in. */}
-        <input autoFocus={open.length === 0} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={`New task in ${project}…`}
-          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/20 px-3 py-1.5 text-[16px] text-neutral-100 outline-none focus:border-[var(--sakura)]/50 md:text-[13px]" />
-        <button type="submit" disabled={!draft.trim()} className={`${btn} disabled:opacity-40`}>Start</button>
-      </form>
+      {/* A new task is just a new chat in this topic: it becomes a card here the moment it has a reply.
+          The field is a trigger for the New task sheet — a task is usually paragraphs and screenshots,
+          which a one-line input can't hold. A left-behind draft shows here so it isn't forgotten. */}
+      <button onClick={() => setWriting(true)} autoFocus={open.length === 0}
+        className="group mt-3 flex w-full items-center gap-2.5 rounded-xl border border-dashed border-white/15 bg-black/20 px-3 py-2 text-left transition-colors hover:border-[var(--sakura)]/50 hover:bg-black/30 focus:border-[var(--sakura)]/50 focus:outline-none">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[var(--sakura)]/15 text-[14px] text-[var(--sakura)]">＋</span>
+        {draft.trim()
+          ? <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-200"><span className="text-[var(--sakura)]">Draft · </span>{draft.trim().split("\n")[0]}</span>
+          : <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-500 group-hover:text-neutral-300">New task in {project} — describe it, paste screenshots…</span>}
+        <span className="shrink-0 text-[11px] text-neutral-600">{draft.trim() ? "continue ›" : "write ›"}</span>
+      </button>
+      <NewTask project={project} open={writing} onClose={() => setWriting(false)}
+        onStart={async (t) => { await startAsk({ project, cwd, at: 0 }, t, { mode: perm, model }); }} />
 
       <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
         {open.length === 0 ? (

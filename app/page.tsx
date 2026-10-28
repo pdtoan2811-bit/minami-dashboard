@@ -50,6 +50,7 @@ import { useShellFullscreen } from "@/components/shell/use-shell";
 import { AskLine, Home } from "@/components/home/Home";
 import { ChatHints } from "@/components/home/ChatHints";
 import { TopicTasks } from "@/components/home/TopicTasks";
+import { imageRefs } from "@/lib/image-refs";
 import { Board } from "@/components/home/Board";
 import { Celebrate } from "@/components/home/Celebrate";
 import { startAsk } from "@/lib/ask";
@@ -2164,21 +2165,11 @@ export default function BentoHome() {
   );
 }
 
-// Absolute paths to image files, mentioned anywhere in a message. Must stay in step with
-// IMAGE_PATH in lib/agent/images.ts, which is what decides which of these actually get sent to the
-// model — a path that renders here but isn't inlined there (or vice versa) is a lie either way.
-const IMAGE_REF = /(?:^|[\s(])"(\/[^"]+\.(?:png|jpe?g|gif|webp))"|(?:^|[\s(])(\/[^\s"'()]+\.(?:png|jpe?g|gif|webp))(?=[\s)]|$)/gi;
-
 /** Thumbnails for the images a turn refers to. Covers pasted screenshots and folder-picker
- *  attachments identically, because both are just a path in the text by the time they land here. */
+ *  attachments identically, because both are just a path in the text by the time they land here.
+ *  The path pattern lives in lib/image-refs.ts, shared with the New task sheet. */
 const ImageRefs = memo(function ImageRefs({ text }: { text: string }) {
-  const paths = useMemo(() => {
-    if (!text) return [];
-    const out: string[] = [];
-    // Group 1 is the quoted form, group 2 the bare one — exactly one is set per match.
-    for (const m of text.matchAll(IMAGE_REF)) { const p = m[1] || m[2]; if (p && !out.includes(p)) out.push(p); }
-    return out.slice(0, 5);
-  }, [text]);
+  const paths = useMemo(() => imageRefs(text).slice(0, 5), [text]);
   if (paths.length === 0) return null;
   return (
     <div className="mt-2 flex flex-wrap gap-2">

@@ -50,8 +50,24 @@ the others stack beside it, and it is full-width on a phone or beside an open pa
   proposed one)
 - tapping a card opens its chats in the panel, and the expanded tile stays open.
 
-The tile header has **All chats** (the old tile click: the topic's panel), **▶ Preview** and ✕. Its input
-starts a **new task**, which is just a new chat in that topic, and is focused when the topic is empty.
+The tile header has **All chats** (the old tile click: the topic's panel), **▶ Preview** and ✕. Below it,
+a **＋ New task** trigger (focused when the topic is empty) opens the **New task sheet**
+(`components/home/NewTask.tsx`). A new task is still just a new chat in that topic, via `startAsk`.
+
+**The New task sheet** (2026-10-28, Thomas: "a task description can be long, can have image etc"). The
+trigger used to be a one-line `<input>`, which could hold "fix the favicon" but not a real brief.
+- The editor is the chat `Composer` itself (`roomy`, `sendOnMod`, `maxHeight` props), so paste, drop and 📎
+  photo produce the same path-in-the-text a pane sends. `/api/agent/send` inlines the images for Claude.
+- **⌘↵ starts it. Enter adds a new line** and continues lists. With Enter-sends, the first paragraph break
+  would start a half-written brief.
+- Attached images show as removable thumbnails. The path pattern is `lib/image-refs.ts`, shared with the
+  transcript's `ImageRefs`, and must stay in step with `IMAGE_PATH` in `lib/agent/images.ts`.
+- The draft is kept per project in `localStorage` (`minami:newtask:<project>`). It is cleared only after
+  `startAsk` resolves, so if the start fails the draft is still there. When a draft is left behind, the
+  trigger reads **Draft · first line… continue ›**.
+- The sheet is portalled to `<body>`. The tile sits in a reflowing grid, and a `fixed` element under a
+  transformed ancestor is placed against that ancestor, not the viewport.
+- Not covered: the board's **+ Add a task** still queues a title only. A queued task has no body to keep.
 
 > 🐛 2026-10-28 — a topic with no tasks kept the old click (open the chat panel) and its corner button was
 > ▶ Preview, so the expanded tile and its "New task" box were unreachable exactly when a first task was
@@ -322,6 +338,7 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 | `lib/ask.ts` | `guessProject`, `splitAsks`, `startAsk` (isolate → send → wait for the id → `minami:open-chat`). |
 | `components/home/Home.tsx` | Ask line, Needs you, Where you left off, Today. |
 | `components/home/TopicTasks.tsx`, `TaskCard.tsx`, `Board.tsx`, `Celebrate.tsx` | The expanded tile, the shared task card (done-list always visible), the project board. |
+| `components/home/NewTask.tsx`, `lib/image-refs.ts` | The New task sheet (long brief, images, saved draft); image-path parsing shared with the transcript. |
 | `lib/morning-push.ts` | The 07:30 digest; `broadcast()` in `lib/push/server.ts`. |
 
 ## Decisions
