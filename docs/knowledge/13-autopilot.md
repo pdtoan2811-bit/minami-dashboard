@@ -136,3 +136,13 @@ on a timer is just a slower way to fail.
 > **Still open:** a bare `next start` without the variable is unguarded. The robust fix is to record
 > the owning PID in the claim and recover only when that PID is dead.
 
+
+> 🐛 **Autopilot told Thomas to step into its own resolve (2026-10-28, chat-3).** 13 s into
+> `resolveConflict`, a tick from a second runner instance (the per-module `ticking` guard doesn't
+> span instances) saw the checkout mid-merge and posted "Someone is resolving a merge by hand". The
+> resolver pane also ended on "I didn't commit or deploy". Together they read as "waiting on you", so
+> he said "go full" and the merge was committed by hand while autopilot was still in its build gate.
+> Fixed three ways. The mid-merge complaint stays silent while a fresh claim exists (resolver
+> timeout + 10 min). If the resolve "fails" because the branch was already merged by hand, autopilot
+> records `Merged — <task>` instead of a false "Needs you" and doesn't block the task. The resolver
+> prompt now ends by saying autopilot builds, commits and deploys on its own.

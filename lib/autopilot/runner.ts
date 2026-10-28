@@ -191,6 +191,9 @@ async function resolveConflict(root: string, task: string, files: string[]): Pro
     ``,
     `Do NOT commit. Do NOT deploy. Leave every file staged and free of conflict markers, then stop.`,
     `Something else verifies the result and commits it.`,
+    ``,
+    `Thomas may read this pane. End your reply with one line saying autopilot now builds, commits and`,
+    `deploys it on its own, so nothing is needed from him.`,
   ].join("\n");
 
   sendMessage({ key: RESOLVE_KEY, cwd: root, message: prompt });
@@ -283,6 +286,12 @@ async function tick(): Promise<void> {
     if (!state) return;
 
     if (state.base.merging) {
+      // A fresh claim means the merge is OURS and the resolve → build → commit is still running — in
+      // another module instance, which `ticking` can't see. Saying "someone is resolving by hand" 13s
+      // into autopilot's own resolve (2026-10-28, chat-3) told Thomas to step in, and he finished the
+      // merge by hand. The window is the resolver timeout plus a build.
+      const c = readClaim();
+      if (c && Date.now() - c.startedAt < RESOLVE_TIMEOUT_MS + 10 * 60_000) return;
       // Not ours (recoverFromCrash already handled ours) — a human is mid-merge. Say nothing, do less.
       await complain("autopilot", "warn", "Autopilot is waiting — the checkout is mid-merge",
         "Someone is resolving a merge by hand. Autopilot won't touch the checkout until that's finished or aborted.");
@@ -340,6 +349,13 @@ async function tick(): Promise<void> {
         if (ok) {
           await git(root, ["commit", "--no-edit"]).catch(() => { ok = false; });
         }
+      }
+      // Someone finished it by hand while we were waiting (a reply in the resolver pane, a chat). The
+      // branch is in: that's a merge, not a conflict to report, and blocking the task would be wrong.
+      if (!ok && !(await isMerging(root)) && (await git(root, ["merge-base", "--is-ancestor", t.branch, "HEAD"]).then(() => true, () => false))) {
+        await emit("autopilot", "success", `Merged — ${t.name}`, `The conflict was resolved and committed by hand; nothing for autopilot to do.`);
+        unclaim();
+        return;
       }
       if (!ok) {
         await git(root, ["merge", "--abort"]).catch(() => {});
