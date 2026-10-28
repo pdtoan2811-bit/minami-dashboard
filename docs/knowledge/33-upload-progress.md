@@ -48,6 +48,11 @@ The video in flight, as its cover, with the minutes left; the rest as small cove
 late (its ETA at the current rate is past its slot) or stuck (under 20 KB/s: the 10-19 hang ran at 12–15, a normal
 Post for Me upload is 44–150), with **Ask Minami** opening the chat that started it. When the publish ends the tile
 says how it ended ("All 5 posted · VI4 held: …") for 6 hours, until the next publish starts, or until Dismiss.
+
+> 🐛 2026-10-28 — "cant see the upload tile after dismiss it". Dismiss removed the finished tile outright, and the
+> API dropped it at 6 h anyway, so there was nothing left on the board to bring it back with. Now the newest finished
+> publish of the last 3 days always comes back from `/api/uploads`; dismissed, or past 6 h, it folds to one small
+> "Last publish" tile (`LastChip`) instead of vanishing, and tapping it opens the full card again.
 The agent card keeps only the one-line headline on the bash row.
 
 Under it, the input every flagged item has (§34), asked for the same evening ("also have input for my comment and do it
@@ -67,7 +72,7 @@ one may be mid-turn, and two drivers on one conversation is what `sendMessage` r
 | `lib/agent/manager.ts` | Puts `MINAMI_SESSION_KEY=<pane key>` into every session's env, so a child process can say which chat started it. `sessionIdentity(key)` maps any key the client holds (`live:<sid>` after the first turn) back to that spawn key and the cwd. |
 | `lib/upload-progress.ts` | `readUploads()` (live pids only), `uploadsFor()` (by session key; a writer with no key falls back to the same repo, worktrees folded and paths realpath'd), `trayOf()` (pure: totals, and every ETA from the current rate with uploads strictly one after another). |
 | `app/api/agent/uploads` | `GET ?key&cwd` → `{ trays }`: the agent card's headline. |
-| `lib/upload-progress.ts` (tile) | `readFinished()` (done/ copies, 6 h), `publishOf()` (pure: the video in flight, minutes left, minutes late against its slot, one tone), `coverOf(pid, n)`. |
+| `lib/upload-progress.ts` (tile) | `readFinished()` (done/ copies, `maxAgeMs`; the route asks 3 days and keeps 6 h + the newest), `publishOf()` (pure: the video in flight, minutes left, minutes late against its slot, one tone), `coverOf(pid, n)`. |
 | `app/api/uploads` | `GET` → `{ publishes }`: every live publish on the machine, whichever chat started it, then the finished ones, each with the `sessionId` of its chat and `att` (§34). `POST {op: comment \| ask, key, text}`: the tile's input. |
 | `app/api/uploads/cover` | `GET ?pid&n` → that video's cover. The path comes only from that publish's own progress file and must be an image; the first request makes a 320 px JPEG with `sips` (~13 KB instead of ~750 KB), cached in `$TMPDIR/minami-covers`. |
 | `components/PublishTile.tsx` | `PublishTiles`: first in the Bento grid in every mode but the flow canvas (a topic open and the compact split included: hiding it there was the first bug, "cant find the tile anywhere"), 2×2, one column wide in the split. Polls 4 s while live, 30 s otherwise. Dismissals in `localStorage` `bento:publishDismissed`. |

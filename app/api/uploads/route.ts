@@ -7,11 +7,14 @@ export const runtime = "nodejs";
 
 const all = () => {
   const sidOf = (key: string | null) => !key ? null : key.startsWith("live:") ? key.slice(5) : sessionIdentity(key)?.sessionId ?? null;
-  return [...readUploads(), ...readFinished()].map((p) => ({ ...publishOf(p), sessionId: sidOf(p.session) }));
+  // The last 6 hours of finished ones, plus the newest of the last 3 days whatever its age: the tile shrinks that one
+  // to a small card rather than dropping it, so a dismissed or aged-out publish can always be reopened.
+  const done = readFinished(undefined, 3 * 24 * 3600e3).filter((p, i) => i === 0 || Date.now() - (p.endedAt ?? 0) < 6 * 3600e3);
+  return [...readUploads(), ...done].map((p) => ({ ...publishOf(p), sessionId: sidOf(p.session) }));
 };
 
 // GET → { publishes } for the Bento publish tile (§33): every live publish on the machine, whichever chat started it,
-// then the ones that ended in the last 6 hours (the writer's done/ copies). `sessionId` is the chat that started it: a
+// then the ones that ended in the last 6 hours (the writer's done/ copies) and the newest of the last 3 days. `sessionId` is the chat that started it: a
 // writer's key is either `live:<sid>` already or a pane key the live store still knows. Each carries `att`, its entry in
 // the attention store (§34, scope "publish"), which holds his comments and the Minami chats asked from the tile.
 export async function GET() {
