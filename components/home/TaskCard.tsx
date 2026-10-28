@@ -177,10 +177,19 @@ export function TaskCard({ t, busy, compact, fold, active, actions, drag }: {
   drag?: { onDragStart: (e: React.DragEvent) => void };
 }) {
   const st = t.archived ? "idle" : t.state;
+  const open = () => { if (t.sessions.length) { markSeen(t.id); openThread(t); } };
+  // The whole card opens the task, not just the title block (Thomas, 2026-10-28: on a long card he "had
+  // to scroll all the way up to click on the top area"). Clicks on the card's own controls (tick, Do it,
+  // Keep, ✓ Done, the add field) keep their meaning, and a drag-select of text is not a click.
+  const onCard = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button, a, input, textarea, select, form, label")) return;
+    if (window.getSelection()?.toString()) return;
+    open();
+  };
   return (
-    <div draggable={!!drag} onDragStart={drag?.onDragStart} data-task={t.id}
-      className={`flex min-w-0 flex-col gap-2 rounded-xl border bg-white/[0.035] ${compact ? "p-2.5" : "p-3"} ${active ? "border-[var(--sakura)]/70 ring-1 ring-[var(--sakura)]/40" : "border-white/10"} ${drag ? "cursor-grab active:cursor-grabbing" : ""} ${t.archived ? "opacity-70" : ""}`}>
-      <button onClick={() => { if (t.sessions.length) { markSeen(t.id); openThread(t); } }} disabled={!t.sessions.length} className="min-w-0 text-left disabled:cursor-default" title={t.sessions.length ? "Open this task's chats" : undefined}>
+    <div draggable={!!drag} onDragStart={drag?.onDragStart} data-task={t.id} onClick={onCard}
+      className={`flex min-w-0 flex-col gap-2 rounded-xl border bg-white/[0.035] ${compact ? "p-2.5" : "p-3"} ${active ? "border-[var(--sakura)]/70 ring-1 ring-[var(--sakura)]/40" : "border-white/10"} ${drag ? "cursor-grab active:cursor-grabbing" : t.sessions.length ? "cursor-pointer" : ""} ${t.sessions.length ? "transition-colors hover:border-white/20 hover:bg-white/[0.05]" : ""} ${t.archived ? "opacity-70" : ""}`}>
+      <button onClick={open} disabled={!t.sessions.length} className="min-w-0 text-left disabled:cursor-default" title={t.sessions.length ? "Open this task's chats" : undefined}>
         <span className="flex items-start gap-2">
           <span className={`mt-[6px] h-2 w-2 shrink-0 rounded-full ${st === "working" ? "animate-pulse" : ""}`} style={{ background: TINT[st] }} />
           <span className={`min-w-0 flex-1 font-medium leading-snug text-neutral-100 ${compact ? "truncate text-[13px]" : "line-clamp-2 text-[13.5px]"}`}>{t.title}</span>
