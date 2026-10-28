@@ -56,6 +56,7 @@ function pump() {
   }
 }
 const RETRY_EMPTY_MS = 6 * 3600e3;
+const FOCUS_EVERY_MS = 2 * 60e3;
 
 // Done closes itself (Thomas, 2026-10-28: "I don't want to check the subtask done manually"). Only on
 // the TRANSITION to all-met, never on a list that was already all met: a task he reopened, or one that
@@ -98,25 +99,48 @@ async function suggest(v: ThreadView) {
   });
 }
 
-/** Tick the items the chat shows are met. Never unticks what Thomas ticked; may untick its own. */
-async function evaluate(v: ThreadView) {
+/** Tick the items the chat shows are met, and note which open item the chat is on now. Never unticks
+ *  what Thomas ticked; unticks its own only when the chat says the thing broke. `focusOnly` (a chat mid-turn): only the "on now" part — a
+ *  half-finished reply reads as "not yet", so ticks wait for the chat to go quiet. */
+async function evaluate(v: ThreadView, focusOnly = false) {
   const dod = v.dod ?? [];
   const chat = chatOf(v);
-  if (!dod.length || !chat) { mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) t.evalAt = v.at; }); return; }
-  const prompt = `Definition of Done for "${v.title}":\n${dod.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\nThe end of the work chat:\n${chat}\n\nWhich items does the chat show are actually met (done and confirmed, not planned or promised)? Reply with ONLY JSON: {"met":[{"n":<item number>,"why":"<under 12 words: what in the chat shows it>"}]}`;
-  const j = haikuJSON(await runHaiku(prompt)) as { met?: { n?: number; why?: string }[] } | null;
+  if (!dod.length || !chat) { mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) { if (focusOnly) t.focusAt = Date.now(); else t.evalAt = v.at; } }); return; }
+  const prompt = `Definition of Done for "${v.title}":\n${dod.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\nThe end of the work chat:\n${chat}\n\nWhich items does the chat show are actually met (done and confirmed, not planned or promised)? For each met item, copy the evidence word for word from the chat (one sentence, under 30 words, no paraphrase) and say who said it. Also: which NOT-met item is the end of the chat working on or asking about right now (0 if none, or if it's about something else)? And list any item the chat says was done but is now broken or reverted (usually none). Reply with ONLY JSON: {"met":[{"n":<item number>,"why":"<under 12 words: what in the chat shows it>","quote":"<exact words from the chat>","by":"Thomas"|"Minami"}],"now":<item number or 0>,"undone":[<item numbers>]}`;
+  const j = haikuJSON(await runHaiku(prompt)) as { met?: { n?: number; why?: string }[]; now?: number } | null;
+  const nowIdx = typeof j?.now === "number" && j.now > 0 ? j.now - 1 : -1;
+  const undone = new Set(((j as { undone?: unknown } | null)?.undone instanceof Array ? (j as { undone: unknown[] }).undone : []).filter((n): n is number => typeof n === "number").map((n) => n - 1));
   const met = new Map<number, string>();
-  for (const x of j?.met ?? []) if (typeof x?.n === "number") met.set(x.n - 1, String(x.why ?? "").slice(0, 120));
+  // Evidence is only evidence if it is really there: a quote that isn't in the chat (whitespace and
+  // quote marks aside) is dropped, and the tick keeps just its reason. A made-up quote under a tick
+  // would be worse than none.
+  const norm = (x: string) => x.toLowerCase().replace(/[“”"'‘’`*_]/g, "").replace(/\s+/g, " ").trim();
+  const hay = norm(chat);
+  const ev = new Map<number, { quote?: string; quoteBy?: "Thomas" | "Minami" }>();
+  for (const x of (j as { met?: { n?: number; why?: string; quote?: string; by?: string }[] } | null)?.met ?? []) {
+    if (typeof x?.n !== "number") continue;
+    met.set(x.n - 1, String(x.why ?? "").slice(0, 120));
+    const q = String(x.quote ?? "").trim().replace(/^["“]|["”]$/g, "").slice(0, 300);
+    if (q.length >= 8 && hay.includes(norm(q))) ev.set(x.n - 1, { quote: q, quoteBy: x.by === "Thomas" ? "Thomas" : "Minami" });
+  }
   mutateFlow((s) => {
     const t = s.threads.find((x) => x.id === v.id);
     if (!t?.dod) return;
-    t.evalAt = v.at;
+    if (focusOnly) t.focusAt = Date.now(); else t.evalAt = v.at;
     if (!j) return; // a failed call says nothing about the items
+    // Which item is on now. A ▶ Do it from the last 10 minutes outranks the reading: he said which one.
+    const pinned = t.dod.some((d) => !d.done && d.doing && Date.now() - d.doing < 10 * 60e3);
+    if (!pinned) t.dod = t.dod.map((d, i) => (i === nowIdx && !d.done ? { ...d, doing: d.doing ?? Date.now() } : d.doing ? (({ doing: _, ...r }) => r)(d) : d));
+    if (focusOnly) return;
     const was = allDone(t.dod);
     t.dod = t.dod.map((d, i): FlowDod => {
       if (d.done && d.by !== "minami") return d; // his tick stands
-      if (met.has(i)) return { ...d, done: true, by: "minami", why: met.get(i), at: d.done ? d.at : Date.now() };
-      return d.by === "minami" ? { id: d.id, t: d.t, done: false } : d;
+      if (met.has(i)) return { id: d.id, t: d.t, done: true, by: "minami", why: met.get(i), quote: ev.get(i)?.quote, quoteBy: ev.get(i)?.quoteBy, at: d.done ? d.at : Date.now() };
+      // Minami's own tick also stands unless the chat now says that thing is broken (`undone`). It used
+      // to be unticked whenever the item wasn't in this reading — but Minami reads only the END of the
+      // chat, so every tick fell off once the evidence scrolled out of the window (seen 2026-10-28: a
+      // 3/4 task went to 0/4 an hour later with nothing undone).
+      return d.by === "minami" && undone.has(i) ? { id: d.id, t: d.t, done: false } : d;
     });
     if (!t.archived) closeIfDone(t, was);
   });
@@ -136,6 +160,9 @@ function ensure(ids: string[]) {
     } else if (v.state !== "working" && v.sessions.length && (st?.evalAt ?? 0) < v.at) {
       // Checked when the chat goes quiet, not mid-turn: a half-finished reply reads as "not yet".
       enqueue(v.id, () => evaluate(v));
+    } else if (v.state === "working" && v.sessions.length && Date.now() - (st?.focusAt ?? 0) > FOCUS_EVERY_MS) {
+      // Mid-turn: only which item it's on, at most every two minutes per task.
+      enqueue(v.id, () => evaluate(v, true));
     }
   }
 }
@@ -154,6 +181,8 @@ function doItem(b: { id: string; dodId: string }): { key?: string; cwd?: string;
   const owner = sessionIdentity("live:" + last.id);
   const key = owner?.key ?? "live:" + last.id; // the alias a panel attaches through (Home's Go uses it too)
   const message = `Next on the done-list for "${v.title}": ${item.t}\n\nDo this now. When it's done and checked, say so plainly.`;
+  // This item is the one on now: he just handed it over.
+  mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t?.dod) t.dod = t.dod.map((d) => (d.id === item.id ? { ...d, doing: Date.now() } : d.doing ? (({ doing: _, ...r }) => r)(d) : d)); });
   return { key, cwd: owner?.cwd ?? last.cwd, resume: last.id, message };
 }
 

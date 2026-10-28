@@ -39,26 +39,59 @@ const markSeen = (id: string) => { try { localStorage.setItem(seenKey(id), Strin
 
 /** One done-item, readable at a glance: a round check, the words at full size, Minami's reason under a
  *  tick it made, and on the open items a "Minami, do it" that hands the item to the task's chat.
- *  "Next" marks the first open item — clicking the bar to remember what to do next was the habit this
+ *  A status pill marks the item being worked on (or "next" when none is) — the first open item — clicking the bar to remember what to do next was the habit this
  *  replaces (Thomas, 2026-10-28). */
-function DodItem({ t, d, next, onDo, doing }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[number]; next: boolean; onDo?: () => void; doing: boolean }) {
+// Each item's status, so the card says which one is being worked on rather than only which is next
+// (Thomas, 2026-10-28). "on" comes from `doing` (▶ Do it, or Minami reading the chat — /api/threads
+// evaluate) combined with the task's live state; "next" only when nothing is on.
+type ItemStatus = "done" | "on" | "asks" | "started" | "next" | "todo";
+const PILL: Record<Exclude<ItemStatus, "done" | "todo">, { label: string; cls: string }> = {
+  on: { label: "Minami on it", cls: "bg-[#f0a868]/15 text-[#f0a868]" },
+  asks: { label: "needs you", cls: "bg-[var(--sakura)]/20 text-[var(--sakura)]" },
+  started: { label: "started", cls: "bg-white/10 text-neutral-300" },
+  next: { label: "next", cls: "bg-white/[0.07] text-neutral-400" },
+};
+function statusesOf(t: ThreadView): Map<string, ItemStatus> {
+  const dod = t.dod ?? [];
+  const cur = dod.filter((d) => !d.done && d.doing).sort((a, b) => (b.doing ?? 0) - (a.doing ?? 0))[0];
+  const next = cur ? undefined : dod.find((d) => !d.done);
+  return new Map(dod.map((d): [string, ItemStatus] => [d.id, d.done ? "done"
+    : d === cur ? (t.state === "working" ? "on" : t.state === "waiting" ? "asks" : "started")
+    : d === next ? "next" : "todo"]));
+}
+
+function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[number]; status: ItemStatus; onDo?: () => void; doing: boolean }) {
+  const lead = status !== "done" && status !== "todo";
+  const pill = status !== "done" && status !== "todo" ? PILL[status] : null;
   return (
-    <li className={`group/item flex items-start gap-2 rounded-lg px-1.5 py-1 ${next ? "bg-[var(--sakura)]/[0.07]" : ""}`}>
+    <li className={`group/item flex items-start gap-2 rounded-lg px-1.5 py-1 ${status === "on" ? "bg-[#f0a868]/[0.08]" : lead ? "bg-[var(--sakura)]/[0.06]" : ""}`}>
       <button onClick={() => void threadPost({ action: "dod.toggle", id: t.id, dodId: d.id })} aria-label={d.done ? "Mark not done" : "Mark done"}
         title={d.by === "minami" ? `Ticked by Minami: ${d.why || "the chat says so"}. Tap to change.` : undefined}
-        className={`mt-[2px] flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] leading-none ${d.done ? "border-[#4ade80] bg-[#4ade80]/20 text-[#4ade80]" : next ? "border-[var(--sakura)]/70" : "border-white/25 hover:border-white/50"}`}>
-        {d.done ? "✓" : ""}
+        className={`mt-[2px] flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] leading-none ${d.done ? "border-[#4ade80] bg-[#4ade80]/20 text-[#4ade80]" : status === "on" ? "border-[#f0a868]" : lead ? "border-[var(--sakura)]/70" : "border-white/25 hover:border-white/50"}`}>
+        {d.done ? "✓" : status === "on" ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f0a868]" /> : ""}
       </button>
       <span className="min-w-0 flex-1">
         <span className={`block text-[13px] leading-[1.35] ${d.done ? "text-neutral-500" : t.dodPending ? "text-neutral-300" : "text-neutral-100"}`}>
-          {next && <span className="mr-1.5 rounded bg-[var(--sakura)]/20 px-1 py-px align-[1px] text-[9px] font-semibold uppercase tracking-wider text-[var(--sakura)]">Next</span>}
+          {pill && <span className={`mr-1.5 rounded px-1 py-px align-[1px] text-[9px] font-semibold uppercase tracking-wider ${pill.cls}`}>{pill.label}</span>}
           {d.t}
         </span>
-        {d.by === "minami" && d.done && <span className="mt-0.5 block text-[11px] leading-snug text-neutral-500"><span className="text-[#4ade80]/80">Minami:</span> {d.why || "the chat says so"}</span>}
+        {d.by === "minami" && d.done && (
+          <span className="mt-0.5 block text-[11px] leading-snug text-neutral-500">
+            <span className="text-[#4ade80]/80">Minami:</span> {d.why || "the chat says so"}
+            {/* The words in the chat that met it, checked to be really there (evaluate in /api/threads).
+                Tapping opens the chat they came from. */}
+            {d.quote && (
+              <button onClick={() => t.sessions.length && openThread(t)} title="Open the chat this came from"
+                className="mt-1 block w-full border-l-2 border-[#4ade80]/30 pl-2 text-left italic text-neutral-400 hover:text-neutral-200">
+                “{d.quote}”{d.quoteBy && <span className="not-italic text-neutral-600"> — {d.quoteBy === "Thomas" ? "you" : "Minami"}</span>}
+              </button>
+            )}
+          </span>
+        )}
       </span>
-      {!d.done && onDo && (
+      {!d.done && onDo && status !== "on" && (
         <button onClick={onDo} disabled={doing} title="Send this item to the task's chat and let Minami do it"
-          className={`shrink-0 rounded-md border border-[var(--sakura)]/40 px-1.5 py-0.5 text-[10px] text-[var(--sakura)] transition-opacity hover:bg-[var(--sakura)]/10 disabled:opacity-50 ${next ? "" : "opacity-0 group-hover/item:opacity-100 pointer-coarse:opacity-100"}`}>
+          className={`shrink-0 rounded-md border border-[var(--sakura)]/40 px-1.5 py-0.5 text-[10px] text-[var(--sakura)] transition-opacity hover:bg-[var(--sakura)]/10 disabled:opacity-50 ${lead ? "" : "opacity-0 group-hover/item:opacity-100 pointer-coarse:opacity-100"}`}>
           {doing ? "sending…" : "▶ Do it"}
         </button>
       )}
@@ -87,14 +120,15 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
   }
   const fresh = dod.filter((d) => d.by === "minami" && d.done && (d.at ?? 0) > seenAt(t.id)).length;
   const toggle = () => { if (!open) { markSeen(t.id); bump((n) => n + 1); } setOpen((v) => !v); };
-  const nextId = dod.find((d) => !d.done)?.id;
+  const status = statusesOf(t);
+  const leadId = dod.find((d) => { const x = status.get(d.id); return x !== "done" && x !== "todo"; })?.id;
   const canDo = t.sessions.length > 0 && !t.archived;
   const doIt = canDo ? (id: string) => async () => {
     setDoing(id); setErr(null);
     const e = await doDodItem(t, id, { mode: perm, model });
     setDoing(null); if (e) setErr(e);
   } : null;
-  const shown = open ? dod : dod.filter((d) => d.id === nextId);
+  const shown = open ? dod : dod.filter((d) => d.id === leadId);
   return (
     <div>
       <div className="flex items-center gap-2">
@@ -109,7 +143,7 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
       </div>
       {!compact && shown.length > 0 && (
         <ul className="-mx-1.5 mt-1.5 space-y-0.5">
-          {shown.map((d) => <DodItem key={d.id} t={t} d={d} next={d.id === nextId} doing={doing === d.id} onDo={doIt ? doIt(d.id) : undefined} />)}
+          {shown.map((d) => <DodItem key={d.id} t={t} d={d} status={status.get(d.id) ?? "todo"} doing={doing === d.id} onDo={doIt ? doIt(d.id) : undefined} />)}
           {open && (
             <li>
               <form onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { void threadPost({ action: "dod.add", id: t.id, t: draft }); setDraft(""); } }}>
