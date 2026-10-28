@@ -224,12 +224,20 @@ async function shrinkPhoto(f: File): Promise<File> {
   } catch { return f; }
 }
 
-export default function Composer({ value, onChange, onSubmit, placeholder, disabled, pickPhotoRef, insertTextRef }: {
+export default function Composer({ value, onChange, onSubmit, placeholder, disabled, pickPhotoRef, insertTextRef, maxHeight, sendOnMod, autoFocus, roomy }: {
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Overrides the pane's density ceiling — the New task sheet is a writing surface, not a chat line. */
+  maxHeight?: number;
+  /** Only ⌘/Ctrl+Enter submits; plain Enter is a newline. For a long brief, where Enter-sends would
+   *  fire a half-written task at the first paragraph break. */
+  sendOnMod?: boolean;
+  autoFocus?: boolean;
+  /** Larger type (15px) for the sheet. Applied to textarea AND mirror, which must share metrics. */
+  roomy?: boolean;
   /** Filled with a function that opens the device's photo picker (gallery / camera / files). The 📎
    *  menu lives in the pane, but the upload and the caret insertion live here, so the menu borrows
    *  this rather than a second copy of either. */
@@ -242,7 +250,9 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
   const touchOnly = useMediaQuery("(hover: none) and (pointer: coarse)");
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
-  const maxH = MAX_H[useDensityTier()];
+  const tierH = MAX_H[useDensityTier()];
+  const maxH = maxHeight ?? tierH;
+  const size = roomy ? "text-[15px] leading-[1.6]" : "text-sm leading-relaxed";
 
   // Scroll the caret back into view. Only ever needed once the composer has hit MAX_H and started
   // scrolling — which is exactly when a Shift+Enter used to insert a line you couldn't see.
@@ -447,10 +457,14 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
     // A phone keyboard has no Shift, so Enter-sends left no way to write a second line at all. On a
     // touch-only device Enter is a newline (and continues lists, like Shift+Enter) and ↵ sends — the
     // convention of every messaging app on Android.
-    if (e.key === "Enter" && !e.shiftKey && !touchOnly) { e.preventDefault(); onSubmit(); return; }
+    if (sendOnMod) {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmit(); return; }
+    } else if (e.key === "Enter" && !e.shiftKey && !touchOnly) { e.preventDefault(); onSubmit(); return; }
+    // With ⌘↵ as the send key, plain Enter is the newline — so it continues lists the way Shift+Enter does.
+    const newlineKey = e.key === "Enter" && !e.metaKey && !e.ctrlKey && (e.shiftKey || touchOnly || !!sendOnMod);
 
     // Shift+Enter (or plain Enter on a phone) — continue the list you're in, or step out of an empty item.
-    if (e.key === "Enter" && (e.shiftKey || touchOnly) && m) {
+    if (newlineKey && m) {
       e.preventDefault();
       if (!m[7].trim()) { replaceRange(el, ls, le, m[1], ls + m[1].length); return; } // empty item → drop the marker
       const next = m[2]
@@ -500,7 +514,7 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
       <div
         ref={mirror}
         aria-hidden
-        className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap text-sm leading-relaxed text-neutral-100 [overflow-wrap:break-word]"
+        className={`pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap ${size} text-neutral-100 [overflow-wrap:break-word]`}
       >
         {lines.map((l, i) => (
           <span key={i}>{tintLine(l, `l${i}`)}{i < lines.length - 1 ? "\n" : ""}</span>
@@ -512,7 +526,7 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
         value={value}
         rows={1}
         // The soft keyboard's action key says what Enter will do: a newline on touch (see onKeyDown).
-        enterKeyHint={touchOnly ? "enter" : "send"}
+        enterKeyHint={touchOnly || sendOnMod ? "enter" : "send"}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
@@ -526,7 +540,8 @@ export default function Composer({ value, onChange, onSubmit, placeholder, disab
         // Inline, not a Tailwind class: the ceiling is now a number the pane decides, and a static
         // `max-h-[220px]` would silently overrule it for anything the layout effect above didn't set.
         style={{ maxHeight: maxH }}
-        className="relative block w-full resize-none whitespace-pre-wrap bg-transparent text-sm leading-relaxed text-transparent caret-white outline-none [overflow-wrap:break-word] selection:bg-[var(--sakura)]/35 placeholder:text-neutral-600"
+        autoFocus={autoFocus}
+        className={`relative block w-full resize-none whitespace-pre-wrap bg-transparent ${size} text-transparent caret-white outline-none [overflow-wrap:break-word] selection:bg-[var(--sakura)]/35 placeholder:text-neutral-600`}
       />
       {/* An upload is a beat of dead time between Cmd-V and the path appearing; without this the
           composer looks like it ignored the paste. Absolute so it can't reflow the growing textarea. */}

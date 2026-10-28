@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-28
+- **Starting a task opens a writing sheet** (§37; `components/home/NewTask.tsx`, `lib/image-refs.ts`, `Composer` props `roomy`/`sendOnMod`/`maxHeight`). The tile's one-line input is now a trigger for a sheet with the chat composer: long text, lists, pasted or dropped images shown as removable thumbnails, ⌘↵ to start, and the draft kept per project until the chat has started.
 - **A done-item tick can't land on the wrong item quietly** (§37; `app/api/threads/route.ts` `doItem`, `lib/task-report.ts`, `TASK_PROMPT`). ▶ Do it now names the item's number, re-ticking a met item says so instead of "ticked", and each report lists what is still open.
 - **A topic with no tasks expands too** (§37; `app/page.tsx`, `components/home/TopicTasks.tsx`). Its click opened the chat panel and its corner was ▶ Preview, so there was no way to start a first task from the tile. Now the click and the **+ Task** corner open the expanded tile with the New task box focused.
 - **A dismissed publish tile can be reopened** (§33; `LastChip` in `components/PublishTile.tsx`, `/api/uploads`). Dismissed or older than 6 h, the last publish folds to a small tile instead of disappearing; the API keeps the newest finished one for 3 days.
