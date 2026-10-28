@@ -77,13 +77,16 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
     const was = allDone(dod);
     const valid = (n: unknown): n is number => typeof n === "number" && n >= 1 && n <= dod.length;
     for (const d of r.done ?? []) {
-      if (!valid(d?.n)) continue;
+      if (!valid(d?.n)) { said.push(`no item ${d?.n}`); continue; }
       const cur = dod[d.n - 1];
-      if (cur.done && cur.by !== "minami") continue; // his tick stands
+      // Re-ticking a met item changes nothing, and must SAY so: a chat handed "Next on the done-list:
+      // <text>" once guessed n=1, got "Recorded: ticked 1", told Thomas the item was done, and the real
+      // item stayed open (2026-10-28). The open list below is what lets it notice and correct itself.
+      if (cur.done) { said.push(`item ${d.n} was already met — nothing changed`); continue; }
       // `by: "minami"` keeps the card's mark and lets him untick it; no `quote`, because the chat is
       // reporting its own work, not quoting evidence someone has to check against a transcript.
-      dod[d.n - 1] = { id: cur.id, t: cur.t, done: true, by: "minami", why: String(d.why ?? "").slice(0, 120) || "reported by the chat", at: cur.done ? cur.at : Date.now() };
-      said.push(`ticked ${d.n}`);
+      dod[d.n - 1] = { id: cur.id, t: cur.t, done: true, by: "minami", why: String(d.why ?? "").slice(0, 120) || "reported by the chat", at: Date.now() };
+      said.push(`ticked ${d.n} ("${cur.t}")`);
     }
     for (const n of r.undone ?? []) {
       if (!valid(n) || dod[n - 1].by !== "minami" || !dod[n - 1].done) continue;
@@ -104,6 +107,10 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
       t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = fin;
     }
     if (t.archived) said.push("task closed");
+    else {
+      const left = dod.map((d, i) => (d.done ? "" : `${i + 1}. ${d.t}`)).filter(Boolean);
+      if (left.length) said.push(`still open: ${left.join("; ")}`);
+    }
   });
   return said.length ? `Recorded: ${said.join(", ")}.` : "Nothing changed.";
 }

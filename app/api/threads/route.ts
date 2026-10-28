@@ -188,7 +188,10 @@ function doItem(b: { id: string; dodId: string }): { key?: string; cwd?: string;
   if (!last) return { error: "the task has no chat yet — start it first" };
   const owner = sessionIdentity("live:" + last.id);
   const key = owner?.key ?? "live:" + last.id; // the alias a panel attaches through (Home's Go uses it too)
-  const message = `Next on the done-list for "${v.title}": ${item.t}\n\nDo this now. When it's done and checked, say so plainly.`;
+  // The item's NUMBER rides along: task_report ticks by number, and with only the text a chat once
+  // guessed n=1 and ticked an item that was already met, leaving this one open (2026-10-28).
+  const n = v.dod!.indexOf(item) + 1;
+  const message = `Next on the done-list for "${v.title}" — item ${n} of ${v.dod!.length}: ${item.t}\n\nDo this now. When it's done and checked, tick item ${n} (task_report done n=${n}) and say so plainly.`;
   // This item is the one on now: he just handed it over.
   mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t?.dod) t.dod = t.dod.map((d) => (d.id === item.id ? { ...d, doing: Date.now() } : d.doing ? (({ doing: _, ...r }) => r)(d) : d)); });
   return { key, cwd: owner?.cwd ?? last.cwd, resume: last.id, message };
