@@ -39,6 +39,28 @@ so a 45-second tick over a handful of folders does approximately nothing most of
 The manager is `await import()`ed here, same as the conflict resolver, because it pulls in the Agent SDK
 and this module is loaded at server boot by `instrumentation.ts`.
 
+### `tidy` — merged worktrees and branches go on their own (2026-10-28)
+
+Every 5 minutes (its own timer, not every tick, because it runs lsof) the autopilot runs
+`node bin/task.mjs tidy --json`. It removes:
+
+- a worktree under `.minami-worktrees/` or `.claude/worktrees/` if it is **clean**, its branch is **an
+  ancestor of the base** (every commit already merged), it is **not occupied** (no claim in the last 30 min,
+  no live session cwd, no process whose cwd is inside it per `lsof`, not locked, not mid-operation), and it
+  has been **quiet 30 min** (last commit, claim heartbeat and `.git` mtime). The quiet window protects a
+  tree `new` just made: until its session starts it is clean and level with the base, so it looks
+  finished.
+- a local branch that is fully merged, checked out nowhere and has no upstream, with `git branch -d`.
+
+Unmerged branches, dirty trees and stashes are reported in the JSON and left alone. It emits one `info`
+event only when it removed something. It defaults **on**, which breaks the "writes default off" rule on
+purpose: it can only delete what is already in the base, and `git worktree add` restores a folder.
+
+**Why:** `task.mjs merge` removes its tree and branch, but most merges never go through it. A chat merges
+its own branch by hand (`git merge` in the base, no event), because it can't delete the folder it runs
+in. Nothing came back afterwards. The janitor (§32) only recycles trees idle 3+ days when the disk is low,
+and never deletes branches. On 2026-10-28 that left 8 trees and 19 branches, every one merged.
+
 ### Why the switch lives on disk
 Every other preference in Bento is a `useSetting` (localStorage, per browser). This one can't be: the
 thing that reads it is a `setInterval` inside next-server, which has no browser to ask. It also has to

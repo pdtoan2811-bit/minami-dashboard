@@ -126,6 +126,29 @@ export async function recoverFromCrash(): Promise<void> {
     `Nothing was lost: the task's branch still has every commit. It will be retried on the next pass.`);
 }
 
+/**
+ * Clear away merged worktrees and branches (`task.mjs tidy`). It runs on its own timer, not every tick:
+ * it shells out to lsof, and a finished tree that waits five minutes to go costs nothing. It only
+ * reports when it removed something, and then in one quiet line. The gates (merged, clean, unoccupied,
+ * quiet for 30 min) all live in task.mjs, so a hand-run `tidy` and this one agree.
+ */
+const TIDY_EVERY_MS = 5 * 60_000;
+let lastTidyAt = 0;
+async function tidy(root: string): Promise<void> {
+  if (Date.now() - lastTidyAt < TIDY_EVERY_MS) return;
+  lastTidyAt = Date.now();
+  try {
+    const { stdout } = await exec(process.execPath, [path.join(root, "bin", "task.mjs"), "tidy", "--json"], { cwd: root, timeout: 60_000 });
+    const r = JSON.parse(stdout.trim().split("\n").pop() || "{}") as { removed?: { tree: string }[]; branches?: string[] };
+    const trees = r.removed?.length || 0, branches = r.branches?.length || 0;
+    if (trees || branches) {
+      await emit("autopilot", "info", `Tidied ${trees} finished worktree(s) and ${branches} merged branch(es)`,
+        [...(r.removed || []).map((t) => `  − ${t.tree}`), ...(r.branches || []).map((b) => `  − ${b}`)].join("\n") +
+        `\n\nEvery commit was already in the base branch.`);
+    }
+  } catch { /* the next pass retries; a failed tidy leaves things as they were */ }
+}
+
 async function listTasks(root: string): Promise<ListOut | null> {
   try {
     const { stdout } = await exec(process.execPath, [path.join(root, "bin", "task.mjs"), "list", "--json"], { cwd: root });
@@ -250,9 +273,10 @@ async function tick(): Promise<void> {
       const { storageTick } = await import("./storage");
       await storageTick(root, emit).catch((e) => emit("storage", "error", "Storage duty failed this tick", String(e?.message || e)));
     }
+    // Someone else is mid-merge or mid-deploy. Both are serialised for good reasons; queue behind them.
+    if (cfg.tidy && root && !held(MERGE_LOCK) && !held(DEPLOY_LOCK)) await tidy(root);
     if (!cfg.merge) return;
     if (!root) return;
-    // Someone else is mid-merge or mid-deploy. Both are serialised for good reasons; queue behind them.
     if (held(MERGE_LOCK) || held(DEPLOY_LOCK)) return;
 
     const state = await listTasks(root);

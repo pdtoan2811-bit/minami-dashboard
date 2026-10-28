@@ -26,6 +26,8 @@ export type AutopilotConfig = {
   /** Keep the disk above its floor (§32): start bin/janitor.mjs when free space drops under lowGB, and alarm
    *  when the janitor stops running. Off = the janitor only watches and reports; it deletes nothing. */
   storage: boolean;
+  /** Remove worktrees and branches whose every commit is already in the base (`task.mjs tidy`). */
+  tidy: boolean;
   /** How long a task must sit still after its last commit before it counts as finished, ms. */
   settleMs: number;
   /** Tick interval, ms. */
@@ -45,6 +47,10 @@ export const DEFAULTS: AutopilotConfig = {
   // Off by default like every other write. It deletes (regenerable caches, and worktrees only after saving
   // their work to a branch), so it is switched on per box, in the file, by someone who meant to.
   storage: false,
+  // On by default even though it deletes, because it can only delete what is already merged: a tree is
+  // removed only if it's clean and its branch is in the base, and a branch only with `git branch -d`. The
+  // worst it can do is remove a folder you meant to reopen, and `git worktree add` brings that back.
+  tidy: true,
   // Two minutes: long enough that a run of commits a few seconds apart reads as one piece of work,
   // short enough that "I'm done" doesn't feel like it went unnoticed.
   settleMs: 120_000,
