@@ -192,12 +192,40 @@ export function PublishTiles({ onOpen, span = "col-span-2 row-span-2" }: { onOpe
     setGone(next);
     try { localStorage.setItem(DISMISSED, JSON.stringify(next)); } catch { /* private mode */ }
   };
-  // Live ones always; of the finished, only the newest that hasn't been dismissed. Pids recycle, so a dismissal is
-  // matched on pid + end time.
+  // Opened again from the small tile: shown full until dismissed again.
+  const [peek, setPeek] = useState<number | null>(null);
+  // Live ones always; of the finished, only the newest. Pids recycle, so a dismissal is matched on pid + end time.
   const live = list.filter((p) => p.live);
   // A finished one only while nothing is live: once the next publish starts, the last one's result is history.
-  const last = live.length ? undefined : list.find((p) => !p.live && !gone.includes(p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4)));
-  return <>{[...live, ...(last ? [last] : [])].map((p) => (
-    <Tile key={`${p.pid}-${p.endedAt ?? "live"}`} p={p} span={span} onOpen={onOpen} onChanged={reload} onDismiss={() => dismiss(p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4))} />
-  ))}</>;
+  const last = live.length ? undefined : list.find((p) => !p.live);
+  const id = (p: Publish) => p.pid * 1e4 + ((p.endedAt ?? 0) % 1e4);
+  // Dismissed, or older than 6 h, it shrinks to one small tile instead of vanishing: dismissing it used to leave
+  // nothing on the board to get it back with.
+  const full = last && (peek === id(last) || (!gone.includes(id(last)) && Date.now() - (last.endedAt ?? 0) < 6 * 3600e3));
+  return <>
+    {[...live, ...(last && full ? [last] : [])].map((p) => (
+      <Tile key={`${p.pid}-${p.endedAt ?? "live"}`} p={p} span={span} onOpen={onOpen} onChanged={reload}
+        onDismiss={() => { setPeek(null); if (!gone.includes(id(p))) dismiss(id(p)); }} />
+    ))}
+    {last && !full && <LastChip p={last} onShow={() => setPeek(id(last))} />}
+  </>;
+}
+
+/** The finished publish, folded to one tile: what happened and when, tap to open the full card again. */
+function LastChip({ p, onShow }: { p: Publish; onShow: () => void }) {
+  const posted = p.videos.filter((v) => v.state === "done").length;
+  const ok = !p.failed;
+  const when = p.endedAt ? `${new Date(p.endedAt).toLocaleDateString("en-CA") === new Date().toLocaleDateString("en-CA") ? "" : new Date(p.endedAt).toLocaleDateString([], { weekday: "short" }) + " "}${hm(p.endedAt)}` : "";
+  return (
+    <button onClick={onShow} className="flex min-w-0 flex-col rounded-2xl px-[18px] py-4 text-left transition-opacity hover:opacity-90"
+      style={{ background: "#13161c", border: "1px solid rgba(255,255,255,.08)", color: C.ink }}>
+      <span className="text-[12.5px]" style={{ color: C.mute }}>Last publish</span>
+      <span className="mt-2 flex items-center gap-2 text-[17px] font-semibold">
+        <span style={{ color: ok ? C.ok : C.bad }}>{ok ? "✓" : "!"}</span>
+        {posted === p.count ? `All ${posted} posted` : `${posted} of ${p.count} posted`}
+      </span>
+      <span className="text-[13px]" style={{ color: C.mute }}>Finished {when}</span>
+      <span className="mt-auto text-[12.5px]" style={{ color: C.up }}>Show →</span>
+    </button>
+  );
 }
