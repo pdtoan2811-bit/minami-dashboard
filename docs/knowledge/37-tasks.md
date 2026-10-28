@@ -129,8 +129,19 @@ subtask and button to let Minami do it for me").
 - **Done is automatic.** When a task's last done-item is ticked (by Minami reading the chat, or by him),
   the server archives it to Done with `autoDone` (`closeIfDone` in `app/api/threads`).
   - **It fires only on the transition to all-met.** A task reopened by hand, or brought back by a new
-    reply (`revived` in `lib/threads.ts`: new activity more than 2 minutes after `doneAt`), stays open
-    with Close and doesn't close itself again.
+    message from him (`revived` in `lib/threads.ts`: a typed message, `lastUserAt`, more than 2 minutes
+    after `doneAt`), stays open with Close and doesn't close itself again. A task closed by words
+    (`closedWhy` set: said in the chat, `task_report finished`, the close API) never revives; Reopen does.
+
+> 🐛 **2026-10-28 — after a deploy the board showed closed tasks again, open items and all.** He had said
+> "this one is done" on several; they came back under Paused with their unticked items. Cause: `revived`
+> compared against `lastActivity`, which is `max(last row timestamp, file mtime)`, so any write after the
+> close counted as "a new reply" — the chat's own sign-off turn, a CLI metadata row, a pane reattaching
+> after the deploy. Measured on `~/.minami/flow.json`: 6 of 6 self-closed tasks were revived, 4–29 minutes
+> after closing, and none had a message typed by him after `doneAt`. Fix: `SessionMeta.lastUserAt` (last
+> user row with text that isn't a `<…>` harness injection) drives revival, and a close-by-words is final.
+> Accumulators cached before the field have no `lastUserTs`; they start from the next message, which only
+> errs toward staying done.
   - **The page celebrates it once** (`components/home/Celebrate.tsx`): a burst of confetti and a toast
     "Done — nice." with Open and **Reopen**, because Minami's reading of "done" can be wrong.
   - **Limits:** once per task per browser, only within 15 minutes of closing, and no burst under reduced

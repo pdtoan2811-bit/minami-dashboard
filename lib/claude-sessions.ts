@@ -99,6 +99,9 @@ export type SessionMeta = {
   tools: number;
   toolNames: string[];
   lastActivity: number;
+  /** When Thomas last typed in this chat. `lastActivity` is not that: it includes the file's mtime, which
+   *  moves on any write (the CLI's own metadata rows, a pane reattaching after a deploy). */
+  lastUserAt?: number;
   active: boolean;
   task?: string;   // specific task (Project > Goal > Task)
   now?: string;    // what the conversation is about NOW — rolling, re-derived every few asks (§5h)
@@ -145,6 +148,7 @@ type ParseAccum = {
   tin: number; tout: number; cost: number; messages: number; tools: number;
   toolSet: string[];
   lastTs: number;
+  lastUserTs?: number; // optional: accumulators cached before it start counting from the next message
   lineLeftover: string; // trailing partial JSON line (no newline yet) carried to the next parse
   byteLeftoverB64: string; // trailing INCOMPLETE utf-8 byte sequence from the last raw read, base64
 };
@@ -314,7 +318,13 @@ function foldLine(acc: ParseAccum, line: string): void {
     }
     // A `/compact` (or any local command) leaves `<local-command-stdout>Compacted` as the newest user
     // row; as the preview it read like the chat's last words. Harness rows don't move lastText.
-    if (txt.trim() && !r.isCompactSummary && !/^\s*<(local-command-|command-name)/.test(txt)) { acc.lastText = txt.trim(); acc.lastRole = "user"; }
+    if (txt.trim() && !r.isCompactSummary && !/^\s*<(local-command-|command-name)/.test(txt)) {
+      acc.lastText = txt.trim(); acc.lastRole = "user";
+      // Typed by him, not a harness injection (`<task-notification>` lands after a background job and
+      // would read as him coming back to the task).
+      const ms = r.timestamp && !/^\s*</.test(txt) ? Date.parse(r.timestamp) : NaN;
+      if (ms > (acc.lastUserTs ?? 0)) acc.lastUserTs = ms;
+    }
     // A real ask, not a tool result (no text), a harness injection (`<task-notification>`, a
     // `<system-reminder>`, a local-command echo — all open on a tag) or a one-word nudge.
     const ask = txt.trim() && !/^\s*[<[]/.test(txt) ? cleanTitle(txt.trim()) : "";
@@ -403,7 +413,7 @@ function buildMeta(id: string, file: string, acc: ParseAccum, mtime: number): Se
     toolNames: acc.toolSet.slice(0, 8),
     lastRole: acc.lastRole, tail: acc.lastText.replace(/\s+/g, " ").slice(0, 200),
     asks: acc.asks || [], askCount: acc.askCount || 0,
-    lastActivity, active: Date.now() - lastActivity < 120000,
+    lastActivity, lastUserAt: acc.lastUserTs, active: Date.now() - lastActivity < 120000,
   };
 }
 
