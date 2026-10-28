@@ -32,7 +32,9 @@ type Body =
   | { action: "queue"; project: string; cwd: string; title: string }
   | { action: "start"; id: string; sessionId: string }
   | { action: "ensure"; ids: string[] }
-  | { action: "do"; id: string; dodId: string };
+  | { action: "do"; id: string; dodId: string }
+  /** Close a task from inside its chat: by session id, or by the chat's own MINAMI_SESSION_KEY. */
+  | { action: "close"; sessionId?: string; key?: string };
 
 // ── Minami's done-lists ──────────────────────────────────────────────────────────────────────────
 // Both jobs are cheap Haiku side calls, never on the request path: `ensure` returns at once and the
@@ -106,9 +108,13 @@ async function evaluate(v: ThreadView, focusOnly = false) {
   const dod = v.dod ?? [];
   const chat = chatOf(v);
   if (!dod.length || !chat) { mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) { if (focusOnly) t.focusAt = Date.now(); else t.evalAt = v.at; } }); return; }
-  const prompt = `Definition of Done for "${v.title}":\n${dod.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\nThe end of the work chat:\n${chat}\n\nWhich items does the chat show are actually met (done and confirmed, not planned or promised)? For each met item, copy the evidence word for word from the chat (one sentence, under 30 words, no paraphrase) and say who said it. Also: which NOT-met item is the end of the chat working on or asking about right now (0 if none, or if it's about something else)? And list any item the chat says was done but is now broken or reverted (usually none). Reply with ONLY JSON: {"met":[{"n":<item number>,"why":"<under 12 words: what in the chat shows it>","quote":"<exact words from the chat>","by":"Thomas"|"Minami"}],"now":<item number or 0>,"undone":[<item numbers>]}`;
+  const prompt = `Definition of Done for "${v.title}":\n${dod.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\nThe end of the work chat:\n${chat}\n\nWhich items does the chat show are actually met (done and confirmed, not planned or promised)? For each met item, copy the evidence word for word from the chat (one sentence, under 30 words, no paraphrase) and say who said it. Also: which NOT-met item is the end of the chat working on or asking about right now (0 if none, or if it's about something else)? And list any item the chat says was done but is now broken or reverted (usually none). Finally: did Thomas say the WHOLE task is done or to close it, or did the chat end by declaring the whole task finished with nothing left to do? Only the whole task counts, never one step; if yes, copy those words exactly. Reply with ONLY JSON: {"met":[{"n":<item number>,"why":"<under 12 words: what in the chat shows it>","quote":"<exact words from the chat>","by":"Thomas"|"Minami"}],"now":<item number or 0>,"undone":[<item numbers>],"finished":<"exact words" or null>}`;
   const j = haikuJSON(await runHaiku(prompt)) as { met?: { n?: number; why?: string }[]; now?: number } | null;
   const nowIdx = typeof j?.now === "number" && j.now > 0 ? j.now - 1 : -1;
+  // "It's done" said in the chat closes the task even with items open (Thomas, 2026-10-28: "I told it is
+  // done but it has no way to mark itself as done"). Same evidence rule as the ticks: the words must
+  // really be in the chat, and a revived task doesn't re-close on the same old words.
+  const fin = String((j as { finished?: unknown } | null)?.finished ?? "").trim().replace(/^["“]|["”]$/g, "").slice(0, 300);
   const undone = new Set(((j as { undone?: unknown } | null)?.undone instanceof Array ? (j as { undone: unknown[] }).undone : []).filter((n): n is number => typeof n === "number").map((n) => n - 1));
   const met = new Map<number, string>();
   // Evidence is only evidence if it is really there: a quote that isn't in the chat (whitespace and
@@ -116,6 +122,7 @@ async function evaluate(v: ThreadView, focusOnly = false) {
   // would be worse than none.
   const norm = (x: string) => x.toLowerCase().replace(/[“”"'‘’`*_]/g, "").replace(/\s+/g, " ").trim();
   const hay = norm(chat);
+  const finished = fin.length >= 4 && fin !== "null" && hay.includes(norm(fin)) ? fin : null;
   const ev = new Map<number, { quote?: string; quoteBy?: "Thomas" | "Minami" }>();
   for (const x of (j as { met?: { n?: number; why?: string; quote?: string; by?: string }[] } | null)?.met ?? []) {
     if (typeof x?.n !== "number") continue;
@@ -143,6 +150,9 @@ async function evaluate(v: ThreadView, focusOnly = false) {
       return d.by === "minami" && undone.has(i) ? { id: d.id, t: d.t, done: false } : d;
     });
     if (!t.archived) closeIfDone(t, was);
+    if (!t.archived && finished && finished !== t.closedWhy) {
+      t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = finished;
+    }
   });
 }
 
@@ -191,6 +201,18 @@ export async function POST(req: Request) {
   if (!b || typeof b !== "object" || !("action" in b)) return Response.json({ error: "bad body" }, { status: 400 });
   try {
     if (b.action === "do") return Response.json(doItem(b));
+    if (b.action === "close") {
+      const sid = b.sessionId || (b.key ? sessionIdentity(b.key)?.sessionId : null);
+      const v = sid ? threads(14).threads.find((t) => t.sessions.some((x) => x.id === sid)) : undefined;
+      if (!v) throw new Error("no open task holds that chat");
+      let id = v.id;
+      mutateFlow((s) => {
+        let t = s.threads.find((x) => x.id === v.id);
+        if (!t) { id = fid(); t = { id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), createdAt: Date.now(), updatedAt: Date.now() }; s.threads.unshift(t); }
+        t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = "closed from the chat"; t.updatedAt = Date.now();
+      });
+      return Response.json({ ok: true, id, title: v.title });
+    }
     if (b.action === "ensure") { ensure(Array.isArray(b.ids) ? b.ids.map(String) : []); return Response.json({ ok: true }); }
     if (b.action === "name") {
       const m = listSessions().find((x) => x.id === b.sessionId);

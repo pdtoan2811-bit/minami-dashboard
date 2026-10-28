@@ -40,6 +40,10 @@ export function ChatHints({ sessionId, project, input, clearInput, title }: {
         <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.1em] text-neutral-500">Task</span>
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-200">{task.title}</span>
         {task.archived && <span className="shrink-0 text-[11px] text-[#4ade80]">done ✓</span>}
+        {!task.archived && (
+          <span role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); void threadPost({ action: "archive", id: task.id }); }}
+            className="shrink-0 rounded-md border border-white/12 px-1.5 py-px text-[10px] text-neutral-400 hover:border-[#4ade80]/50 hover:text-[#4ade80]" title="Mark this task done">✓ Done</span>
+        )}
         <span className="shrink-0 text-[11px] text-neutral-600">{taskOpen ? "▾" : "▸"}</span>
       </button>
       <div className="mt-1"><Dod key={taskOpen ? "open" : "fold"} t={task} busy={(d.busy ?? []).includes(task.id)} fold={!taskOpen} /></div>

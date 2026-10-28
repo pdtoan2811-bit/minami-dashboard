@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-28
+- **A task closes when the chat says it's done** (§37). Minami closes a task when the chat calls the whole task done (exact words, verified, quoted in the toast). Every card and the chat's Task strip get ✓ Done, and `action: close` by session id or `MINAMI_SESSION_KEY` lets a chat close its own task.
 - **Done-items show their status; Minami's ticks stay** (§37). Each item is Minami on it / needs you / started / next / done, from ▶ Do it or Minami reading the chat (a focus-only check every 2 min while a chat runs). Fix: ticks no longer fall off when their evidence scrolls out of the part of the chat Minami reads.
 - **Minami's ticks quote the chat** (§37; `app/api/threads` evaluate, `lib/flow-store.ts` `quote`/`quoteBy`, `TaskCard.tsx`). Each tick carries a verbatim line from the chat, verified to be there, shown under the item and opening the chat.
 - **Tasks close themselves, checklist in view, Minami do it** (§37; `components/home/{TaskCard,Celebrate,ChatHints,TopicTasks}.tsx`, `app/api/threads` `closeIfDone` + `do`, `lib/threads.ts` revive, `lib/use-threads.ts` `doDodItem`). The last done-item ticked archives the task with a one-time celebration (Reopen in the toast). Cards show the whole list with a Next item and ▶ Do it, which sends the item to the task's chat under the key that owns it. A Task strip above the composer shows the task, its bar and Next. The open task's card says "chatting now".
