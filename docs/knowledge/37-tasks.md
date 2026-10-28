@@ -157,6 +157,16 @@ subtask and button to let Minami do it for me").
   (case, whitespace and quote marks ignored). Otherwise the tick keeps just its reason, because a made-up
   quote under a tick is worse than none. The card shows it as an indented italic line ("— you" /
   "— Minami"); tapping it opens the chat. Ticks made before this keep only their reason until the next check.
+- **A task can be closed without ticking every item.** He said "I told it is done but it has no way
+  to mark itself as done". There are three ways:
+  - **Said in the chat.** Every check also asks whether Thomas called the whole task done (or said to
+    close it), or the chat declared it finished with nothing left. If so, Haiku returns the exact words.
+    They must really be in the chat (the same rule as the quotes on ticks), and the task closes with
+    `closedWhy` = those words. The toast quotes them. A task that came back after a new reply doesn't
+    re-close on the same old words.
+  - **✓ Done by hand:** on every open card (the tile had none) and in the chat's Task strip.
+  - **From the chat itself:** `POST /api/threads {"action":"close","key":"$MINAMI_SESSION_KEY"}` (or
+    `sessionId`) closes the task holding that chat. Toast: "Closed from the chat".
 - **Each item has a status**, so the card shows what is being worked on, not only what's next:
   - **Minami on it** (orange, pulsing): the task's chat is running on this item.
   - **needs you**: the chat stopped and is asking about it.

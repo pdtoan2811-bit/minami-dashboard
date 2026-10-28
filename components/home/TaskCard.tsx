@@ -188,7 +188,13 @@ export function TaskCard({ t, busy, compact, fold, active, actions, drag }: {
         {t.line && fold && <span className="mt-1 line-clamp-1 pl-4 text-[12px] leading-snug text-neutral-400">{t.line}</span>}
       </button>
       {(!!t.dod?.length || !compact) && <div className="pl-4"><Dod t={t} busy={busy} compact={compact} fold={fold} /></div>}
-      {actions && <div className="flex flex-wrap items-center gap-1.5 pl-4">{actions}</div>}
+      {/* Every open card can be closed by hand — the tile had no way to (Thomas, 2026-10-28). The board
+          passes its own actions; the tile gets this. */}
+      {actions ? <div className="flex flex-wrap items-center gap-1.5 pl-4">{actions}</div>
+        : !t.archived && t.state !== "queued" && (
+          <div className="pl-4"><button onClick={() => void threadPost({ action: "archive", id: t.id })} title="Mark this task done and move it to Done"
+            className="rounded-md border border-white/12 px-2 py-0.5 text-[11px] text-neutral-400 transition-colors hover:border-[#4ade80]/50 hover:text-[#4ade80] pointer-coarse:py-1.5">✓ Done</button></div>
+        )}
     </div>
   );
 }

@@ -43,6 +43,10 @@ export type FlowThread = {
   /** Archived by itself: the last done-item got ticked (by Minami or him). The page celebrates these
    *  once, and a reply in the chat afterwards brings the task back. */
   autoDone?: boolean;
+  /** Why it closed when not every item was ticked: the words in the chat that said the whole task is
+   *  done, or "closed from the chat" (the `close` API). Also how a revived task avoids re-closing on the
+   *  same old words. */
+  closedWhy?: string;
   /** Dropped: still claims its sessions (so they don't come back as a new task) but shows nowhere. */
   hidden?: boolean;
 };

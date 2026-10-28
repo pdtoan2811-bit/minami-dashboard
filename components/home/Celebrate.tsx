@@ -60,7 +60,7 @@ export function Celebrate() {
             <span className="min-w-0 flex-1">
               <span className="block text-[13px] font-semibold text-neutral-100">Done — nice.</span>
               <span className="block truncate text-[12px] text-neutral-400">{now.title}</span>
-              <span className="block text-[11px] text-neutral-500">Every done-item met · moved to Done</span>
+              <span className="block truncate text-[11px] text-neutral-500">{now.closedWhy ? (now.closedWhy === "closed from the chat" ? "Closed from the chat" : `“${now.closedWhy}”`) : "Every done-item met"} · moved to Done</span>
             </span>
             <span className="flex shrink-0 flex-col gap-1">
               {now.sessions.length > 0 && <button onClick={() => { openThread(now); setNow(null); }} className="rounded-md border border-white/12 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-white/30">Open</button>}
