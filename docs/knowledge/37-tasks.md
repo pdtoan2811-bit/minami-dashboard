@@ -188,6 +188,34 @@ subtask and button to let Minami do it for me").
 - The home list's threads call `ensureDod` too, so tasks get done-lists and ticks without the board
   being opened.
 
+## The chat reports its own progress
+
+Round 8 (Thomas: "enhance the semantic tasks and progress — should it be a CLI or something?"). Everything
+above is Minami *inferring* progress after the fact: Haiku reads the last ~7k characters of a quiet chat.
+That is late, it costs a call per check, and it needed verified quotes to be trusted. The chat doing the
+work already knows which item it just finished, so it now says so itself (`lib/task-report.ts`).
+
+- **The tools.** Every dashboard session gets an in-process MCP server, `minami_task` (`taskMcpServer` in
+  `lib/agent/manager.ts`), with two tools:
+  - `task_status`: the task holding this chat and its numbered done-list, or "not part of an open task".
+  - `task_report {done:[{n,why}], now, undone, add, finished}`: tick items with what shows them met, set
+    the item on now, untick Minami's own when broken, add missing items, or close the whole task.
+  The handler reads `s.sessionId` at call time, so the model never passes a key and a resumed or re-homed
+  chat reports for the right task. A line in the system prompt (`TASK_PROMPT`) says when to call them.
+- **Why a tool and not a CLI.** A listed tool is called far more reliably than a command the model has to
+  remember. It is typed, nothing passes through Bash output, and no key has to be threaded. The
+  same logic is reachable over HTTP (`POST /api/threads {"action":"report", key|sessionId, …}`), so a CLI
+  for terminal sessions or the Minami bot would be a thin wrapper on it. None is built yet.
+- **Same marks as Minami's reading.** A reported tick is `by: "minami"` with the chat's `why` and no quote
+  (it's the chat's own word, not evidence pulled from a transcript). His ticks are never touched. `now`
+  sets `doing`, which holds for 10 minutes like ▶ Do it. All-met and `finished` close the task through
+  the same `closeIfDone` / `closedWhy` path.
+- **Haiku is the backup.** A report stores `reportAt`. In `ensure`, a `reportAt` newer than `evalAt`
+  skips both the quiet-time reading and the mid-turn focus check, and marks the task checked. A later
+  stretch of work the chat doesn't report is then read by Haiku as before. Chats outside the dashboard
+  (terminal, Minami bot) don't have the tool and are only ever read.
+- `MINAMI_DASHBOARD_TASK_TOOLS=0` turns the tools and the prompt line off.
+
 ## Threads
 
 A thread is derived, not declared (`lib/threads.ts`):
@@ -205,6 +233,7 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 | Piece | Role |
 |---|---|
 | `lib/threads.ts` | Derivation, the machine filter, the project list. Reads each transcript's head once (start time and first line) and caches it by id. |
+| `lib/task-report.ts` | A chat's own progress report: `taskStatus` / `taskReport`, plus the shared `allDone` / `closeIfDone` / `storedFor`. Behind the `minami_task` MCP tools and `action: report`. |
 | `lib/flow-store.ts` | The stored part: `~/.minami/flow.json` v2 (`MINAMI_FLOW_FILE`). Read from disk on every call: `:3000` and `:3001` share it. |
 | `app/api/threads/route.ts` | GET threads + projects; `?key=` → the session id of a just-started chat. POST: name (with Haiku DoD suggestion via `runHaiku`), dismiss, dod.accept/toggle/add, archive. |
 | `lib/use-threads.ts` | One shared poll per tab; `openThread()` (event `minami:open-thread`). |

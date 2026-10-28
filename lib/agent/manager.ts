@@ -18,7 +18,8 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import pathMod from "node:path";
-import { query, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, query, tool, type EffortLevel, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import { activityLabel, inputFromPartial, isAskTeamTool, phaseLabel, summarizeToolResult, type ActivityPhase, type ActivityState, type FinishedTask, type LiveTask, type LiveTool, type TaskKind, type ToolOutput } from "./labels";
 import { findSubagentFile, subagentModel } from "../claude-sessions";
 import { BLACKSMITH_WORKER_MODEL, DASHBOARD_MODEL, FANOUT_WORKER_MODEL } from "../model-pins";
@@ -144,6 +145,31 @@ const FANOUT_PROMPT = `When a task has independently workable parts — multiple
 // exempt on purpose — a one-step plan is a bar that jumps 0 → 100 and tells you nothing.
 const PROGRESS_PROMPT = `The user watches a live progress bar and ETA for each request, computed from your plan tool (TodoWrite, or TaskCreate/TaskUpdate). For any request that will take more than two or three steps, write the plan FIRST — 3 to 7 items, each an outcome in plain words ("Add the ETA to the tile", not "Edit page.tsx") — then mark each item in_progress when you start it and completed the moment it is done, one at a time, never in a batch at the end. Add or remove items when the plan changes; the bar follows. Skip the plan for quick questions and one-step changes.`;
 const PROGRESS_ENABLED = process.env.MINAMI_DASHBOARD_PROGRESS !== "0";
+
+// The chat reports its own task progress (§37, lib/task-report.ts) instead of leaving every tick to
+// Haiku reading the transcript after the fact. In-process, per session: the handler reads `s.sessionId`
+// at call time, so the model never handles a key and a resumed or re-homed chat reports for the right
+// task. lib/task-report is imported lazily because it imports lib/threads, which imports this module.
+// MINAMI_DASHBOARD_TASK_TOOLS=0 turns it off (Haiku alone, as before).
+const TASK_TOOLS_ENABLED = process.env.MINAMI_DASHBOARD_TASK_TOOLS !== "0";
+const TASK_PROMPT = `Thomas tracks work as tasks on his board, each with a short done-list. If this chat belongs to one, keep it current yourself with the minami_task tools: call task_status once when you start substantive work (it says whether there is a task and lists its items), task_report {now} when you move onto an item, and task_report {done} the moment an item is actually met and checked — not planned, not promised. If Thomas says the whole task is done, report {finished} with his words. One short call each, no announcement in the reply. Skip all of it for quick questions or when task_status says there is no task.`;
+const taskMcpServer = (s: { sessionId: string | null }) => {
+  const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+  return createSdkMcpServer({
+    name: "minami_task",
+    version: "1.0.0",
+    tools: [
+      tool("task_status", "The task on Thomas's board that this chat belongs to, with its numbered done-list.", {}, async () => text((await import("../task-report")).taskStatus(s.sessionId))),
+      tool("task_report", "Report progress on this chat's task: items met (with what shows it), the item on now, items broken again, missing items, or the whole task finished.", {
+        done: z.array(z.object({ n: z.number().int().describe("1-based item number"), why: z.string().describe("under 12 words: what shows it is met") })).optional(),
+        now: z.number().int().optional().describe("the open item being worked on now; 0 clears it"),
+        undone: z.array(z.number().int()).optional().describe("items ticked earlier that are broken or reverted"),
+        add: z.array(z.string()).optional().describe("missing checkable outcomes, under 10 words each"),
+        finished: z.string().optional().describe("Thomas's words saying the whole task is done, or why it is finished"),
+      }, async (a) => text((await import("../task-report")).taskReport(s.sessionId, a))),
+    ],
+  });
+};
 
 // Default for panes that haven't chosen (and the send route's fallback). OFF since 2026-09-25: with no
 // instruction Claude still spawns agents when IT judges the work divisible ("free"), and the standing
@@ -1058,6 +1084,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
         append: [
           PREVIEW_PROMPT, contextPrompt(autocompactLabel(key)),
           ...(PROGRESS_ENABLED ? [PROGRESS_PROMPT] : []),
+          ...(TASK_TOOLS_ENABLED ? [TASK_PROMPT] : []),
           // Measured facts about the checkout, ahead of the behavioural rules — the model can't be
           // told to distrust a working tree that renders, so it is handed the answer instead.
           ...(repoBriefing(repo) ? [repoBriefing(repo)!] : []),
@@ -1077,7 +1104,7 @@ function ensureSession(key: string, cwd: string, mode: AllowedMode, resume?: str
           ...(teamBriefing() ? [teamBriefing()!] : []),
         ].join("\n\n"),
       },
-      ...(mcp ? { mcpServers: mcp } : {}),
+      ...(mcp || TASK_TOOLS_ENABLED ? { mcpServers: { ...(mcp ?? {}), ...(TASK_TOOLS_ENABLED ? { minami_task: taskMcpServer(s) } : {}) } } : {}),
       ...(resume ? { resume } : {}),
     } as any,
   });

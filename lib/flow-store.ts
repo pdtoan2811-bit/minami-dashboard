@@ -39,6 +39,9 @@ export type FlowThread = {
   focusAt?: number;
   /** When a done-list was asked for and none came back, so it isn't asked for on every poll. */
   dodTriedAt?: number;
+  /** Last time the task's own chat reported progress itself (`task_report`, lib/task-report.ts). A report
+   *  newer than `evalAt` stands in for Minami's reading, so the Haiku check is skipped for that quiet. */
+  reportAt?: number;
   createdAt: number; updatedAt: number; archived?: boolean; doneAt?: number;
   /** Archived by itself: the last done-item got ticked (by Minami or him). The page celebrates these
    *  once, and a reply in the chat afterwards brings the task back. */
