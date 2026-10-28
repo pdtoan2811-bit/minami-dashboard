@@ -33,6 +33,9 @@ export type FlowThread = {
   /** When a done-list was asked for and none came back, so it isn't asked for on every poll. */
   dodTriedAt?: number;
   createdAt: number; updatedAt: number; archived?: boolean; doneAt?: number;
+  /** Archived by itself: the last done-item got ticked (by Minami or him). The page celebrates these
+   *  once, and a reply in the chat afterwards brings the task back. */
+  autoDone?: boolean;
   /** Dropped: still claims its sessions (so they don't come back as a new task) but shows nowhere. */
   hidden?: boolean;
 };

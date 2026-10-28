@@ -4,7 +4,7 @@
 // task that has none and to tick the items its chats show are met.
 import { sessionIdentity } from "@/lib/agent/manager";
 import { runHaiku } from "@/lib/bento-enrich";
-import { fid, mutateFlow, readFlow, type FlowDod } from "@/lib/flow-store";
+import { fid, mutateFlow, readFlow, type FlowDod, type FlowThread } from "@/lib/flow-store";
 import { listSessions, topicOf } from "@/lib/claude-sessions";
 import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
 
@@ -31,7 +31,8 @@ type Body =
   | { action: "drop"; id: string }
   | { action: "queue"; project: string; cwd: string; title: string }
   | { action: "start"; id: string; sessionId: string }
-  | { action: "ensure"; ids: string[] };
+  | { action: "ensure"; ids: string[] }
+  | { action: "do"; id: string; dodId: string };
 
 // ── Minami's done-lists ──────────────────────────────────────────────────────────────────────────
 // Both jobs are cheap Haiku side calls, never on the request path: `ensure` returns at once and the
@@ -55,6 +56,15 @@ function pump() {
   }
 }
 const RETRY_EMPTY_MS = 6 * 3600e3;
+
+// Done closes itself (Thomas, 2026-10-28: "I don't want to check the subtask done manually"). Only on
+// the TRANSITION to all-met, never on a list that was already all met: a task he reopened, or one that
+// came back because he replied in it (lib/threads.ts `revived`), stays open with Close until he says.
+const allDone = (dod?: FlowDod[]) => !!dod?.length && dod.every((d) => d.done);
+function closeIfDone(t: FlowThread, wasDone: boolean) {
+  if (wasDone || !allDone(t.dod)) return;
+  t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false;
+}
 
 function haikuJSON(raw: string): unknown {
   try {
@@ -102,11 +112,13 @@ async function evaluate(v: ThreadView) {
     if (!t?.dod) return;
     t.evalAt = v.at;
     if (!j) return; // a failed call says nothing about the items
+    const was = allDone(t.dod);
     t.dod = t.dod.map((d, i): FlowDod => {
       if (d.done && d.by !== "minami") return d; // his tick stands
       if (met.has(i)) return { ...d, done: true, by: "minami", why: met.get(i), at: d.done ? d.at : Date.now() };
       return d.by === "minami" ? { id: d.id, t: d.t, done: false } : d;
     });
+    if (!t.archived) closeIfDone(t, was);
   });
 }
 
@@ -128,10 +140,28 @@ function ensure(ids: string[]) {
   }
 }
 
+/** "Minami, do it": where to send one done-item — the task's latest chat, under the key that already
+ *  owns that conversation when one does (a pane, or a run started elsewhere). Resuming a live session
+ *  under a second key is two processes writing one transcript (manager.sendMessage refuses it). With no
+ *  owner, a fresh key resumes it from disk and the panel attaches by session id. The browser does the
+ *  send through /api/agent/send, so a chat whose worktree is gone is re-homed there as usual. */
+function doItem(b: { id: string; dodId: string }): { key?: string; cwd?: string; resume?: string; message?: string; error?: string } {
+  const v = threads(14).threads.find((t) => t.id === b.id);
+  const item = v?.dod?.find((d) => d.id === b.dodId);
+  if (!v || !item) return { error: "no such task or item" };
+  const last = v.sessions[v.sessions.length - 1];
+  if (!last) return { error: "the task has no chat yet — start it first" };
+  const owner = sessionIdentity("live:" + last.id);
+  const key = owner?.key ?? "live:" + last.id; // the alias a panel attaches through (Home's Go uses it too)
+  const message = `Next on the done-list for "${v.title}": ${item.t}\n\nDo this now. When it's done and checked, say so plainly.`;
+  return { key, cwd: owner?.cwd ?? last.cwd, resume: last.id, message };
+}
+
 export async function POST(req: Request) {
   const b = (await req.json().catch(() => null)) as Body | null;
   if (!b || typeof b !== "object" || !("action" in b)) return Response.json({ error: "bad body" }, { status: 400 });
   try {
+    if (b.action === "do") return Response.json(doItem(b));
     if (b.action === "ensure") { ensure(Array.isArray(b.ids) ? b.ids.map(String) : []); return Response.json({ ok: true }); }
     if (b.action === "name") {
       const m = listSessions().find((x) => x.id === b.sessionId);
@@ -175,12 +205,12 @@ export async function POST(req: Request) {
         case "dismiss": if (!s.dismissed.includes(b.sessionId)) s.dismissed = [...s.dismissed, b.sessionId].slice(-500); break;
         case "dod.accept": if (t) t.dodPending = false; break;
         // His tap is his: it clears Minami's mark either way, so Minami won't untick it later.
-        case "dod.toggle": if (t?.dod) { t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, done: !d.done, at: Date.now() } : d)); t.dodPending = false; } break;
+        case "dod.toggle": if (t?.dod) { const was = allDone(t.dod); t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, done: !d.done, at: Date.now() } : d)); t.dodPending = false; if (!t.archived) closeIfDone(t, was); } break;
         case "dod.add": if (t && b.t.trim()) { t.dod = [...(t.dod ?? []), { id: fid(), t: b.t.trim().slice(0, 140), done: false }]; t.dodPending = false; } break;
         case "archive": if (t) { t.archived = true; t.doneAt = Date.now(); t.auto = false; } break;
         // A To-do never started is just deleted; anything with chats is hidden, so they stay claimed.
         case "drop": if (t) { if (!t.sessions.length) s.threads = s.threads.filter((x) => x !== t); else t.hidden = true; } break;
-        case "unarchive": if (t) { t.archived = false; delete t.doneAt; } break;
+        case "unarchive": if (t) { t.archived = false; t.autoDone = false; delete t.doneAt; } break;
         case "start": if (t) { t.queued = false; if (!t.sessions.includes(b.sessionId)) t.sessions.push(b.sessionId); } break;
       }
       if (t) t.updatedAt = Date.now();

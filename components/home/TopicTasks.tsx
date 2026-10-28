@@ -14,16 +14,26 @@ import { TaskCard } from "./TaskCard";
 
 const btn = "shrink-0 rounded-lg border border-white/12 px-2.5 py-1 text-[12px] text-neutral-200 transition-colors hover:border-white/30 pointer-coarse:py-2";
 
-export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose }: {
+export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, openSids = [] }: {
   project: string; cwd: string; tasks: ThreadView[]; onAllChats: () => void; onBoard: () => void; onClose: () => void;
+  /** Sessions open in the chat panel: their task is ringed and says "chatting now". */
+  openSids?: string[];
 }) {
   const [perm] = useSetting<Exclude<AgentMode, "plan">>("permMode", "bypassPermissions");
   const [model] = useSetting<string | null>("chatModel", null);
-  const busy = new Set(useThreads()?.busy ?? []);
+  const td = useThreads();
+  const busy = new Set(td?.busy ?? []);
+  const doneToday = (td?.done ?? []).filter((t) => t.project === project && (t.doneAt ?? 0) > Date.now() - 86_400_000).length;
   const [draft, setDraft] = useState("");
   const [more, setMore] = useState(false);
   const open = tasks.filter((t) => t.state !== "queued");
   const shown = more ? open : open.slice(0, 6);
+  // The task whose chat is open scrolls into view inside the tile, so "which one am I in" is answered
+  // without hunting through the list.
+  const activeId = open.find((t) => t.sessions.some((x) => openSids.includes(x.id)))?.id;
+  useEffect(() => {
+    if (activeId) document.querySelector(`[data-expanded] [data-task="${CSS.escape(activeId)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeId]);
   useEffect(() => { ensureDod(shown); }, [shown.map((t) => t.id + t.at).join()]); // eslint-disable-line react-hooks/exhaustive-deps
   const send = (text: string) => void startAsk({ project, cwd, at: 0 }, text, { mode: perm, model });
   const met = open.reduce((n, t) => n + (t.dod?.filter((d) => d.done).length ?? 0), 0);
@@ -33,6 +43,7 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose }
       <div className="flex items-center gap-2">
         <p className="min-w-0 flex-1 truncate text-lg font-semibold tracking-tight">{project}
           <span className="ml-2 text-[12px] font-normal text-neutral-500">{open.length} task{open.length === 1 ? "" : "s"}{all ? ` · ${met}/${all} done-items met` : ""}</span>
+          {doneToday > 0 && <button onClick={onBoard} className="ml-2 text-[12px] font-normal text-[#4ade80]/80 hover:text-[#4ade80]" title="Finished tasks are on the board's Done column">✓ {doneToday} done today</button>}
         </p>
         <button onClick={onBoard} className={`${btn} border-[var(--sakura)]/40`} title="Focus on this project: its tasks as a board">⤢ Board</button>
         <button onClick={onAllChats} className={btn} title="Open the topic's chat panel, as a tile click used to">All chats</button>
@@ -52,7 +63,7 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose }
           <p className="py-6 text-center text-[13px] text-neutral-500">No tasks in the last week. Start one above, or open All chats.</p>
         ) : (
           <div className="grid items-start gap-2.5 @min-[520px]:grid-cols-2 @min-[820px]:grid-cols-3">
-            {shown.map((t) => <TaskCard key={t.id} t={t} busy={busy.has(t.id)} compact />)}
+            {shown.map((t) => <TaskCard key={t.id} t={t} busy={busy.has(t.id)} active={t.sessions.some((x) => openSids.includes(x.id))} />)}
           </div>
         )}
         {open.length > 6 && <button onClick={() => setMore((v) => !v)} className="mt-2 text-[12px] text-neutral-500 hover:text-neutral-200">{more ? "Fewer" : `${open.length - 6} more`}</button>}

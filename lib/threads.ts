@@ -96,7 +96,7 @@ export type ThreadView = {
   latest: string; at: number; state: ThreadState; line: string; asks: number;
   dod?: FlowDod[]; dodPending?: boolean;
   /** Archived (moved to Done). Only in `done`, never in `threads`. */
-  archived?: boolean; doneAt?: number;
+  archived?: boolean; doneAt?: number; autoDone?: boolean;
 };
 export type ProjectRef = { project: string; cwd: string; at: number };
 
@@ -156,12 +156,14 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     if (!ms.length) continue;
     ms.sort((a, b) => a.lastActivity - b.lastActivity);
     const last = ms[ms.length - 1];
-    if (st?.archived) {
+    // A task that closed itself and then got a new reply is open again: the work wasn't over.
+    const revived = !!st?.archived && !!st.autoDone && last.lastActivity > (st.doneAt ?? 0) + 120_000;
+    if (st?.archived && !revived) {
       // Done keeps two weeks, so a finished task is still there to reopen the next week.
       if ((st.doneAt ?? st.updatedAt) > Date.now() - 14 * 86_400_000) done.push({
         id, stored: true, title: clip(st.title, 90), project: st.project || ms[ms.length - 1].project, cwd: st.cwd,
         sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: ms[ms.length - 1].id, at: ms[ms.length - 1].lastActivity,
-        state: "idle", line: "", asks: 0, archived: true, doneAt: st.doneAt ?? st.updatedAt, ...(st.dod ? { dod: st.dod } : {}),
+        state: "idle", line: "", asks: 0, archived: true, doneAt: st.doneAt ?? st.updatedAt, autoDone: !!st.autoDone, ...(st.dod ? { dod: st.dod } : {}),
       });
       continue;
     }
