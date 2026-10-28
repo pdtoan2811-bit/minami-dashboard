@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-28
+- **A topic with no tasks expands too** (§37; `app/page.tsx`, `components/home/TopicTasks.tsx`). Its click opened the chat panel and its corner was ▶ Preview, so there was no way to start a first task from the tile. Now the click and the **+ Task** corner open the expanded tile with the New task box focused.
 - **A dismissed publish tile can be reopened** (§33; `LastChip` in `components/PublishTile.tsx`, `/api/uploads`). Dismissed or older than 6 h, the last publish folds to a small tile instead of disappearing; the API keeps the newest finished one for 3 days.
 - **Autopilot tidies merged worktrees and branches** (§13 `tidy`; `bin/task.mjs tidy`, `lib/autopilot/runner.ts`).
   Every 5 min it removes trees whose branch is already in the base and that are clean, unoccupied and quiet

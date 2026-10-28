@@ -1637,7 +1637,7 @@ export default function BentoHome() {
                     </div>
                   ) : (
                   <>
-                  <button data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => (ts.length ? expandTile(p.name) : openProject(p))}
+                  <button data-i={i} onMouseEnter={() => { setSel(i); prefetchProject(p); }} onClick={() => expandTile(p.name)}
                     style={{ background: `radial-gradient(120% 120% at 100% 0%, ${pc}22, rgba(255,255,255,0.03) 55%)` }}
                     // NO backdrop-blur here — it was measured as the single biggest CPU cost in the app.
                     // A `backdrop-filter` must re-blur everything beneath it whenever anything inside its
@@ -1704,12 +1704,14 @@ export default function BentoHome() {
                   </button>
 
                   {/* The corner the Flow switch used to hold (§37): how many tasks this topic has. A
-                      sibling of the tile for the nested-button reason above. With no tasks the tile
-                      click opens the chat panel as it always did, and this offers a preview instead. */}
-                  <button onClick={(e) => { e.stopPropagation(); if (ts.length) expandTile(p.name); else void startAsk({ project: p.name, cwd: p.cwd, at: 0 }, "Pull the latest code and let me preview it."); }}
-                    title={ts.length ? `${ts.length} task${ts.length > 1 ? "s" : ""} — show them here` : "Preview the latest code"}
+                      sibling of the tile for the nested-button reason above. A topic with no tasks
+                      expands too: it used to open the chat panel instead, which left no way to reach
+                      the expanded tile's "New task" box — the one place a first task is started from
+                      (Thomas, 2026-10-28). Preview and All chats live in that expanded header. */}
+                  <button onClick={(e) => { e.stopPropagation(); expandTile(p.name); }}
+                    title={ts.length ? `${ts.length} task${ts.length > 1 ? "s" : ""} — show them here` : "No tasks yet — start one here"}
                     className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-lg border border-white/15 bg-black/30 px-2 py-0.5 text-[10px] text-neutral-300 transition-colors hover:border-[var(--sakura)]/60 pointer-coarse:px-2.5 pointer-coarse:py-1.5">
-                    {ts.length ? <>Tasks <span className="text-neutral-500">{ts.length}</span></> : "▶ Preview"}
+                    {ts.length ? <>Tasks <span className="text-neutral-500">{ts.length}</span></> : "+ Task"}
                   </button>
                   </>
                   )}

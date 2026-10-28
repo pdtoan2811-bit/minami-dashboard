@@ -42,8 +42,8 @@ Above the tiles, in this order (desktop: in the bento column with no panel open;
 | **Today** | Open to-dos with **Run** (the Today hand-off), then **Go** (sends "go") when the run waits on you, and **Open**. |
 
 **Tiles expand to show their tasks** (`components/home/TopicTasks.tsx`; Thomas: "the bento tile expand to
-show task with task UI components — but don't hide other topics for navigation"). A topic with tasks
-(threads) expands in place when you click it, or its **Tasks n** corner button. It takes 3 of 4 columns,
+show task with task UI components — but don't hide other topics for navigation"). Every topic expands
+in place when you click it, or its **Tasks n** corner button (**+ Task** when it has none). It takes 3 of 4 columns,
 the others stack beside it, and it is full-width on a phone or beside an open panel. Each task is a card:
 - state, title, age, number of chats, and its last line
 - a done-list bar and dots that tick open (the "use the suggested done-list" chip when Minami has
@@ -51,7 +51,11 @@ the others stack beside it, and it is full-width on a phone or beside an open pa
 - tapping a card opens its chats in the panel, and the expanded tile stays open.
 
 The tile header has **All chats** (the old tile click: the topic's panel), **▶ Preview** and ✕. Its input
-starts a **new task**, which is just a new chat in that topic. A topic with no tasks keeps the old click.
+starts a **new task**, which is just a new chat in that topic, and is focused when the topic is empty.
+
+> 🐛 2026-10-28 — a topic with no tasks kept the old click (open the chat panel) and its corner button was
+> ▶ Preview, so the expanded tile and its "New task" box were unreachable exactly when a first task was
+> needed. Now every tile expands; Preview and All chats are in the expanded header.
 Opening a topic prefers Thomas's own chats over machine sessions. `/api/threads` now returns up to 60
 threads, not 16, so a tile has its own topic's tasks and not only the newest overall.
 
