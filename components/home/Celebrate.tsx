@@ -50,7 +50,9 @@ export function Celebrate() {
   return (
     <AnimatePresence>
       {now && (
-        <motion.div key={now.id} className="fixed inset-x-0 bottom-24 z-[60] flex justify-center px-4 md:bottom-8"
+        // Above the phone's two bars (the shell nav + Bento's Home|Inbox row), not on them: at a flat
+        // bottom-24 it sat over ＋ Task for its 7 seconds, and a tap there hit the toast instead.
+        <motion.div key={now.id} className="fixed inset-x-0 bottom-[calc(var(--shell-bottom,0px)+4.75rem)] z-[60] flex justify-center px-4 md:bottom-8"
           initial={{ opacity: 0, y: 24, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12 }}
           transition={{ type: "spring", stiffness: 340, damping: 26 }}>
           {!reduce && <Burst />}

@@ -54,14 +54,23 @@ The tile header has **All chats** (the old tile click: the topic's panel), **▶
 a **＋ New task** trigger (focused when the topic is empty) opens the **New task sheet**
 (`components/home/NewTask.tsx`). A new task is still just a new chat in that topic, via `startAsk`.
 
-**On a phone** (2026-10-28, Thomas: "the experience on phone to start a new task is not there") the
-trigger was five screens down — under Ask, Needs you, Where you left off, Today and the grid — and one
-tap behind expanding a tile. So the phone's bottom bar (the Home | Inbox band, `compact` only) carries
-a **＋ Task** button (`NewTaskButton`) that opens the same sheet from either view. It starts on the
-expanded or open topic, else the last-worked one; the project is a chip with a menu (every bento topic
-merged with the threads feed's projects, which alone only knew the few with a task this week). Switching
-project carries the written text across and moves its draft key. The sheet is full height on a phone
-(`h-[92dvh]`), which follows the keyboard because the viewport is `interactive-widget=resizes-content`.
+**On a phone** (2026-10-28, Thomas: "the experience on phone to start a new task is not there"). The
+tile's trigger sat five screens down and one tap behind an expand. A first fix put a ＋ Task pill in
+Bento's bottom bar (bfc5f1e); Thomas then picked V3 of the `phone-new-task` pitch, "A tab of its own":
+- **＋ Task is the middle tab of the shell's phone nav** (`components/home/PhoneNewTask.tsx`, rendered
+  by `AppShell`), so it is there on Today, Autopilot, Ideas and inside a chat, not just Home. More
+  keeps its slot (the pitch gave it away): six tabs fit at 393px and More is the only way to Settings.
+- **It opens a full screen**, not a sheet (`h-dvh`, which follows the keyboard because the viewport is
+  `interactive-widget=resizes-content`). ✕ · NEW TASK · Start on top, the Composer, then the project.
+- **The project follows the words**: `guessProject` (the Ask line's), else the shell's project filter,
+  else the last-worked thread, shown as "Goes to [chip] — you named it / your project filter / where you
+  last worked". A pick from the chip sticks for that draft.
+- **One draft key** (`minami:newtask:~phone`), not one per project: the guess can flip while you type.
+- Off `/`, nothing listens for `minami:open-chat`, so it goes to `/?open=<sid>` like a notification link.
+
+> 🐛 2026-10-28 — the "Done — nice" toast (`Celebrate.tsx`) sat at a flat `bottom-24`, which on a phone
+> is on top of Bento's Home|Inbox bar, and swallowed taps on ＋ Task for its 7 seconds. It now sits at
+> `--shell-bottom` + 4.75rem.
 
 **The New task sheet** (2026-10-28, Thomas: "a task description can be long, can have image etc"). The
 trigger used to be a one-line `<input>`, which could hold "fix the favicon" but not a real brief.
@@ -348,6 +357,7 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 | `components/home/Home.tsx` | Ask line, Needs you, Where you left off, Today. |
 | `components/home/TopicTasks.tsx`, `TaskCard.tsx`, `Board.tsx`, `Celebrate.tsx` | The expanded tile, the shared task card (done-list always visible), the project board. |
 | `components/home/NewTask.tsx`, `lib/image-refs.ts` | The New task sheet (long brief, images, saved draft); image-path parsing shared with the transcript. |
+| `components/home/PhoneNewTask.tsx` | The phone's ＋ Task tab and its full-screen composer (project guessed from the text). |
 | `lib/morning-push.ts` | The 07:30 digest; `broadcast()` in `lib/push/server.ts`. |
 
 ## Decisions

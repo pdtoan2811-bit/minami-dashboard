@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-28
+- **Phone: ＋ Task is a tab on every page** (§37; `components/home/PhoneNewTask.tsx`, `AppShell.tsx`). Thomas's pick from the `phone-new-task` pitch (V3): full-screen composer, project guessed from the text. Replaces the Bento-bar pill. The celebrate toast no longer covers the phone's bottom bars.
 - **Phone: ＋ Task in the bottom bar** (§37; `components/home/NewTask.tsx` `NewTaskButton`, `app/page.tsx`). Opens the New task sheet from Home or Inbox, full-height, with a project chip to change where it lands.
 - **Autopilot no longer asks for a hand on its own conflict resolve** (§13; `lib/autopilot/runner.ts`). The mid-merge "someone is resolving by hand" warning is suppressed while autopilot holds a fresh claim. A merge finished by hand mid-resolve is recorded as merged, not as a conflict. The resolver pane says nothing is needed from Thomas.
 - **Starting a task opens a writing sheet** (§37; `components/home/NewTask.tsx`, `lib/image-refs.ts`, `Composer` props `roomy`/`sendOnMod`/`maxHeight`). The tile's one-line input is now a trigger for a sheet with the chat composer: long text, lists, pasted or dropped images shown as removable thumbnails, ⌘↵ to start, and the draft kept per project until the chat has started.

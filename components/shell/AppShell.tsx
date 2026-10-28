@@ -24,6 +24,7 @@ import { K, mix, Sky } from "@/app/today/ui";
 import { ShellContext, useShellData } from "./use-shell";
 import { Drawer } from "./Drawer";
 import { Capture } from "./Capture";
+import { NewTaskTab } from "@/components/home/PhoneNewTask";
 
 const RAIL_OPEN = 208, RAIL_SHUT = 64, PHONE_TOP = 48, PHONE_BAR = 64;
 
@@ -146,7 +147,11 @@ function Frame({ path, children }: { path: string; children: React.ReactNode }) 
       {compact && !fullscreen && (
         <nav className="fixed inset-x-0 bottom-0 z-40 flex items-stretch px-1 pb-[env(safe-area-inset-bottom)]" style={{ height: `calc(${PHONE_BAR}px + env(safe-area-inset-bottom))`,
           background: mix(K.bg, 88), borderTop: `1px solid ${K.line}`, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)" }}>
-          {PHONE_TABS.map((it) => <TabItem key={it.href} it={it} on={isActive(it, path)} />)}
+          {/* ＋ Task in the middle, on every page (§37, pitch phone-new-task V3). The pitch gave it More's
+              slot; More stays, because six tabs fit at 393px and More is the phone's only way to Settings. */}
+          {PHONE_TABS.slice(0, 2).map((it) => <TabItem key={it.href} it={it} on={isActive(it, path)} />)}
+          <NewTaskTab />
+          {PHONE_TABS.slice(2).map((it) => <TabItem key={it.href} it={it} on={isActive(it, path)} />)}
           <button onClick={() => setMore(true)} className="flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium"
             style={{ color: more || [...NAV.flatMap((g) => g.items), ...NAV_FOOTER].some((it) => !PHONE_TABS.some((t) => t.href === it.href) && isActive(it, path)) ? K.ink : K.faint }}>
             <span className="text-[18px] leading-none">⋯</span>More

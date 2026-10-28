@@ -50,7 +50,6 @@ import { useShellFullscreen } from "@/components/shell/use-shell";
 import { AskLine, Home } from "@/components/home/Home";
 import { ChatHints } from "@/components/home/ChatHints";
 import { TopicTasks } from "@/components/home/TopicTasks";
-import { NewTaskButton } from "@/components/home/NewTask";
 import { imageRefs } from "@/lib/image-refs";
 import { Board } from "@/components/home/Board";
 import { Celebrate } from "@/components/home/Celebrate";
@@ -846,7 +845,6 @@ export default function BentoHome() {
   // it's read (the ＋ menu, the chat switcher, `continueTarget`), then the unfiltered one purely to
   // keep what's on screen on screen.
   const allProjects = useMemo(() => groupProjects(pool), [pool]);
-  const newTaskTopics = useMemo(() => allProjects.map((p) => ({ project: p.name, cwd: p.cwd, at: p.last })), [allProjects]);
   // The inbox lists every chat in the date window across all topics, plus any chat running or waiting
   // on you whatever its age — a question doesn't stop needing an answer because it's 4 days old.
   const inboxSessions = useMemo(() => {
@@ -1526,9 +1524,6 @@ export default function BentoHome() {
             )}
             {(!compact || homeView === "topics") && <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className={`w-24 @min-[620px]:w-32 compact:min-w-0 compact:flex-1 compact:py-2 compact:text-sm rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]`} />}
             {compact && homeView === "inbox" && <span className="flex-1" />}
-            {/* Starting a task, in the thumb band (§37): on the desk it's the tile's trigger, which on a
-                phone sits five screens down and one tap behind an expand. */}
-            {compact && <NewTaskButton prefer={expandFor ?? project} topics={newTaskTopics} />}
             <Segmented className={`hidden ${split ? "" : "@min-[700px]:flex"}`} value={winDays} onChange={setWinDays}
               options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
             {!proj && <Segmented className="hidden md:flex" title="Sort projects" lead="↕" value={sortBy} onChange={setSortBy}
