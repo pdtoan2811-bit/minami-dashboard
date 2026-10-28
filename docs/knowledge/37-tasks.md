@@ -239,6 +239,14 @@ work already knows which item it just finished, so it now says so itself (`lib/t
   (terminal, Minami bot) don't have the tool and are only ever read.
 - `MINAMI_DASHBOARD_TASK_TOOLS=0` turns the tools and the prompt line off.
 
+> 🐛 2026-10-28: ▶ Do it sent "Next on the done-list for "…": <item text>", which had no number in it.
+> The chat skipped `task_status`, guessed `n=1` (already met), got back "Recorded: ticked 1." and told
+> Thomas the item was done. Item 3 stayed open and the task never closed. Fix, three layers: the
+> hand-off says "item N of M" and "tick item N"; `taskReport` refuses to re-tick a met item ("item 1
+> was already met — nothing changed") and every reply ends with "still open: …"; `TASK_PROMPT` says
+> to tick by the listed number and read the reply. A Minami tick can no longer be re-ticked to change
+> its `why`; untick it first if that is ever needed.
+
 ## Threads
 
 A thread is derived, not declared (`lib/threads.ts`):
