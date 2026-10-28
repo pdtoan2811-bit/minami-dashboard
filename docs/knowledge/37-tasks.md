@@ -279,3 +279,7 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 
 > 🐛 2026-10-28: the tile button did nothing on click. A helper named its parameter `project`, which
 > shadowed the panel's `project` state, so `project !== p.name` compared the parameter with itself. Renamed.
+
+> 🐛 2026-10-28: a long task card only opened from its title block, so with the done-list unfolded he
+> had to scroll back up to click it. The whole card now opens the task (`onCard` in `TaskCard.tsx`); clicks
+> on its own controls and text selections are skipped.
