@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-28
+- **Ticks land as soon as a turn ends** (§37). The browser's `ensureDod` throttle is now keyed on the task's state as well as its last activity, so a chat going quiet triggers Minami's re-read right away instead of up to a minute later.
 - **A task closes when the chat says it's done** (§37). Minami closes a task when the chat calls the whole task done (exact words, verified, quoted in the toast). Every card and the chat's Task strip get ✓ Done, and `action: close` by session id or `MINAMI_SESSION_KEY` lets a chat close its own task.
 - **Done-items show their status; Minami's ticks stay** (§37). Each item is Minami on it / needs you / started / next / done, from ▶ Do it or Minami reading the chat (a focus-only check every 2 min while a chat runs). Fix: ticks no longer fall off when their evidence scrolls out of the part of the chat Minami reads.
 - **Minami's ticks quote the chat** (§37; `app/api/threads` evaluate, `lib/flow-store.ts` `quote`/`quoteBy`, `TaskCard.tsx`). Each tick carries a verbatim line from the chat, verified to be there, shown under the item and opening the chat.

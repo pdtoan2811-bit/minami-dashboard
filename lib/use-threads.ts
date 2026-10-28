@@ -57,9 +57,13 @@ export function openThread(t: ThreadView) {
 const ensured = new Map<string, number>();
 export function ensureDod(ts: ThreadView[]) {
   const now = Date.now();
-  const ids = ts.filter((t) => !t.archived && (ensured.get(t.id + ":" + t.at) ?? 0) < now - 60_000).map((t) => t.id);
+  // The state is in the key: a turn ends (working → waiting/idle) with the same `at` as its last write,
+  // and that's exactly when the full re-read is due. Keyed on `at` alone it waited out the 60s throttle,
+  // the ✓ came a minute late, and he pressed ▶ Do it again on an item that was already done (2026-10-28).
+  const k = (t: ThreadView) => `${t.id}:${t.at}:${t.state}`;
+  const ids = ts.filter((t) => !t.archived && (ensured.get(k(t)) ?? 0) < now - 60_000).map((t) => t.id);
   if (!ids.length) return;
-  for (const t of ts) ensured.set(t.id + ":" + t.at, now);
+  for (const t of ts) ensured.set(k(t), now);
   void fetch("/api/threads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "ensure", ids }) });
 }
 

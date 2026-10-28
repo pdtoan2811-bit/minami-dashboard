@@ -185,6 +185,11 @@ subtask and button to let Minami do it for me").
 > chat and used to untick any of its own items not confirmed in that window, so a 3/4 task dropped to
 > 0/4 an hour later with nothing undone. Ticks are now sticky unless the chat reports the item undone.
 
+> 🐛 2026-10-28: a tick landed a minute or two after the turn that earned it, so he pressed ▶ Do it again
+> on an item that was already done. `ensureDod` throttles 60s per `id:at`, and a turn ending
+> (working → quiet) keeps the same `at` as its last write, so the full re-read waited out the throttle.
+> The key now includes the state, so going quiet triggers the re-read on the next 8s poll.
+
 - The home list's threads call `ensureDod` too, so tasks get done-lists and ticks without the board
   being opened.
 
