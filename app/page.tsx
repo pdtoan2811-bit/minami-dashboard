@@ -849,9 +849,13 @@ export default function BentoHome() {
   // on you whatever its age — a question doesn't stop needing an answer because it's 4 days old.
   const inboxSessions = useMemo(() => {
     const ids = new Set(windowed.map((x) => x.id));
-    return [...windowed, ...pool.filter((x) => !ids.has(x.id) && (liveAct[x.id]?.need || liveAct[x.id]?.busy))]
+    const all = [...windowed, ...pool.filter((x) => !ids.has(x.id) && (liveAct[x.id]?.need || liveAct[x.id]?.busy))]
       .map((x) => ({ id: x.id, project: x.project, title: titleOf(x), tail: x.tail || "", lastActivity: x.lastActivity, lastRole: x.lastRole || "", task: taskKeyOf(x.cwd, x.id), today: !!x.today }));
-  }, [windowed, pool, liveAct]);
+    // On the phone Search lives in the Inbox (N5 audit 2026-10-28): it finds chats, which is what you
+    // search for there. It used to sit in a bottom bar filtering tiles a screen below the fold.
+    const ql = q.trim().toLowerCase();
+    return ql ? all.filter((x) => `${x.title} ${x.project} ${x.tail}`.toLowerCase().includes(ql)) : all;
+  }, [windowed, pool, liveAct, q]);
   const openProj = useMemo(
     () => (project ? allProjects.find((p) => p.name === project) ?? null : null),
     [allProjects, project],
@@ -1366,6 +1370,18 @@ export default function BentoHome() {
   }, [isDragging, setPanelW, setRail]);
 
   const proj = project ? (projects.find((p) => p.name === project) || openProj) : newTopic;
+  // The unfolded N5's home, no chat open: Home in two columns across the whole screen (see the board).
+  const splitHome = split && !proj && !focusFor;
+  // Home | Inbox — the phone's two homes, at the top of the page so it scrolls away with it rather than
+  // docking as a second bar over the shell's tabs. Inbox: every chat by what it needs from you.
+  const homeSwitch = compact && (
+    <div className="flex shrink-0 rounded-xl border border-white/10 p-0.5">
+      {(["topics", "inbox"] as const).map((v) => (
+        <button key={v} onClick={() => { setHomeView(v); setQ(""); }}
+          className={`min-h-9 rounded-lg px-3 py-1.5 text-[13px] font-medium ${homeView === v ? "bg-[var(--accent-fill)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Home"}</button>
+      ))}
+    </div>
+  );
   // A chat on a phone takes the whole screen: the composer owns the bottom edge and the keyboard the
   // rest, so the shell's top strip and tab bar step aside (Back closes the topic and brings them back).
   useShellFullscreen(compact && !!proj);
@@ -1496,35 +1512,20 @@ export default function BentoHome() {
       // `@container`: the header's controls have to thin out by the BENTO COLUMN's width, not the
       // window's. At a 60% chat panel this column is ~500px on a wide display — plenty of window,
       // nowhere near enough column, and the old `md:` breakpoints happily overflowed it.
-      <div className={`@container flex min-w-0 flex-col ${split ? (proj ? "hidden" : "shrink-0 border-r border-white/10 w-[288px]") : `w-full ${compact ? "" : "md:w-[var(--lw)]"} ${proj ? (compact ? "hidden" : "hidden md:flex") : ""}`} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
+      <div className={`@container flex min-w-0 flex-col ${split ? (proj ? "hidden" : "w-full") :`w-full ${compact ? "" : "md:w-[var(--lw)]"} ${proj ? (compact ? "hidden" : "hidden md:flex") : ""}`} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {/* Only the full-width (no project open) case needs the bell's gutter: with a panel open the
             bento is a left column whose right edge is nowhere near the viewport corner. */}
-        {/* Split (N5 unfolded) with the keyboard up: the list is an icon strip, no header at all. */}
-        {!(split && keyboardUp && proj) && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${compact ? "px-3 pb-1 pt-3" : `pb-2 pl-6 pt-5 ${proj ? "pr-6" : team.data?.ok ? "pr-28" : "pr-6"}`}`}>
-          {/* The brand is the shell's (§30); on a phone its top strip already says it, so the board only names itself on a desktop. */}
-          {!compact && <h1 className="text-base font-semibold tracking-tight">Bento</h1>}
-          {!compact && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>}
+        {/* The desk's board header. The phone has none (N5 audit 2026-10-28): its Home | Inbox switch and
+            Search used to dock here as a second bar above the shell's tab bar — two stacked bars, ~65px,
+            with a Search that filtered tiles a screen below the fold. The switch now opens the scroll
+            (`homeSwitch`, below) and scrolls away with it; Search moved into the Inbox, where it finds chats. */}
+        {!compact && <header className={`flex flex-wrap items-center gap-x-3 gap-y-2 pb-2 pl-6 pt-5 ${proj ? "pr-6" : team.data?.ok ? "pr-28" : "pr-6"}`}>
+          <h1 className="text-base font-semibold tracking-tight">Bento</h1>
+          <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">{projects.length}</span>
           {enriching && <span className="flex items-center gap-1 text-[11px] text-neutral-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "var(--sakura)" }} />labeling…</span>}
-          {/* On a phone the search + Bento/Metrics/Settings row docks at the bottom, in the thumb's zone —
-                same band as the chat bar inside a topic, so navigation is always found in one place.
-                Fixed, so with `interactive-widget=resizes-content` it rides up on the keyboard while
-                you search, the way Safari's bottom address bar does. */}
-            {/* In split view the list pane is 288px: the bar stays at the top of it (Material's
-                list-detail puts the list's own controls in its header), never across the chat. */}
-            <div className={`ml-auto flex items-center gap-2 ${compact && !split ? "fixed inset-x-0 bottom-[var(--shell-bottom)] z-40 ml-0 border-t border-white/10 bg-[#0b0e12]/90 px-3 pb-2 pt-2 backdrop-blur" : split ? "w-full ml-0" : ""}`}>
-            {/* Inbox | Topics — the phone's two homes. Inbox: every chat by what it needs from you.
-                Topics: the bento board. 44px tall, in the thumb band. */}
-            {compact && (
-              <div className="flex shrink-0 rounded-xl border border-white/10 p-0.5">
-                {(["topics", "inbox"] as const).map((v) => (
-                  <button key={v} onClick={() => setHomeView(v)}
-                    className={`min-h-11 rounded-lg px-3 py-2 text-[13px] font-medium ${homeView === v ? "bg-[var(--accent-fill)] text-white" : "text-neutral-400"}`}>{v === "inbox" ? "Inbox" : "Home"}</button>
-                ))}
-              </div>
-            )}
-            {(!compact || homeView === "topics") && <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className={`w-24 @min-[620px]:w-32 compact:min-w-0 compact:flex-1 compact:py-2 compact:text-sm rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]`} />}
-            {compact && homeView === "inbox" && <span className="flex-1" />}
-            <Segmented className={`hidden ${split ? "" : "@min-[700px]:flex"}`} value={winDays} onChange={setWinDays}
+            <div className="ml-auto flex items-center gap-2">
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="w-24 @min-[620px]:w-32 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
+            <Segmented className="hidden @min-[700px]:flex" value={winDays} onChange={setWinDays}
               options={WINDOWS.map((w) => ({ value: w.days, label: w.label }))} />
             {!proj && <Segmented className="hidden md:flex" title="Sort projects" lead="↕" value={sortBy} onChange={setSortBy}
               options={[{ value: "recent", label: "Recent" }, { value: "busy", label: "Busy" }, { value: "name", label: "A–Z" }] as const} />}
@@ -1539,18 +1540,31 @@ export default function BentoHome() {
         </header>}
 
         {compact && homeView === "inbox" ? (
-          <div className={`flex min-h-0 flex-1 flex-col ${split ? "" : "pb-20"}`}>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex items-center gap-2 px-3 pt-3">
+              {homeSwitch}
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chats…" className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2 text-sm outline-none transition-colors placeholder:text-neutral-600 focus:border-[var(--sakura)]" />
+            </div>
             <Inbox sessions={inboxSessions} live={liveAct} seen={seen.seen} floor={seen.floor} icons={topicIcons}
-              current={proj && focusPane != null ? panes[focusPane]?.sid : null} strip={split && keyboardUp && !!proj}
+              current={proj && focusPane != null ? panes[focusPane]?.sid : null}
               onOpen={openChat} onMarkRead={markRead}
               head={team.data?.ok && team.waiting > 0 ? <TeamRow inbox={team.data} waiting={team.waiting} onOpen={() => setTeamOpen(true)} /> : null} />
           </div>
         ) : (
-        <div className={`min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3 ${split ? "" : "compact:pb-24"}`}>
-          {/* Ask · Needs you · Where you left off · Today, above the tiles (§37). The phone pins the Ask
-              line to the bottom instead, where the thumb is. */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2.5 compact:px-3">
+          {/* Ask · Needs you · Where you left off · Today, above the tiles (§37). */}
           <Celebrate />
-          {!proj && !split && !focusFor && <><AskLine /><Home filter={pf ? (x) => matchesProject(pf, x) : undefined} /></>}
+          {compact && <div className="mb-3 flex">{homeSwitch}</div>}
+          {/* The unfolded N5 (`split`) gets the same Home in two columns: what needs you on the left,
+              Today and the tiles on the right. It used to get a 288px list of tiles beside an empty
+              "Pick a chat" pane, and no Home at all — the §37 Home was gated on `!split`.
+              `contents` keeps every other width's layout exactly as it was. */}
+          <div className={splitHome ? "grid grid-cols-2 items-start gap-4" : "contents"}>
+          {!proj && !focusFor && (splitHome
+            ? <div className="min-w-0"><AskLine /><Home only="focus" filter={pf ? (x) => matchesProject(pf, x) : undefined} /></div>
+            : !split && <><AskLine /><Home filter={pf ? (x) => matchesProject(pf, x) : undefined} /></>)}
+          <div className={splitHome ? "min-w-0" : "contents"}>
+          {splitHome && <Home only="today" filter={pf ? (x) => matchesProject(pf, x) : undefined} />}
           {pf && !proj && <p className="mb-2 text-[12px] text-neutral-500">Filtered to {pf} · <button onClick={() => setPf("")} className="underline underline-offset-2 hover:text-neutral-300">show all</button></p>}
           {focusFor ? (() => {
             const fp = projects.find((x) => x.name === focusFor);
@@ -1732,6 +1746,7 @@ export default function BentoHome() {
               </button>}
             </div>
           )}
+          </div></div>
         </div>
         )}
       </div>
@@ -1788,8 +1803,7 @@ export default function BentoHome() {
           surface in the app, and it hosts the think-dots and activity shimmer of every open pane — so
           a single bouncing dot invalidated ~614k pixels of blur every frame. It sits BESIDE the grid as
           a flex sibling, never over it, so there was never anything behind it but the page gradient. */}
-      <div className={`min-h-0 bg-neutral-900/50 ${split ? "desk min-w-0 flex-1" : `w-full ${compact ? "" : railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"}`} ${proj ? "flex flex-col" : split ? "flex items-center justify-center" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
-        {!proj && split && <p className="px-8 text-center text-sm text-neutral-500">Pick a chat on the left — or ＋ to start one.</p>}
+      <div className={`min-h-0 bg-neutral-900/50 ${split ? "desk min-w-0 flex-1" : `w-full ${compact ? "" : railed ? "md:flex-1 md:w-auto" : "md:w-[var(--rw)]"}`} ${proj ? "flex flex-col" : "hidden"} ${isDragging ? "" : "transition-[width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"}`}>
         {proj && split && (() => {
           // N5 unfolded = a READING desk (phone pitch round 9). Switching topics isn't this screen's job,
           // so it left the bottom of the screen (no dock, no 288px list beside the reply) for this pill:
