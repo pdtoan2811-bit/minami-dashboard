@@ -7,6 +7,9 @@ import { inter, interVi, mono } from "./today/fonts";
 export const metadata: Metadata = {
   title: "Minami Bento — Claude Code mission control",
   description: "Every Claude Code session on your machine as a live bento tile, plus real-time cross-machine usage & model-routing metrics.",
+  // Without a declared icon the browser asks for /favicon.ico, which doesn't exist: a 404 in the
+  // console on every page load, and the only error a clean page showed.
+  icons: { icon: "/app-icon-192.png", apple: "/app-icon-192.png" },
 };
 
 export const viewport: Viewport = {
