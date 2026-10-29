@@ -64,6 +64,24 @@ wave (A) and named the focus ("Traffic > sign up > paid + filter by traffic sour
 - **A failed pull keeps the last good one on screen,** with the error above it. It never shows a blank
   page.
 
+## The PostHog MCP in dashboard chats
+
+Separate from `/growth`: chats can query PostHog directly through the user-scoped MCP server
+`posthog` (`https://mcp.posthog.com/mcp`, in `~/.claude.json`). Chats are headless, so they **cannot
+log in themselves**. A chat that says "posthog needs authentication" is waiting on a login done outside it:
+
+1. In a terminal: `claude`, then `/mcp` → **posthog** → **Authenticate**. Log in and approve project
+   663877 (ecvision.ai).
+2. Check with `claude mcp list` — it should say `✔ Connected`.
+3. Start a **new** chat. MCP servers load at session start, so open chats don't pick it up.
+
+The login token sits in the Keychain, so a `tok switch` may drop it. If that happens, do step 1 again.
+The no-login alternative is a personal API key sent as a header (`claude mcp add --transport http -s
+user posthog https://mcp.posthog.com/mcp --header "Authorization: Bearer <key>"`). The key must use
+PostHog's **"MCP Server"** scope preset. The `/growth` key (`POSTHOG_PERSONAL_API_KEY`) is
+Query-read only and gets a 403 (`Missing PostHog API scope: 'user:read'`), checked 2026-10-29.
+Working via the browser login since 2026-10-29.
+
 ## State on 2026-10-24
 
 The project is ecvision.ai (PostHog 663877, UTC), with data since 15 Oct. This week (17–23 Oct): 30
