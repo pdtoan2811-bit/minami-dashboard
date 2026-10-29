@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-29
+- **Phone sheets list tasks, not sessions** (§37, §23; `components/PhoneTasks.tsx`, `components/Focus.tsx`). ☰ and the current-chip sheet open on Tasks (Needs you · Working · Recent) with each task's done-list bar and next item; one tap opens its latest chat. The old session list is the Chats tab. The dock chip shows the task's name and `met/total`.
 - **The Today plan runs itself** (§26; `lib/today-autorun.ts`, `lib/today.ts`, `instrumentation.ts`, `app/today/Today.tsx`). A server tick each minute hands off answered decisions, then to-dos whose `after` is met, then questions with a recommendation — two chats at a time, 20 a day max. Runner-started chats are told nobody is watching: outward-facing work ends on `TODAY: yours`, not a question. One switch per day on the page (Pause / Run on its own). `MINAMI_TODAY_AUTORUN=0` turns it off.
 
 ### 2026-10-28

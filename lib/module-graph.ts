@@ -70,6 +70,7 @@ export const NODES: ModuleNode[] = [
   { id: "l/meetmic", label: "meet-mic.ts", sub: "phone PCM → receiver's chunker\n→ ingest in-process (§17b)", layer: "core", row: 33 },
   { id: "l/taskgroups", label: "task-groups.ts", sub: "sessions in one worktree\n= one task row", layer: "core", row: 27 },
   { id: "c/Focus", label: "Focus", sub: "phone dock = focus set +\nprogress sheet / N5 drawer", layer: "component", row: 27 },
+  { id: "c/PhoneTasks", label: "PhoneTasks", sub: "phone sheets list tasks\n(threads + done-list), §37", layer: "component", row: 27 },
   { id: "r/focus", label: "/api/agent/focus", sub: "the pinned focus set, ≤5\n(lib/focus.ts, all devices)", layer: "route", row: 20 },
   { id: "r/viewport", label: "/api/viewport", sub: "each device's real sizes\n→ viewports.jsonl", layer: "route", row: 22 },
   { id: "r/meetmic", label: "/api/meet/mic", sub: "start · 0.5s PCM frames · end\nphone-… ids only", layer: "route", row: 25 },
@@ -324,6 +325,7 @@ export const NODES: ModuleNode[] = [
 export const EDGES: ModuleEdge[] = [
   // surfaces → components (static imports)
   { from: "c/Focus", to: "l/taskgroups", kind: "import" },
+  { from: "c/Focus", to: "c/PhoneTasks", kind: "import" },
   { from: "c/Inbox", to: "l/taskgroups", kind: "import" },
   { from: "app/page", to: "c/Composer", kind: "import" },
   // page.tsx measures each pane and PROVIDES the tier; Composer is the one leaf that consumes it.
