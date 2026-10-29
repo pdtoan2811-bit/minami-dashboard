@@ -10,7 +10,7 @@
 import { closeTask, fid, findStored, mutateFlow, type FlowDod, type FlowState, type FlowThread } from "@/lib/flow-store";
 export { closeTask };
 import { threads, type ThreadView } from "@/lib/threads";
-import { GATE_LABEL, runRules } from "@/lib/task-pace";
+import { GATE_LABEL, insertItems, runRules } from "@/lib/task-pace";
 
 export const allDone = (dod?: FlowDod[]) => !!dod?.length && dod.every((d) => d.done);
 
@@ -86,7 +86,7 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
     const t = storedFor(s, v);
     let dod = [...(t.dod ?? [])];
     const adds = (r.add ?? []).map((x) => String(x).trim().slice(0, 140)).filter(Boolean).slice(0, 4);
-    if (adds.length) { dod = [...dod, ...adds.map((x) => ({ id: fid(), t: x, done: false }))]; said.push(`added ${adds.length}`); }
+    if (adds.length) { dod = insertItems(dod, adds.map((x) => ({ id: fid(), t: x, done: false }))); said.push(`added ${adds.length}`); }
     const was = allDone(dod);
     const valid = (n: unknown): n is number => typeof n === "number" && n >= 1 && n <= dod.length;
     for (const d of r.done ?? []) {

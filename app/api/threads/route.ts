@@ -8,7 +8,7 @@ import { fid, findStored, mutateFlow, readFlow, type FlowDod, type FlowThread, t
 import { listSessions, topicOf } from "@/lib/claude-sessions";
 import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
 import { allDone, closeIfDone, closeTask, gateOf, storedFor, taskReport, type TaskReport } from "@/lib/task-report";
-import { GATE_RULES, SHIP_ITEM, gateFor, parseGate, runMessage, runPlan } from "@/lib/task-pace";
+import { GATE_RULES, SHIP_ITEM, gateFor, insertItems, parseGate, runMessage, runPlan } from "@/lib/task-pace";
 import { shippedLive } from "@/lib/task-ship";
 
 export const dynamic = "force-dynamic";
@@ -179,7 +179,7 @@ async function readStep(v: ThreadView) {
     // A ship step with nothing on the list for it: the list says what's left, so it gets the item. Gate
     // null — merging and deploying his own tools runs on its own (GATE_RULES); a publish gets gated by
     // `classify` like any added item.
-    if (step?.ship && t.dod?.length && !t.dod.some((d) => SHIP_ITEM.test(d.t))) t.dod = [...t.dod, { id: fid(), t: "Merged and deployed", done: false }];
+    if (step?.ship && t.dod?.length && !t.dod.some((d) => SHIP_ITEM.test(d.t))) t.dod = insertItems(t.dod, [{ id: fid(), t: "Merged and deployed", done: false }]);
   });
 }
 
@@ -423,7 +423,7 @@ export async function POST(req: Request) {
         case "dod.accept": if (t) t.dodPending = false; break;
         // His tap is his: it clears Minami's mark either way, so Minami won't untick it later.
         case "dod.toggle": if (t?.dod) { const was = allDone(t.dod); t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, ...gateOf(d), done: !d.done, at: Date.now() } : d)); t.dodPending = false; if (!t.archived) closeIfDone(t, was); } break;
-        case "dod.add": if (t && b.t.trim()) { t.dod = [...(t.dod ?? []), { id: fid(), t: b.t.trim().slice(0, 140), done: false }]; t.dodPending = false; } break;
+        case "dod.add": if (t && b.t.trim()) { t.dod = insertItems(t.dod ?? [], [{ id: fid(), t: b.t.trim().slice(0, 140), done: false }]); t.dodPending = false; } break;
         case "gate": if (t?.dod) t.dod = t.dod.map((d) => (d.id === b.dodId ? { ...d, gate: gateFor(d.t, parseGate(b.gate)), gateBy: "thomas" as const, gateWhy: undefined } : d)); break;
         case "archive": if (t) closeTask(t); break;
         // A To-do never started is just deleted; anything with chats is hidden, so they stay claimed.

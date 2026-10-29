@@ -539,6 +539,23 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 > had to scroll back up to click it. The whole card now opens the task (`onCard` in `TaskCard.tsx`); clicks
 > on its own controls and text selections are skipped.
 
+> 🐛 2026-10-29: **"Subtasks are not in chronological order, and it isn't as automatic as chatting
+> directly."** A card read: found ✓ · bug fixed · Merged and deployed · root cause ✓ · compiles ✓ · stuck
+> tasks moved · post-mortem merged. Its chat had written three items, then added four mid-run with
+> task_report `add`, which appended them after "Merged and deployed". The chat had done the work behind
+> items 2 and 6, but it started the deploy before ticking them, and the deploy restarted the server and
+> ended its turn. Git ticked the ship items once the build was live. Nothing was left alive to tick the
+> rest, so the card sat at 3/7 on finished work. Fixes:
+> - `insertItems` in `lib/task-pace.ts` is the only way items are added (task_report `add`, the card's
+>   `dod.add`, `readStep`'s ship item): a new item goes before the first open ship item, and a new ship
+>   item goes at the end. Lists already stored keep their order.
+> - `runRules` and `runMessage` now say, when a ship item is open: tick every met item before deploying,
+>   because the deploy ends the turn.
+> - Not fixed: a chat killed by a deploy is not resumed. `maybeContinue` needs a live owner
+>   (`sessionIdentity`), and after a restart the store has none until the pane is opened and sent to.
+>   Resuming from the server would hold the session id under a server key, and his pane's own resume
+>   would then be refused ("already open in another pane", `sendMessage`).
+
 > 🐛 2026-10-29: **"Everything is waiting for each other."** Five tasks read Waiting. Three were already
 > merged and live: autopilot or another chat had merged their branch, but `readStep` and `evaluate` read
 > only the end of the task's own chat, so a merge done elsewhere never reached the task, and the tile card

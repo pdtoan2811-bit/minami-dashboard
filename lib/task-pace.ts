@@ -53,12 +53,20 @@ export function paceLine(dod: FlowDod[] = []): string | null {
   return p.run.length ? `Runs ${p.run.length} on its own, then ${gate}` : `Waits on ${gate} first`;
 }
 
+/** A dashboard deploy restarts the server that hosts the chat, so it ends the chat's turn on the spot. A
+ *  chat on 2026-10-29 did the fix and the clean-up, started the deploy, then died with them unticked; the
+ *  card sat at 3/7 on finished work and nothing was left alive to tick it (git ticks only the ship item). */
+const DEPLOY_LAST = "Before you start a deploy, tick every item already met with task_report — the deploy restarts the server and ends this turn, so anything unticked by then stays open. The deploy is the last thing you do; git ticks the ship item once it is live.";
+
+const shipsHere = (dod: FlowDod[]) => dod.some((d) => !d.done && SHIP_ITEM.test(d.t));
+
 /** What ▶ Run sends to the task's chat: every item up to the first gate, in one go. */
 export function runMessage(title: string, dod: FlowDod[] = []): string | null {
   const p = runPlan(dod);
   if (!p.run.length && !p.stop) return null;
   const lines = [`Run the done-list for "${title}".`];
   if (p.run.length) lines.push(`Do these in order, all in one go — don't stop to ask between them, and report each with task_report as it's met:\n${p.run.map((x) => `${x.n}. ${x.d.t}`).join("\n")}`);
+  if (p.run.length && shipsHere(dod)) lines.push(DEPLOY_LAST);
   if (p.stop) lines.push(`${p.run.length ? "Then" : "First"} item ${p.stop.n}, "${p.stop.d.t}": ${GATE_HOW[p.stop.gate]}.`);
   else lines.push("Nothing on the list needs Thomas. If something truly blocks you, say what and stop; don't guess past it.");
   return lines.join("\n\n");
@@ -71,14 +79,28 @@ export function runRules(dod: FlowDod[] = []): string {
   const gated = dod.map((d, i) => ({ d, n: i + 1 })).filter((x) => !x.d.done && x.d.gate);
   return [
     "How to run it: work through the open items in order in one go, without stopping to ask between them. Thomas wants to be asked rarely.",
+    shipsHere(dod) ? DEPLOY_LAST : "",
     gated.length
       ? `Stop only at: ${gated.map((x) => `item ${x.n} (${GATE_HOW[x.d.gate!]})`).join("; ")}.`
       : "No item needs Thomas — do all of it. If something truly blocks you, say what and stop.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 /** A done-item about shipping the work rather than making it. */
 export const SHIP_ITEM = /merg|deploy|live|ship|publish|release|push/i;
+
+/** Put new items into a done-list in working order: shipping is the last step, so a new item goes in
+ *  before the first open ship item, and a new ship item goes at the end. Plain appending put "Root cause
+ *  found" and "Fix compiles" AFTER "Merged and deployed" on 2026-10-29 (a chat's task_report `add` mid-run),
+ *  and the card read out of order: Thomas, "to do subtask is not in chronological order". */
+export function insertItems(dod: FlowDod[], add: FlowDod[]): FlowDod[] {
+  const work = add.filter((d) => !SHIP_ITEM.test(d.t));
+  const ship = add.filter((d) => SHIP_ITEM.test(d.t));
+  const at = dod.findIndex((d) => !d.done && SHIP_ITEM.test(d.t));
+  const head = at < 0 ? dod : dod.slice(0, at);
+  const tail = at < 0 ? [] : dod.slice(at);
+  return [...head, ...work, ...tail, ...ship];
+}
 
 /** Next in Thomas's tap cycle on an item's gate chip: auto → your pick → asks you → auto. A ship item
  *  skips "your pick": there are no versions of a merge to choose between. On 2026-10-29 four "Merged and
