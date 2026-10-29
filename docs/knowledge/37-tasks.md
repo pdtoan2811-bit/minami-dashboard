@@ -421,7 +421,7 @@ Two concept changes Thomas picked from the findings the same day:
 Found and left open:
 - **Auto-continue rarely fires**: twice in the whole store. The run rules in `task_status` do the work.
 - **`task_status` outside a task**: 15 replies of "not part of an open task", from chats the prompt told
-  to check.
+  to check. The reply now tells the chat not to call it again in that chat.
 
 ## On the phone: the sheets list tasks
 
