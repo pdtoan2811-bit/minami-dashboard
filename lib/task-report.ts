@@ -51,7 +51,9 @@ const itemLine = (d: FlowDod, i: number) =>
 /** What `task_status` hands the chat: the task and its numbered done-list. */
 export function taskStatus(sessionId: string | null): string {
   const v = sessionId ? taskOfSession(sessionId) : undefined;
-  if (!v) return "This chat is not part of an open task on Thomas's board. Nothing to report.";
+  // Said so the chat stops asking: 15 of these replies in four days (2026-10-29 sweep) were chats
+  // re-checking a task that was never there, a wasted tool round-trip each time.
+  if (!v) return "This chat is not part of an open task on Thomas's board. Nothing to report, and no need to call task_status again in this chat.";
   const dod = v.dod ?? [];
   return [
     `Task: "${v.title}" (project ${v.project})`,
