@@ -178,6 +178,10 @@ async function readStep(v: ThreadView) {
     // null — merging and deploying his own tools runs on its own (GATE_RULES); a publish gets gated by
     // `classify` like any added item.
     if (step?.ship && t.dod?.length && !t.dod.some((d) => SHIP_ITEM.test(d.t))) t.dod = insertItems(t.dod, [{ id: fid(), t: "Merged and deployed", done: false }]);
+    // This reading is the "no question for him" that a held close waits for, so it closes here. Left to
+    // `ensure`, the close needed a second poll after this one, and the board only sends one per state
+    // change plus one a minute while it is on screen — a held task sat open 8+ minutes (2026-10-29, §37).
+    if (!step && t.closeHeld && !t.archived && v.state === "idle" && allDone(t.dod)) closeTask(t, { auto: true });
   }, "reader");
 }
 
