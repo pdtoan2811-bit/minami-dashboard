@@ -8,7 +8,8 @@ import { fid, findStored, mutateFlow, readFlow, type FlowDod, type FlowThread, t
 import { listSessions, topicOf } from "@/lib/claude-sessions";
 import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
 import { allDone, closeIfDone, closeTask, gateOf, storedFor, taskReport, type TaskReport } from "@/lib/task-report";
-import { GATE_RULES, parseGate, runMessage, runPlan } from "@/lib/task-pace";
+import { GATE_RULES, SHIP_ITEM, gateFor, parseGate, runMessage, runPlan } from "@/lib/task-pace";
+import { shippedLive } from "@/lib/task-ship";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -87,7 +88,7 @@ async function suggest(v: ThreadView) {
   const prompt = `A piece of work is called "${v.title}" (project ${v.project}).\n${firstAsks.length ? `It started with:\n${firstAsks.map((a) => "- " + a.slice(0, 300)).join("\n")}\n` : ""}${v.sessions.length ? `The end of its chat:\n${chatOf(v).slice(-3000)}\n` : ""}\nWrite its Definition of Done: 2 to 4 outcomes Thomas can check by looking (a page renders, a number is right, a file exists, it is merged). Each under 10 words, no verbs in the imperative. If it changes code in a repo, the last outcome is the change merged and live (e.g. "Merged and deployed"): finished work that sits on a branch isn't done. If the work needs a look decided (see "pitch" below), make the first outcome Thomas's pick of a version.\n\n${GATE_RULES}\n\nReply with ONLY a JSON array: [{"t":"<outcome>","gate":"pitch"|"ok"|null,"why":"<under 8 words, only when gated>"}]`;
   const arr = haikuJSON(await runHaiku(prompt));
   // Strings are still accepted (an older-style answer): they come in unclassified and get gated later.
-  const items = (Array.isArray(arr) ? arr : []).map((x) => typeof x === "string" ? { t: x.trim() } : { t: String((x as { t?: unknown })?.t ?? "").trim(), gate: parseGate((x as { gate?: unknown })?.gate), why: String((x as { why?: unknown })?.why ?? "").slice(0, 80) })
+  const items = (Array.isArray(arr) ? arr : []).map((x) => typeof x === "string" ? { t: x.trim() } : { t: String((x as { t?: unknown })?.t ?? "").trim(), gate: gateFor(String((x as { t?: unknown })?.t ?? ""), parseGate((x as { gate?: unknown })?.gate)), why: String((x as { why?: unknown })?.why ?? "").slice(0, 80) })
     .filter((x) => x.t).slice(0, 4);
   mutateFlow((s) => {
     if (!items.length && !findStored(s, v)) return;
@@ -163,7 +164,6 @@ async function evaluate(v: ThreadView, focusOnly = false) {
  *  done-item the chat had already checked while the chat itself was asking "Should I merge and deploy
  *  it?" — he had to read the chat to find where the task stood. Runs on every quiet, even when the chat
  *  reported for itself (task_report skips `evaluate`), and reads only the end of the latest chat. */
-const SHIP_ITEM = /merg|deploy|live|ship|publish|release|push/i;
 async function readStep(v: ThreadView) {
   const last = v.sessions[v.sessions.length - 1];
   const chat = last ? recentText(last.id, last.cwd, 3500) : "";
@@ -193,7 +193,7 @@ async function classify(v: ThreadView) {
   const got = new Map<string, { gate: "pitch" | "ok" | null; why: string }>();
   for (const x of Array.isArray(j) ? j : []) {
     const n = (x as { n?: unknown })?.n;
-    if (typeof n === "number" && todo[n - 1]) got.set(todo[n - 1].id, { gate: parseGate((x as { gate?: unknown }).gate), why: String((x as { why?: unknown }).why ?? "").slice(0, 80) });
+    if (typeof n === "number" && todo[n - 1]) got.set(todo[n - 1].id, { gate: gateFor(todo[n - 1].t, parseGate((x as { gate?: unknown }).gate)), why: String((x as { why?: unknown }).why ?? "").slice(0, 80) });
   }
   mutateFlow((s) => {
     const t = findStored(s, v);
@@ -255,6 +255,23 @@ function maybeContinue(id: string) {
   try { sendMessage({ key: owner.key, cwd: owner.cwd, message: `(Minami, auto-continue) ${message}` }); } catch { /* the next quiet tries again within the budget */ }
 }
 
+/** A quiet task whose ship item is open, or whose card asks to merge, gets its answer from git
+ *  (lib/task-ship.ts): merged and live ticks the item and drops the question. Closes like any tick. */
+function tickShipped(v: ThreadView) {
+  const open = (v.dod ?? []).some((d) => !d.done && SHIP_ITEM.test(d.t));
+  if (!open && !v.step?.ship) return;
+  const cwd = [...v.sessions].reverse().find((x) => x.cwd)?.cwd;
+  if (!cwd || !shippedLive(cwd)) return;
+  mutateFlow((s) => {
+    const t = findStored(s, v);
+    if (!t) return;
+    const was = allDone(t.dod);
+    if (t.step?.ship) delete t.step;
+    if (t.dod) t.dod = t.dod.map((d) => (!d.done && SHIP_ITEM.test(d.t) ? { id: d.id, t: d.t, ...gateOf(d), done: true, by: "minami", why: "in main and in the live build (git)", at: Date.now() } : d));
+    if (!t.archived && v.state === "idle") closeIfDone(t, was);
+  });
+}
+
 function ensure(ids: string[]) {
   const store = readFlow();
   const all = threads(14);
@@ -265,6 +282,7 @@ function ensure(ids: string[]) {
     const st = findStored(store, v);
     // Gates are their own small call, independent of ticking; `enqueue` keeps it to one job per task.
     if (v.dod?.some((d) => !d.done && d.gate === undefined) && Date.now() - (st?.gateTriedAt ?? 0) > RETRY_EMPTY_MS / 6) enqueue(v.id + ":gate", () => classify(v));
+    if (st && v.state !== "working") tickShipped(v);
     if (v.dod?.length && v.state === "idle") maybeContinue(v.id);
     // The step is read once per quiet; a turn in flight has none.
     // Stored tasks only: a derived one gets stored by its done-list first (suggest), then read here.
@@ -392,7 +410,7 @@ export async function POST(req: Request) {
         // His tap is his: it clears Minami's mark either way, so Minami won't untick it later.
         case "dod.toggle": if (t?.dod) { const was = allDone(t.dod); t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, ...gateOf(d), done: !d.done, at: Date.now() } : d)); t.dodPending = false; if (!t.archived) closeIfDone(t, was); } break;
         case "dod.add": if (t && b.t.trim()) { t.dod = [...(t.dod ?? []), { id: fid(), t: b.t.trim().slice(0, 140), done: false }]; t.dodPending = false; } break;
-        case "gate": if (t?.dod) t.dod = t.dod.map((d) => (d.id === b.dodId ? { ...d, gate: b.gate === "pitch" || b.gate === "ok" ? b.gate : null, gateBy: "thomas" as const, gateWhy: undefined } : d)); break;
+        case "gate": if (t?.dod) t.dod = t.dod.map((d) => (d.id === b.dodId ? { ...d, gate: gateFor(d.t, parseGate(b.gate)), gateBy: "thomas" as const, gateWhy: undefined } : d)); break;
         case "archive": if (t) closeTask(t); break;
         // A To-do never started is just deleted; anything with chats is hidden, so they stay claimed.
         case "drop": if (t) { if (!t.sessions.length) s.threads = s.threads.filter((x) => x !== t); else t.hidden = true; } break;

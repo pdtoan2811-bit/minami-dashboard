@@ -501,3 +501,20 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 > 🐛 2026-10-28: a long task card only opened from its title block, so with the done-list unfolded he
 > had to scroll back up to click it. The whole card now opens the task (`onCard` in `TaskCard.tsx`); clicks
 > on its own controls and text selections are skipped.
+
+> 🐛 2026-10-29: **"Everything is waiting for each other."** Five tasks read Waiting. Three were already
+> merged and live: autopilot or another chat had merged their branch, but `readStep` and `evaluate` read
+> only the end of the task's own chat, so a merge done elsewhere never reached the task, and the tile card
+> kept asking "Merge and deploy the tile layout fix?". All four "Merged and deployed" items also sat on
+> "your pick", from one tap each on the gate chip (`gateBy: thomas`). A gated item makes the task Waiting
+> and tells its chat to stop there, so even a chat that had seen the merge didn't tick it. The fourth task
+> was really blocked: an uncommitted 18-line doc edit in the main checkout made `task.mjs merge` refuse
+> every merge. Fixes:
+> - `shippedLive(cwd)` in `lib/task-ship.ts`, run by `tickShipped` in `ensure`: a task worktree that is
+>   clean, has commits past where its branch was cut (the branch reflog's first entry), is an ancestor of
+>   main, and is older than `.next/BUILD_ID` ticks its open ship items and drops a `ship` step. Only
+>   `.minami-worktrees/*` trees in this repo, since only here can "live" be checked; cached a minute per tree.
+> - Ship items (`SHIP_ITEM`, now in `lib/task-pace.ts`) can't hold "pitch": `gateFor` drops it at all three
+>   gate sites (suggest, classify, the chip's `gate` action), the chip cycles auto → asks you → auto for
+>   them (`nextGate(g, ship)`), and `GATE_RULES` says so. Thomas: merges run on their own.
+

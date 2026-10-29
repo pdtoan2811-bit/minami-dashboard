@@ -74,13 +74,24 @@ export function runRules(dod: FlowDod[] = []): string {
   ].join("\n");
 }
 
-/** Next in Thomas's tap cycle on an item's gate chip: auto → your pick → asks you → auto. */
-export const nextGate = (g?: Gate | null): Gate | null => (!g ? "pitch" : g === "pitch" ? "ok" : null);
+/** A done-item about shipping the work rather than making it. */
+export const SHIP_ITEM = /merg|deploy|live|ship|publish|release|push/i;
+
+/** Next in Thomas's tap cycle on an item's gate chip: auto → your pick → asks you → auto. A ship item
+ *  skips "your pick": there are no versions of a merge to choose between. On 2026-10-29 four "Merged and
+ *  deployed" items sat on "your pick" from one tap each, every task read Waiting, and the chats stopped
+ *  short of merges that had in fact already happened — he wanted merges to run on their own. */
+export const nextGate = (g?: Gate | null, ship = false): Gate | null =>
+  ship ? (g ? null : "ok") : !g ? "pitch" : g === "pitch" ? "ok" : null;
+
+/** A gate an item may hold: "pitch" on a ship item is read as none (see nextGate). */
+export const gateFor = (t: string, g: Gate | null): Gate | null => (g === "pitch" && SHIP_ITEM.test(t) ? null : g);
 
 /** The rules Haiku classifies by, shared by the done-list writer and the late classifier. */
 export const GATE_RULES = `For each item decide its gate:
 - "pitch": deciding how something LOOKS or how a person USES it — a new screen, layout, visual style, flow, a widget whose look isn't settled yet, marketing visuals. Thomas wants versions to pick from before it's built. NOT a bug fix in existing UI, wiring in a design he already picked, or a control whose look is already decided.
 - "ok": leaves the machine or can't be undone — publishing, posting, sending a message or email to people, spending money (paid APIs, image generation), deleting data, pushing to a shared production system customers see. NOT local commits, builds, tests, merges into his own tools, or deploying his own dashboard.
+- Merging or deploying is never "pitch": there is nothing to pick between.
 - null: everything else — the chat just does it. Most items are null. When unsure, null: Thomas wants to be asked rarely.`;
 
 export function parseGate(x: unknown): Gate | null {
