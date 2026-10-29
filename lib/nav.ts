@@ -32,6 +32,7 @@ export const NAV: NavGroup[] = [
   ] },
   { id: "library", label: "Library", items: [
     { href: "/ideas", label: "Ideas", icon: "✦" },
+    { href: "/opinion", label: "Opinion Reveal", icon: "❝" },
     { href: "/meetings", label: "Meetings", icon: "◉" },
     { href: "/harness", label: "Harness browser", icon: "◍" },
   ] },
