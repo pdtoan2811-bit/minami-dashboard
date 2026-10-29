@@ -37,11 +37,15 @@ function logUsage(raw: string, source: string, ms: number) {
   } catch { /* the ledger is observability; it must never fail the call */ }
 }
 
+// `--no-session-persistence`: these calls are not chats, and their transcripts crowded real ones off the
+// board. The task readers (§37) run ~100–180 an hour, so `~/.minami-bento` held 134 of the 150 newest
+// transcripts on the box and listSessions' recency window kept about an hour of real chats — a topic
+// worked on that morning (ecvision) had no tile (2026-10-29, §5d).
 export function runHaiku(prompt: string, source = "dashboard:bento-enrich"): Promise<string> {
   const t0 = Date.now();
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
-    try { child = spawn("claude", ["-p", prompt, "--model", CHEAP_MODEL, "--output-format", "json"], { cwd: DIR }); }
+    try { child = spawn("claude", ["-p", prompt, "--model", CHEAP_MODEL, "--output-format", "json", "--no-session-persistence"], { cwd: DIR }); }
     catch { resolve(""); return; }
     let out = "", done = false;
     const finish = (v: string) => { if (!done) { done = true; clearTimeout(to); logUsage(v, source, Date.now() - t0); resolve(v); } };
