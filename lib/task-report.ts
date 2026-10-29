@@ -108,12 +108,18 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
     t.dod = dod;
     t.reportAt = Date.now();
     t.updatedAt = Date.now();
-    if (!t.archived) closeIfDone(t, was);
+    // A chat reports from INSIDE its turn, and the turn often goes on to ask him something — this task
+    // closed itself on its last tick while the chat was asking "ship it?" (Thomas, 2026-10-29: "why this
+    // one marked done even though it still asking me questions"). So the chat's own ticks never close
+    // here; they hold the close, and evaluate (/api/threads) closes it once the turn has ended without a
+    // question. His own words (`fin`) and his own ticks still close at once.
+    if (!t.archived && !was && allDone(t.dod)) t.closeHeld = true;
     const fin = String(r.finished ?? "").trim().slice(0, 300);
     if (!t.archived && fin) {
       t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = fin;
     }
     if (t.archived) said.push("task closed");
+    else if (t.closeHeld) said.push("every item met — the task closes when this turn ends without a question for Thomas");
     else {
       const left = dod.map((d, i) => (d.done ? "" : `${i + 1}. ${d.t}`)).filter(Boolean);
       if (left.length) said.push(`still open: ${left.join("; ")}`);

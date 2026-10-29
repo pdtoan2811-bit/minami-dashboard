@@ -170,6 +170,15 @@ subtask and button to let Minami do it for me").
     message from him (`revived` in `lib/threads.ts`: a typed message, `lastUserAt`, more than 2 minutes
     after `doneAt`), stays open with Close and doesn't close itself again. A task closed by words
     (`closedWhy` set: said in the chat, `task_report finished`, the close API) never revives; Reopen does.
+  - **Only on a quiet chat.** All-met while the chat is working or ends on a question to him sets
+    `closeHeld` instead; the next evaluate of an idle chat closes it. The chat's own `task_report` ticks
+    always hold (it reports from inside its turn). His own tick and his words still close at once.
+
+> 🐛 **2026-10-29 — "why this one marked done even though it still asking me questions".** The phone-tasks
+> chat ticked its last item via `task_report`, the task closed on that tick, and the same turn then asked
+> him "Ship it?". Cause: `closeIfDone` ran on the tick with no look at the chat. Fix: the hold above. The
+> phone dock chip also printed "done" for any read, quiet chat (the session group `idle`) — it now shows
+> the task's state (needs you / working) and nothing for idle.
 
 > 🐛 **2026-10-28 — after a deploy the board showed closed tasks again, open items and all.** He had said
 > "this one is done" on several; they came back under Paused with their unticked items. Cause: `revived`

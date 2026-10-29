@@ -60,6 +60,9 @@ export type FlowThread = {
    *  done, or "closed from the chat" (the `close` API). Also how a revived task avoids re-closing on the
    *  same old words. */
   closedWhy?: string;
+  /** Every item is met but the chat was mid-turn or asking him when that happened, so the close waits
+   *  for a reading of a quiet chat (evaluate in /api/threads). See closeIfDone in lib/task-report.ts. */
+  closeHeld?: boolean;
   /** Dropped: still claims its sessions (so they don't come back as a new task) but shows nowhere. */
   hidden?: boolean;
 };
