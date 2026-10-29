@@ -200,6 +200,9 @@ subtask and button to let Minami do it for me").
 > `task_report` was only read in `evaluate`, which `ensure` skips when the chat reported for itself or
 > nothing newer happened, so it was never read. Fix: `tickShipped` holds when not idle, and `ensure`
 > honours the hold directly. The two stuck records with no hold were closed by hand.
+> Then this task's own close sat for 8+ minutes. The single `ensure` at turn end ran before `readStep` had
+> stored `stepAt`, and no second poll came while the board was off screen. `readStep` now closes a held,
+> all-met, idle task itself when it finds no question.
 
 > 🐛 **2026-10-29 — "why this one marked done even though it still asking me questions".** The phone-tasks
 > chat ticked its last item via `task_report`, the task closed on that tick, and the same turn then asked
