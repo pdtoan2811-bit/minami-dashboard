@@ -91,7 +91,7 @@ function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<
         {d.done ? "✓" : status === "on" ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f0a868]" /> : ""}
       </button>
       <span className="min-w-0 flex-1">
-        <span className={`block text-pretty break-words text-[13px] leading-[1.4] ${d.done ? "text-neutral-500" : t.dodPending ? "text-neutral-300" : "text-neutral-100"}`}>
+        <span className={`block text-pretty break-words text-[13px] leading-[1.4] ${d.done ? "text-neutral-500" : "text-neutral-100"}`}>
           {d.t}
         </span>
         {meta && (
@@ -188,10 +188,6 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
         <button onClick={toggle} className="block min-w-0 flex-1 text-left" title={open ? "Fold the done-list" : "Show the whole done-list"}><DodBar t={t} /></button>
         {fresh > 0 && !open && !compact && (
           <button onClick={toggle} className="shrink-0 rounded bg-[#4ade80]/10 px-1.5 py-0.5 text-[10px] text-[#4ade80]/90" title="Minami ticked items from the chat — see why">Minami ✓{fresh}</button>
-        )}
-        {t.dodPending && !compact && (
-          <button onClick={() => void threadPost({ action: "dod.accept", id: t.id })} className="shrink-0 rounded-md border border-white/12 px-1.5 py-0.5 text-[10px] text-neutral-400 hover:border-white/30 hover:text-neutral-100"
-            title={`Minami's done-list${busy ? " (checking…)" : ""} — keep it`}>Keep</button>
         )}
       </div>
       {/* What it waits on him for, first: the question the chat ended on ("Merge and deploy it?") or

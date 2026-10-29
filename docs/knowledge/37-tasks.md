@@ -399,11 +399,26 @@ launchd logs. Fixed in the same change:
 > 🐛 **Machine prompts as tasks.** "You are resolving a git merge conflict…" (×3), "You are in a git
 > worktree…", "Minami · Slack turn" and pace-test pings were on the board. Added to `MACHINE`.
 
-Found and left open, with no fix in code yet:
-- **Today work is off the board.** Only 2 of 78 Today hand-off sessions belong to a task. 26 of 32
-  hand-offs in four days never called the task tools. Today items carry their own `done_when`, so there
-  are two done-list systems.
-- **The Keep step is dead weight.** Of 137 ticks, 136 were Minami's, and Thomas has ticked one item.
+Two concept changes Thomas picked from the findings the same day:
+
+- **Today work is task work** (`linkTasks` in `lib/today.ts`, run by `reconcile`). Only 2 of 78 Today
+  hand-off sessions belonged to a task, and 26 of 32 hand-offs in four days never called the task tools.
+  A hand-off he never typed in is machine to `isMachine`, and Today kept a second done-list system
+  (`done_when`). Now every `do`/`decide` hand-off from the last 3 days that is still open is stored as a
+  task holding its chat, linked by `today: {date, kind, id}`. A stored claim bypasses the machine filter.
+  - **The done-list** is its `done_when` checks in words ("blog live at …", "committed in …"). Without
+    them, Haiku writes one as for any task.
+  - **Each side closes the other.** A ticked to-do closes the task, with the to-do's evidence as
+    `closedWhy`. A closed task ticks the to-do (`done_by: "minami"`), which is what frees its dependents
+    in the Today runner. A to-do he set by hand (`manual`) is never ticked by this. A task he reopened
+    (`reopenedAt`) is closed again only by a newer tick.
+  - **Not linked:** `ask` hand-offs (only a Slack card), and to-dos already done when this shipped, which
+    would have buried his own tasks in Done.
+- **No more Keep.** 52 of 58 suggested lists were never kept, and 136 of 137 ticks were Minami's, so the
+  tap decided nothing. Minami's list is now just the list: edit it, untick it, add to it. `dodPending`
+  is no longer set or shown. `dod.accept` stays as a no-op for old tabs.
+
+Found and left open:
 - **Auto-continue rarely fires**: twice in the whole store. The run rules in `task_status` do the work.
 - **`task_status` outside a task**: 15 replies of "not part of an open task", from chats the prompt told
   to check.

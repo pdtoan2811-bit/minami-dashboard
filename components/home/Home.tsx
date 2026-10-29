@@ -114,7 +114,7 @@ function ThreadRow({ t, first }: { t: ThreadView; first: boolean }) {
             </span>
           </span>
         </button>
-        {!!t.dod?.length && <button onClick={() => setOpen((v) => !v)} className="w-24 shrink-0 px-3 py-3" title={t.dodPending ? "Minami's done-list" : "Definition of done"}><DodBar t={t} /></button>}
+        {!!t.dod?.length && <button onClick={() => setOpen((v) => !v)} className="w-24 shrink-0 px-3 py-3" title="Done-list"><DodBar t={t} /></button>}
       </div>
       {open && t.dod && <DodList t={t} className="px-3.5 pb-2.5 pl-8" />}
     </div>

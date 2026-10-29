@@ -97,7 +97,7 @@ function TaskLine({ t, bare, icon, titles, currentId, onOpen }: {
                 {t.step ? <span className="mt-1 block truncate text-[12px] text-neutral-200"><span className="text-[var(--sakura)]">✋ </span>{t.step.q}</span>
                   : next && <span className="mt-1 block truncate text-[12px] text-neutral-400"><span className="text-neutral-600">Next · </span>{next.t}</span>}
               </span>
-            ) : t.dodPending && <span className="mt-1 block text-[12px] text-neutral-600">Minami is writing the done-list…</span>}
+            ) : null}
           </span>
         </button>
         {n > 1 ? (

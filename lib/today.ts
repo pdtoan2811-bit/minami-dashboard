@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { handoffReport, STATUS_CONTRACT, type HandoffReport } from "@/lib/today-status";
+import { closeTask, fid, mutateFlow, readFlow, type FlowDod, type FlowState } from "@/lib/flow-store";
 
 // The Today page's store (§26). One JSON file per day in ~/.minami/today, written first by the vault's
 // morning heartbeat (~/secondBrain/bin/morning-heartbeat.mjs, 07:30 via launchd) and then edited here
@@ -287,8 +288,73 @@ export async function reconcile(date: string): Promise<{ day: TodayDay; status: 
       changed = true;
     }
   }
+  if (linkTasks(day)) changed = true;
   if (changed) write(day);
   return { day, status };
+}
+
+// ── Today work is task work (§37, Thomas 2026-10-29: "merge them") ───────────────────────────────────
+// A log sweep found 2 of 78 handed-off to-dos on the task board: a hand-off he never typed in is a
+// machine session to lib/threads.ts, so everything the Today runner did was invisible there, under a
+// second done-list system (`done_when`). Now every hand-off that does work (`do`, `decide`; an `ask` is
+// only a Slack card) is stored as a task holding its chat. A stored claim bypasses the machine filter.
+// Each side closes the other: the to-do ticked (its chat's "TODAY: done", the vault's done_when check,
+// his tap) closes the task; the task closed (all items met, "finished", ✓ Done) ticks the to-do — unless
+// he set the to-do's box by hand (`manual`), the same rule reconcile keeps.
+
+/** A machine check as an outcome he can read. Unknown kinds fall back to their fields. */
+function checkLabel(w: Record<string, unknown>): string {
+  const s = (k: string) => (typeof w[k] === "string" ? (w[k] as string) : "");
+  if (w.kind === "live") return `${s("what") || "page"} live at ${s("path")}`;
+  if (w.kind === "commit") return `committed in ${path.basename(s("folder")) || "the repo"}${s("grep") ? ` (“${s("grep")}”)` : ""}`;
+  if (w.kind === "file") return `${path.basename(s("path"))} written`;
+  if (w.kind === "gate") return `draft ${s("draft")} is ${s("status")}`;
+  return Object.entries(w).map(([k, v]) => `${k}: ${String(v)}`).join(", ");
+}
+
+/** Store a task for each working hand-off of the day and keep both sides' done state in step. Changes the
+ *  day in place; true when it did. Writes flow.json only when something there changed. */
+export function linkTasks(day: TodayDay): boolean {
+  const flow = readFlow();
+  const items = [...day.todos.map((x) => ["todo", x] as const), ...day.loops.map((x) => ["loop", x] as const)]
+    .filter(([, x]) => x.handoff?.sessionId && x.handoff.how !== "ask");
+  let dayChanged = false;
+  const edits: ((s: FlowState) => void)[] = [];
+  for (const [kind, it] of items) {
+    const sid = it.handoff!.sessionId;
+    const st = flow.threads.find((t) => t.today?.date === day.date && t.today.id === it.id) ?? flow.threads.find((t) => t.sessions.includes(sid));
+    const done = !!it.done;
+    if (!st) {
+      // Only work still open: the hand-offs already done before this shipped would bury his own tasks in
+      // the Done column. A later tick closes the task through the branch below.
+      if (done || Date.now() - (Date.parse(it.handoff!.at) || 0) > 3 * 86_400_000) continue;
+      const cwd = it.handoff!.cwd || expand(it.folder);
+      const base = cwd.includes("/.minami-worktrees/") ? cwd.slice(0, cwd.indexOf("/.minami-worktrees/")) : cwd;
+      const checks = kind === "todo" ? ((it as TodayTodo).done_when ?? []) : [];
+      const at = Date.parse(it.handoff!.at) || Date.now();
+      const id = fid();
+      edits.push((s) => {
+        if (s.threads.some((t) => t.sessions.includes(sid))) return; // another process linked it meanwhile
+        s.threads.unshift({ id, title: handoffLabel(it), project: path.basename(base), cwd: base, sessions: [sid],
+          today: { date: day.date, kind, id: it.id }, auto: true, createdAt: at, updatedAt: Date.now(),
+          ...(checks.length ? { dod: checks.slice(0, 4).map((w, i): FlowDod => ({ id: `${id}-${i}`, t: checkLabel(w), done: false, gate: null })) } : {}) });
+      });
+      continue;
+    }
+    if (!st.today) edits.push((s) => { const t = s.threads.find((x) => x.id === st.id); if (t && !t.today) t.today = { date: day.date, kind, id: it.id }; });
+    // A task he reopened stays open: only a tick newer than the Reopen closes it again.
+    if (done && !st.archived && (Date.parse(it.done_at ?? "") || Date.now()) > (st.reopenedAt ?? 0)) {
+      const why = it.done_evidence || (it.done_by ? "ticked on the Today page" : "Thomas ticked it on Today");
+      edits.push((s) => { const t = s.threads.find((x) => x.id === st.id); if (t && !t.archived) closeTask(t, { auto: true, why: why.slice(0, 300) }); });
+    } else if (!done && st.archived && !("manual" in it && it.manual)) {
+      it.done = true; it.done_at = new Date(st.doneAt ?? Date.now()).toISOString(); it.done_by = "minami";
+      it.done_evidence = `Its task closed${st.closedWhy ? ` — ${st.closedWhy}` : " with every done-item met"}.`;
+      log(day, "auto", `Done (task closed): ${handoffLabel(it)}`);
+      dayChanged = true;
+    }
+  }
+  if (edits.length) mutateFlow((s) => { for (const e of edits) e(s); });
+  return dayChanged;
 }
 
 /** A hand-off's human name: the to-do's title, or the question. One line, short enough for a tab. */

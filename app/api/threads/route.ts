@@ -95,7 +95,6 @@ async function suggest(v: ThreadView) {
     if (t.dod?.length) return;
     if (!items.length) { t.dodTriedAt = Date.now(); return; }
     t.dod = items.map((x, i): FlowDod => ({ id: t!.id + "-" + i, t: x.t, done: false, ...("gate" in x ? { gate: x.gate, ...(x.gate && x.why ? { gateWhy: x.why } : {}) } : {}) }));
-    t.dodPending = true;
     t.evalAt = 0; // tick right away against what the chat already says
   });
 }
@@ -397,7 +396,7 @@ export async function POST(req: Request) {
         case "archive": if (t) closeTask(t); break;
         // A To-do never started is just deleted; anything with chats is hidden, so they stay claimed.
         case "drop": if (t) { if (!t.sessions.length) s.threads = s.threads.filter((x) => x !== t); else t.hidden = true; } break;
-        case "unarchive": if (t) { t.archived = false; t.autoDone = false; delete t.doneAt; } break;
+        case "unarchive": if (t) { t.archived = false; t.autoDone = false; delete t.doneAt; t.reopenedAt = Date.now(); } break;
         case "start": if (t) { t.queued = false; if (!t.sessions.includes(b.sessionId)) t.sessions.push(b.sessionId); } break;
       }
       if (t) t.updatedAt = Date.now();

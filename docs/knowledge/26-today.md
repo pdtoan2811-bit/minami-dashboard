@@ -436,3 +436,10 @@ Thomas: *"those articles are not on production ecvision.ai — check why it's do
   show all"). A to-do still being researched has no folder, so it hides under a filter.
 - No more Ideas / Board links in the top bar, and the phone's "Answer N decisions" bar sits 64px up,
   above the shell's bottom bar.
+
+## Hand-offs are tasks (2026-10-29)
+
+Every open `do`/`decide` hand-off is also a task on the board (§37, `linkTasks` in `lib/today.ts`, run by
+`reconcile`). Its `done_when` checks, in words, are the task's done-list. Closing either one closes the
+other. A to-do he set by hand is left alone, and so is a task he reopened. Before this, 2 of 78 hand-offs
+showed on the board.

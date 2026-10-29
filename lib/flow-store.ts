@@ -33,8 +33,9 @@ export type FlowThread = {
   /** Session ids, oldest first. A session belongs to at most one stored thread. */
   sessions: string[];
   dod?: FlowDod[];
-  /** The DoD is Minami's proposal, not yet kept (Thomas, 2026-10-28: "Minami suggests, you tap"). It
-   *  still shows and still tracks progress — a hidden suggestion read as "DoD is not there". */
+  /** Retired 2026-10-29: "Minami's suggestion, tap Keep". 52 of 58 lists were never kept, and the
+   *  suggestion drove ticks and closes anyway, so the tap decided nothing. Minami's list is now just the
+   *  list. Still written as false by old paths and ignored on read. */
   dodPending?: boolean;
   /** Retired shape of the proposal (a bare list); folded into `dod` + `dodPending` on read. */
   dodSuggested?: string[];
@@ -75,6 +76,10 @@ export type FlowThread = {
   stepAt?: number;
   /** Dropped: still claims its sessions (so they don't come back as a new task) but shows nowhere. */
   hidden?: boolean;
+  /** The Today to-do or decision this task carries (`linkTasks` in lib/today.ts). Each closes the other. */
+  today?: { date: string; kind: "todo" | "loop"; id: string };
+  /** When he last pressed Reopen: a Today tick older than this doesn't close it again. */
+  reopenedAt?: number;
 };
 /** `dismissed`: sessions whose "Name this thread?" offer was waved off — asked once, never again. */
 export type FlowState = { v: 2; threads: FlowThread[]; dismissed: string[] };
@@ -130,6 +135,18 @@ function writeFlow(s: FlowState) {
   const tmp = `${FILE}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(s, null, 1));
   fs.renameSync(tmp, FILE);
+}
+
+/** The one way a task is moved to Done. Every close path used to set the fields by hand, and none
+ *  cleared an item's `doing`, so a closed task kept an item "on now" for hours (4 archived tasks, and 3
+ *  open ones 13–17h stale, in flow.json on 2026-10-29) and the board showed a done task as being worked.
+ *  Lives here, not in lib/task-report.ts, so lib/today.ts can close a task without importing the session parser. */
+export function closeTask(t: FlowThread, o: { auto?: boolean; why?: string } = {}) {
+  t.archived = true; t.doneAt = Date.now(); t.auto = false; t.updatedAt = Date.now();
+  if (o.auto) t.autoDone = true;
+  if (o.why) t.closedWhy = o.why;
+  t.dodPending = false;
+  if (t.dod) t.dod = t.dod.map((d) => (d.doing ? (({ doing: _, ...r }) => r)(d) : d));
 }
 
 /** Read, change, write: the only way anything mutates the file. Returns what was written. */

@@ -101,7 +101,7 @@ export type ThreadView = {
   id: string; stored: boolean; title: string; project: string; cwd: string;
   sessions: { id: string; cwd: string }[];
   latest: string; at: number; state: ThreadState; line: string; asks: number;
-  dod?: FlowDod[]; dodPending?: boolean;
+  dod?: FlowDod[];
   /** What it waits on him for now (TaskStep): only while no newer activity than the reading. */
   step?: TaskStep;
   /** Archived (moved to Done). Only in `done`, never in `threads`. */
@@ -164,7 +164,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     // A To-do card: written down on the board, no chat yet.
     if (!ms.length && st?.queued && !st.archived) {
       views.push({ id, stored: true, title: st.title, project: st.project, cwd: st.cwd, sessions: [], latest: "", at: st.createdAt,
-        state: "queued", line: "", asks: 0, ...(st.dod ? { dod: st.dod, dodPending: st.dodPending } : {}) });
+        state: "queued", line: "", asks: 0, ...(st.dod ? { dod: st.dod } : {}) });
       continue;
     }
     if (!ms.length) continue;
@@ -206,7 +206,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
       sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: last.id, at: last.lastActivity, state,
       line: clip(state === "working" ? (last.now || tail || "working") : tail || last.lastPrompt || "", 140),
       asks: ms.reduce((n, m) => n + (m.askCount ?? 0), 0),
-      ...(g.stored?.dod ? { dod: g.stored.dod, dodPending: !!g.stored.dodPending } : {}),
+      ...(g.stored?.dod ? { dod: g.stored.dod } : {}),
       ...(step ? { step } : {}),
     });
   }

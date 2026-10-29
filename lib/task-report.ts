@@ -7,7 +7,8 @@
 // (`taskMcpServer` in lib/agent/manager.ts — typed, no key to pass, the server knows the session), and
 // `POST /api/threads {"action":"report"}` for anything else. Haiku stays as the backup for chats that
 // never report: `reportAt` newer than `evalAt` skips its reading for that quiet (see `ensure` in the route).
-import { fid, findStored, mutateFlow, type FlowDod, type FlowState, type FlowThread } from "@/lib/flow-store";
+import { closeTask, fid, findStored, mutateFlow, type FlowDod, type FlowState, type FlowThread } from "@/lib/flow-store";
+export { closeTask };
 import { threads, type ThreadView } from "@/lib/threads";
 import { GATE_LABEL, runRules } from "@/lib/task-pace";
 
@@ -24,19 +25,6 @@ export const gateOf = (d: FlowDod): Pick<FlowDod, "gate" | "gateWhy" | "gateBy">
 export function closeIfDone(t: FlowThread, wasDone: boolean) {
   if (wasDone || !allDone(t.dod)) return;
   closeTask(t, { auto: true });
-}
-
-/** The one way a task is moved to Done. Every close path used to set the fields by hand, and none
- *  cleared an item's `doing`, so a closed task kept an item "on now" for hours (4 archived tasks, and 3
- *  open ones 13–17h stale, in flow.json on 2026-10-29) and the board showed a done task as being worked.
- *  A suggested list that carried a task to Done was in use, so `dodPending` goes too (52 of 58 tasks were
- *  still "suggested" — the Keep tap is rarely made and nothing else ever cleared it). */
-export function closeTask(t: FlowThread, o: { auto?: boolean; why?: string } = {}) {
-  t.archived = true; t.doneAt = Date.now(); t.auto = false; t.updatedAt = Date.now();
-  if (o.auto) t.autoDone = true;
-  if (o.why) t.closedWhy = o.why;
-  t.dodPending = false;
-  if (t.dod) t.dod = t.dod.map((d) => (d.doing ? (({ doing: _, ...r }) => r)(d) : d));
 }
 
 /** The open task that holds this chat, if any. */
@@ -68,7 +56,7 @@ export function taskStatus(sessionId: string | null): string {
   return [
     `Task: "${v.title}" (project ${v.project})`,
     dod.length
-      ? `Done-list${v.dodPending ? " (Minami's suggestion, not yet kept by Thomas)" : ""}:\n${dod.map(itemLine).join("\n")}`
+      ? `Done-list:\n${dod.map(itemLine).join("\n")}`
       : "No done-list yet. You may add 2-4 checkable outcomes with task_report's `add`.",
     runRules(dod),
   ].filter(Boolean).join("\n");
