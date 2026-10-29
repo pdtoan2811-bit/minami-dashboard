@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { isBusy } from "@/lib/agent/manager";
 import { listSessions, topicOf, type SessionMeta } from "@/lib/claude-sessions";
-import { readFlow, type FlowDod } from "@/lib/flow-store";
+import { readFlow, type FlowDod, type TaskStep } from "@/lib/flow-store";
 import { todaySessionIds } from "@/lib/today-origin";
 
 const WT = "/.minami-worktrees/";
@@ -80,7 +80,10 @@ export function recentText(id: string, cwd: string, max = 6000): string {
       const c = r.message?.content;
       const text = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b: { type?: string }) => b?.type === "text").map((b: { text?: string }) => b.text ?? "").join("\n") : "";
       if (!text.trim() || text.startsWith("<")) continue;
-      out.push(`${r.type === "user" ? "Thomas" : "Minami"}: ${text.trim().slice(0, 1500)}`);
+      // A long message keeps its start AND its end: the end is where a reply asks "Should I merge?" or
+      // says what's left, and a head-only clip dropped exactly that (2026-10-29).
+      const x = text.trim();
+      out.push(`${r.type === "user" ? "Thomas" : "Minami"}: ${x.length > 1500 ? x.slice(0, 600) + " … " + x.slice(-900) : x}`);
     }
     let s = out.join("\n\n");
     if (s.length > max) s = "…" + s.slice(-max);
@@ -96,6 +99,8 @@ export type ThreadView = {
   sessions: { id: string; cwd: string }[];
   latest: string; at: number; state: ThreadState; line: string; asks: number;
   dod?: FlowDod[]; dodPending?: boolean;
+  /** What it waits on him for now (TaskStep): only while no newer activity than the reading. */
+  step?: TaskStep;
   /** Archived (moved to Done). Only in `done`, never in `threads`. */
   archived?: boolean; doneAt?: number; autoDone?: boolean; closedWhy?: string;
 };
@@ -180,7 +185,10 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     // A run stopped at a gate (lib/task-pace.ts) needs him even when the chat's last line isn't a question:
     // that is the one place a task should flag him, and an ungated next item never does (auto-continue).
     const gated = !!g.stored?.dod && (({ run, stop }) => !run.length && !!stop)(runPlan(g.stored.dod));
-    const waiting = !busy && (!!last.review || gated || last.lastRole === "assistant" && /\?\s*$/.test(last.tail || ""));
+    // The step read off a quiet chat ("Merge and deploy it?") is his move too, and the card leads with it.
+    // Any newer activity hides it until it's read again: a stale question is worse than none.
+    const step = !busy && g.stored?.step && g.stored.step.at >= last.lastActivity ? g.stored.step : undefined;
+    const waiting = !busy && (!!last.review || gated || !!step || last.lastRole === "assistant" && /\?\s*$/.test(last.tail || ""));
     const state: ThreadState = busy ? "working" : waiting ? "waiting" : "idle";
     const tail = plain(last.tail || "");
     views.push({
@@ -189,6 +197,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
       line: clip(state === "working" ? (last.now || tail || "working") : tail || last.lastPrompt || "", 140),
       asks: ms.reduce((n, m) => n + (m.askCount ?? 0), 0),
       ...(g.stored?.dod ? { dod: g.stored.dod, dodPending: !!g.stored.dodPending } : {}),
+      ...(step ? { step } : {}),
     });
   }
   views.sort((a, b) => b.at - a.at);

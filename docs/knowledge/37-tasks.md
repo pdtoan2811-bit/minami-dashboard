@@ -341,6 +341,38 @@ Tested end to end on an isolated server (`:3027`, `MINAMI_FLOW_FILE` in `/tmp`):
 - Haiku labelled "layout chosen" / "API returns values" / "tests pass" / "post published on X" as
   pitch / auto / auto / ok.
 
+## What it waits on you for (the step)
+
+Thomas, 2026-10-29, on a tile whose chat had just asked "Should I merge and deploy it?" while the card's
+"next" pointed at "Tile layout holds at phone and desktop widths": "task like this need better next step,
+like merge or deploy … rather than irrelevant next to do list / subtask that make me have to read and
+check where is the task". The done-list says what *done* looks like; it never said what the chat is
+stopped on, and the chat's own `task_report` skips `evaluate`, so nothing read the end of the reply.
+
+- **`readStep`** (`app/api/threads`): once per quiet (`stepAt` < `v.at`, stored tasks only, any state but
+  working), Haiku reads the end of the latest chat and returns either `null` or a `TaskStep`
+  `{q, yes, reply, ship}`: the question the reply ended on, or the finished-but-unshipped step (committed
+  not merged, merged not deployed, drafted not published). Runs even when the chat reported for itself.
+- **It shows only while current**: `threads()` passes `step` through when `step.at >= lastActivity`, so
+  any newer turn hides it until the next reading. A current step makes the task `waiting` (Needs you, and
+  `closeIfDone` holds, so a task doesn't close itself with its merge still asked about).
+- **The card leads with it** (`Dod` in `TaskCard.tsx`, so the tile, the board and the chat's Task strip):
+  "✋ Merge and deploy the tile layout fix?" with **▶ Merge & deploy** (sends `reply`, "Yes, merge and
+  deploy it.", through `action: "answer"` + `/api/agent/send`, routed like ▶ Do it) and **Reply** (opens
+  the chat). Meanwhile no item is marked "next", and the pace line and ▶ Run are hidden. Home's "Where you
+  left off" row and the phone task row show the question in place of the tail / next item.
+- **Answering clears it at once**, so a second tap gets "nothing is waiting on you here".
+- **Ship steps on the list**: a `ship` step with no item matching merge/deploy/live/ship/publish adds
+  "Merged and deployed" (gate null; GATE_RULES already treat merging/deploying his own tools as auto).
+  `suggest` now ends a code task's list with that outcome too: work sitting on a branch isn't done.
+- **`recentText` keeps the end of a long message** (first 600 + last 900 chars). It kept the first 1500,
+  which cut off exactly the closing question, for `evaluate` as well.
+
+Tested on an isolated `:3027` server with a copy of `flow.json`: the screenshot's task came back
+`{q: "Merge and deploy the tile layout fix?", yes: "Merge & deploy", reply: "Yes, merge and deploy it.",
+ship: true}`, state `waiting`, and gained "Merged and deployed"; `answer` returned the owner key and
+message, and a second `answer` was refused.
+
 ## On the phone: the sheets list tasks
 
 Thomas, 2026-10-29, on the phone's all-chats sheet: "clunky, I want to view task instead of sessions. it

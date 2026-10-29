@@ -6,7 +6,7 @@
 // ticks from his and see why. Progress is that list and nothing else: no phases, no percentages of work.
 import { useState } from "react";
 import { useSetting } from "@/lib/use-settings";
-import { doDodItem, openThread, threadPost, type ThreadView } from "@/lib/use-threads";
+import { answerStep, doDodItem, openThread, threadPost, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
 import { GATE_LABEL, nextGate, paceLine, runPlan } from "@/lib/task-pace";
 
@@ -55,7 +55,10 @@ const PILL: Record<Exclude<ItemStatus, "done" | "todo">, { label: string; cls: s
 function statusesOf(t: ThreadView): Map<string, ItemStatus> {
   const dod = t.dod ?? [];
   const cur = dod.filter((d) => !d.done && d.doing).sort((a, b) => (b.doing ?? 0) - (a.doing ?? 0))[0];
-  const next = cur ? undefined : dod.find((d) => !d.done);
+  // While the task waits on him for a step (the chat's question, an unshipped change), the step leads
+  // and no item is marked "next": the first open item was often one the chat had just checked, and
+  // pointing at it sent him reading the chat to find where things stood (2026-10-29).
+  const next = cur || t.step ? undefined : dod.find((d) => !d.done);
   return new Map(dod.map((d): [string, ItemStatus] => [d.id, d.done ? "done"
     : d === cur ? (t.state === "working" ? "on" : t.state === "waiting" ? "asks" : "started")
     // A run stopped at a gate is his move: the gated next item says so, not just "next".
@@ -117,6 +120,7 @@ function GateChip({ t, d }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[n
 }
 
 const RUN = "__run";
+const STEP = "__step";
 
 export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; compact?: boolean; fold?: boolean }) {
   const [draft, setDraft] = useState("");
@@ -153,7 +157,7 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
   const pace = paceLine(dod);
   const doIt = canDo ? (id: string) => async () => {
     setDoing(id); setErr(null);
-    const e = await doDodItem(t, id === RUN ? null : id, { mode: perm, model });
+    const e = id === STEP ? await answerStep(t, { mode: perm, model }) : await doDodItem(t, id === RUN ? null : id, { mode: perm, model });
     setDoing(null); if (e) setErr(e);
   } : null;
   const shown = open ? dod : dod.filter((d) => d.id === leadId);
@@ -169,12 +173,27 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
             title={`Minami's done-list${busy ? " (checking…)" : ""} — keep it`}>Keep</button>
         )}
       </div>
+      {/* What it waits on him for, first: the question the chat ended on ("Merge and deploy it?") or
+          the step it left unshipped, with the go-ahead one tap away. Read off the quiet chat (readStep in
+          /api/threads) and gone as soon as the chat moves. */}
+      {t.step && !compact && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-[var(--sakura)]/[0.08] px-2 py-1.5">
+          <span className="min-w-0 flex-1 basis-40 text-[13px] leading-snug text-neutral-100"><span className="mr-1 text-[var(--sakura)]">✋</span>{t.step.q}</span>
+          {canDo && (
+            <button onClick={doIt!(STEP)} disabled={!!doing} title={`Sends: “${t.step.reply}”`}
+              className="shrink-0 rounded-md bg-[var(--sakura)]/20 px-2 py-0.5 text-[11px] font-semibold text-[var(--sakura)] hover:bg-[var(--sakura)]/30 disabled:opacity-50 pointer-coarse:py-1.5">
+              {doing === STEP ? "sending…" : `▶ ${t.step.yes}`}
+            </button>
+          )}
+          {canDo && <button onClick={() => openThread(t)} className={mini} title="Open the chat to answer in your own words">Reply</button>}
+        </div>
+      )}
       {/* How the task runs: on its own to the end, or to a gate where it waits for him. ▶ Run sends the
           whole stretch in one message, so the ungated items need no click each (Thomas, 2026-10-28). */}
-      {!compact && pace && (
+      {!compact && pace && !t.step && (
         <div className="mt-1 flex items-center gap-2 text-[11px] text-neutral-500">
           <span className="min-w-0 flex-1 truncate">{pace}</span>
-          {doIt && plan.run.length > 0 && t.state !== "working" && (
+          {doIt && plan.run.length > 0 && t.state !== "working" && !t.step && (
             <button onClick={doIt(RUN)} disabled={!!doing} title="Send every item up to the first gate to the task's chat, in one go"
               className="shrink-0 rounded-md bg-[var(--sakura)]/15 px-2 py-0.5 text-[10px] font-semibold text-[var(--sakura)] hover:bg-[var(--sakura)]/25 disabled:opacity-50 pointer-coarse:py-1.5">
               {doing === RUN ? "sending…" : plan.run.length > 1 ? `▶ Run ${plan.run.length}` : "▶ Run"}

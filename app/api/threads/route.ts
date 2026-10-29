@@ -4,7 +4,7 @@
 // task that has none and to tick the items its chats show are met.
 import { isBusy, sendMessage, sessionIdentity } from "@/lib/agent/manager";
 import { runHaiku } from "@/lib/bento-enrich";
-import { fid, mutateFlow, readFlow, type FlowDod, type FlowThread } from "@/lib/flow-store";
+import { fid, mutateFlow, readFlow, type FlowDod, type FlowThread, type TaskStep } from "@/lib/flow-store";
 import { listSessions, topicOf } from "@/lib/claude-sessions";
 import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
 import { allDone, closeIfDone, gateOf, taskReport, type TaskReport } from "@/lib/task-report";
@@ -35,6 +35,8 @@ type Body =
   | { action: "start"; id: string; sessionId: string }
   | { action: "ensure"; ids: string[] }
   | { action: "do"; id: string; dodId: string }
+  /** The one-tap answer to what the task waits on him for (`step`): sends the step's reply to its chat. */
+  | { action: "answer"; id: string }
   /** ▶ Run: every open item up to the first gate, in one message (lib/task-pace.ts). */
   | { action: "run"; id: string }
   /** His tap on an item's gate chip: auto / "pitch" / "ok". Haiku never reclassifies it after. */
@@ -82,7 +84,7 @@ function chatOf(v: ThreadView): string {
 /** Write a proposed done-list for a task. A derived task is stored (`auto`) to hold it. */
 async function suggest(v: ThreadView) {
   const firstAsks = v.sessions.length ? (listSessions().find((x) => x.id === v.sessions[0].id)?.asks ?? []).slice(0, 3) : [];
-  const prompt = `A piece of work is called "${v.title}" (project ${v.project}).\n${firstAsks.length ? `It started with:\n${firstAsks.map((a) => "- " + a.slice(0, 300)).join("\n")}\n` : ""}${v.sessions.length ? `The end of its chat:\n${chatOf(v).slice(-3000)}\n` : ""}\nWrite its Definition of Done: 2 to 4 outcomes Thomas can check by looking (a page renders, a number is right, a file exists, it is merged). Each under 10 words, no verbs in the imperative. If the work needs a look decided (see "pitch" below), make the first outcome Thomas's pick of a version.\n\n${GATE_RULES}\n\nReply with ONLY a JSON array: [{"t":"<outcome>","gate":"pitch"|"ok"|null,"why":"<under 8 words, only when gated>"}]`;
+  const prompt = `A piece of work is called "${v.title}" (project ${v.project}).\n${firstAsks.length ? `It started with:\n${firstAsks.map((a) => "- " + a.slice(0, 300)).join("\n")}\n` : ""}${v.sessions.length ? `The end of its chat:\n${chatOf(v).slice(-3000)}\n` : ""}\nWrite its Definition of Done: 2 to 4 outcomes Thomas can check by looking (a page renders, a number is right, a file exists, it is merged). Each under 10 words, no verbs in the imperative. If it changes code in a repo, the last outcome is the change merged and live (e.g. "Merged and deployed"): finished work that sits on a branch isn't done. If the work needs a look decided (see "pitch" below), make the first outcome Thomas's pick of a version.\n\n${GATE_RULES}\n\nReply with ONLY a JSON array: [{"t":"<outcome>","gate":"pitch"|"ok"|null,"why":"<under 8 words, only when gated>"}]`;
   const arr = haikuJSON(await runHaiku(prompt));
   // Strings are still accepted (an older-style answer): they come in unclassified and get gated later.
   const items = (Array.isArray(arr) ? arr : []).map((x) => typeof x === "string" ? { t: x.trim() } : { t: String((x as { t?: unknown })?.t ?? "").trim(), gate: parseGate((x as { gate?: unknown })?.gate), why: String((x as { why?: unknown })?.why ?? "").slice(0, 80) })
@@ -163,6 +165,31 @@ async function evaluate(v: ThreadView, focusOnly = false) {
   });
 }
 
+/** What a quiet task waits on him for: the question its chat ended on, or the plain next step the chat
+ *  left (built and committed but not merged or deployed). Thomas, 2026-10-29: the card's "next" was a
+ *  done-item the chat had already checked while the chat itself was asking "Should I merge and deploy
+ *  it?" — he had to read the chat to find where the task stood. Runs on every quiet, even when the chat
+ *  reported for itself (task_report skips `evaluate`), and reads only the end of the latest chat. */
+const SHIP_ITEM = /merg|deploy|live|ship|publish|release|push/i;
+async function readStep(v: ThreadView) {
+  const last = v.sessions[v.sessions.length - 1];
+  const chat = last ? recentText(last.id, last.cwd, 3500) : "";
+  const open = (v.dod ?? []).filter((d) => !d.done).map((d) => d.t);
+  const j = !chat ? null : haikuJSON(await runHaiku(`The end of a work chat between Thomas and his assistant Minami, on "${v.title}":\n${chat}\n\n${open.length ? `Still open on its done-list: ${open.join(" · ")}\n\n` : ""}Minami has stopped. Is it waiting on Thomas for something before the work can go on? Either (a) its last reply asks him a question or for a go-ahead (e.g. "Should I merge and deploy it?", "Which version?"), or (b) the work is finished and checked but not shipped yet (committed on a branch but not merged, merged but not deployed, drafted but not published) and the reply says so. If neither (it is still working through items on its own, or everything is shipped), answer null.\nReply with ONLY JSON, either null or {"q":"<what it waits on, as a short plain question, under 9 words>","yes":"<button label for going ahead, 1-3 words, e.g. 'Merge & deploy'>","reply":"<the message that button sends to Minami, in Thomas's voice, under 15 words>","ship":<true if it is about merging, deploying, publishing or releasing>}`));
+  const ok = j && typeof j === "object" && typeof (j as TaskStep).q === "string" && (j as TaskStep).q.trim() ? (j as TaskStep) : null;
+  const step: TaskStep | undefined = ok ? { q: ok.q.trim().slice(0, 90), yes: String(ok.yes || "Yes, go ahead").trim().slice(0, 24), reply: String(ok.reply || "Yes, go ahead.").trim().slice(0, 200), ...(ok.ship === true ? { ship: true } : {}), at: v.at } : undefined;
+  mutateFlow((s) => {
+    const t = s.threads.find((x) => x.id === v.id);
+    if (!t) return;
+    t.stepAt = v.at;
+    if (step) t.step = step; else delete t.step;
+    // A ship step with nothing on the list for it: the list says what's left, so it gets the item. Gate
+    // null — merging and deploying his own tools runs on its own (GATE_RULES); a publish gets gated by
+    // `classify` like any added item.
+    if (step?.ship && t.dod?.length && !t.dod.some((d) => SHIP_ITEM.test(d.t))) t.dod = [...t.dod, { id: fid(), t: "Merged and deployed", done: false }];
+  });
+}
+
 /** Gate the open items that have none yet: a list written before gates existed, or items added by hand or
  *  by the chat's task_report `add`. Items he gated by tap are never sent. */
 async function classify(v: ThreadView) {
@@ -239,6 +266,9 @@ function ensure(ids: string[]) {
     // Gates are their own small call, independent of ticking; `enqueue` keeps it to one job per task.
     if (v.dod?.some((d) => !d.done && d.gate === undefined) && Date.now() - (st?.gateTriedAt ?? 0) > RETRY_EMPTY_MS / 6) enqueue(v.id + ":gate", () => classify(v));
     if (v.dod?.length && v.state === "idle") maybeContinue(v.id);
+    // The step is read once per quiet; a turn in flight has none.
+    // Stored tasks only: a derived one gets stored by its done-list first (suggest), then read here.
+    if (st && v.state !== "working" && v.sessions.length && (st.stepAt ?? 0) < v.at) enqueue(v.id + ":step", () => readStep(v));
     if (!v.dod?.length) {
       if (st?.dodTriedAt && Date.now() - st.dodTriedAt < RETRY_EMPTY_MS) continue;
       enqueue(v.id, () => suggest(v));
@@ -282,12 +312,25 @@ function doItem(b: { id: string; dodId?: string }): { key?: string; cwd?: string
   return { key, cwd: owner?.cwd ?? last.cwd, resume: last.id, message };
 }
 
+/** His one tap on the step: the step's reply goes to the task's latest chat, under the key that owns it
+ *  (same routing as doItem). The step is cleared at once so the card doesn't offer it twice. */
+function answerStep(id: string): { key?: string; cwd?: string; resume?: string; message?: string; error?: string } {
+  const v = threads(14).threads.find((t) => t.id === id);
+  if (!v?.step) return { error: "nothing is waiting on you here" };
+  const last = v.sessions[v.sessions.length - 1];
+  if (!last) return { error: "the task has no chat yet" };
+  const owner = sessionIdentity("live:" + last.id);
+  mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) delete t.step; });
+  return { key: owner?.key ?? "live:" + last.id, cwd: owner?.cwd ?? last.cwd, resume: last.id, message: v.step.reply };
+}
+
 export async function POST(req: Request) {
   const b = (await req.json().catch(() => null)) as Body | null;
   if (!b || typeof b !== "object" || !("action" in b)) return Response.json({ error: "bad body" }, { status: 400 });
   try {
     if (b.action === "do") return Response.json(doItem(b));
     if (b.action === "run") return Response.json(doItem({ id: b.id }));
+    if (b.action === "answer") return Response.json(answerStep(b.id));
     if (b.action === "close") {
       const sid = b.sessionId || (b.key ? sessionIdentity(b.key)?.sessionId : null);
       const v = sid ? threads(14).threads.find((t) => t.sessions.some((x) => x.id === sid)) : undefined;
