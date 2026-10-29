@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-29
+- **Opinion Reveal is never closed** (§38). Thomas: "should not block my access like this, but I can randomly visit and pick topic". /opinion is now a list of every recent daily story; any can be ranted about any time, one takes/<id>.json each; the Saturday lock gathers what is waiting.
 - **Opinion Reveal interview page** (§38; `app/opinion/`, `app/api/opinion`, `lib/opinion.ts`, nav, automations). The weekly interview behind Video Studio's opinion video, as the "rant to a friend" chat Thomas picked (pitch opinion-interview V2). Writes `~/tiktok-studio/harness/opinion/<week>/interview.json`; drafted Fri 14:00 and locked Sat 12:05 by `com.thomas.video-opinion`.
 - **Task cards stop moving** (§37; `lib/threads.ts`, `TopicTasks.tsx`, `Board.tsx`). The tile listed tasks by last activity, so every reply moved a card to the top. Cards are now placed by when the task was created (`ThreadView.born`).
 - **Topics stop vanishing from the board** (§5d; `lib/bento-enrich.ts`, `lib/flow-narrate.ts`, `lib/claude-sessions.ts`). The task readers' Haiku calls saved ~100–180 transcripts an hour into `~/.minami-bento`, filling 134 of the 150 places in `listSessions`' recency window, so only ~16 real chats reached the board and ecvision had no tile to start a task in. The calls now run with `--no-session-persistence`, and the folder is skipped before the window. Board went from 16 to 60 sessions.
