@@ -98,6 +98,35 @@ export function AskLine({ pinned }: { pinned?: boolean }) {
   );
 }
 
+// ── Running now ──────────────────────────────────────────────────────────────────────────────────
+// Every task whose chat is running, across all projects, with the done-item it is on. The board had
+// this per project (Working column, "Minami on it"), but seeing it meant opening each project's board
+// (Thomas, 2026-10-29: "a way to see which task is running and which subtask is being done").
+// The item is the same `doing` pick the card's "Minami on it" pill uses; with none, the chat's live line.
+function RunningRow({ t, first }: { t: ThreadView; first: boolean }) {
+  const dod = t.dod ?? [];
+  const cur = dod.filter((d) => !d.done && d.doing).sort((a, b) => (b.doing ?? 0) - (a.doing ?? 0))[0];
+  const n = cur ? dod.indexOf(cur) + 1 : 0;
+  return (
+    <button onClick={() => openThread(t)} className={`${row} ${first ? "" : "border-t border-white/[0.06]"}`}>
+      <span className="relative flex h-2 w-2 shrink-0">
+        <span className="absolute inset-0 animate-ping rounded-full opacity-60 motion-reduce:animate-none" style={{ background: TINT.working }} />
+        <span className="relative h-2 w-2 rounded-full" style={{ background: TINT.working }} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[14px] text-neutral-100">{t.title}</span>
+        <span className="block truncate text-[12px] text-neutral-500">
+          <span className="text-neutral-400">{t.project}</span>
+          {cur
+            ? <> · <span className="text-[#f0a868]">on {n}/{dod.length}</span> — {cur.t}</>
+            : t.line ? ` — ${t.line}` : ""}
+        </span>
+      </span>
+      {dod.length > 0 && <span className="w-20 shrink-0"><DodBar t={t} /></span>}
+    </button>
+  );
+}
+
 // ── Where you left off ───────────────────────────────────────────────────────────────────────────
 function ThreadRow({ t, first }: { t: ThreadView; first: boolean }) {
   const [open, setOpen] = useState(false);
@@ -167,11 +196,16 @@ export function Home({ filter, only }: { filter?: (project: string) => boolean; 
 
   const needs = (shell?.needs ?? []).filter((n) => ok(n.project));
   const waitingSids = new Set(needs.flatMap((n) => (n.kind === "chat" ? [n.sid] : [])));
-  const threads = (d?.threads ?? []).filter((t) => ok(t.project) && t.state !== "queued");
+  const all = (d?.threads ?? []).filter((t) => ok(t.project) && t.state !== "queued");
+  // A running task is listed under Running now, so Where you left off doesn't repeat it.
+  const runningNow = all.filter((t) => t.state === "working");
+  const threads = all.filter((t) => t.state !== "working");
   const shown = threads.slice(0, more ? 10 : 4);
   // The morning list is where most tasks are seen first: keep their done-lists written and ticked too,
-  // so a task can close itself (and celebrate) without the board ever being opened.
-  useEffect(() => { ensureDod(shown); }, [shown.map((t) => t.id + t.at).join()]); // eslint-disable-line react-hooks/exhaustive-deps
+  // so a task can close itself (and celebrate) without the board ever being opened. Running tasks too:
+  // the focus check that sets their "on" item runs off the same call.
+  const watched = [...runningNow, ...shown];
+  useEffect(() => { ensureDod(watched); }, [watched.map((t) => t.id + t.at + t.state).join()]); // eslint-disable-line react-hooks/exhaustive-deps
   const open = (todos ?? []).filter((t) => !t.done);
   const doneN = (todos ?? []).length - open.length;
 
@@ -189,6 +223,13 @@ export function Home({ filter, only }: { filter?: (project: string) => boolean; 
 
   return (
     <div className="mb-4 flex flex-col gap-4">
+      {only !== "today" && runningNow.length > 0 && (
+        <section>
+          <p className={head}><span className="h-1.5 w-1.5 rounded-full" style={{ background: TINT.working }} />Running now · {runningNow.length}</p>
+          <div className={box}>{runningNow.map((t, i) => <RunningRow key={t.id} t={t} first={i === 0} />)}</div>
+        </section>
+      )}
+
       {only !== "today" && needs.length > 0 && (
         <section>
           <p className={head}><span className="h-1.5 w-1.5 rounded-full bg-[var(--sakura)]" />Needs you · {needs.length}</p>
