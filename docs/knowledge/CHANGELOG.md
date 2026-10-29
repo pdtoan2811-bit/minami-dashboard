@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-29
+- **A task with every item met closes, even when git ticked the last one** (§37; `app/api/threads/route.ts`, `lib/flow-store.ts`). `tickShipped` now holds the close when the card is waiting on its ship step. `ensure` closes a held task once the chat is quiet with no question, without waiting on `evaluate`, which a self-reporting chat never reaches. `closeTask` clears the hold.
 - **A new task holds its slot from the click** (§37; new `components/home/StartingCard.tsx`, `lib/ask.ts`, `TopicTasks.tsx`, `Board.tsx`). A dashed placeholder card sits first in the topic tile and at the top of Working until the real card exists, so nothing pops in later. Pick V1 of pitch `task-lands`.
 - **Lanes by who holds the next move** (§37; `wait` in `lib/threads.ts`, `mergeBlock` in `lib/task-ship.ts`, `Board.tsx`, `TaskCard.tsx`, `bin/waits.mjs`). Pitch waiting-chain V1. The board groups by You / Running / Another task / Paused / Done with a count line, each card says what it waits on, and `node bin/waits.mjs` prints the same in text.
 - **Session controls fold into one pill in every pane; the flow-strip chip is retired** (§5e, §5f; `app/page.tsx`, `components/FlowStrip.tsx` deleted, `lib/module-graph.ts`). The roomy pane's inline row (model, fan-out, smith, pause, Plan/Code, approval) is now the same `code · bypass ⌄` pill the cramped pane had, opening the full controls. The "2/3 asks" chip that opened the flow canvas is gone; the canvas has no door now.

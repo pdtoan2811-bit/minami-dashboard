@@ -268,7 +268,10 @@ function tickShipped(v: ThreadView) {
     const was = allDone(t.dod);
     if (t.step?.ship) delete t.step;
     if (t.dod) t.dod = t.dod.map((d) => (!d.done && SHIP_ITEM.test(d.t) ? { id: d.id, t: d.t, ...gateOf(d), done: true, by: "minami", why: "in main and in the live build (git)", at: Date.now() } : d));
-    if (!t.archived && v.state === "idle") closeIfDone(t, was);
+    // Not idle is the usual case here: the card's own ship step ("Merge and deploy?") makes it "waiting".
+    // Ticking the last item then used to close nothing AND hold nothing, and with the step gone and no
+    // ship item left this never ran again — the task sat at "All met, closes itself" for good (§37).
+    if (!t.archived) { if (v.state === "idle") closeIfDone(t, was); else if (!was && allDone(t.dod)) t.closeHeld = true; }
   });
 }
 
@@ -286,6 +289,14 @@ function ensure(ids: string[]) {
     // Gates are their own small call, independent of ticking; `enqueue` keeps it to one job per task.
     if (v.dod?.some((d) => !d.done && d.gate === undefined) && Date.now() - (st?.gateTriedAt ?? 0) > RETRY_EMPTY_MS / 6) enqueue(v.id + ":gate", () => classify(v));
     if (st && v.state !== "working") tickShipped(v);
+    // A held close is honoured here, not only in `evaluate`: a chat that reported its own ticks skips
+    // evaluate (the report branch below), and a quiet with no newer activity never reaches it, so the
+    // hold was never read and the task stayed open with every item met (🐛 2026-10-29, §37). Waits for
+    // the step reading of this quiet, so a chat that ended on a question to him stays open.
+    if (st?.closeHeld && !st.archived && v.state === "idle" && allDone(st.dod) && (st.stepAt ?? 0) >= v.at) {
+      mutateFlow((s) => { const t = findStored(s, v); if (t?.closeHeld && !t.archived && allDone(t.dod)) closeTask(t, { auto: true }); });
+      continue;
+    }
     if (v.dod?.length && v.state === "idle") maybeContinue(v.id);
     // The step is read once per quiet; a turn in flight has none.
     // Stored tasks only: a derived one gets stored by its done-list first (suggest), then read here.
