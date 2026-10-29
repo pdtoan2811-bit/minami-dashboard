@@ -37,6 +37,7 @@ Above the tiles, in this order (desktop: in the bento column with no panel open;
 | Section | What it is |
 |---|---|
 | **Ask line** | Type anything. A chip shows the project it will land in *before* sending: your pick, else the project the text names (`guessProject`), else the newest thread's. A numbered list of 2+ asks shows **Split into N / Send as one**. Each ask gets its own chat (and worktree), and the first one opens. |
+| **Running now** | Every task whose chat is running, all projects: pulsing orange dot, title, project, and **on n/m — the item** (the same `doing` pick as the card's "Minami on it"), else the chat's live line. Those tasks leave Where you left off. Hidden when empty. Added 2026-10-29 ("which task is running and which subtask is being done"); before, that meant opening each project's board. |
 | **Needs you** | `/api/shell`'s `needs` (chat needs, goal asks, failing automations). Hidden when empty. |
 | **Where you left off** | Threads, 4 shown (10 with "more"). One line each: title · project · state · age — last line. Dots only if the thread has a DoD; `+ done-list (n)` when Minami has suggested one. |
 | **Today** | Open to-dos with **Run** (the Today hand-off), then **Go** (sends "go") when the run waits on you, and **Open**. |
