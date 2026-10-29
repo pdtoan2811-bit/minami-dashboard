@@ -150,8 +150,14 @@ async function evaluate(v: ThreadView, focusOnly = false) {
       // 3/4 task went to 0/4 an hour later with nothing undone).
       return d.by === "minami" && undone.has(i) ? { id: d.id, t: d.t, ...gateOf(d), done: false } : d;
     });
-    if (!t.archived) closeIfDone(t, was);
-    if (!t.archived && finished && finished !== t.closedWhy) {
+    // Close only on a quiet chat: one that is still working or ends on a question to him is not done,
+    // whatever the list says (2026-10-29). Met-while-busy holds the close (`closeHeld`, also set by the
+    // chat's own task_report) for the next reading of an idle chat.
+    if (!t.archived) {
+      if (v.state !== "idle") { if (!was && allDone(t.dod)) t.closeHeld = true; }
+      else { closeIfDone(t, was && !t.closeHeld); delete t.closeHeld; }
+    }
+    if (!t.archived && v.state === "idle" && finished && finished !== t.closedWhy) {
       t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = finished;
     }
   });

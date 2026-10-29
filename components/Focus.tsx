@@ -127,6 +127,10 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
   const td = useThreads();
   const thread = current.id ? td?.threads.find((t) => t.sessions.some((x) => x.id === current.id)) : undefined;
   const dod = thread?.dod ?? [];
+  // The state word follows the TASK when there is one: the chat's own group calls a reply you've read
+  // "idle", and the chip used to print that as "done" on a chat still asking you a question.
+  const word = thread ? TASK_WORD[thread.state] : curG && curG !== "idle" ? STATE_WORD[curG] : "";
+  const tint = thread ? TASK_TINT[thread.state] : curG ? STATE_TINT[curG] : "";
   // Handle swipe-up opens the sheet; the bar's horizontal swipe keeps stepping through recent chats.
   const y0 = useRef<number | null>(null);
   const chip = (id: string, g: Group, dashed?: boolean) => {
@@ -156,7 +160,7 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
             <span className="flex items-center gap-1 text-[11px] text-neutral-400">
               {current.project && <span className="truncate">{projectLabel(current.project)}</span>}
               {current.pos && current.pos.n > 1 && <span className="shrink-0 tabular-nums text-neutral-500">· {current.pos.i + 1} of {current.pos.n} ▾</span>}
-              {curG && <span className={`shrink-0 ${STATE_TINT[curG]}`}>· {STATE_WORD[curG]}</span>}
+              {word && <span className={`shrink-0 ${tint}`}>· {word}</span>}
               {dod.length > 0 && <span className={`shrink-0 tabular-nums ${dod.every((d) => d.done) ? "text-[#4ade80]" : "text-neutral-500"}`}>· {dod.filter((d) => d.done).length}/{dod.length}</span>}
             </span>
             <span className="block truncate text-[14px] font-medium">{thread?.title || current.title}</span>
@@ -173,7 +177,9 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
   );
 });
 
-const STATE_WORD: Record<Group, string> = { failed: "failed", need: "needs you", running: "working", new: "new reply", idle: "done" };
+const STATE_WORD: Record<Group, string> = { failed: "failed", need: "needs you", running: "working", new: "new reply", idle: "" };
+const TASK_WORD = { waiting: "needs you", working: "working", idle: "", queued: "to do" } as const;
+const TASK_TINT = { waiting: "text-[#4ade80]", working: "text-[#f0a868]", idle: "", queued: "text-neutral-500" } as const;
 const STATE_TINT: Record<Group, string> = { failed: "text-[#ef7c7c]", need: "text-[#4ade80]", running: "text-[#f0a868]", new: "text-neutral-200", idle: "text-neutral-500" };
 /** A task stays in Active this long after it last moved; past that, idle tasks fold into Older. */
 const ACTIVE_MS = 6 * 3600_000;
