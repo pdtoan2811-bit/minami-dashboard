@@ -551,10 +551,14 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 >   item goes at the end. Lists already stored keep their order.
 > - `runRules` and `runMessage` now say, when a ship item is open: tick every met item before deploying,
 >   because the deploy ends the turn.
-> - Not fixed: a chat killed by a deploy is not resumed. `maybeContinue` needs a live owner
->   (`sessionIdentity`), and after a restart the store has none until the pane is opened and sent to.
->   Resuming from the server would hold the session id under a server key, and his pane's own resume
->   would then be refused ("already open in another pane", `sendMessage`).
+> - A chat a deploy killed is resumed. `maybeContinue` used to need a live owner (`sessionIdentity`), and
+>   after a restart there is none until he opens the pane and types. With no owner it now resumes the
+>   chat from disk under `live:<session id>`, the key the pane attaches through and ▶ Run already uses,
+>   so his pane drives the same session afterwards; a separate server key would have had his pane refused
+>   ("already open in another pane", `sendMessage`). The usual nudge guards still apply (a new tick since
+>   the last nudge, `MAX_NUDGES`, an ungated next item). It only resumes on the live server
+>   (`NODE_ENV=production`, no `MINAMI_AUTOPILOT_DISABLE`, no `MINAMI_FLOW_FILE`), only for a chat active
+>   in the last 3h, and only if its folder still exists.
 
 > 🐛 2026-10-29: **"Everything is waiting for each other."** Five tasks read Waiting. Three were already
 > merged and live: autopilot or another chat had merged their branch, but `readStep` and `evaluate` read
