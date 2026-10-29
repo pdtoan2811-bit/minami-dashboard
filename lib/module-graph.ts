@@ -579,7 +579,7 @@ export const EDGES: ModuleEdge[] = [
   { from: "l/task-report", to: "l/task-pace", kind: "import" },
   { from: "r/flow", to: "l/task-pace", kind: "import", label: "gates + auto-continue" },
   { from: "r/flow", to: "l/task-ship", kind: "import", label: "ticks ship items" },
-  { from: "l/threads", to: "l/task-ship", kind: "import", label: "wait: another task" },
+  { from: "l/flow-store", to: "l/task-ship", kind: "import", label: "wait: another task" },
   { from: "l/task-report", to: "l/flow-store", kind: "import" },
   { from: "r/harness", to: "l/harness", kind: "import" },
   { from: "c/AttentionRow", to: "r/attention", kind: "http" },
