@@ -280,24 +280,27 @@ function ensure(ids: string[]) {
     const v = byId.get(id);
     if (!v || v.archived) continue;
     const st = findStored(store, v);
+    // A turn parked on his answer shows as "waiting" but is still mid-turn: none of the quiet-chat
+    // readings below may run on it, or they read a half-finished reply as the task's end (§37).
+    const mid = v.state === "working" || !!v.ask;
     // Gates are their own small call, independent of ticking; `enqueue` keeps it to one job per task.
     if (v.dod?.some((d) => !d.done && d.gate === undefined) && Date.now() - (st?.gateTriedAt ?? 0) > RETRY_EMPTY_MS / 6) enqueue(v.id + ":gate", () => classify(v));
     if (st && v.state !== "working") tickShipped(v);
     if (v.dod?.length && v.state === "idle") maybeContinue(v.id);
     // The step is read once per quiet; a turn in flight has none.
     // Stored tasks only: a derived one gets stored by its done-list first (suggest), then read here.
-    if (st && v.state !== "working" && v.sessions.length && (st.stepAt ?? 0) < v.at) enqueue(v.id + ":step", () => readStep(v));
+    if (st && !mid && v.sessions.length && (st.stepAt ?? 0) < v.at) enqueue(v.id + ":step", () => readStep(v));
     if (!v.dod?.length) {
       if (st?.dodTriedAt && Date.now() - st.dodTriedAt < RETRY_EMPTY_MS) continue;
       enqueue(v.id, () => suggest(v));
     } else if (st?.reportAt && st.reportAt > (st.evalAt ?? 0)) {
       // The chat reported for itself since the last reading: its word stands in for Haiku's this quiet.
       // Marked checked as of now, so a later stretch of work that goes unreported is read as usual.
-      if (v.state !== "working") mutateFlow((s) => { const t = findStored(s, v); if (t) t.evalAt = Math.max(v.at, t.reportAt ?? 0); });
-    } else if (v.state !== "working" && v.sessions.length && (st?.evalAt ?? 0) < v.at) {
+      if (!mid) mutateFlow((s) => { const t = findStored(s, v); if (t) t.evalAt = Math.max(v.at, t.reportAt ?? 0); });
+    } else if (!mid && v.sessions.length && (st?.evalAt ?? 0) < v.at) {
       // Checked when the chat goes quiet, not mid-turn: a half-finished reply reads as "not yet".
       enqueue(v.id, () => evaluate(v));
-    } else if (v.state === "working" && v.sessions.length && Date.now() - (st?.focusAt ?? 0) > FOCUS_EVERY_MS) {
+    } else if (mid && v.sessions.length && Date.now() - (st?.focusAt ?? 0) > FOCUS_EVERY_MS) {
       // Mid-turn: only which item it's on, at most every two minutes per task.
       enqueue(v.id, () => evaluate(v, true));
     }
