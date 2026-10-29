@@ -29,13 +29,11 @@ import FilePanel from "@/components/FilePanel";
 import { deriveFileState, writtenBy } from "@/lib/file-view";
 import { rankTopics, type RecentTopic } from "@/lib/topic-rank";
 import BrowserLightbox from "@/components/BrowserLightbox";
-import { FlowStrip } from "@/components/FlowStrip";
 import { TaskProgressBar } from "@/components/TaskProgressBar";
 import { UploadPaneContext, trayHeadline, useUploadTrays } from "@/components/UploadTray";
 import { PublishTiles } from "@/components/PublishTile";
 import type { TaskProgress } from "@/lib/task-progress";
 import { FlowCanvas } from "@/components/FlowCanvas";
-import { buildJourney } from "@/lib/flow-model";
 import { splitPreviewSegments, isLocalUrl, type Preview } from "@/lib/preview-block";
 import { openLocalUrl, PREVIEW_EVENT } from "@/lib/open-local";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
@@ -2065,7 +2063,7 @@ export default function BentoHome() {
                     // thrown away" bug the allBlank guard in openProject describes.
                     <ChatColumn key={`${pane.key}:${pane.switchGen || 0}`} paneKey={pane.key} sessionId={pane.sid} sessions={pp.sessions} cwd={pane.cwd || pp.cwd} isolated={!!pane.cwd} idx={idx} count={pk.panes.length} showTools={showTools} agentsHere={cwdAgentCount[pane.cwd || pp.cwd] || 0}
                       collapsed focused={false}
-                      onFocus={() => {}} onOpenFlow={() => {}} onPick={() => {}} onClose={() => {}}
+                      onFocus={() => {}} onPick={() => {}} onClose={() => {}}
                       openSids={pk.panes.map((p) => p.sid).filter(Boolean)}
                       onLive={(sid) => {
                         const nextPanes = pk.panes.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x));
@@ -2086,9 +2084,6 @@ export default function BentoHome() {
                   // open here. It selects the pane AND switches to tabs, since tabs view is the only
                   // place a browser or file preview has room to be worth opening.
                   onFocus={() => { setPaneView("tabs"); setActivePane(idx); }}
-                  // Opening the flow from a chat raises the canvas in the BENTO column, and un-rails the
-                  // bento if it was collapsed — otherwise the click would appear to do nothing at all.
-                  onOpenFlow={(sid) => { if (!sid) return; setRail(false); setFlowFor({ project: proj.name, sid }); }}
                   openSids={panes.map((p) => p.sid).filter(Boolean)}
                   onPick={(nid) => setPanes((p) => p.map((x, j) => (j === idx ? { ...x, sid: nid, switchGen: (x.switchGen || 0) + 1 } : x)))}
                   onLive={(sid) => setPanes((p) => p.map((x, j) => (j === idx && x.sid !== sid ? { ...x, sid } : x)))}
@@ -2788,11 +2783,11 @@ function fetchIsoMode(cwd: string): Promise<string | null> {
   return p;
 }
 
-function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx, count, showTools, agentsHere, openSids, collapsed, focused, onFocus, onOpenFlow, onPick, onLive, onBusy, onClose }: {
+function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx, count, showTools, agentsHere, openSids, collapsed, focused, onFocus, onPick, onLive, onBusy, onClose }: {
   paneKey: string; sessionId: string; sessions: SessionMeta[]; cwd: string;
   /** This chat has its own git worktree (see `addPane`), so nothing it writes can collide. */
   isolated?: boolean;
-  idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; collapsed?: boolean; focused?: boolean; onFocus: () => void; onOpenFlow: (sid: string) => void; onPick: (id: string) => void; onLive: (sid: string) => void; onBusy: (key: string, act: { phase: ActivityPhase; label: string; busy: boolean }) => void; onClose: () => void;
+  idx: number; count: number; showTools: boolean; agentsHere: number; openSids: string[]; collapsed?: boolean; focused?: boolean; onFocus: () => void; onPick: (id: string) => void; onLive: (sid: string) => void; onBusy: (key: string, act: { phase: ActivityPhase; label: string; busy: boolean }) => void; onClose: () => void;
 }) {
   // Seed from the shared cache so re-opening a project paints its transcripts instantly (no reload flash).
   const [detail, setDetail] = useState<Detail | null>(() => (sessionId ? transcriptCache.get(sessionId) ?? null : null));
@@ -3182,14 +3177,6 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
     el.scrollTop = pinnedRef.current ? el.scrollHeight : parkedScroll.current;
     parkedScroll.current = null;
   }, [collapsed]);
-
-  // The session, folded into a journey — ONE derivation, read by both the strip and the canvas so they
-  // cannot disagree about what exists. Was two: the strip scanned raw TodoWrite input while the panel
-  // called buildFlow, which is how a TaskCreate-tracked turn ended up with a flow and no way to open
-  // it. Nothing server-side needed — TodoWrite's input already flows through `source` like any other
-  // tool. No narratives here on purpose: the strip shows counts and the live goal, both of which are
-  // rules-derived and must be right *while* a turn runs, which is exactly when narration has nothing.
-  const flowJourney = useMemo(() => buildJourney(source), [source]);
 
   // The browser tool (Playwright MCP, see manager.ts). Everything the panel shows — URL, title,
   // console counts, network rows, the screenshot filmstrip, the action log — is folded out of the tool
@@ -3799,31 +3786,18 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           + composer came to ~160px of the ~354px a four-pane grid gives each column.
           `onFocusCapture`/`onBlurCapture` are what make it breathe — see `composing` above. */}
       <div className={`border-t border-white/10 ${roomy ? "px-4 py-3" : "px-3 py-2"}`}>
-        {roomy && !compact ? (
-          // The flow door is a CHIP on the control row, never its own row.
+        {roomy || atLeast(dc, "tight") || compact ? (
+          // Every pane, roomy or not, folds the session controls into ONE pill that states the two
+          // things you'd check at a glance (plan-vs-code, and the approval level) and opens the real
+          // controls on click. The roomy pane used to lay all six out inline — model, fan-out, smith,
+          // pause, Plan/Code, approval — a full row of controls Thomas rarely touched (2026-10-29), so
+          // it now gets the cramped pane's treatment.
           //
-          // It used to be a full-width strip above this row — ~42px with its margin, permanently, in
-          // every pane. That was affordable when the grid was the default view and the strip only
-          // appeared in a large pane; with tabs-first, the pane you're reading is always `roomy`, so
-          // "the roomy treatment" stopped meaning "occasionally" and started meaning "always".
-          //
-          // Nothing is lost but the running-step title, and that is already said by the activity line
-          // at the other end of this same row. Two doors, ONE destination still holds — this chip and
-          // the switch on the bento tile raise the same canvas.
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <ModeControls hold={agent.hold} onHold={agent.setHold} planning={planning} onPlan={setPlan} perm={perm} onPerm={setPermLevel} model={model} sessionModel={agent.sessionModel} onModel={setModelPick} fanout={fanout} onFanout={setFanoutPick} blacksmith={blacksmith} sessionBlacksmith={agent.sessionBlacksmith} smith={agent.smith} onBlacksmith={setBlacksmithPick} busy={agent.busy} />
-            <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
-            <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-neutral-500">{ctxEl}{tasksEl}{statusEl}</span>
-          </div>
-        ) : atLeast(dc, "tight") || compact ? (
-          // Cramped: the flow strip's row and the control row become ONE 22px bar. Nothing is removed —
-          // the strip becomes a chip and the six controls fold into a pill that states the two things
-          // you'd actually check at a glance (plan-vs-code, and the approval level) and opens the real
-          // controls on click. ~54px of the pane handed back to the transcript.
-          // Wraps rather than clips: at phone width the status cluster (ask progress, mode pill, ctx, tasks,
-          // live) is wider than the row, and `overflow-hidden` on its shrink-0 children cut "live" in half.
+          // The flow-strip chip ("2/3 asks") that sat first in this row is retired the same day: he
+          // never opened it, and it was the canvas's last in-pane door.
+          // Wraps rather than clips: at phone width the status cluster (mode pill, ctx, tasks, live) is
+          // wider than the row, and `overflow-hidden` on its shrink-0 children cut "live" in half.
           <div className="relative mb-1.5 flex flex-wrap items-center gap-1.5 gap-y-1">
-            <FlowStrip journey={flowJourney} busy={agent.busy} onOpen={() => onOpenFlow(agent.sessionId || sessionId)} />
             {/* Phone: pause is its own thumb-sized button beside the chip — the one control you need
                 fast, and the safe direction, so it never hides inside the sheet (§23). */}
             {compact && (
@@ -3832,7 +3806,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
                 {agent.hold ? "▶ resume" : "⏸"}
               </button>
             )}
-            <button onClick={() => setModeOpen((v) => !v)} title="Session controls — pause, Plan vs Code, approval level"
+            <button onClick={() => setModeOpen((v) => !v)} title="Session controls — model, fan-out, smith, pause, Plan vs Code, approval level"
               className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors compact:h-9 compact:rounded-lg compact:px-2.5 compact:text-[12px] ${
                 modeOpen ? "border-white/25 text-neutral-200" : "border-white/10 text-neutral-500 hover:border-white/25 hover:text-neutral-300"}`}>
               {/* Held and bypass keep their colour even folded. A pane that is parking every tool call,
@@ -3840,8 +3814,9 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
                   else — the whole point of folding is that what stays must still be readable at a
                   glance, and those two are the states you must never misread. */}
               {agent.hold && <span className="text-[#c47f18]">⏸{compact ? " held ·" : ""}</span>}
-              {/* The model only when it isn't the default — the chip states what you CHANGED, nothing else. */}
-              {compact && model && model !== modelDefault && <span>{(SELECTABLE_MODELS.find((m) => m.id === model)?.label || model).split(" ")[0].toLowerCase()} ·</span>}
+              {/* The model only when it isn't the default — the chip states what you CHANGED, nothing else.
+                  Every pane now, not just the phone: the picker lives behind this pill everywhere. */}
+              {model && model !== modelDefault && <span>{(SELECTABLE_MODELS.find((m) => m.id === model)?.label || model).split(" ")[0].toLowerCase()} ·</span>}
               <span className={planning ? "text-[var(--sakura)]" : ""}>{planning ? "plan" : "code"}</span>
               {!planning && <span className={perm === "bypassPermissions" ? "text-green-400" : ""}>· {PERM_LABEL[perm]}</span>}
               <span className="text-neutral-600">⌄</span>

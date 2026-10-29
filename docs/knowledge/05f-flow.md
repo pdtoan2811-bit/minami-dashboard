@@ -5,7 +5,7 @@ which `§` ids live where. Section numbers are stable: code comments cite them.
 
 ---
 
-## 5f. Flow — `components/FlowCanvas.tsx`, `components/FlowStrip.tsx`, `lib/flow-model.ts`, `lib/flow-narrate.ts`, `lib/flow-stack.ts`
+## 5f. Flow — `components/FlowCanvas.tsx`, `lib/flow-model.ts`, `lib/flow-narrate.ts`, `lib/flow-stack.ts`
 
 **One spine per session, one node per thing you asked for, and each node says what was wanted and how
 it turned out.** It answers three questions the transcript cannot: what have I asked this session for,
@@ -218,9 +218,9 @@ wide plan. What went is the part actually complained about: the **minimap**, and
 it. `fitView` re-frames on every plan change, which is what a minimap stands in for, with a `minZoom`
 floor so a ten-step spine stops shrinking before the labels go unreadable and you pan instead.
 
-Two doors, one destination: the switch on the tile, and the plan strip in the chat
-(`components/FlowStrip.tsx`) — which raises the same expanded tile and un-rails the bento first, since
-otherwise the click appears to do nothing. There is no second flow surface to keep in sync.
+There were two doors to it: the switch on the tile, and the plan strip in the chat
+(`components/FlowStrip.tsx`). The switch went with §37 and the strip was retired on 2026-10-29 (never
+used), so as of then nothing in the UI opens the canvas; `flowFor` in `app/page.tsx` is only cleared.
 
 The canvas fetches its own transcript over HTTP rather than reading a pane's live SSE state: it sits in
 page scope, panes each own their `useAgent`, and two subscribers to one session is two copies of the
