@@ -25,6 +25,7 @@ import { ShellContext, useShellData } from "./use-shell";
 import { Drawer } from "./Drawer";
 import { Capture } from "./Capture";
 import { NewTaskTab } from "@/components/home/PhoneNewTask";
+import { Starting } from "./Starting";
 
 const RAIL_OPEN = 208, RAIL_SHUT = 64, PHONE_TOP = 48, PHONE_BAR = 64;
 
@@ -162,6 +163,7 @@ function Frame({ path, children }: { path: string; children: React.ReactNode }) 
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} data={data} />
       <Capture open={capture} onClose={() => setCapture(false)} />
+      <Starting bottom={bottom} />
       </div>
     </ShellContext.Provider>
   );

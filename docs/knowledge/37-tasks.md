@@ -80,9 +80,18 @@ trigger used to be a one-line `<input>`, which could hold "fix the favicon" but 
   would start a half-written brief.
 - Attached images show as removable thumbnails. The path pattern is `lib/image-refs.ts`, shared with the
   transcript's `ImageRefs`, and must stay in step with `IMAGE_PATH` in `lib/agent/images.ts`.
-- The draft is kept per project in `localStorage` (`minami:newtask:<project>`). It is cleared only after
-  `startAsk` resolves, so if the start fails the draft is still there. When a draft is left behind, the
-  trigger reads **Draft · first line… continue ›**.
+- The draft is kept per project in `localStorage` (`minami:newtask:<project>`). When a draft is left
+  behind, the trigger reads **Draft · first line… continue ›**.
+- **Start closes the sheet at once and the start runs in the background** (`startInBackground` in
+  `lib/ask.ts`, both the desk sheet and the phone tab). The draft is cleared on click and put back by
+  `onFail` if the start never got going (unless a newer draft has been begun). Progress shows in the
+  shell's **Starting chip** (`components/shell/Starting.tsx`, every page): spinner → **Task started ·
+  Open** (auto-hides after 15s) or **Couldn't start — draft kept**. It never opens the chat by itself.
+
+> 🐛 2026-10-29 — Start task froze the board. The sheet awaited `startAsk` with its backdrop up: the
+> worktree, the send, then up to ~20s polling `/api/threads?key=` for the session id. Nothing behind it
+> was clickable until then, and the phone version finished by jumping to the board. The store lives at
+> module level in `lib/ask.ts` so a start survives the tile collapsing or a client-side page change.
 - The sheet is portalled to `<body>`. The tile sits in a reflowing grid, and a `fixed` element under a
   transformed ancestor is placed against that ancestor, not the viewport.
 - Not covered: the board's **+ Add a task** still queues a title only. A queued task has no body to keep.
@@ -463,7 +472,8 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 | `lib/flow-store.ts` | The stored part: `~/.minami/flow.json` v2 (`MINAMI_FLOW_FILE`). Read from disk on every call: `:3000` and `:3001` share it. |
 | `app/api/threads/route.ts` | GET threads + projects; `?key=` → the session id of a just-started chat. POST: name (with Haiku DoD suggestion via `runHaiku`), dismiss, dod.accept/toggle/add, archive. |
 | `lib/use-threads.ts` | One shared poll per tab; `openThread()` (event `minami:open-thread`). |
-| `lib/ask.ts` | `guessProject`, `splitAsks`, `startAsk` (isolate → send → wait for the id → `minami:open-chat`). |
+| `lib/ask.ts` | `guessProject`, `splitAsks`, `startAsk` (isolate → send → wait for the id → `minami:open-chat`), `startInBackground` + the starting store. |
+| `components/shell/Starting.tsx` | The shell's chip for background task starts: spinner, Open, or the error. |
 | `components/home/Home.tsx` | Ask line, Needs you, Where you left off, Today. |
 | `components/home/TopicTasks.tsx`, `TaskCard.tsx`, `Board.tsx`, `Celebrate.tsx` | The expanded tile, the shared task card (done-list always visible), the project board. |
 | `components/home/NewTask.tsx`, `lib/image-refs.ts` | The New task sheet (long brief, images, saved draft); image-path parsing shared with the transcript. |

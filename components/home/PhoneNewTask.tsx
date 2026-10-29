@@ -17,7 +17,7 @@ import Composer from "@/components/Composer";
 import { useBackLayer } from "@/lib/use-back";
 import { dropImageRef, imageRefs, imageUrl } from "@/lib/image-refs";
 import { K, mix } from "@/app/today/ui";
-import { guessProject, startAsk } from "@/lib/ask";
+import { guessProject, startInBackground } from "@/lib/ask";
 import { useProjectFilter } from "@/lib/project-filter";
 import { useSetting } from "@/lib/use-settings";
 import { useThreads } from "@/lib/use-threads";
@@ -47,8 +47,6 @@ function PhoneNewTask({ onClose }: { onClose: () => void }) {
   const [text, setText] = useState(() => { try { return localStorage.getItem(DRAFT) ?? ""; } catch { return ""; } });
   const [picked, setPicked] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const pickPhoto = useRef<(() => void) | null>(null);
   useBackLayer(true, onClose);
 
@@ -63,18 +61,17 @@ function PhoneNewTask({ onClose }: { onClose: () => void }) {
   const why = picked ? "" : named ? "you named it" : pf && target?.project === pf ? "your project filter" : "where you last worked";
   const imgs = imageRefs(text);
 
-  const start = async () => {
+  // Closes at once; the start runs in the background (lib/ask.ts startInBackground) and the shell's
+  // chip offers Open when it's ready — the old version held this screen up on "Starting…" for the
+  // worktree, the send and the session-id poll, then yanked him to the board.
+  const start = () => {
     const t = text.trim();
-    if (!t || !target || busy) return;
-    setBusy(true); setErr(null);
-    try {
-      const { sid } = await startAsk(target, t, { mode: perm, model });
-      try { localStorage.removeItem(DRAFT); } catch { /* */ }
-      // startAsk opens the chat with `minami:open-chat`, which only the board listens for. From Today,
-      // Autopilot or Ideas, go to the board the way a notification link does.
-      if (sid && location.pathname !== "/") location.assign(`/?open=${encodeURIComponent(sid)}`);
-      onClose();
-    } catch (e) { setErr(`Couldn't start: ${(e as Error).message || e}. Your draft is kept.`); setBusy(false); }
+    if (!t || !target) return;
+    try { localStorage.removeItem(DRAFT); } catch { /* */ }
+    startInBackground(target, t, { mode: perm, model }, () => {
+      try { if (!localStorage.getItem(DRAFT)) localStorage.setItem(DRAFT, t); } catch { /* */ }
+    });
+    onClose();
   };
 
   if (typeof document === "undefined") return null;
@@ -84,14 +81,14 @@ function PhoneNewTask({ onClose }: { onClose: () => void }) {
     <div role="dialog" aria-label="New task" className="fixed inset-x-0 top-0 z-[80] flex h-dvh flex-col px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))]"
       style={{ background: K.bg }}>
       <div className="flex items-center gap-2 pb-2">
-        <button onClick={onClose} disabled={busy} aria-label="Close" className="-ml-1 flex h-10 w-10 items-center justify-center text-[18px]" style={{ color: K.muted }}>✕</button>
+        <button onClick={onClose} aria-label="Close" className="-ml-1 flex h-10 w-10 items-center justify-center text-[18px]" style={{ color: K.muted }}>✕</button>
         <span className="flex-1 text-center text-[11px] font-semibold uppercase tracking-[0.09em]" style={{ color: K.faint }}>New task</span>
-        <button onClick={start} disabled={!text.trim() || !target || busy}
-          className="h-9 rounded-full bg-[var(--accent-fill)] px-4 text-[14px] font-semibold text-white disabled:opacity-35">{busy ? "Starting…" : "Start"}</button>
+        <button onClick={start} disabled={!text.trim() || !target}
+          className="h-9 rounded-full bg-[var(--accent-fill)] px-4 text-[14px] font-semibold text-white disabled:opacity-35">Start</button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto py-2">
-        <Composer value={text} onChange={setText} onSubmit={start} sendOnMod roomy autoFocus disabled={busy} pickPhotoRef={pickPhoto}
+        <Composer value={text} onChange={setText} onSubmit={start} sendOnMod roomy autoFocus pickPhotoRef={pickPhoto}
           maxHeight={Math.round((typeof window !== "undefined" ? window.innerHeight : 800) * 0.6)}
           placeholder={"What needs doing, and what does done look like?\n\nLists, links, screenshots — write as much as you like."} />
         {imgs.length > 0 && (
@@ -108,10 +105,9 @@ function PhoneNewTask({ onClose }: { onClose: () => void }) {
         )}
       </div>
 
-      {err && <p className="pb-1 text-[12.5px]" style={{ color: "#ef7c7c" }}>{err}</p>}
       <div className="relative flex flex-wrap items-center gap-x-1.5 gap-y-1 pb-2 text-[12.5px]" style={{ color: K.faint }}>
         Goes to
-        <button onClick={() => setMenu((v) => !v)} disabled={busy}
+        <button onClick={() => setMenu((v) => !v)}
           className="flex max-w-[60%] items-center gap-1 rounded-xl bg-[var(--sakura)]/15 px-2.5 py-1.5 text-[13px] text-[var(--sakura)]">
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--sakura)]" /><span className="truncate">{target?.project ?? "no project yet"}</span><span className="opacity-60">▾</span>
         </button>
@@ -131,7 +127,7 @@ function PhoneNewTask({ onClose }: { onClose: () => void }) {
         )}
       </div>
       <div className="flex items-center gap-2">
-        <button onClick={() => pickPhoto.current?.()} disabled={busy} className="rounded-xl px-3 py-2 text-[13px]"
+        <button onClick={() => pickPhoto.current?.()} className="rounded-xl px-3 py-2 text-[13px]"
           style={{ background: mix(K.ink, 7), border: `1px solid ${K.line}`, color: K.ink }}>＋ Image</button>
         <span className="ml-auto text-[12px]" style={{ color: K.faint }}>{text.trim() ? "draft saved" : "opens as a chat once started"}</span>
       </div>
