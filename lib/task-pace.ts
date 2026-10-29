@@ -15,7 +15,10 @@ import type { FlowDod } from "@/lib/flow-store";
 export type Gate = "pitch" | "ok";
 export const GATE_LABEL: Record<Gate, string> = { pitch: "your pick", ok: "asks you" };
 export const GATE_HOW: Record<Gate, string> = {
-  pitch: "pitch it first — build 2–4 genuinely different versions (the pitch skill), show them, and ask Thomas to pick with AskUserQuestion. Stop there; the pick is his",
+  // "Show them" used to be read as "put the URL in the text", and the chat then asked at once. A URL in prose
+  // opens nothing for him, and the turn's closing preview block never comes while a question card is up, so
+  // he was asked to pick versions he had not seen (2026-10-29). The ready block is what puts it on his screen.
+  pitch: "pitch it first — build 2–4 genuinely different versions (the pitch skill). Then write the pitch URL in a `minami-preview-ready` block BEFORE you ask; a URL in prose shows him nothing. Only then ask Thomas to pick with AskUserQuestion. Stop there; the pick is his",
   ok: "get everything ready, then ask Thomas before doing it (AskUserQuestion) — it leaves the machine or can't be undone. Stop there",
 };
 
