@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { sendMessage } from "@/lib/agent/manager";
+import { registerTask } from "@/lib/task-report";
 import { imageBlocksFor } from "@/lib/agent/images";
 import { isolate, rehomeStrandedTranscript, restoreRecycledTree } from "@/lib/worktree";
 import { primeRepoState } from "@/lib/repo-state";
@@ -14,7 +15,7 @@ export const runtime = "nodejs";
 // separate request can't work for the first turn of a session.
 export async function POST(req: Request) {
   try {
-    const { key, cwd, message, mode, resume, hold, model, fanout, blacksmith } = await req.json();
+    const { key, cwd, message, mode, resume, hold, model, fanout, blacksmith, task } = await req.json();
     // typeof-guard before .trim(): a non-string truthy `message` (number, object, array) would otherwise
     // throw inside this try and come back as a 500 "message.trim is not a function" instead of the clean
     // 400 this validation is meant to produce.
@@ -82,6 +83,9 @@ export async function POST(req: Request) {
     // choice actually changed. An id that isn't in the catalog no longer rides through to the SDK:
     // ensureSession coerces it back to the box pin and says so in the pane (see resolveModel).
     const { sessionId } = sendMessage({ key, cwd: home, message: String(message), mode, resume, images, model: typeof model === "string" && model ? model : undefined, hold: typeof hold === "boolean" ? hold : undefined, fanout: typeof fanout === "boolean" ? fanout : undefined, blacksmith: typeof blacksmith === "boolean" ? blacksmith : undefined });
+    // Started as a task (the Ask line, New task, the phone's ＋ Task): only these become tasks (§37).
+    // The session id arrives with the SDK's init, so the record is written once it does.
+    if (task === true && !resume) registerTask(String(key), home, sessionId ?? null);
     return Response.json({ ok: true, sessionId, ...(movedTo ? { cwd: movedTo } : {}) });
   } catch (e) {
     return Response.json({ error: String((e as Error)?.message || e) }, { status: 500 });

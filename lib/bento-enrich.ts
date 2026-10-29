@@ -25,13 +25,26 @@ export type Digest = { id: string; project: string; title: string; lastPrompt: s
 // Run Haiku via the local `claude` CLI WITHOUT blocking the Node event loop. spawnSync used to freeze
 // the entire server (every request — including transcript loads) for the whole call; this returns a
 // promise so the server keeps serving while the label is computed.
-export function runHaiku(prompt: string): Promise<string> {
+// Every call is written to the headless ledger the usage board reads (lib/usage-index.ts), tagged with
+// `source`. The task layer's readers ran several Haiku calls per task per quiet and none of them showed
+// up anywhere, so their cost could not be counted (2026-10-29 sweep, §37).
+const LEDGER = process.env.MINAMI_HEADLESS_USAGE || path.join(os.homedir(), ".minami", "headless-usage.jsonl");
+function logUsage(raw: string, source: string, ms: number) {
+  try {
+    const r = JSON.parse(raw);
+    if (!r || typeof r !== "object") return;
+    fs.appendFileSync(LEDGER, JSON.stringify({ ts: Date.now(), source, cwd: DIR, model: "haiku", turns: r.num_turns, ms: r.duration_ms ?? ms, modelUsage: r.modelUsage || {} }) + "\n");
+  } catch { /* the ledger is observability; it must never fail the call */ }
+}
+
+export function runHaiku(prompt: string, source = "dashboard:bento-enrich"): Promise<string> {
+  const t0 = Date.now();
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try { child = spawn("claude", ["-p", prompt, "--model", CHEAP_MODEL, "--output-format", "json"], { cwd: DIR }); }
     catch { resolve(""); return; }
     let out = "", done = false;
-    const finish = (v: string) => { if (!done) { done = true; clearTimeout(to); resolve(v); } };
+    const finish = (v: string) => { if (!done) { done = true; clearTimeout(to); logUsage(v, source, Date.now() - t0); resolve(v); } };
     const to = setTimeout(() => { try { child.kill(); } catch { /* gone */ } finish(out); }, 90000);
     child.stdout?.on("data", (d) => { out += d; if (out.length > 8 * 1024 * 1024) finish(out); });
     child.on("error", () => finish(""));

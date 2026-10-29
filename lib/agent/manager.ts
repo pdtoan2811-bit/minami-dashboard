@@ -152,7 +152,7 @@ const PROGRESS_ENABLED = process.env.MINAMI_DASHBOARD_PROGRESS !== "0";
 // task. lib/task-report is imported lazily because it imports lib/threads, which imports this module.
 // MINAMI_DASHBOARD_TASK_TOOLS=0 turns it off (Haiku alone, as before).
 const TASK_TOOLS_ENABLED = process.env.MINAMI_DASHBOARD_TASK_TOOLS !== "0";
-const TASK_PROMPT = `Thomas tracks work as tasks on his board, each with a short done-list. If this chat belongs to one, keep it current yourself with the minami_task tools: call task_status once when you start substantive work (it says whether there is a task and lists its items), task_report {now} when you move onto an item, and task_report {done} the moment an item is actually met and checked — not planned, not promised. Tick by the number task_status lists (or the one the hand-off message names), never a guess; read the reply, and if it says an item was already met, tick the right one. If Thomas says the whole task is done, report {finished} with his words. Follow task_status's "How to run it" line: go through the open items in one go and stop only at a gated item (a look to pitch, or something to ask before doing). One short call each, no announcement in the reply. Skip all of it for quick questions or when task_status says there is no task.`;
+const TASK_PROMPT = `Thomas tracks work as tasks on his board, each with a short done-list. If this chat belongs to one, keep it current yourself with the minami_task tools: call task_status once when you start substantive work (it says whether there is a task and lists its items), task_report {now} when you move onto an item, and task_report {done} the moment an item is actually met and checked — not planned, not promised. Tick by the number task_status lists (or the one the hand-off message names), never a guess; read the reply, and if it says an item was already met, tick the right one. If Thomas says the whole task is done, report {finished} with his words. When you stop (end of a stretch of work, a question for him, before a deploy), pass {note}: two or three lines on where the task stands and what comes next, for whoever picks it up after. Follow task_status's "How to run it" line: go through the open items in one go and stop only at a gated item (a look to pitch, or something to ask before doing). One short call each, no announcement in the reply. Skip all of it for quick questions or when task_status says there is no task.`;
 const taskMcpServer = (s: { sessionId: string | null }) => {
   const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
   return createSdkMcpServer({
@@ -166,6 +166,7 @@ const taskMcpServer = (s: { sessionId: string | null }) => {
         undone: z.array(z.number().int()).optional().describe("items ticked earlier that are broken or reverted"),
         add: z.array(z.string()).optional().describe("missing checkable outcomes, under 10 words each"),
         finished: z.string().optional().describe("Thomas's words saying the whole task is done, or why it is finished"),
+        note: z.string().optional().describe("where the task stands for whoever picks it up next: done so far, next step, blockers (replaces the last note)"),
       }, async (a) => text((await import("../task-report")).taskReport(s.sessionId, a))),
     ],
   });

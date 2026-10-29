@@ -38,14 +38,15 @@ export function splitAsks(text: string): string[] {
 
 /** Start a chat in a project and open it as a bento tab. Its own worktree when the folder is a repo,
  *  like a Today hand-off — a fresh ask beside other running chats would otherwise share their tree. */
-export async function startAsk(p: ProjectRef, text: string, opts: { mode?: string; model?: string | null; open?: boolean | "quiet"; onStep?: (step: "sent") => void } = {}): Promise<{ key: string; sid: string | null }> {
+/** `task: false` for a chat that isn't a new task: the board's ▶ Start joins its To-do card instead. */
+export async function startAsk(p: ProjectRef, text: string, opts: { mode?: string; model?: string | null; open?: boolean | "quiet"; onStep?: (step: "sent") => void; task?: boolean } = {}): Promise<{ key: string; sid: string | null }> {
   let cwd = p.cwd;
   try {
     const w = await (await fetch("/api/worktree", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "isolate", cwd: p.cwd, label: "chat" }) })).json();
     if (w?.isolated?.dir) cwd = w.isolated.dir;
   } catch { /* the shared folder still works */ }
   const key = `ask-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, cwd, message: text, mode: opts.mode, model: opts.model ?? undefined }) });
+  const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, cwd, message: text, mode: opts.mode, model: opts.model ?? undefined, task: opts.task !== false }) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error || `send ${r.status}`);
   opts.onStep?.("sent");
   if (opts.open === false) return { key, sid: null };

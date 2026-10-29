@@ -23,7 +23,14 @@ export type FlowDod = { id: string; t: string; done: boolean; at?: number; by?: 
    *  it leaves the machine, null = the chat just does it. Absent = not classified yet (runs like null). */
   gate?: "pitch" | "ok" | null; gateWhy?: string;
   /** He set the gate by tapping it: Haiku never reclassifies it. */
-  gateBy?: "thomas" };
+  gateBy?: "thomas";
+  /** What made a `by: "minami"` tick: the task's own chat (task_report), git / the live build, or the
+   *  Today to-do it carries. Minami's reading of a chat never ticks (2026-10-29): see `seen`. */
+  src?: "chat" | "git" | "today";
+  /** Minami's reading thinks this open item is met, with what it saw. A suggestion only: it doesn't count
+   *  as progress and never closes the task. His tap turns it into a tick. Thomas, 2026-10-29: done is the
+   *  chat's own report plus artifacts — 36% of closed tasks had closed with items still open. */
+  seen?: { why: string; quote?: string; quoteBy?: "Thomas" | "Minami"; at: number } };
 /** The one thing a quiet task waits on him for (§37). `q` is short and plain ("Merge and deploy it?"),
  *  `yes` the button label, `reply` what that button sends to the chat in his voice. `ship`: it is about
  *  merging / deploying / publishing, so a list without a ship item gets one. */
@@ -80,6 +87,13 @@ export type FlowThread = {
   today?: { date: string; kind: "todo" | "loop"; id: string };
   /** When he last pressed Reopen: a Today tick older than this doesn't close it again. */
   reopenedAt?: number;
+  /** How the task came to be (2026-10-29: only tasks he starts are tasks). "ask" = the Ask line / New
+   *  task / phone ＋ Task, "board" = a To-do card, "named" = he named a chat, "today" = a Today hand-off,
+   *  "legacy" = derived from any chat before this rule (kept until it ages out). */
+  origin?: "ask" | "board" | "named" | "today" | "legacy";
+  /** Where the task stands, in the chat's words (task_report `note`), stored as note.md beside the record.
+   *  What a chat picking the task up the next day reads first. */
+  note?: string;
 };
 /** `dismissed`: sessions whose "Name this thread?" offer was waved off — asked once, never again. */
 export type FlowState = { v: 2; threads: FlowThread[]; dismissed: string[] };
@@ -87,7 +101,34 @@ export type FlowState = { v: 2; threads: FlowThread[]; dismissed: string[] };
 const empty = (): FlowState => ({ v: 2, threads: [], dismissed: [] });
 export const fid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-export function readFlow(): FlowState {
+// ── Storage: one folder per task (§37, "task = contract + log", 2026-10-29) ───────────────────────
+// Until 2026-10-29 every task lived in one flow.json that every writer read, changed and rewrote whole.
+// Two writers on two different tasks (Haiku's done-list landing while a chat's task_report ticked
+// another) could each write back the other's stale copy. And nothing said WHO changed a task, so a wrong
+// tick or a wrong close could only be explained by reading transcripts.
+//
+//   <TASKS>/<id>/task.json    the record (the FlowThread minus `note`), rewritten only when it changed
+//   <TASKS>/<id>/events.jsonl append-only: one line per change, with who made it (see `Actor`)
+//   <TASKS>/<id>/note.md      where the task stands, in the chat's words (task_report `note`)
+//   <TASKS>/_meta.json        { v: 3, dismissed, migratedAt }
+//
+// The API is unchanged (readFlow / mutateFlow / FlowState), so every caller works as before. A mutation
+// now writes only the tasks it changed, so writers on different tasks no longer clobber each other.
+// State is still the snapshot, not a fold of the log: the log is the audit trail for now.
+const TASKS = process.env.MINAMI_TASKS_DIR || path.join(path.dirname(FILE), "tasks");
+const META = path.join(TASKS, "_meta.json");
+/** Who made a change, written on every event. "chat" = the task's own chat (task_report), "reader" =
+ *  Minami's Haiku reading of a chat, "sensor" = git / the live build, "runner" = auto-continue. */
+export type Actor = "thomas" | "chat" | "reader" | "sensor" | "today" | "runner" | "start" | "server";
+type Meta = { v: 3; dismissed: string[]; migratedAt: number };
+
+function atomic(file: string, body: string) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, body);
+  fs.renameSync(tmp, file);
+}
+
+function readLegacy(): FlowState {
   try {
     const j = JSON.parse(fs.readFileSync(FILE, "utf8"));
     // v1 was the task/lead/sub model (retired the same day it was built); nothing in it carries over.
@@ -96,9 +137,87 @@ export function readFlow(): FlowState {
     for (const t of s.threads) if (t.dodSuggested?.length && !t.dod) {
       t.dod = t.dodSuggested.map((x, i) => ({ id: t.id + "-" + i, t: x, done: false })); t.dodPending = true; delete t.dodSuggested;
     }
-    s.threads = oneOwnerPerChat(s.threads);
     return s;
   } catch { return empty(); }
+}
+
+// Once, on the first read with no _meta.json: every flow.json record becomes a folder. flow.json is left
+// where it is, untouched, so a rollback to the old build finds its store as it was.
+function migrate() {
+  const old = readLegacy();
+  fs.mkdirSync(TASKS, { recursive: true });
+  // Every flow.json record was derived from a chat or named; none says it was started as a task. They
+  // stay ("legacy") so nothing open vanishes, and derived ones still age out after a week.
+  for (const t of oneOwnerPerChat(old.threads)) writeTask({ ...t, origin: t.origin ?? (t.today ? "today" : t.queued ? "board" : t.auto ? "legacy" : "named") }, null, "server", "migrated from flow.json");
+  atomic(META, JSON.stringify({ v: 3, dismissed: old.dismissed, migratedAt: Date.now() } satisfies Meta));
+}
+
+function readMeta(): Meta {
+  if (!fs.existsSync(META)) migrate();
+  try { return JSON.parse(fs.readFileSync(META, "utf8")); } catch { return { v: 3, dismissed: [], migratedAt: 0 }; }
+}
+
+function readTask(id: string): FlowThread | null {
+  try {
+    const t = JSON.parse(fs.readFileSync(path.join(TASKS, id, "task.json"), "utf8")) as FlowThread;
+    try { const n = fs.readFileSync(path.join(TASKS, id, "note.md"), "utf8").trim(); if (n) t.note = n; } catch { /* no note yet */ }
+    return t;
+  } catch { return null; }
+}
+
+export function readFlow(): FlowState {
+  const meta = readMeta();
+  const threads: FlowThread[] = [];
+  let ids: string[] = [];
+  try { ids = fs.readdirSync(TASKS).filter((x) => !x.startsWith(".") && !x.startsWith("_")); } catch { /* none yet */ }
+  for (const id of ids) { const t = readTask(id); if (t) threads.push(t); }
+  // Newest first, the order flow.json kept (writers `unshift`ed), which callers' "first claim" rules assume.
+  threads.sort((a, b) => b.createdAt - a.createdAt);
+  return { v: 2, threads: oneOwnerPerChat(threads), dismissed: meta.dismissed ?? [] };
+}
+
+/** What changed, in a line a person can read: items ticked / unticked / added / suggested, and closes. */
+function diff(a: FlowThread | null, b: FlowThread): Record<string, unknown> {
+  if (!a) return { created: true, title: b.title, origin: b.origin };
+  const out: Record<string, unknown> = {};
+  const was = new Map((a.dod ?? []).map((d) => [d.id, d]));
+  const ticked = [], unticked = [], added = [], seen = [];
+  for (const d of b.dod ?? []) {
+    const p = was.get(d.id);
+    if (!p) { added.push(d.t); if (d.done) ticked.push({ t: d.t, why: d.why, src: d.src }); continue; }
+    if (d.done && !p.done) ticked.push({ t: d.t, why: d.why, src: d.src });
+    if (!d.done && p.done) unticked.push(d.t);
+    if (d.seen && d.seen.at !== p.seen?.at) seen.push({ t: d.t, why: d.seen.why });
+  }
+  if (ticked.length) out.ticked = ticked;
+  if (unticked.length) out.unticked = unticked;
+  if (added.length) out.added = added;
+  if (seen.length) out.seen = seen;
+  if (b.archived && !a.archived) out.closed = { auto: !!b.autoDone, why: b.closedWhy };
+  if (!b.archived && a.archived) out.reopened = true;
+  if (b.note !== a.note) out.note = true;
+  if (b.step?.q !== a.step?.q) out.step = b.step?.q ?? null;
+  if (b.title !== a.title) out.title = b.title;
+  const keys = (Object.keys(b) as (keyof FlowThread)[]).filter((k) => !["dod", "updatedAt", "note", "step", "title", "archived"].includes(k) && JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+  if (keys.length) out.fields = keys;
+  return out;
+}
+
+function writeTask(t: FlowThread, before: FlowThread | null, by: Actor, why?: string) {
+  const dir = path.join(TASKS, t.id);
+  fs.mkdirSync(dir, { recursive: true });
+  const { note, ...rec } = t;
+  atomic(path.join(dir, "task.json"), JSON.stringify(rec, null, 1));
+  if ((note ?? "") !== (before?.note ?? "")) atomic(path.join(dir, "note.md"), (note ?? "") + "\n");
+  const d = diff(before, t);
+  if (Object.keys(d).length) fs.appendFileSync(path.join(dir, "events.jsonl"), JSON.stringify({ at: Date.now(), by, ...(why ? { why } : {}), ...d }) + "\n");
+}
+
+/** Every change a task has had, oldest first: who, when, what. */
+export function taskEvents(id: string): Record<string, unknown>[] {
+  try {
+    return fs.readFileSync(path.join(TASKS, id, "events.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  } catch { return []; }
 }
 
 /** The stored record for a task view, or undefined. A derived view ("s:<session>") never has a record
@@ -128,13 +247,17 @@ function oneOwnerPerChat(threads: FlowThread[]): FlowThread[] {
   });
 }
 
-// Write-then-rename with a per-process tmp name: two servers writing at once each land a whole file,
-// never an interleaving of both.
-function writeFlow(s: FlowState) {
-  fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  const tmp = `${FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(s, null, 1));
-  fs.renameSync(tmp, FILE);
+// Only the tasks that changed are written (write-then-rename, per-process tmp name). A task removed from
+// `threads` (a To-do card dropped) moves to `.trash/`, never deleted outright.
+function writeFlow(before: FlowState, s: FlowState, by: Actor, why?: string) {
+  const old = new Map(before.threads.map((t) => [t.id, t]));
+  const snap = new Map(before.threads.map((t) => [t.id, JSON.stringify(t)]));
+  for (const t of s.threads) if (snap.get(t.id) !== JSON.stringify(t)) writeTask(t, old.get(t.id) ?? null, by, why);
+  const keep = new Set(s.threads.map((t) => t.id));
+  for (const t of before.threads) if (!keep.has(t.id)) {
+    try { fs.mkdirSync(path.join(TASKS, ".trash"), { recursive: true }); fs.renameSync(path.join(TASKS, t.id), path.join(TASKS, ".trash", t.id)); } catch { /* already gone */ }
+  }
+  if (JSON.stringify(before.dismissed) !== JSON.stringify(s.dismissed)) atomic(META, JSON.stringify({ ...readMeta(), dismissed: s.dismissed }));
 }
 
 /** The one way a task is moved to Done. Every close path used to set the fields by hand, and none
@@ -151,10 +274,12 @@ export function closeTask(t: FlowThread, o: { auto?: boolean; why?: string } = {
   if (t.dod) t.dod = t.dod.map((d) => (d.doing ? (({ doing: _, ...r }) => r)(d) : d));
 }
 
-/** Read, change, write: the only way anything mutates the file. Returns what was written. */
-export function mutateFlow(f: (s: FlowState) => void): FlowState {
-  const s = readFlow();
+/** Read, change, write: the only way anything mutates the store. `by` is written on each task's event
+ *  line, so a wrong tick or close can be traced to who made it. Returns what was written. */
+export function mutateFlow(f: (s: FlowState) => void, by: Actor = "server", why?: string): FlowState {
+  const before = readFlow();
+  const s: FlowState = structuredClone(before);
   f(s);
-  writeFlow(s);
+  writeFlow(before, s, by, why);
   return s;
 }

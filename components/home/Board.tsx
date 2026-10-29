@@ -114,7 +114,7 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
   const start = async (t: ThreadView) => {
     setStarting((s) => new Set(s).add(t.id));
     try {
-      const r = await startAsk({ project, cwd: t.cwd || cwd, at: 0 }, t.title, { mode: perm, model });
+      const r = await startAsk({ project, cwd: t.cwd || cwd, at: 0 }, t.title, { mode: perm, model, task: false });
       if (r.sid) await threadPost({ action: "start", id: t.id, sessionId: r.sid });
       else setNote("Started, but the chat's id didn't arrive — it will show up under Paused or Working.");
     } catch (e) { setNote(`Couldn't start: ${(e as Error).message}`); }

@@ -109,6 +109,8 @@ export type ThreadView = {
   sessions: { id: string; cwd: string }[];
   latest: string; at: number; state: ThreadState; line: string; asks: number;
   dod?: FlowDod[];
+  /** Where it stands, in the chat's words (task_report `note`). */
+  note?: string;
   /** What it waits on him for now (TaskStep): only while no newer activity than the reading. */
   step?: TaskStep;
   /** The turn is parked on him mid-flight (AskUserQuestion, plan review): state is "waiting", but the
@@ -161,8 +163,13 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
 
   const groups = new Map<string, { stored?: (typeof store.threads)[number]; ids: Set<string> }>();
   for (const t of store.threads) groups.set(t.id, { stored: t, ids: new Set(t.sessions.filter((sid) => claimed.get(sid) === t.id)) });
+  // Only tasks he started are tasks (Thomas's pick, 2026-10-29): a chat joins a view when a stored task
+  // claims it or the chat it continues. Every other chat he typed in used to become a derived "s:" task,
+  // so test pings, merge resolvers and "pull the latest" chats filled the board (≥11 of 76 records).
+  // Those chats stay in the topic's chat list, and naming one ("name it?") makes it a task.
   for (const m of human) {
-    const key = claimed.get(m.id) ?? claimed.get(root(m.id)) ?? "s:" + root(m.id);
+    const key = claimed.get(m.id) ?? claimed.get(root(m.id));
+    if (!key) continue;
     const g = groups.get(key) ?? { ids: new Set<string>() };
     g.ids.add(m.id); groups.set(key, g);
   }
@@ -194,7 +201,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     if (st?.archived && !revived) {
       // Done keeps two weeks, so a finished task is still there to reopen the next week.
       if ((st.doneAt ?? st.updatedAt) > Date.now() - 14 * 86_400_000) done.push({
-        id, stored: true, title: clip(st.title, 90), project: st.project || ms[ms.length - 1].project, cwd: st.cwd,
+        id, stored: true, title: clip(st.title || titleOf(ms[ms.length - 1]), 90), project: st.project || ms[ms.length - 1].project, cwd: st.cwd,
         sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: ms[ms.length - 1].id, at: ms[ms.length - 1].lastActivity,
         state: "idle", line: "", asks: 0, archived: true, doneAt: st.doneAt ?? st.updatedAt, autoDone: !!st.autoDone, closedWhy: st.closedWhy, ...(st.dod ? { dod: st.dod } : {}),
       });
@@ -237,6 +244,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
       line: clip(need ? need.summary : state === "working" ? (last.now || tail || "working") : tail || last.lastPrompt || "", 140),
       asks: ms.reduce((n, m) => n + (m.askCount ?? 0), 0),
       ...(g.stored?.dod ? { dod: g.stored.dod } : {}),
+      ...(g.stored?.note ? { note: g.stored.note } : {}),
       ...(step && !need ? { step } : {}),
       ...(need ? { ask: need.summary } : {}),
       wait,

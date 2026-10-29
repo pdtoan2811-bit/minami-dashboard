@@ -87,7 +87,7 @@ function chatOf(v: ThreadView): string {
 async function suggest(v: ThreadView) {
   const firstAsks = v.sessions.length ? (listSessions().find((x) => x.id === v.sessions[0].id)?.asks ?? []).slice(0, 3) : [];
   const prompt = `A piece of work is called "${v.title}" (project ${v.project}).\n${firstAsks.length ? `It started with:\n${firstAsks.map((a) => "- " + a.slice(0, 300)).join("\n")}\n` : ""}${v.sessions.length ? `The end of its chat:\n${chatOf(v).slice(-3000)}\n` : ""}\nWrite its Definition of Done: 2 to 4 outcomes Thomas can check by looking (a page renders, a number is right, a file exists, it is merged). Each under 10 words, no verbs in the imperative. If it changes code in a repo, the last outcome is the change merged and live (e.g. "Merged and deployed"): finished work that sits on a branch isn't done. If the work needs a look decided (see "pitch" below), make the first outcome Thomas's pick of a version.\n\n${GATE_RULES}\n\nReply with ONLY a JSON array: [{"t":"<outcome>","gate":"pitch"|"ok"|null,"why":"<under 8 words, only when gated>"}]`;
-  const arr = haikuJSON(await runHaiku(prompt));
+  const arr = haikuJSON(await runHaiku(prompt, "dashboard:task-suggest"));
   // Strings are still accepted (an older-style answer): they come in unclassified and get gated later.
   const items = (Array.isArray(arr) ? arr : []).map((x) => typeof x === "string" ? { t: x.trim() } : { t: String((x as { t?: unknown })?.t ?? "").trim(), gate: gateFor(String((x as { t?: unknown })?.t ?? ""), parseGate((x as { gate?: unknown })?.gate)), why: String((x as { why?: unknown })?.why ?? "").slice(0, 80) })
     .filter((x) => x.t).slice(0, 4);
@@ -98,7 +98,7 @@ async function suggest(v: ThreadView) {
     if (!items.length) { t.dodTriedAt = Date.now(); return; }
     t.dod = items.map((x, i): FlowDod => ({ id: t!.id + "-" + i, t: x.t, done: false, ...("gate" in x ? { gate: x.gate, ...(x.gate && x.why ? { gateWhy: x.why } : {}) } : {}) }));
     t.evalAt = 0; // tick right away against what the chat already says
-  });
+  }, "reader");
 }
 
 /** Tick the items the chat shows are met, and note which open item the chat is on now. Never unticks
@@ -108,8 +108,8 @@ async function evaluate(v: ThreadView, focusOnly = false) {
   const dod = v.dod ?? [];
   const chat = chatOf(v);
   if (!dod.length || !chat) { mutateFlow((s) => { const t = findStored(s, v); if (t) { if (focusOnly) t.focusAt = Date.now(); else t.evalAt = v.at; } }); return; }
-  const prompt = `Definition of Done for "${v.title}":\n${dod.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\nThe end of the work chat:\n${chat}\n\nWhich items does the chat show are actually met (done and confirmed, not planned or promised)? For each met item, copy the evidence word for word from the chat (one sentence, under 30 words, no paraphrase) and say who said it. Also: which NOT-met item is the end of the chat working on or asking about right now (0 if none, or if it's about something else)? And list any item the chat says was done but is now broken or reverted (usually none). Finally: did Thomas say the WHOLE task is done or to close it, or did the chat end by declaring the whole task finished with nothing left to do? Only the whole task counts, never one step; if yes, copy those words exactly. Reply with ONLY JSON: {"met":[{"n":<item number>,"why":"<under 12 words: what in the chat shows it>","quote":"<exact words from the chat>","by":"Thomas"|"Minami"}],"now":<item number or 0>,"undone":[<item numbers>],"finished":<"exact words" or null>}`;
-  const j = haikuJSON(await runHaiku(prompt)) as { met?: { n?: number; why?: string }[]; now?: number } | null;
+  const prompt = `Definition of Done for "${v.title}":\n${dod.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\nThe end of the work chat:\n${chat}\n\nWhich items does the chat show are actually met (done and confirmed, not planned or promised)? For each met item, copy the evidence word for word from the chat (one sentence, under 30 words, no paraphrase) and say who said it. Also: which NOT-met item is the end of the chat working on or asking about right now (0 if none, or if it's about something else)? And list any item the chat says was done but is now broken or reverted (usually none). Finally: did Thomas say the WHOLE task is done or to close it, or did the chat end by declaring the whole task finished with nothing left to do? Only the whole task counts, never one step; if yes, copy those words exactly. Reply with ONLY JSON: {"met":[{"n":<item number>,"why":"<under 12 words: what in the chat shows it>","quote":"<exact words from the chat>","by":"Thomas"|"Minami"}],"now":<item number or 0>,"undone":[<item numbers>],"finished":<"exact words" or null>,"finishedBy":"Thomas"|"Minami"|null}`;
+  const j = haikuJSON(await runHaiku(prompt, focusOnly ? "dashboard:task-focus" : "dashboard:task-evaluate")) as { met?: { n?: number; why?: string }[]; now?: number } | null;
   const nowIdx = typeof j?.now === "number" && j.now > 0 ? j.now - 1 : -1;
   // "It's done" said in the chat closes the task even with items open (Thomas, 2026-10-28: "I told it is
   // done but it has no way to mark itself as done"). Same evidence rule as the ticks: the words must
@@ -122,7 +122,12 @@ async function evaluate(v: ThreadView, focusOnly = false) {
   // would be worse than none.
   const norm = (x: string) => x.toLowerCase().replace(/[“”"'‘’`*_]/g, "").replace(/\s+/g, " ").trim();
   const hay = norm(chat);
-  const finished = fin.length >= 4 && fin !== "null" && hay.includes(norm(fin)) ? fin : null;
+  // Only HIS words close a task from a reading: the chat itself closes through task_report `finished`.
+  const his = norm(chat.split("\n\n").filter((l) => l.startsWith("Thomas:")).join("\n"));
+  // Two words at least: a one-word "Done." matched inside his own brief ("…then reply done.") and closed a
+  // test task on its first quiet (found on :3001, 2026-10-29).
+  const byHim = (j as { finishedBy?: unknown } | null)?.finishedBy === "Thomas";
+  const finished = byHim && fin.split(/\s+/).length >= 2 && fin !== "null" && his.includes(norm(fin)) ? fin : null;
   const ev = new Map<number, { quote?: string; quoteBy?: "Thomas" | "Minami" }>();
   for (const x of (j as { met?: { n?: number; why?: string; quote?: string; by?: string }[] } | null)?.met ?? []) {
     if (typeof x?.n !== "number") continue;
@@ -139,25 +144,17 @@ async function evaluate(v: ThreadView, focusOnly = false) {
     const pinned = t.dod.some((d) => !d.done && d.doing && Date.now() - d.doing < 10 * 60e3);
     if (!pinned) t.dod = t.dod.map((d, i) => (i === nowIdx && !d.done ? { ...d, doing: d.doing ?? Date.now() } : d.doing ? (({ doing: _, ...r }) => r)(d) : d));
     if (focusOnly) return;
-    const was = allDone(t.dod);
+    // A reading SUGGESTS, it never ticks (Thomas's pick, 2026-10-29): done is the chat's own task_report
+    // plus artifacts (git, the live build, a Today check). 200 of 204 ticks had been this reading, and
+    // 36% of closed tasks closed with items still open. A met item gets `seen` — shown as "looks met",
+    // one tap from him makes it a tick — and an item the chat says broke loses it.
     t.dod = t.dod.map((d, i): FlowDod => {
-      if (d.done && d.by !== "minami") return d; // his tick stands
-      if (met.has(i)) return { id: d.id, t: d.t, ...gateOf(d), done: true, by: "minami", why: met.get(i), quote: ev.get(i)?.quote, quoteBy: ev.get(i)?.quoteBy, at: d.done ? d.at : Date.now() };
-      // Minami's own tick also stands unless the chat now says that thing is broken (`undone`). It used
-      // to be unticked whenever the item wasn't in this reading — but Minami reads only the END of the
-      // chat, so every tick fell off once the evidence scrolled out of the window (seen 2026-10-28: a
-      // 3/4 task went to 0/4 an hour later with nothing undone).
-      return d.by === "minami" && undone.has(i) ? { id: d.id, t: d.t, ...gateOf(d), done: false } : d;
+      if (d.done) return d;
+      if (met.has(i)) return { ...d, seen: { why: met.get(i) || "the chat shows it", ...(ev.get(i) ?? {}), at: d.seen?.at ?? Date.now() } };
+      return undone.has(i) && d.seen ? (({ seen: _, ...r }) => r)(d) : d;
     });
-    // Close only on a quiet chat: one that is still working or ends on a question to him is not done,
-    // whatever the list says (2026-10-29). Met-while-busy holds the close (`closeHeld`, also set by the
-    // chat's own task_report) for the next reading of an idle chat.
-    if (!t.archived) {
-      if (v.state !== "idle") { if (!was && allDone(t.dod)) t.closeHeld = true; }
-      else { closeIfDone(t, was && !t.closeHeld); delete t.closeHeld; }
-    }
     if (!t.archived && v.state === "idle" && finished && finished !== t.closedWhy) closeTask(t, { auto: true, why: finished });
-  });
+  }, "reader");
 }
 
 /** What a quiet task waits on him for: the question its chat ended on, or the plain next step the chat
@@ -169,7 +166,7 @@ async function readStep(v: ThreadView) {
   const last = v.sessions[v.sessions.length - 1];
   const chat = last ? recentText(last.id, last.cwd, 3500) : "";
   const open = (v.dod ?? []).filter((d) => !d.done).map((d) => d.t);
-  const j = !chat ? null : haikuJSON(await runHaiku(`The end of a work chat between Thomas and his assistant Minami, on "${v.title}":\n${chat}\n\n${open.length ? `Still open on its done-list: ${open.join(" · ")}\n\n` : ""}Minami has stopped. Is it waiting on Thomas for something before the work can go on? Either (a) its last reply asks him a question or for a go-ahead (e.g. "Should I merge and deploy it?", "Which version?"), or (b) the work is finished and checked but not shipped yet (committed on a branch but not merged, merged but not deployed, drafted but not published) and the reply says so. If neither (it is still working through items on its own, or everything is shipped), answer null.\nReply with ONLY JSON, either null or {"q":"<what it waits on, as a short plain question, under 9 words>","yes":"<button label for going ahead, 1-3 words, e.g. 'Merge & deploy'>","reply":"<the message that button sends to Minami, in Thomas's voice, under 15 words>","ship":<true if it is about merging, deploying, publishing or releasing>}`));
+  const j = !chat ? null : haikuJSON(await runHaiku(`The end of a work chat between Thomas and his assistant Minami, on "${v.title}":\n${chat}\n\n${open.length ? `Still open on its done-list: ${open.join(" · ")}\n\n` : ""}Minami has stopped. Is it waiting on Thomas for something before the work can go on? Either (a) its last reply asks him a question or for a go-ahead (e.g. "Should I merge and deploy it?", "Which version?"), or (b) the work is finished and checked but not shipped yet (committed on a branch but not merged, merged but not deployed, drafted but not published) and the reply says so. If neither (it is still working through items on its own, or everything is shipped), answer null.\nReply with ONLY JSON, either null or {"q":"<what it waits on, as a short plain question, under 9 words>","yes":"<button label for going ahead, 1-3 words, e.g. 'Merge & deploy'>","reply":"<the message that button sends to Minami, in Thomas's voice, under 15 words>","ship":<true if it is about merging, deploying, publishing or releasing>}`, "dashboard:task-step"));
   const ok = j && typeof j === "object" && typeof (j as TaskStep).q === "string" && (j as TaskStep).q.trim() ? (j as TaskStep) : null;
   const step: TaskStep | undefined = ok ? { q: ok.q.trim().slice(0, 90), yes: String(ok.yes || "Yes, go ahead").trim().slice(0, 24), reply: String(ok.reply || "Yes, go ahead.").trim().slice(0, 200), ...(ok.ship === true ? { ship: true } : {}), at: v.at } : undefined;
   mutateFlow((s) => {
@@ -181,7 +178,7 @@ async function readStep(v: ThreadView) {
     // null — merging and deploying his own tools runs on its own (GATE_RULES); a publish gets gated by
     // `classify` like any added item.
     if (step?.ship && t.dod?.length && !t.dod.some((d) => SHIP_ITEM.test(d.t))) t.dod = insertItems(t.dod, [{ id: fid(), t: "Merged and deployed", done: false }]);
-  });
+  }, "reader");
 }
 
 /** Gate the open items that have none yet: a list written before gates existed, or items added by hand or
@@ -190,7 +187,7 @@ async function classify(v: ThreadView) {
   const todo = (v.dod ?? []).filter((d) => !d.done && d.gate === undefined);
   if (!todo.length) return;
   const prompt = `Work: "${v.title}" (project ${v.project}). Its open done-items:\n${todo.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\n${GATE_RULES}\n\nReply with ONLY JSON: [{"n":<item number>,"gate":"pitch"|"ok"|null,"why":"<under 8 words, only when gated>"}] with one entry per item.`;
-  const j = haikuJSON(await runHaiku(prompt));
+  const j = haikuJSON(await runHaiku(prompt, "dashboard:task-gate"));
   const got = new Map<string, { gate: "pitch" | "ok" | null; why: string }>();
   for (const x of Array.isArray(j) ? j : []) {
     const n = (x as { n?: unknown })?.n;
@@ -201,7 +198,7 @@ async function classify(v: ThreadView) {
     if (!t?.dod) return;
     t.gateTriedAt = Date.now();
     t.dod = t.dod.map((d) => { const g = got.get(d.id); return g && d.gate === undefined ? { ...d, gate: g.gate, ...(g.gate && g.why ? { gateWhy: g.why } : {}) } : d; });
-  });
+  }, "reader");
 }
 
 // ── Auto-continue ────────────────────────────────────────────────────────────────────────────────
@@ -265,7 +262,7 @@ function maybeContinue(id: string) {
   if (Date.now() - v.at < SETTLE_MS) { settling.add(id); setTimeout(() => { settling.delete(id); maybeContinue(id); }, SETTLE_MS); return; }
   const message = runMessage(v.title, st.dod);
   if (!message) return;
-  mutateFlow((s) => { const t = s.threads.find((x) => x.id === id); if (t) { t.nudgeAt = Date.now(); t.nudges = nudges + 1; t.nudgeMet = met; } });
+  mutateFlow((s) => { const t = s.threads.find((x) => x.id === id); if (t) { t.nudgeAt = Date.now(); t.nudges = nudges + 1; t.nudgeMet = met; } }, "runner");
   try { sendMessage({ key: owner.key, cwd: owner.cwd, message: `(Minami, auto-continue) ${message}`, ...("resume" in owner ? { resume: owner.resume } : {}) }); } catch { /* the next quiet tries again within the budget */ }
 }
 
@@ -281,12 +278,12 @@ function tickShipped(v: ThreadView) {
     if (!t) return;
     const was = allDone(t.dod);
     if (t.step?.ship) delete t.step;
-    if (t.dod) t.dod = t.dod.map((d) => (!d.done && SHIP_ITEM.test(d.t) ? { id: d.id, t: d.t, ...gateOf(d), done: true, by: "minami", why: "in main and in the live build (git)", at: Date.now() } : d));
+    if (t.dod) t.dod = t.dod.map((d) => (!d.done && SHIP_ITEM.test(d.t) ? { id: d.id, t: d.t, ...gateOf(d), done: true, by: "minami", src: "git" as const, why: "in main and in the live build (git)", at: Date.now() } : d));
     // Not idle is the usual case here: the card's own ship step ("Merge and deploy?") makes it "waiting".
     // Ticking the last item then used to close nothing AND hold nothing, and with the step gone and no
     // ship item left this never ran again — the task sat at "All met, closes itself" for good (§37).
     if (!t.archived) { if (v.state === "idle") closeIfDone(t, was); else if (!was && allDone(t.dod)) t.closeHeld = true; }
-  });
+  }, "sensor");
 }
 
 function ensure(ids: string[]) {
@@ -308,7 +305,7 @@ function ensure(ids: string[]) {
     // hold was never read and the task stayed open with every item met (🐛 2026-10-29, §37). Waits for
     // the step reading of this quiet, so a chat that ended on a question to him stays open.
     if (st?.closeHeld && !st.archived && v.state === "idle" && allDone(st.dod) && (st.stepAt ?? 0) >= v.at) {
-      mutateFlow((s) => { const t = findStored(s, v); if (t?.closeHeld && !t.archived && allDone(t.dod)) closeTask(t, { auto: true }); });
+      mutateFlow((s) => { const t = findStored(s, v); if (t?.closeHeld && !t.archived && allDone(t.dod)) closeTask(t, { auto: true }); }, "server", "every item met and the chat is quiet");
       continue;
     }
     if (v.dod?.length && v.state === "idle") maybeContinue(v.id);
@@ -407,7 +404,7 @@ export async function POST(req: Request) {
         const existing = view?.stored ? s.threads.find((t) => t.id === view.id) : undefined;
         if (existing) { existing.title = title; existing.auto = false; existing.updatedAt = Date.now(); id = existing.id; return; }
         id = fid();
-        s.threads.unshift({ id, title, project: topicOf(baseCwd(m.cwd)).project || m.project, cwd: baseCwd(m.cwd), sessions: ids, createdAt: Date.now(), updatedAt: Date.now() });
+        s.threads.unshift({ id, title, project: topicOf(baseCwd(m.cwd)).project || m.project, cwd: baseCwd(m.cwd), sessions: ids, origin: "named", createdAt: Date.now(), updatedAt: Date.now() });
       });
       const v = threads(30).threads.find((t) => t.id === id);
       if (v && !v.dod?.length) enqueue(id, () => suggest(v));
@@ -417,7 +414,7 @@ export async function POST(req: Request) {
       const title = String(b.title || "").trim().slice(0, 140);
       if (!title || !b.project || !b.cwd) throw new Error("title, project and cwd");
       const id = fid();
-      mutateFlow((s) => { s.threads.unshift({ id, title, project: b.project, cwd: baseCwd(b.cwd), sessions: [], queued: true, createdAt: Date.now(), updatedAt: Date.now() }); });
+      mutateFlow((s) => { s.threads.unshift({ id, title, project: b.project, cwd: baseCwd(b.cwd), sessions: [], queued: true, origin: "board", createdAt: Date.now(), updatedAt: Date.now() }); });
       const v = threads().threads.find((t) => t.id === id);
       if (v) enqueue(id, () => suggest(v));
       return Response.json({ ok: true, id });
@@ -436,7 +433,7 @@ export async function POST(req: Request) {
         case "dismiss": if (!s.dismissed.includes(b.sessionId)) s.dismissed = [...s.dismissed, b.sessionId].slice(-500); break;
         case "dod.accept": if (t) t.dodPending = false; break;
         // His tap is his: it clears Minami's mark either way, so Minami won't untick it later.
-        case "dod.toggle": if (t?.dod) { const was = allDone(t.dod); t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, ...gateOf(d), done: !d.done, at: Date.now() } : d)); t.dodPending = false; if (!t.archived) closeIfDone(t, was); } break;
+        case "dod.toggle": if (t?.dod) { const was = allDone(t.dod); t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, ...gateOf(d), done: !d.done, at: Date.now(), ...(d.seen && !d.done ? { why: d.seen.why } : {}) } : d)); t.dodPending = false; if (!t.archived) closeIfDone(t, was); } break;
         case "dod.add": if (t && b.t.trim()) { t.dod = insertItems(t.dod ?? [], [{ id: fid(), t: b.t.trim().slice(0, 140), done: false }]); t.dodPending = false; } break;
         case "gate": if (t?.dod) t.dod = t.dod.map((d) => (d.id === b.dodId ? { ...d, gate: gateFor(d.t, parseGate(b.gate)), gateBy: "thomas" as const, gateWhy: undefined } : d)); break;
         case "archive": if (t) closeTask(t); break;
@@ -446,7 +443,7 @@ export async function POST(req: Request) {
         case "start": if (t) { t.queued = false; if (!t.sessions.includes(b.sessionId)) t.sessions.push(b.sessionId); } break;
       }
       if (t) t.updatedAt = Date.now();
-    });
+    }, "thomas");
     return Response.json({ ok: true });
   } catch (e) {
     return Response.json({ error: String((e as Error).message) }, { status: 400 });

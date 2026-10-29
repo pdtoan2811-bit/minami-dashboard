@@ -335,7 +335,7 @@ export function linkTasks(day: TodayDay): boolean {
       const id = fid();
       edits.push((s) => {
         if (s.threads.some((t) => t.sessions.includes(sid))) return; // another process linked it meanwhile
-        s.threads.unshift({ id, title: handoffLabel(it), project: path.basename(base), cwd: base, sessions: [sid],
+        s.threads.unshift({ id, title: handoffLabel(it), project: path.basename(base), cwd: base, sessions: [sid], origin: "today",
           today: { date: day.date, kind, id: it.id }, auto: true, createdAt: at, updatedAt: Date.now(),
           ...(checks.length ? { dod: checks.slice(0, 4).map((w, i): FlowDod => ({ id: `${id}-${i}`, t: checkLabel(w), done: false, gate: null })) } : {}) });
       });
@@ -353,7 +353,7 @@ export function linkTasks(day: TodayDay): boolean {
       dayChanged = true;
     }
   }
-  if (edits.length) mutateFlow((s) => { for (const e of edits) e(s); });
+  if (edits.length) mutateFlow((s) => { for (const e of edits) e(s); }, "today");
   return dayChanged;
 }
 
