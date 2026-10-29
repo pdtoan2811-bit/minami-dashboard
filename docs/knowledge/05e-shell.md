@@ -38,19 +38,15 @@ session, read once, and the tab strip and bento tile both still say it) → **th
 `code · bypass` pill** → padding and gaps → at `micro`, the utility bar itself, the project icon and the
 📎. Net effect at four panes: **transcript 146px → ~232px**.
 
-**The flow strip is no longer part of that ladder — it is a chip at every tier.** It used to have a
-full-width form that took its own row (~42px with its margin) and folded to a chip only when cramped,
-which was affordable while the 2×2 grid was the default view: the wide form only appeared in a large
-pane. Tabs-first inverted that. The pane you are reading is now *always* `roomy`, so "the roomy
-treatment" stopped meaning "occasionally" and started meaning "always" — a permanent row, in every pane,
-for a label. The chip sits on the control row beside Plan/Code and the approval chips, and the wide
-variant is deleted rather than left unreachable.
+**Every tier folds the mode row now (2026-10-29).** The roomy pane used to lay all six session
+controls out inline — model, fan-out, smith, pause, Plan/Code, approval. Thomas rarely touched any of
+them, so the roomy pane now gets the cramped pane's `code · bypass ⌄` pill too, and the popover holds the
+full set. The pill also names the model when it isn't the box default, on every tier rather than only
+on the phone, since the picker is behind it everywhere.
 
-The one thing the wide form carried that the chip can't is `detail`, the running step's title. That is
-already said by the activity line at the other end of the same row, so it moved to the tooltip instead
-of being lost, and the chip's label tints while a step is in progress. The rule this control must not
-break is still met: **the door is visible at rest** — v1's only appeared on hover, on a tile, in another
-view, which is the whole reason nobody found it.
+**The flow strip chip is retired (2026-10-29).** It sat first on that row ("2/3 asks", a bar and a ›)
+as the in-pane door to the flow canvas; he never used it, and `components/FlowStrip.tsx` is deleted.
+The tile's Flow switch was already gone (§37), so the canvas (§5f) currently has no door.
 
 **The folded pill and the full row are one component** (`ModeControls`). The approval level is the most
 dangerous thing in this UI to be wrong about — two renderings of it, drifting, is the failure worth

@@ -268,7 +268,6 @@ export const NODES: ModuleNode[] = [
   { id: "r/fsfile", label: "/api/fs/file", sub: "sliced text · binary sniff\n· raw allow-list", layer: "route", row: 15 },
 
   // ── Flow view: the session journey + its brake (KNOWLEDGE.md §5f) ───────
-  { id: "c/FlowStrip", label: "FlowStrip", sub: "the in-chat door\n+ goals done / open loops", layer: "component", row: 22, pipeline: "live" },
   { id: "c/FlowCanvas", label: "FlowCanvas", sub: "one spine per session\n(ask → what it did)", layer: "component", row: 21, pipeline: "live" },
   { id: "l/flowmodel", label: "flow-model.ts", sub: "transcript → journey\n(acts · evidence · open loops)", layer: "core", row: 16, pipeline: "live" },
   { id: "l/flownarrate", label: "flow-narrate.ts", sub: "Haiku writes the outcome\nline · cached to disk", layer: "core", row: 17, pipeline: "live" },
@@ -616,10 +615,8 @@ export const EDGES: ModuleEdge[] = [
   // Flow view. The brake is drawn as a full round trip on purpose: the button is in the component,
   // but the only place it can be ENFORCED is canUseTool inside the manager — see KNOWLEDGE.md §5f.
   { from: "app/page", to: "c/FlowCanvas", kind: "import" },
-  { from: "app/page", to: "c/FlowStrip", kind: "import" },
   { from: "c/FlowCanvas", to: "r/session", kind: "http", label: "transcript · pages back" },
   { from: "c/FlowCanvas", to: "l/flowmodel", kind: "import" },
-  { from: "c/FlowStrip", to: "l/flowmodel", kind: "import" },
   // The stack row's slugs are derived in the MODEL, not the component — so the server-side fold in
   // /api/flow reaches the same answer the browser does, exactly as it must for narrative keys.
   { from: "l/flowmodel", to: "l/flowstack", kind: "import" },
