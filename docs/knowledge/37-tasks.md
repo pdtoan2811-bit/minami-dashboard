@@ -189,6 +189,17 @@ subtask and button to let Minami do it for me").
   - **Only on a quiet chat.** All-met while the chat is working or ends on a question to him sets
     `closeHeld` instead; the next evaluate of an idle chat closes it. The chat's own `task_report` ticks
     always hold (it reports from inside its turn). His own tick and his words still close at once.
+    `ensure` also closes a held task on any poll where the chat is idle and the step for this quiet has
+    been read with no question, so the hold never depends on evaluate running. `closeTask` clears it.
+
+> 🐛 **2026-10-29 — "all subtasks are marked done but they are not done".** Three tasks sat open at
+> "All met, closes itself" for 20+ minutes. The work was real: both were merged and in the live 11:17
+> build. The tasks just never closed. There were two holes. (1) `tickShipped` ticks the ship item from git
+> while the card is "waiting" on its own "Merge and deploy?" step. It closed only on idle, never set the
+> hold, then deleted the step, and with no ship item left it never ran again. (2) A hold set by
+> `task_report` was only read in `evaluate`, which `ensure` skips when the chat reported for itself or
+> nothing newer happened, so it was never read. Fix: `tickShipped` holds when not idle, and `ensure`
+> honours the hold directly. The two stuck records with no hold were closed by hand.
 
 > 🐛 **2026-10-29 — "why this one marked done even though it still asking me questions".** The phone-tasks
 > chat ticked its last item via `task_report`, the task closed on that tick, and the same turn then asked

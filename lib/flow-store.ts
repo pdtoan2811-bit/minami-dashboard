@@ -146,6 +146,8 @@ export function closeTask(t: FlowThread, o: { auto?: boolean; why?: string } = {
   if (o.auto) t.autoDone = true;
   if (o.why) t.closedWhy = o.why;
   t.dodPending = false;
+  // A hold left on a closed task would re-close it the moment he reopens it (`ensure` honours holds).
+  delete t.closeHeld;
   if (t.dod) t.dod = t.dod.map((d) => (d.doing ? (({ doing: _, ...r }) => r)(d) : d));
 }
 
