@@ -211,11 +211,11 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
           task's next item is already in the pace line, and a running chat says what it's doing in its own line below. */}
       {t.wait && !t.step && !compact && (t.wait.holder === "you" || t.wait.holder === "task") && (
         <div className="mt-1.5 rounded-lg px-2 py-1.5 text-[13px] leading-snug text-neutral-100"
-          style={{ background: t.wait.holder === "you" ? "color-mix(in srgb, var(--sakura) 8%, transparent)" : t.wait.holder === "task" ? "rgba(167,139,250,0.1)" : "rgba(255,255,255,0.03)" }}>
-          <span className="mr-1" style={{ color: t.wait.holder === "you" ? TINT.waiting : t.wait.holder === "task" ? TINT.blocked : "rgb(115 115 115)" }}>
-            {t.wait.holder === "you" ? "✋" : t.wait.holder === "task" ? "↪" : "›"}
+          style={{ background: t.wait.holder === "you" ? "color-mix(in srgb, var(--sakura) 8%, transparent)" : "rgba(167,139,250,0.1)" }}>
+          <span className="mr-1" style={{ color: t.wait.holder === "you" ? TINT.waiting : TINT.blocked }}>
+            {t.wait.holder === "you" ? "✋" : "↪"}
           </span>
-          <span className={t.wait.holder === "paused" ? "text-neutral-400" : undefined}>{t.wait.what}</span>
+          {t.wait.what}
           {t.wait.detail && <span className="text-[12px] text-neutral-400"> · {t.wait.detail}</span>}
         </div>
       )}
