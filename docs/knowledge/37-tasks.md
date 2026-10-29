@@ -332,6 +332,25 @@ Tested end to end on an isolated server (`:3027`, `MINAMI_FLOW_FILE` in `/tmp`):
 - Haiku labelled "layout chosen" / "API returns values" / "tests pass" / "post published on X" as
   pitch / auto / auto / ok.
 
+## On the phone: the sheets list tasks
+
+Thomas, 2026-10-29, on the phone's all-chats sheet: "clunky, I want to view task instead of sessions. it
+requires me to navigate too much to get where I want." The sheet listed sessions (worktree-grouped, §23),
+so machine chats like "Pace test: ok" sat between his tasks, and a task's done-list existed only on the
+desktop tile and board.
+
+`components/PhoneTasks.tsx`, mounted by both phone sheets in `components/Focus.tsx`:
+- **☰ sheet** opens on **Tasks**: Needs you · Working · Recent (12, then "n more"), topic chips that
+  only show topics with an open task. Each row has the done-list bar and the next open item, readable
+  without a tap. **Tapping the row opens the task's latest chat** (`openChat(t.latest)`, not
+  `openThread`, so the phone keeps its one-chat-at-a-time pane). "n chats ▾" lists the others.
+- **Current-chip sheet** (one topic) has the same Tasks | Chats switch; a topic with no open task opens
+  on Chats.
+- **Chats** is the old list unchanged, a tab away: pins, Edit pins, the Today fold, Older. Machine chats
+  aren't threads (lib/threads.ts drops them), so this is where they stay reachable.
+- The **dock chip** names the task the open chat belongs to, with its `met/total`.
+- Queued tasks (board To do) are left out: they have no chat to open yet.
+
 ## Threads
 
 A thread is derived, not declared (`lib/threads.ts`):

@@ -17,6 +17,8 @@
 // - Full at three: a DONE pin steps out by itself (with Undo). The swap question appears only when all
 //   three are still active, so pinning is one tap almost every time. Nothing running is ever evicted.
 // - Everything counts TASKS, not sessions (lib/task-groups.ts): sessions sharing a worktree are one row.
+//   Since 2026-10-29 both sheets open on the §37 task list (components/PhoneTasks.tsx); this grouping
+//   is the Chats tab.
 // - Sorted by urgency, never recency: failed → needs you → running → new → idle. Nothing expands or
 //   opens on its own; the sheet waits for the tap.
 import ChatName from "@/components/ChatName";
@@ -29,6 +31,8 @@ import { ProjectIcon } from "@/components/ProjectIcon";
 import type { TaskProgress } from "@/lib/task-progress";
 import { FOCUS_MAX } from "@/lib/use-focus";
 import { byUrgency, groupTasks, type Task } from "@/lib/task-groups";
+import { useThreads } from "@/lib/use-threads";
+import { PhoneTaskList, TaskTopics, openTasks } from "@/components/PhoneTasks";
 
 export type FocusLive = InboxLive & { progress?: TaskProgress };
 type Ctx = {
@@ -118,6 +122,11 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
   const byId = useMemo(() => new Map(ctx.sessions.map((s) => [s.id, s])), [ctx.sessions]);
   const shown = pins.slice(0, visitor ? 1 : 2), more = pins.length - shown.length;
   const curG = curTask?.g ?? (current.id ? groups[current.id] : undefined);
+  // The chip names the TASK this chat belongs to, with its done-list count, so "where am I" is answered
+  // in task terms on the phone too (§37, 2026-10-29). A chat outside any task keeps its own title.
+  const td = useThreads();
+  const thread = current.id ? td?.threads.find((t) => t.sessions.some((x) => x.id === current.id)) : undefined;
+  const dod = thread?.dod ?? [];
   // Handle swipe-up opens the sheet; the bar's horizontal swipe keeps stepping through recent chats.
   const y0 = useRef<number | null>(null);
   const chip = (id: string, g: Group, dashed?: boolean) => {
@@ -148,8 +157,9 @@ export const FocusDock = memo(function FocusDock({ ctx, current, recent, hidden,
               {current.project && <span className="truncate">{projectLabel(current.project)}</span>}
               {current.pos && current.pos.n > 1 && <span className="shrink-0 tabular-nums text-neutral-500">· {current.pos.i + 1} of {current.pos.n} ▾</span>}
               {curG && <span className={`shrink-0 ${STATE_TINT[curG]}`}>· {STATE_WORD[curG]}</span>}
+              {dod.length > 0 && <span className={`shrink-0 tabular-nums ${dod.every((d) => d.done) ? "text-[#4ade80]" : "text-neutral-500"}`}>· {dod.filter((d) => d.done).length}/{dod.length}</span>}
             </span>
-            <span className="block truncate text-[14px] font-medium">{current.title}</span>
+            <span className="block truncate text-[14px] font-medium">{thread?.title || current.title}</span>
           </span>
         </button>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
@@ -199,6 +209,14 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
   const [older, setOlder] = useState(0);
   const [showToday, setShowToday] = useState(false);
   const f = useChatFilter();
+  // Tasks first (§37, 2026-10-29): the sheet he opens to get somewhere lists tasks; the session list
+  // is a tab away for machine chats and pins. Not remembered — tasks is where every open starts.
+  const [view, setView] = useState<"tasks" | "chats">("tasks");
+  const [taskTopic, setTaskTopic] = useState<string | null>(null);
+  const td = useThreads();
+  const titles = useMemo(() => new Map(ctx.sessions.map((s) => [s.id, s.title])), [ctx.sessions]);
+  const tAll = openTasks(td?.threads, taskTopic ?? undefined);
+  const tNeed = tAll.filter((t) => t.state === "waiting").length, tWork = tAll.filter((t) => t.state === "working").length;
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const say = (text: string, undo: () => void) => {
     setToast({ text, undo });
@@ -260,15 +278,28 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
       <div className="absolute inset-0 bg-black/50" onClick={onDismiss} />
       <div className={`relative flex flex-col bg-neutral-900 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl ${side ? "h-full w-[380px] max-w-[85vw] border-r border-white/10 pt-3" : "max-h-[88dvh] rounded-t-2xl border-t border-white/10"}`}>
         {!side && <button onClick={onDismiss} aria-label="Close" className="flex w-full justify-center py-2.5"><span className="h-1 w-10 rounded-full bg-white/20" /></button>}
-        <div className="flex items-center gap-2 px-5 pb-1">
-          <p className="min-w-0 flex-1 text-[13px] text-neutral-400">
-            {count("failed") > 0 && <span className="text-[#ef7c7c]">{count("failed")} failed · </span>}
-            {count("need") > 0 ? <span className="font-semibold text-[#4ade80]">{count("need")} need you</span> : <span>Nothing waiting</span>}
-            {count("running") > 0 && <> · {count("running")} working</>}
+        <div className="flex items-center gap-2 px-4 pb-1">
+          <ViewTabs view={view} setView={setView} />
+          <p className="min-w-0 flex-1 truncate text-right text-[13px] text-neutral-400">
+            {view === "tasks" ? <>
+              {tNeed > 0 ? <span className="font-semibold text-[#4ade80]">{tNeed} need you</span> : <span>Nothing waiting</span>}
+              {tWork > 0 && <> · {tWork} working</>}
+            </> : <>
+              {count("failed") > 0 && <span className="text-[#ef7c7c]">{count("failed")} failed · </span>}
+              {count("need") > 0 ? <span className="font-semibold text-[#4ade80]">{count("need")} need you</span> : <span>Nothing waiting</span>}
+            </>}
           </p>
-          <button onClick={() => { setEdit((v) => !v); setSwapFor(null); }}
-            className={`h-10 shrink-0 rounded-lg px-3 text-[13px] ${edit ? "bg-[var(--accent-fill)] font-semibold text-white" : "text-neutral-400 active:bg-white/10"}`}>{edit ? "Done" : "Edit pins"}</button>
+          {view === "chats" && <button onClick={() => { setEdit((v) => !v); setSwapFor(null); }}
+            className={`h-10 shrink-0 rounded-lg px-3 text-[13px] ${edit ? "bg-[var(--accent-fill)] font-semibold text-white" : "text-neutral-400 active:bg-white/10"}`}>{edit ? "Done" : "Edit pins"}</button>}
         </div>
+        {view === "tasks" ? <>
+          <TaskTopics threads={td?.threads ?? []} topic={taskTopic} setTopic={setTaskTopic} />
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2">
+            {td ? <PhoneTaskList threads={td.threads} project={taskTopic ?? undefined} icons={ctx.icons} titles={titles} currentId={currentId} onOpen={onOpen}
+              empty={<p className="px-4 py-10 text-center text-[13px] text-neutral-500">No open tasks{taskTopic ? " here" : ""} this week. <button onClick={() => setView("chats")} className="text-neutral-300 underline">See chats</button></p>} />
+              : <p className="px-4 py-10 text-center text-[13px] text-neutral-500">Loading tasks…</p>}
+          </div>
+        </> : <>
         <ChatFilter chats={ctx.sessions} topic={f.topic} setTopic={f.setTopic} todayOnly={f.todayOnly} setTodayOnly={f.setTodayOnly} loud={loud} className="px-4 pb-1 pt-1" />
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2">
           {(pins.length > 0 || edit) && head(allPins.length > FOCUS_MAX ? `Pinned · ${allPins.length} · limit ${FOCUS_MAX}` : `Pinned · ${allPins.length} of ${FOCUS_MAX}`, "text-[var(--sakura)]")}
@@ -295,6 +326,7 @@ export function FocusSheet({ side, ctx, currentId, pin, unpin, onOpen, onNew, on
             </button>
           )}
         </div>
+        </>}
         {toast && (
           <div className="mx-3 mb-2 mt-1 flex items-center gap-3 rounded-xl bg-neutral-800 px-3 py-2.5 text-[13px] shadow-lg">
             <span className="min-w-0 flex-1 truncate">{toast.text}</span>
@@ -385,6 +417,11 @@ export function TopicSheet({ side, ctx, project, currentId, onOpen, onAll, onDis
   const main = sorted.filter((t) => !t.rep.today || loud(t));
   const today = sorted.filter((t) => t.rep.today && !loud(t));
   const [showToday, setShowToday] = useState(() => !!current?.rep.today || !main.length);
+  const td = useThreads();
+  const titles = useMemo(() => new Map(scoped.sessions.map((s) => [s.id, s.title])), [scoped.sessions]);
+  const nTasks = openTasks(td?.threads, project).length;
+  // A topic with no task yet (only machine chats) opens on its chats rather than on an empty list.
+  const [view, setView] = useState<"tasks" | "chats">(() => td && !nTasks ? "chats" : "tasks");
   const row = (t: Task) => <TaskRow key={t.key} bare t={t} l={ctx.live} icon={ctx.icons[t.rep.project]} on={t === current} currentId={currentId} onOpen={onOpen} />;
   return (
     <div className={`fixed inset-0 z-[70] flex ${side ? "flex-row" : "flex-col justify-end"}`} role="dialog" aria-label={`Chats in ${project}`}>
@@ -393,10 +430,14 @@ export function TopicSheet({ side, ctx, project, currentId, onOpen, onAll, onDis
         {!side && <button onClick={onDismiss} aria-label="Close" className="flex w-full justify-center py-2.5"><span className="h-1 w-10 rounded-full bg-white/20" /></button>}
         <div className="flex items-center gap-2 px-4 pb-2">
           <ProjectIcon name={project} icon={ctx.icons[project]} size={22} />
-          <p className="min-w-0 flex-1 truncate text-[15px] font-semibold">{projectLabel(project)} <span className="font-normal text-neutral-500">· {tasks.length} {tasks.length === 1 ? "chat" : "chats"}</span></p>
-          <button onClick={onAll} className="h-10 shrink-0 rounded-lg border border-white/10 px-3 text-[13px] text-neutral-300 active:bg-white/10">All chats</button>
+          <p className="min-w-0 flex-1 truncate text-[15px] font-semibold">{projectLabel(project)}</p>
+          <button onClick={onAll} className="h-10 shrink-0 rounded-lg border border-white/10 px-3 text-[13px] text-neutral-300 active:bg-white/10">All topics</button>
         </div>
+        <div className="px-4 pb-1"><ViewTabs view={view} setView={setView} n={{ tasks: nTasks, chats: tasks.length }} /></div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1">
+          {view === "tasks" ? (td ? <PhoneTaskList threads={td.threads} project={project} icons={ctx.icons} titles={titles} currentId={currentId} onOpen={onOpen}
+            empty={<p className="px-4 py-10 text-center text-[13px] text-neutral-500">No open tasks in this topic this week. <button onClick={() => setView("chats")} className="text-neutral-300 underline">See chats</button></p>} />
+            : <p className="px-4 py-10 text-center text-[13px] text-neutral-500">Loading tasks…</p>) : <>
           {main.map(row)}
           {today.length > 0 && (
             <>
@@ -410,8 +451,20 @@ export function TopicSheet({ side, ctx, project, currentId, onOpen, onAll, onDis
             </>
           )}
           {!tasks.length && <p className="px-4 py-10 text-center text-[13px] text-neutral-500">No chats in this topic yet.</p>}
+          </>}
         </div>
       </div>
     </div>
   );
+}
+
+/** Tasks | Chats, the one switch on both sheets. */
+function ViewTabs({ view, setView, n }: { view: "tasks" | "chats"; setView: (v: "tasks" | "chats") => void; n?: { tasks: number; chats: number } }) {
+  const tab = (v: "tasks" | "chats", label: string) => (
+    <button onClick={() => setView(v)} aria-pressed={view === v}
+      className={`h-9 rounded-lg px-3.5 text-[14px] ${view === v ? "bg-white/15 font-semibold text-white" : "text-neutral-400 active:bg-white/10"}`}>
+      {label}{n && <span className="ml-1 font-normal tabular-nums text-neutral-500">{n[v]}</span>}
+    </button>
+  );
+  return <div className="flex shrink-0 gap-0.5 rounded-xl bg-white/[0.05] p-0.5">{tab("tasks", "Tasks")}{tab("chats", "Chats")}</div>;
 }
