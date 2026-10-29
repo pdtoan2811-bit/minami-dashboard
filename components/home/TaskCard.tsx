@@ -10,7 +10,7 @@ import { answerStep, doDodItem, openThread, threadPost, type ThreadView } from "
 import type { AgentMode } from "@/lib/use-agent";
 import { GATE_LABEL, SHIP_ITEM, nextGate, paceLine, runPlan } from "@/lib/task-pace";
 
-export const TINT = { working: "#f0a868", waiting: "var(--sakura)", idle: "rgba(255,255,255,0.22)", queued: "rgba(255,255,255,0.12)" } as const;
+export const TINT = { working: "#f0a868", waiting: "var(--sakura)", blocked: "#a78bfa", idle: "rgba(255,255,255,0.22)", queued: "rgba(255,255,255,0.12)" } as const;
 const STATE = { working: "working", waiting: "waiting on you", idle: "", queued: "to do" } as const;
 const ago = (ms: number) => {
   const m = Math.round((Date.now() - ms) / 60e3);
@@ -205,6 +205,20 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
           {canDo && <button onClick={() => openThread(t)} className={mini} title="Open the chat to answer in your own words">Reply</button>}
         </div>
       )}
+      {/* What it waits on, when the chat's question (above) doesn't already say it (§37, pitch waiting-chain
+          V1): a gated item ("your pick"), another chat's leftovers (wait.holder "task", lib/task-ship.ts
+          mergeBlock — not his move and not this chat's, the case he couldn't see on 2026-10-29), . A paused
+          task's next item is already in the pace line, and a running chat says what it's doing in its own line below. */}
+      {t.wait && !t.step && !compact && (t.wait.holder === "you" || t.wait.holder === "task") && (
+        <div className="mt-1.5 rounded-lg px-2 py-1.5 text-[13px] leading-snug text-neutral-100"
+          style={{ background: t.wait.holder === "you" ? "color-mix(in srgb, var(--sakura) 8%, transparent)" : t.wait.holder === "task" ? "rgba(167,139,250,0.1)" : "rgba(255,255,255,0.03)" }}>
+          <span className="mr-1" style={{ color: t.wait.holder === "you" ? TINT.waiting : t.wait.holder === "task" ? TINT.blocked : "rgb(115 115 115)" }}>
+            {t.wait.holder === "you" ? "✋" : t.wait.holder === "task" ? "↪" : "›"}
+          </span>
+          <span className={t.wait.holder === "paused" ? "text-neutral-400" : undefined}>{t.wait.what}</span>
+          {t.wait.detail && <span className="text-[12px] text-neutral-400"> · {t.wait.detail}</span>}
+        </div>
+      )}
       {/* How the task runs: on its own to the end, or to a gate where it waits for him. ▶ Run sends the
           whole stretch in one message, so the ungated items need no click each (Thomas, 2026-10-28). */}
       {!compact && pace && !t.step && (
@@ -266,7 +280,7 @@ export function TaskCard({ t, busy, compact, fold, active, actions, drag }: {
         </span>
         <span className="mt-0.5 block truncate pl-4 text-[11px] text-neutral-500">
           {active && <span className="font-medium text-[var(--sakura)]">● chatting now · </span>}
-          {!t.archived && STATE[st] && <span style={{ color: st === "queued" ? undefined : TINT[st] }}>{STATE[st]} · </span>}
+          {!t.archived && STATE[st] && t.wait?.holder !== "done" && <span style={{ color: st === "queued" ? undefined : TINT[st] }}>{STATE[st]} · </span>}
           {t.archived ? `done ${ago(t.doneAt ?? t.at)} ago` : ago(t.at)}
           {t.sessions.length > 0 && ` · ${t.sessions.length} chat${t.sessions.length > 1 ? "s" : ""}`}
         </span>

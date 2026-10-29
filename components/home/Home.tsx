@@ -110,7 +110,7 @@ function ThreadRow({ t, first }: { t: ThreadView; first: boolean }) {
             <span className="block truncate text-[14px] text-neutral-100">{t.title}</span>
             <span className="block truncate text-[12px] text-neutral-500">
               <span className="text-neutral-400">{t.project}</span>
-              {t.state === "working" ? " · working" : t.state === "waiting" ? " · waiting on you" : ""} · {ago(t.at)}{t.step ? ` — ✋ ${t.step.q}` : t.line ? ` — ${t.line}` : ""}
+              {t.state === "working" ? " · working" : t.state === "waiting" ? " · waiting on you" : ""} · {ago(t.at)}{t.step ? ` — ✋ ${t.step.q}` : t.wait?.holder === "task" ? ` — ↪ ${t.wait.what}${t.wait.detail ? ` · ${t.wait.detail}` : ""}` : t.line ? ` — ${t.line}` : ""}
             </span>
           </span>
         </button>
