@@ -70,7 +70,16 @@ export function ensureDod(ts: ThreadView[]) {
 /** "Minami, do it" on one done-item (or the whole run): send it to the task's chat and open that chat. */
 /** `dodId` null = ▶ Run: every open item up to the first gate, in one message (lib/task-pace.ts). */
 export async function doDodItem(t: ThreadView, dodId: string | null, opts: { mode?: string; model?: string | null } = {}): Promise<string | null> {
-  const r = await fetch("/api/threads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(dodId ? { action: "do", id: t.id, dodId } : { action: "run", id: t.id }) }).then((x) => x.json()).catch(() => null);
+  return sendVia(t, dodId ? { action: "do", id: t.id, dodId } : { action: "run", id: t.id }, opts);
+}
+
+/** His one tap on what the task waits on him for (`t.step`): the step's reply goes to the task's chat. */
+export function answerStep(t: ThreadView, opts: { mode?: string; model?: string | null } = {}): Promise<string | null> {
+  return sendVia(t, { action: "answer", id: t.id }, opts);
+}
+
+async function sendVia(t: ThreadView, body: object, opts: { mode?: string; model?: string | null }): Promise<string | null> {
+  const r = await fetch("/api/threads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((x) => x.json()).catch(() => null);
   if (!r?.key) return r?.error ?? "couldn't reach the task's chat";
   const s = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ key: r.key, cwd: r.cwd, message: r.message, resume: r.resume, mode: opts.mode, model: opts.model ?? undefined }) });

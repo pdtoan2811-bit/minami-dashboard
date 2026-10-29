@@ -24,6 +24,10 @@ export type FlowDod = { id: string; t: string; done: boolean; at?: number; by?: 
   gate?: "pitch" | "ok" | null; gateWhy?: string;
   /** He set the gate by tapping it: Haiku never reclassifies it. */
   gateBy?: "thomas" };
+/** The one thing a quiet task waits on him for (§37). `q` is short and plain ("Merge and deploy it?"),
+ *  `yes` the button label, `reply` what that button sends to the chat in his voice. `ship`: it is about
+ *  merging / deploying / publishing, so a list without a ship item gets one. */
+export type TaskStep = { q: string; yes: string; reply: string; ship?: boolean; at: number };
 export type FlowThread = {
   id: string; title: string; project: string; cwd: string;
   /** Session ids, oldest first. A session belongs to at most one stored thread. */
@@ -63,6 +67,12 @@ export type FlowThread = {
   /** Every item is met but the chat was mid-turn or asking him when that happened, so the close waits
    *  for a reading of a quiet chat (evaluate in /api/threads). See closeIfDone in lib/task-report.ts. */
   closeHeld?: boolean;
+  /** What the task waits on from him now, read off the end of its chat when the chat goes quiet
+   *  (readStep in /api/threads): the question it ended on, or the obvious unshipped step ("committed, not
+   *  merged"). `at` is the activity it was read for, so any newer turn hides it until it is read again. */
+  step?: TaskStep;
+  /** The activity `step` was last read for (null answers included), so a quiet is read once. */
+  stepAt?: number;
   /** Dropped: still claims its sessions (so they don't come back as a new task) but shows nowhere. */
   hidden?: boolean;
 };
