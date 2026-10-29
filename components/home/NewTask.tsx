@@ -10,7 +10,7 @@
 //   - the attached images as thumbnails under the text, each removable, so a long path isn't the only
 //     sign that a screenshot is attached;
 //   - the draft kept per project in localStorage, so closing the sheet (or a deploy blinking the page)
-//     loses nothing. It is cleared only once the chat has actually started.
+//     loses nothing. Starting clears it; a start that fails puts it back.
 // Portalled to <body>: the tile it opens from sits in a reflowing grid, and a `fixed` element under a
 // transformed ancestor is positioned against that ancestor, not the viewport.
 import { useEffect, useRef, useState } from "react";
@@ -27,49 +27,51 @@ export function readDraft(project: string): string {
   try { return localStorage.getItem(draftKey(project)) ?? ""; } catch { return ""; }
 }
 
+/** Put a failed start's text back as the draft — unless a newer draft has been begun since. */
+export function restoreDraft(project: string, text: string) {
+  try { if (!readDraft(project)) localStorage.setItem(draftKey(project), text); } catch { /* private mode */ }
+}
+
 export function NewTask({ project, open, onClose, onStart }: {
   project: string; open: boolean; onClose: () => void;
   /** Starts the chat. Throws on failure, so the sheet can stay open with the draft intact. */
-  onStart: (text: string) => Promise<void>;
+  onStart: (text: string) => void;
 }) {
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const pickPhoto = useRef<(() => void) | null>(null);
   const box = useRef<HTMLDivElement>(null);
   useBackLayer(open, onClose);
 
-  useEffect(() => { if (open) { setText(readDraft(project)); setErr(null); } }, [open, project]);
+  useEffect(() => { if (open) setText(readDraft(project)); }, [open, project]);
   useEffect(() => {
     if (!open) return;
     try { if (text.trim()) localStorage.setItem(draftKey(project), text); else localStorage.removeItem(draftKey(project)); } catch { /* private mode */ }
   }, [text, open, project]);
   useEffect(() => {
     if (!open) return;
-    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
-  }, [open, busy, onClose]);
+  }, [open, onClose]);
 
   const imgs = imageRefs(text);
   const words = text.trim() ? text.trim().split(/\s+/).length - imgs.length : 0;
 
-  const start = async () => {
+  // Closes at once and hands the start to the background (lib/ask.ts startInBackground), so the board
+  // is usable while the worktree and session spin up. The draft is cleared now and put back by the
+  // caller's onFail — kept until success instead, it would reappear in the sheet for the NEXT task.
+  const start = () => {
     const t = text.trim();
-    if (!t || busy) return;
-    setBusy(true); setErr(null);
-    try {
-      await onStart(t);
-      try { localStorage.removeItem(draftKey(project)); } catch { /* */ }
-      setText(""); onClose();
-    } catch (e) { setErr(`Couldn't start: ${(e as Error).message || e}. Your draft is kept.`); }
-    finally { setBusy(false); }
+    if (!t) return;
+    try { localStorage.removeItem(draftKey(project)); } catch { /* */ }
+    setText(""); onClose();
+    onStart(t);
   };
 
   if (!open || typeof document === "undefined") return null;
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-end justify-center md:items-start md:pt-[10vh]">
-      <div onClick={() => !busy && onClose()} className="absolute inset-0" style={{ background: "rgba(0,0,0,.55)", backdropFilter: "blur(2px)" }} />
+      <div onClick={onClose} className="absolute inset-0" style={{ background: "rgba(0,0,0,.55)", backdropFilter: "blur(2px)" }} />
       <div role="dialog" aria-label={`New task in ${project}`}
         className="relative flex max-h-[92dvh] w-full max-w-[680px] flex-col p-5 max-md:rounded-t-[28px] max-md:pb-[max(1.25rem,env(safe-area-inset-bottom))] md:max-h-[80vh] md:rounded-[28px]"
         style={{ background: `linear-gradient(160deg, ${mix(K.paper, 94)}, ${mix(K.bg, 96)})`, border: `1px solid ${K.line2}`, boxShadow: "0 24px 70px rgba(0,0,0,.55)", animation: `shell-rise 320ms ${EASE}` }}>
@@ -79,7 +81,7 @@ export function NewTask({ project, open, onClose, onStart }: {
           <span className="flex min-w-0 items-center gap-1.5 truncate text-[15px] font-semibold" style={{ color: K.ink }}>
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--sakura)]" />{project}
           </span>
-          <button onClick={onClose} disabled={busy} className="ml-auto self-center px-1 text-[15px]" style={{ color: K.muted }} aria-label="Close">✕</button>
+          <button onClick={onClose} className="ml-auto self-center px-1 text-[15px]" style={{ color: K.muted }} aria-label="Close">✕</button>
         </div>
 
         {/* The whole card is the text box: a click anywhere in the empty space below the first line
@@ -87,7 +89,7 @@ export function NewTask({ project, open, onClose, onStart }: {
         <div ref={box} onClick={(e) => { if (e.target === e.currentTarget) box.current?.querySelector("textarea")?.focus(); }}
           className="min-h-[180px] flex-1 cursor-text overflow-y-auto rounded-[18px] px-4 py-3.5"
           style={{ background: mix(K.bg, 70), border: `1px solid ${K.line2}` }}>
-          <Composer value={text} onChange={setText} onSubmit={start} sendOnMod roomy autoFocus disabled={busy}
+          <Composer value={text} onChange={setText} onSubmit={start} sendOnMod roomy autoFocus
             maxHeight={Math.round((typeof window !== "undefined" ? window.innerHeight : 800) * 0.45)} pickPhotoRef={pickPhoto}
             placeholder={"What needs doing, and what does done look like?\n\nWrite as much as you like — lists, links, context. Paste or drop screenshots straight in."} />
         </div>
@@ -105,18 +107,18 @@ export function NewTask({ project, open, onClose, onStart }: {
           </div>
         )}
 
-        <p className="mt-2 min-h-[18px] text-[12.5px]" style={{ color: err ? "#ef7c7c" : K.faint }}>
-          {err ?? (text.trim()
+        <p className="mt-2 min-h-[18px] text-[12.5px]" style={{ color: K.faint }}>
+          {text.trim()
             ? `${words} word${words === 1 ? "" : "s"}${imgs.length ? ` · ${imgs.length} image${imgs.length === 1 ? "" : "s"}` : ""} · draft saved`
-            : "Starts a new chat in its own worktree. It shows up as a card here once it replies.")}
+            : "Starts a new chat in its own worktree, in the background — carry on meanwhile."}
         </p>
 
         <div className="mt-3 flex items-center gap-2">
-          <button onClick={() => pickPhoto.current?.()} disabled={busy} className="rounded-full px-3 py-1.5 text-[13px]"
+          <button onClick={() => pickPhoto.current?.()} className="rounded-full px-3 py-1.5 text-[13px]"
             style={{ background: mix(K.ink, 7), border: `1px solid ${K.line}`, color: K.ink }}>＋ Image</button>
           <span className="flex-1" />
           <span className="hidden text-[11px] md:inline" style={{ color: K.faint, fontFamily: "var(--today-mono)" }}>⌘↵ to start · Esc to close</span>
-          <PillButton tone="accent" small disabled={!text.trim() || busy} onClick={start}>{busy ? "Starting…" : "Start task"}</PillButton>
+          <PillButton tone="accent" small disabled={!text.trim()} onClick={start}>Start task</PillButton>
         </div>
       </div>
     </div>,

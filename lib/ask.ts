@@ -38,7 +38,7 @@ export function splitAsks(text: string): string[] {
 
 /** Start a chat in a project and open it as a bento tab. Its own worktree when the folder is a repo,
  *  like a Today hand-off — a fresh ask beside other running chats would otherwise share their tree. */
-export async function startAsk(p: ProjectRef, text: string, opts: { mode?: string; model?: string | null; open?: boolean } = {}): Promise<{ key: string; sid: string | null }> {
+export async function startAsk(p: ProjectRef, text: string, opts: { mode?: string; model?: string | null; open?: boolean | "quiet" } = {}): Promise<{ key: string; sid: string | null }> {
   let cwd = p.cwd;
   try {
     const w = await (await fetch("/api/worktree", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "isolate", cwd: p.cwd, label: "chat" }) })).json();
@@ -55,6 +55,35 @@ export async function startAsk(p: ProjectRef, text: string, opts: { mode?: strin
     await new Promise((res) => setTimeout(res, 700));
     sid = (await (await fetch(`/api/threads?key=${encodeURIComponent(key)}`)).json().catch(() => ({})))?.sessionId ?? null;
   }
-  if (sid) window.dispatchEvent(new CustomEvent("minami:open-chat", { detail: sid }));
+  if (sid && opts.open !== "quiet") window.dispatchEvent(new CustomEvent("minami:open-chat", { detail: sid }));
   return { key, sid };
+}
+
+// Starting a task in the background (§37). The New task sheets used to await startAsk with the sheet
+// and its backdrop still up — worktree creation, the send, then up to ~20s polling for the session id —
+// so the whole board was frozen behind a "Starting…" button. Now the sheet closes on click and the start
+// runs here, outside any component, so it survives the tile collapsing or a client-side page change.
+// The shell's <Starting> chip shows progress and offers Open once the session id arrives; it does not
+// open the chat by itself, because by then Thomas may be somewhere else and a pane jumping open under
+// him is the same interruption the freeze was.
+export type Starting = { id: string; project: string; title: string; state: "starting" | "ready" | "failed"; sid?: string | null; error?: string };
+let starting: Starting[] = [];
+const subs = new Set<() => void>();
+const emit = () => subs.forEach((f) => f());
+const patch = (id: string, v: Partial<Starting>) => { starting = starting.map((s) => (s.id === id ? { ...s, ...v } : s)); emit(); };
+
+export function subscribeStarting(f: () => void) { subs.add(f); return () => { subs.delete(f); }; }
+export const getStarting = () => starting;
+export function dismissStarting(id: string) { starting = starting.filter((s) => s.id !== id); emit(); }
+
+/** Fire-and-forget start. `onFail` runs if it never got going — the sheets use it to put the draft back. */
+export function startInBackground(p: ProjectRef, text: string, opts: { mode?: string; model?: string | null }, onFail?: () => void): void {
+  const id = Math.random().toString(36).slice(2, 9);
+  const title = text.split("\n").find((l) => l.trim())?.trim() ?? text;
+  starting = [...starting, { id, project: p.project, title, state: "starting" }];
+  emit();
+  startAsk(p, text, { ...opts, open: "quiet" }).then(
+    ({ sid }) => patch(id, { state: "ready", sid }),
+    (e) => { onFail?.(); patch(id, { state: "failed", error: String((e as Error)?.message || e) }); },
+  );
 }

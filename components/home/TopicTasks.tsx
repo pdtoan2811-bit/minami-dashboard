@@ -6,12 +6,12 @@
 // had, so the card list is full the first time it opens and nothing has to be created by hand.
 // "Board" goes one step further, to the project's kanban (Board.tsx), for when he wants to focus.
 import { useEffect, useState } from "react";
-import { startAsk } from "@/lib/ask";
+import { startAsk, startInBackground } from "@/lib/ask";
 import { useSetting } from "@/lib/use-settings";
 import { ensureDod, useThreads, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
 import { TaskCard } from "./TaskCard";
-import { NewTask, readDraft } from "./NewTask";
+import { NewTask, readDraft, restoreDraft } from "./NewTask";
 
 const btn = "shrink-0 rounded-lg border border-white/12 px-2.5 py-1 text-[12px] text-neutral-200 transition-colors hover:border-white/30 pointer-coarse:py-2";
 
@@ -67,7 +67,9 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
         <span className="shrink-0 text-[11px] text-neutral-600">{draft.trim() ? "continue ›" : "write ›"}</span>
       </button>
       <NewTask project={project} open={writing} onClose={() => setWriting(false)}
-        onStart={async (t) => { await startAsk({ project, cwd, at: 0 }, t, { mode: perm, model }); }} />
+        onStart={(t) => startInBackground({ project, cwd, at: 0 }, t, { mode: perm, model }, () => {
+          restoreDraft(project, t); setDraft(readDraft(project));
+        })} />
 
       <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
         {open.length === 0 ? (
