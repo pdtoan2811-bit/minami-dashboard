@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-29
+- **The Today plan runs itself** (§26; `lib/today-autorun.ts`, `lib/today.ts`, `instrumentation.ts`, `app/today/Today.tsx`). A server tick each minute hands off answered decisions, then to-dos whose `after` is met, then questions with a recommendation — two chats at a time, 20 a day max. Runner-started chats are told nobody is watching: outward-facing work ends on `TODAY: yours`, not a question. One switch per day on the page (Pause / Run on its own). `MINAMI_TODAY_AUTORUN=0` turns it off.
+
 ### 2026-10-28
 - **Find N5: the new Home reaches both screens** (§23, §37; `app/page.tsx`, `components/home/Home.tsx`, `Celebrate.tsx`). Unfolded: two-column Home instead of a 288px tile list beside an empty pane. Folded: the Home | Inbox switch is at the top, Search moved into the Inbox, and the second bottom bar is gone. The toast no longer sits on the tab bar at 813px or runs off the edge at 380px.
 - **Phone: ＋ Task is a tab on every page** (§37; `components/home/PhoneNewTask.tsx`, `AppShell.tsx`). Thomas's pick from the `phone-new-task` pitch (V3): full-screen composer, project guessed from the text. Replaces the Bento-bar pill. The celebrate toast no longer covers the phone's bottom bars.

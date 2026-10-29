@@ -96,6 +96,35 @@ a held or permission step. Approvals stay in the pane, the same rule the cover k
 > on a question (publish on bench vs. hold), and nothing on any screen said which. **Fix:** the three
 > changes above, plus the desktop "N need you" pill (§3, `components/NeedsYou.tsx`).
 
+### Runs on its own (2026-10-29)
+
+Thomas: "today task is going to be done autonomously without waiting for my input to do each step … the
+today to do list etc". `lib/today-autorun.ts`, started from `instrumentation.ts`, ticks every minute on
+the live server only (off under `MINAMI_AUTOPILOT_DISABLE=1`, the :3001 preview, which would start every
+task twice; off for the install with `MINAMI_TODAY_AUTORUN=0`). Each tick runs `reconcile()` first —
+that is what ticks a finished prerequisite and frees its dependent — then calls the same `handoff()` the
+buttons do, with `auto: true`, in this order:
+
+1. questions he already answered but nobody carried out,
+2. to-dos in plan order whose `after` is all ticked and whose research isn't still running,
+3. open questions with a `recommended` option (Minami takes it unless the facts say otherwise).
+
+A question with no recommendation stays his. Limits: `MINAMI_TODAY_AUTORUN_MAX` chats working at once
+(default 2; a chat stopped on a question doesn't count), `MINAMI_TODAY_AUTORUN_CAP` runner starts per day
+(default 20), and a failed start is retried after 30 min, not every tick. The first tick is one interval
+after boot, not at boot: `liveStats()` is empty until panes reattach and would read every running chat as
+stopped.
+
+**The prompt differs for a runner start.** A tapped hand-off says "ask me before anything outward-facing";
+in a chat nobody is watching, that AskUserQuestion holds the turn (and a slot) until he happens to open it,
+which is the waiting he asked to be rid of. So `OUTWARD_AUTO` tells it to make outward-facing work ready
+and end on `TODAY: yours — …` instead; the page already shows that as "your move". The route forces
+`auto: false` on POSTs — a tap is never "nobody is watching". Marked on the item as `handoff.auto`, logged
+as "Started on its own".
+
+**The switch.** `day.autorun` (absent = on), set by `{ op: "autorun", on }`, shown under the hero buttons
+as "● Runs on its own … Pause" / "Paused … Run on its own". Turning it on kicks a tick two seconds later.
+
 ## Why it's shaped this way
 
 - **The day file is the contract, and the heartbeat owns its shape.** The page only mutates fields the

@@ -214,6 +214,12 @@ export function Today() {
               ? <PillButton tone="accent" cap onClick={() => act({ op: "heartbeat" }).then((r) => { if (!r.error) setTimeout(() => load(day.date), 1500); })}>Build today's plan</PillButton>
               : <TextButton onClick={() => act({ op: "heartbeat" }).then((r) => { if (r.error) return; /* act toasted it; reloading day.date would undo a rollover */ setToast({ text: r.started ? "Rebuilding — about 4 minutes. This page refreshes itself." : `Not started: ${r.reason}` }); setTimeout(() => load(day.date), 1500); })}
                   disabled={day.status === "running" && !stalled}>{day.status === "running" ? (stalled ? "Heartbeat stalled — rebuild" : "Heartbeat running…") : "Rebuild plan"}</TextButton>)}
+            {/* lib/today-autorun.ts starts the plan without a tap per task; this is the one switch for the day. */}
+            {isToday && planned && <p className="text-[12.5px]" style={{ color: K.muted }}>
+              {day.autorun !== false ? "● Runs on its own — Minami starts each task itself. " : "Paused — each task waits for your tap. "}
+              <button className="underline-offset-2 hover:underline" style={{ color: K.accentBright }}
+                onClick={() => act({ op: "autorun", on: day.autorun === false })}>{day.autorun !== false ? "Pause" : "Run on its own"}</button>
+            </p>}
           </div>
         </Glass>
         <div ref={heroRef} className="-mt-4 h-px" />{/* below the hero's button: once this scrolls off, the sticky one appears */}

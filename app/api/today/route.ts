@@ -26,10 +26,14 @@ export async function POST(req: Request) {
     const body = await req.json();
     if (body.op === "heartbeat") return Response.json(runHeartbeat());
     // { op: "handoff", kind, id, how: do|decide|ask, member?, answer? } → { ok, sessionId } (open /?open=<id>)
-    if (body.op === "handoff") return Response.json(await handoff(body.date || localDate(), body as Handoff));
+    // `auto` is the runner's own flag (lib/today-autorun.ts) — a tap is never "nobody is watching".
+    if (body.op === "handoff") return Response.json(await handoff(body.date || localDate(), { ...body, auto: false } as Handoff));
     // { op: "comment", id, text } → { ok, day } — a handed-off to-do's comment also goes into its chat.
     if (body.op === "comment") return Response.json(await commentTodo(body.date || localDate(), String(body.id), String(body.text ?? "")));
     const date = body.date || localDate();
-    return Response.json({ day: applyAction(date, body as TodayAction) });
+    const day = applyAction(date, body as TodayAction);
+    // Switched back on: start what's waiting now rather than at the next minute's tick.
+    if (body.op === "autorun" && body.on) (await import("@/lib/today-autorun")).kickTodayAutorun();
+    return Response.json({ day });
   } catch (e) { return Response.json({ error: String(e) }, { status: 400 }); }
 }
