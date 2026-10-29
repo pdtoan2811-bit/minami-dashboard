@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-29
+- **A task chat a deploy cut off is resumed on its own** (§37; `app/api/threads/route.ts` `maybeContinue`). With no live session it resumes the chat from disk under the pane's `live:` key. Live server only, chats active in the last 3h, same nudge guards as before.
 - **New done-items go before the ship step, and chats tick before they deploy** (§37; `lib/task-pace.ts` `insertItems`, `lib/task-report.ts`, `app/api/threads/route.ts`). Items a chat added mid-run used to land after "Merged and deployed". The run rules now say to tick every met item before deploying, because the deploy ends the turn.
 - **A task with every item met closes, even when git ticked the last one** (§37; `app/api/threads/route.ts`, `lib/flow-store.ts`). `tickShipped` now holds the close when the card is waiting on its ship step. `ensure` closes a held task once the chat is quiet with no question, without waiting on `evaluate`, which a self-reporting chat never reaches. `closeTask` clears the hold.
 - **A new task holds its slot from the click** (§37; new `components/home/StartingCard.tsx`, `lib/ask.ts`, `TopicTasks.tsx`, `Board.tsx`). A dashed placeholder card sits first in the topic tile and at the top of Working until the real card exists, so nothing pops in later. Pick V1 of pitch `task-lands`.

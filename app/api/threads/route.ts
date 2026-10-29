@@ -10,6 +10,7 @@ import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
 import { allDone, closeIfDone, closeTask, gateOf, storedFor, taskReport, type TaskReport } from "@/lib/task-report";
 import { GATE_RULES, SHIP_ITEM, gateFor, insertItems, parseGate, runMessage, runPlan } from "@/lib/task-pace";
 import { shippedLive } from "@/lib/task-ship";
+import { existsSync } from "node:fs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -209,7 +210,8 @@ async function classify(v: ThreadView) {
 // first gate in one turn; this is the net for a chat that stops early anyway. When the task's chat goes
 // quiet with the next open item ungated, the server sends it on. Guards, all needed:
 //   - only the process that HOSTS the chat sends (sessionIdentity) — the :3001 preview never drives a
-//     :3000 chat, and nobody resumes a transcript a second process is writing;
+//     :3000 chat, and nobody resumes a transcript a second process is writing; a chat no process hosts
+//     (a deploy ended it) is resumed by the live server alone, under the pane's own `live:` key;
 //   - the chat must be working the list: it reported progress (task_report) after his last message, and
 //     every later nudge needs a new met item since the one before, so a chat that answers a nudge with
 //     no progress is left alone;
@@ -218,6 +220,8 @@ async function classify(v: ThreadView) {
 const AUTORUN = process.env.MINAMI_TASK_AUTORUN !== "0";
 const MAX_NUDGES = 6;
 const SETTLE_MS = 8_000;
+const RESUME_WINDOW_MS = 3 * 3600_000;
+const RESUMES = process.env.NODE_ENV === "production" && process.env.MINAMI_AUTOPILOT_DISABLE !== "1" && !process.env.MINAMI_FLOW_FILE;
 const settling = new Set<string>();
 function maybeContinue(id: string) {
   if (!AUTORUN || settling.has(id)) return;
@@ -231,7 +235,17 @@ function maybeContinue(id: string) {
   // ▶ Run, which he presses himself, still treats an unlabelled item as auto.
   if (plan.run[0].d.gate === undefined) return;
   const last = v.sessions[v.sessions.length - 1];
-  const owner = last ? sessionIdentity("live:" + last.id) : null;
+  if (!last) return;
+  // No live owner: the chat's process is gone, almost always because a deploy restarted the server and
+  // ended its turn mid-run (2026-10-29: a chat ticked 3 of 7, started the deploy, and the card sat there
+  // on finished work — "not automated on par with chatting directly"). Resume it from disk under its
+  // `live:<id>` alias, the key the pane attaches through and ▶ Run uses, so his pane drives the same
+  // session afterwards instead of being refused as "open in another pane". Only the live server does
+  // this (a preview or a test server on a copied flow file never resumes his chats), only for a chat
+  // active in the last RESUME_WINDOW_MS, and only into a folder that still exists.
+  const owner = sessionIdentity("live:" + last.id)
+    ?? (RESUMES && Date.now() - v.at < RESUME_WINDOW_MS && last.cwd && existsSync(last.cwd)
+      ? { key: "live:" + last.id, cwd: last.cwd, resume: last.id } : null);
   // A turn that ended with agents still running in the background is waiting on them, not stalled: the
   // CLI wakes the chat when they report. Seen 2026-10-29: a chat that had launched three log readers and
   // said "waiting on them" was nudged to "run the done-list" while two were still out.
@@ -252,7 +266,7 @@ function maybeContinue(id: string) {
   const message = runMessage(v.title, st.dod);
   if (!message) return;
   mutateFlow((s) => { const t = s.threads.find((x) => x.id === id); if (t) { t.nudgeAt = Date.now(); t.nudges = nudges + 1; t.nudgeMet = met; } });
-  try { sendMessage({ key: owner.key, cwd: owner.cwd, message: `(Minami, auto-continue) ${message}` }); } catch { /* the next quiet tries again within the budget */ }
+  try { sendMessage({ key: owner.key, cwd: owner.cwd, message: `(Minami, auto-continue) ${message}`, ...("resume" in owner ? { resume: owner.resume } : {}) }); } catch { /* the next quiet tries again within the budget */ }
 }
 
 /** A quiet task whose ship item is open, or whose card asks to merge, gets its answer from git
