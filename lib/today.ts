@@ -11,7 +11,8 @@ import { handoffReport, STATUS_CONTRACT, type HandoffReport } from "@/lib/today-
 // SHAPE (it reads yesterday's file to plan today), so this module only mutates fields it defines.
 
 /** `cwd` is where the chat actually runs — a worktree when the repo isolates, else the folder itself. */
-type HandoffMark = { how: "do" | "decide" | "ask"; sessionId: string; at: string; to?: string; cwd?: string };
+/** `auto`: started by the Today runner (lib/today-autorun.ts), not by a tap. */
+type HandoffMark = { how: "do" | "decide" | "ask"; sessionId: string; at: string; to?: string; cwd?: string; auto?: boolean };
 export type TodayTodo = { id: string; title?: string; text: string; handoff?: HandoffMark; manual?: boolean;
   /** Who ticked it: "auto" = the model judge or a done_when check (vault today-sync), "minami" = its
    *  hand-off chat reported "TODAY: done" (lib/today-status.ts). Absent = Thomas. */
@@ -36,7 +37,9 @@ export type TodayLoop = { id: string; header?: string; handoff?: HandoffMark; re
 /** Where the content pipeline's drafts stand, written by vault bin/today-sync.mjs every 10 min from
  *  bin/content-funnel.mjs: live (public sitemap) / prod_waiting / bench_only / in_progress. */
 export type Pipeline = { seo?: { at: string; live_ok: boolean; counts: { live: number; prod_waiting: number; bench_only: number; in_progress: number }; waiting?: string[]; bench?: string[] } };
-export type TodayDay = { pipeline?: Pipeline; date: string; status: "running" | "ready" | "facts-only" | "none"; built_at: string | null; started_at?: string; usd: number | null; error?: string | null; carried?: boolean;
+/** `autorun`: whether the runner starts this day's to-dos and decisions by itself (§26 "runs on its own").
+ *  Absent = on — Thomas, 2026-10-29: "today task is going to be done autonomously without waiting for my input". */
+export type TodayDay = { autorun?: boolean; pipeline?: Pipeline; date: string; status: "running" | "ready" | "facts-only" | "none"; built_at: string | null; started_at?: string; usd: number | null; error?: string | null; carried?: boolean;
   dropped?: string[]; // ids he dropped — the heartbeat won't re-suggest them on a Rebuild
   headline: string; focus: { id: string; name: string; status: string }[]; todos: TodayTodo[]; loops: TodayLoop[];
   research: { title: string; url: string; takeaway: string; focus?: string }[]; log: { at: string; kind: string; text: string }[] };
@@ -90,7 +93,8 @@ export type TodayAction =
   | { op: "reopen"; id: string }
   | { op: "note"; text: string }
   | { op: "research"; id: string } // research a to-do again (after a failure, or a stalled run)
-  | { op: "comment"; id: string; text: string };
+  | { op: "comment"; id: string; text: string }
+  | { op: "autorun"; on: boolean };
 
 /** Only same-origin paths: `from` is rendered as a link on the page, so a posted `javascript:` or an
  *  off-site URL must never reach it. */
@@ -177,6 +181,12 @@ export function applyAction(date: string, a: TodayAction): TodayDay {
       const text = a.text.trim(); if (text) { log(day, "note", text); changed = true; }
       break;
     }
+    case "autorun": {
+      if ((day.autorun !== false) === a.on) break;
+      day.autorun = a.on; changed = true;
+      log(day, "autorun", a.on ? "Runs on its own: on" : "Runs on its own: off — tasks wait for a tap");
+      break;
+    }
   }
   if (!changed) return day;
   if (day.status === "none") day.status = "ready";
@@ -206,12 +216,20 @@ function startResearch(date: string, id: string) {
 const starting = new Set<string>();
 
 /** `note`: his extra instruction for this run ("Do it with Minami" with a comment), placed above the task. */
-export type Handoff = { kind: "todo" | "loop"; id: string; how: "do" | "decide" | "ask"; member?: { key: string; name: string; role?: string }; answer?: string | string[]; note?: string };
+/** `auto`: the runner started it — the chat is told nobody is watching, so it must not stop to ask. */
+export type Handoff = { kind: "todo" | "loop"; id: string; how: "do" | "decide" | "ask"; member?: { key: string; name: string; role?: string }; answer?: string | string[]; note?: string; auto?: boolean };
 
 // unknown, not string: day files written before the heartbeat coerced loop folders can hold anything.
 const expand = (folder?: unknown) => (typeof folder === "string" && folder ? folder.replace(/^~(?=\/|$)/, os.homedir()) : os.homedir());
 
+// A chat the runner started has nobody at the pane. An AskUserQuestion there holds the turn — and a runner
+// slot — until he happens to open it, which is the waiting he asked to be rid of. So outward-facing work
+// ends the turn on "TODAY: yours" instead: ready, and named on the page as the one thing left for him.
+const OUTWARD_TAP = "Ask me before anything outward-facing (publishing, Slack, email, spending money).";
+const OUTWARD_AUTO = "Nobody is watching this chat — my Today plan started it on its own. Work through every step without stopping to ask me. Anything outward-facing (publishing, Slack, email, spending money) or truly mine to decide: get it ready, don't do it, and end on \"TODAY: yours — …\" naming it, instead of asking a question and waiting.";
+
 function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: string } {
+  const outward = h.auto ? OUTWARD_AUTO : OUTWARD_TAP;
   const head = `From my Today page (${day.date}). Today's focus: ${day.focus.map((f) => `${f.name} — ${f.status}`).join(" · ")}`;
   if (h.kind === "todo") {
     const t = day.todos.find((x) => x.id === h.id)!;
@@ -219,7 +237,7 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
     // the research write-up below it. Earlier comments follow the task as context.
     const note = h.note?.trim() ? `My instruction for this one: ${h.note.trim()}\n\n` : "";
     const said = (t.comments ?? []).filter((c) => c.to !== "instruction").map((c) => `- ${c.text}`).join("\n");
-    return { cwd: expand(t.folder), message: `${head}\n\n${note}Do this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.asked && t.asked !== t.text ? `(I typed: "${t.asked}" — the detail above is Minami's research on it; my words win if they disagree.)\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}${said ? `My comments on it:\n${said}\n` : ""}\nAsk me before anything outward-facing (publishing, Slack, email, spending money).\n\n${STATUS_CONTRACT}` };
+    return { cwd: expand(t.folder), message: `${head}\n\n${note}Do this to-do for me, end to end, then tell me in a few lines what you did and what's left:\n\n**${t.title || t.text}**\n${t.title ? t.text + "\n" : ""}${t.why ? `Why: ${t.why}\n` : ""}${t.asked && t.asked !== t.text ? `(I typed: "${t.asked}" — the detail above is Minami's research on it; my words win if they disagree.)\n` : ""}${t.cmd ? `Suggested command: \`${t.cmd}\`\n` : ""}${said ? `My comments on it:\n${said}\n` : ""}\n${outward}\n\n${STATUS_CONTRACT}` };
   }
   const l = day.loops.find((x) => x.id === h.id)!;
   const opts = l.options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n");
@@ -228,7 +246,7 @@ function handoffPrompt(day: TodayDay, h: Handoff): { message: string; cwd: strin
     return { cwd: expand(l.folder), message: `${head}\n\nI don't know the answer to this one, so ask ${m.name}${m.role ? ` (${m.role})` : ""} for me with the ask_team tool: assignee "${m.key}", mode "fire" (don't wait). I've already confirmed sending it by tapping "Ask ${m.name}" — don't ask me again. Keep my question and options verbatim, add a short doing/why_now from the context, and a recommendation based on the first option.\n\nQuestion: ${l.question}\nContext: ${l.context || "—"}\nOptions:\n${opts}\n\nAfter it's sent, reply with one line: the ticket and that it's out.` };
   }
   const answer = h.answer ? [].concat(h.answer as never).join(", ") : null;
-  return { cwd: expand(l.folder), message: `${head}\n\n${answer ? `I decided: **${answer}**.` : "Decide this for me — take the recommended option unless the facts on disk clearly say otherwise, and tell me which you took and why in one line."}\n\nQuestion: ${l.question}\nContext: ${l.context || "—"}\nOptions:\n${opts}\n\nNow carry it out. Ask me before anything outward-facing (publishing, Slack, email, spending money).\n\n${STATUS_CONTRACT}` };
+  return { cwd: expand(l.folder), message: `${head}\n\n${answer ? `I decided: **${answer}**.` : "Decide this for me — take the recommended option unless the facts on disk clearly say otherwise, and tell me which you took and why in one line."}\n\nQuestion: ${l.question}\nContext: ${l.context || "—"}\nOptions:\n${opts}\n\nNow carry it out. ${outward}\n\n${STATUS_CONTRACT}` };
 }
 
 /** Prerequisites (`after`) that aren't done yet. An id that's no longer in the day (dropped, or a
@@ -342,7 +360,7 @@ export async function handoff(date: string, h: Handoff): Promise<{ ok: boolean; 
     const it = (h.kind === "todo" ? fresh.todos : fresh.loops).find((x) => x.id === h.id) as (TodayTodo | TodayLoop) | undefined;
     if (it?.handoff) return { ok: true, sessionId: it.handoff.sessionId, day: fresh }; // another process got there first
     if (it) {
-      it.handoff = { how: h.how, sessionId, at: now(), to: h.member?.name, cwd: runCwd };
+      it.handoff = { how: h.how, sessionId, at: now(), to: h.member?.name, cwd: runCwd, ...(h.auto ? { auto: true } : {}) };
       if (h.kind === "todo" && h.note?.trim()) ((it as TodayTodo).comments ||= []).push({ at: now(), text: h.note.trim(), to: "instruction" });
       // Always overwrite: the stored answer must be the one the chat was given. An earlier pick he
       // backed out of (Decide → Back → "Let Minami decide") is not what Minami was told.
@@ -352,7 +370,7 @@ export async function handoff(date: string, h: Handoff): Promise<{ ok: boolean; 
     // The chat started either way, so it's logged either way: if a Rebuild dropped the item meanwhile,
     // label it from the copy read before the start rather than logging "undefined".
     const src = (it ?? item) as TodayTodo & TodayLoop;
-    log(fresh, "handoff", h.how === "ask" ? `Asked ${h.member?.name}: ${src.question}` : `Handed to Minami: ${src.title || src.text || src.question}`);
+    log(fresh, "handoff", h.how === "ask" ? `Asked ${h.member?.name}: ${src.question}` : `${h.auto ? "Started on its own" : "Handed to Minami"}: ${src.title || src.text || src.question}`);
     write(fresh);
     return { ok: true, sessionId, day: fresh };
   } finally { starting.delete(lockKey); }

@@ -51,6 +51,15 @@ export async function register() {
     console.error("[minami] morning push failed to start:", e);
   }
 
+  // The Today plan runs itself (lib/today-autorun.ts, §26): here because the point is that nobody has to
+  // open the page for the morning's to-dos to start.
+  try {
+    const { startTodayAutorun } = await import("@/lib/today-autorun");
+    startTodayAutorun();
+  } catch (e) {
+    console.error("[minami] today autorun failed to start:", e);
+  }
+
   // "Để Minami trả lời" Slack talk threads (lib/team-chat.ts, §25). Here because a deploy restarts the
   // server mid-conversation, and your next reply in the thread should still reach the chat.
   try {
