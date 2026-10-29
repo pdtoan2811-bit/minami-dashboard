@@ -23,7 +23,20 @@ export const gateOf = (d: FlowDod): Pick<FlowDod, "gate" | "gateWhy" | "gateBy">
 // came back because he replied in it (lib/threads.ts `revived`), stays open with Close until he says.
 export function closeIfDone(t: FlowThread, wasDone: boolean) {
   if (wasDone || !allDone(t.dod)) return;
-  t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false;
+  closeTask(t, { auto: true });
+}
+
+/** The one way a task is moved to Done. Every close path used to set the fields by hand, and none
+ *  cleared an item's `doing`, so a closed task kept an item "on now" for hours (4 archived tasks, and 3
+ *  open ones 13–17h stale, in flow.json on 2026-10-29) and the board showed a done task as being worked.
+ *  A suggested list that carried a task to Done was in use, so `dodPending` goes too (52 of 58 tasks were
+ *  still "suggested" — the Keep tap is rarely made and nothing else ever cleared it). */
+export function closeTask(t: FlowThread, o: { auto?: boolean; why?: string } = {}) {
+  t.archived = true; t.doneAt = Date.now(); t.auto = false; t.updatedAt = Date.now();
+  if (o.auto) t.autoDone = true;
+  if (o.why) t.closedWhy = o.why;
+  t.dodPending = false;
+  if (t.dod) t.dod = t.dod.map((d) => (d.doing ? (({ doing: _, ...r }) => r)(d) : d));
 }
 
 /** The open task that holds this chat, if any. */
@@ -31,11 +44,14 @@ export function taskOfSession(sessionId: string): ThreadView | undefined {
   return threads(14).threads.find((t) => t.sessions.some((x) => x.id === sessionId));
 }
 
-/** The stored record for a task, made on the spot for a derived one ("s:…" has nothing stored yet). */
-export function storedFor(s: FlowState, v: ThreadView): FlowThread {
+/** The stored record for a task, made on the spot for a derived one ("s:…" has nothing stored yet).
+ *  A derived id is looked up by its sessions too (`findStored`): `suggest`, a chat's first `task_report`
+ *  and a close can each be the first to store the same derived task, and matching only on the "s:" id made
+ *  a second record claiming the same chat — 3 chats were claimed twice on 2026-10-29. */
+export function storedFor(s: FlowState, v: ThreadView, o: { auto?: boolean } = {}): FlowThread {
   let t = findStored(s, v);
   if (!t) {
-    t = { id: v.id.startsWith("s:") ? fid() : v.id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), auto: true, createdAt: Date.now(), updatedAt: Date.now() };
+    t = { id: v.id.startsWith("s:") ? fid() : v.id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), auto: o.auto ?? true, createdAt: Date.now(), updatedAt: Date.now() };
     s.threads.unshift(t);
   }
   return t;
@@ -115,9 +131,7 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
     // question. His own words (`fin`) and his own ticks still close at once.
     if (!t.archived && !was && allDone(t.dod)) t.closeHeld = true;
     const fin = String(r.finished ?? "").trim().slice(0, 300);
-    if (!t.archived && fin) {
-      t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = fin;
-    }
+    if (!t.archived && fin) closeTask(t, { auto: true, why: fin });
     if (t.archived) said.push("task closed");
     else if (t.closeHeld) said.push("every item met — the task closes when this turn ends without a question for Thomas");
     else {

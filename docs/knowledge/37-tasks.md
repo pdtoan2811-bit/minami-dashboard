@@ -373,6 +373,41 @@ Tested on an isolated `:3027` server with a copy of `flow.json`: the screenshot'
 ship: true}`, state `waiting`, and gained "Merged and deployed"; `answer` returned the owner key and
 message, and a second `answer` was refused.
 
+## What the logs showed (2026-10-29)
+
+A sweep of `~/.minami/flow.json` (58 tasks), 293 transcripts from four days, and the deploy, event and
+launchd logs. Fixed in the same change:
+
+> 🐛 **One chat, two tasks.** 3 chats were claimed by two stored records each, so each showed twice, with
+> two done-lists. The live case was this sweep's own chat: its list changed between two `task_status`
+> calls. Cause: `suggest`, a chat's first `task_report`, `close` and the derived-id edits each stored a
+> derived task (`s:…`) with a fresh id, matching only on that id, and they raced. Fix: `storedFor` also
+> matches by session and every path uses it. In `threads()` the first claim wins: a named task beats one
+> Minami stored, an open one beats a closed one, and then the newest wins. Old duplicates stop showing.
+
+> 🐛 **Auto-continue nudged a chat that was waiting on its own agents.** The turn had ended with three
+> background readers still out. The chat read as `idle`, and its opening `task_report {add, now}` counted
+> as "working the list". Fix: `awaitingAgents(key)` (agents only, like the deploy veto) makes the thread
+> `working`, and `maybeContinue` skips it. The first nudge now needs an item **ticked** after his last
+> message, not just any report.
+
+> 🐛 **Closed tasks kept an item "on now".** No close path cleared `doing`: 4 archived tasks had one, and
+> 3 open ones were 13–17h stale. `closeTask()` in `lib/task-report.ts` is now the only way to close a task.
+> It clears `doing` and `dodPending`. Of 58 lists, 52 were still "suggested": the Keep tap is almost never
+> made, and nothing else cleared the flag.
+
+> 🐛 **Machine prompts as tasks.** "You are resolving a git merge conflict…" (×3), "You are in a git
+> worktree…", "Minami · Slack turn" and pace-test pings were on the board. Added to `MACHINE`.
+
+Found and left open, with no fix in code yet:
+- **Today work is off the board.** Only 2 of 78 Today hand-off sessions belong to a task. 26 of 32
+  hand-offs in four days never called the task tools. Today items carry their own `done_when`, so there
+  are two done-list systems.
+- **The Keep step is dead weight.** Of 137 ticks, 136 were Minami's, and Thomas has ticked one item.
+- **Auto-continue rarely fires**: twice in the whole store. The run rules in `task_status` do the work.
+- **`task_status` outside a task**: 15 replies of "not part of an open task", from chats the prompt told
+  to check.
+
 ## On the phone: the sheets list tasks
 
 Thomas, 2026-10-29, on the phone's all-chats sheet: "clunky, I want to view task instead of sessions. it

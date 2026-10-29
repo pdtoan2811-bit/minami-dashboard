@@ -2,12 +2,12 @@
 // POST: the edits a task can take — name it, keep/tick/add to its Definition of Done, queue a To-do,
 // start one, archive (Done) and reopen — plus `ensure`, which asks Minami to write a done-list for a
 // task that has none and to tick the items its chats show are met.
-import { isBusy, sendMessage, sessionIdentity } from "@/lib/agent/manager";
+import { awaitingAgents, isBusy, sendMessage, sessionIdentity } from "@/lib/agent/manager";
 import { runHaiku } from "@/lib/bento-enrich";
 import { fid, findStored, mutateFlow, readFlow, type FlowDod, type FlowThread, type TaskStep } from "@/lib/flow-store";
 import { listSessions, topicOf } from "@/lib/claude-sessions";
 import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
-import { allDone, closeIfDone, gateOf, storedFor, taskReport, type TaskReport } from "@/lib/task-report";
+import { allDone, closeIfDone, closeTask, gateOf, storedFor, taskReport, type TaskReport } from "@/lib/task-report";
 import { GATE_RULES, parseGate, runMessage, runPlan } from "@/lib/task-pace";
 
 export const dynamic = "force-dynamic";
@@ -155,9 +155,7 @@ async function evaluate(v: ThreadView, focusOnly = false) {
       if (v.state !== "idle") { if (!was && allDone(t.dod)) t.closeHeld = true; }
       else { closeIfDone(t, was && !t.closeHeld); delete t.closeHeld; }
     }
-    if (!t.archived && v.state === "idle" && finished && finished !== t.closedWhy) {
-      t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = finished;
-    }
+    if (!t.archived && v.state === "idle" && finished && finished !== t.closedWhy) closeTask(t, { auto: true, why: finished });
   });
 }
 
@@ -235,14 +233,21 @@ function maybeContinue(id: string) {
   if (plan.run[0].d.gate === undefined) return;
   const last = v.sessions[v.sessions.length - 1];
   const owner = last ? sessionIdentity("live:" + last.id) : null;
-  if (!owner || isBusy(owner.key)) return;
+  // A turn that ended with agents still running in the background is waiting on them, not stalled: the
+  // CLI wakes the chat when they report. Seen 2026-10-29: a chat that had launched three log readers and
+  // said "waiting on them" was nudged to "run the done-list" while two were still out.
+  if (!owner || isBusy(owner.key) || awaitingAgents(owner.key)) return;
   // The nudge is itself a user row, so "he typed" means a message well after the last nudge.
   const userAt = listSessions().find((x) => x.id === last.id)?.lastUserAt ?? 0;
   const his = userAt > (st.nudgeAt ?? 0) + 30_000;
   const met = st.dod.filter((d) => d.done).length;
   const nudges = his ? 0 : st.nudges ?? 0;
   if (nudges >= MAX_NUDGES) return;
-  if (his ? !(st.reportAt && st.reportAt > userAt) : met <= (st.nudgeMet ?? 0)) return;
+  // The first nudge needs an item TICKED since he typed, not just any report: a chat's opening
+  // `task_report {add, now}` (writing the list, saying where it starts) is not progress, and counting it
+  // nudged the same 2026-10-29 chat before it had finished item 1.
+  const tickedSince = st.dod.some((d) => d.done && d.by === "minami" && (d.at ?? 0) > userAt);
+  if (his ? !tickedSince : met <= (st.nudgeMet ?? 0)) return;
   // Let the turn's last writes and its final report land before deciding; then decide again from disk.
   if (Date.now() - v.at < SETTLE_MS) { settling.add(id); setTimeout(() => { settling.delete(id); maybeContinue(id); }, SETTLE_MS); return; }
   const message = runMessage(v.title, st.dod);
@@ -333,8 +338,9 @@ export async function POST(req: Request) {
       if (!v) throw new Error("no open task holds that chat");
       let id = v.id;
       mutateFlow((s) => {
-        const t = storedFor(s, v); id = t.id;
-        t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = "closed from the chat"; t.updatedAt = Date.now();
+        const t = storedFor(s, v, { auto: false });
+        id = t.id;
+        closeTask(t, { auto: true, why: "closed from the chat" });
       });
       return Response.json({ ok: true, id, title: v.title });
     }
@@ -388,7 +394,7 @@ export async function POST(req: Request) {
         case "dod.toggle": if (t?.dod) { const was = allDone(t.dod); t.dod = t.dod.map((d) => (d.id === b.dodId ? { id: d.id, t: d.t, ...gateOf(d), done: !d.done, at: Date.now() } : d)); t.dodPending = false; if (!t.archived) closeIfDone(t, was); } break;
         case "dod.add": if (t && b.t.trim()) { t.dod = [...(t.dod ?? []), { id: fid(), t: b.t.trim().slice(0, 140), done: false }]; t.dodPending = false; } break;
         case "gate": if (t?.dod) t.dod = t.dod.map((d) => (d.id === b.dodId ? { ...d, gate: b.gate === "pitch" || b.gate === "ok" ? b.gate : null, gateBy: "thomas" as const, gateWhy: undefined } : d)); break;
-        case "archive": if (t) { t.archived = true; t.doneAt = Date.now(); t.auto = false; } break;
+        case "archive": if (t) closeTask(t); break;
         // A To-do never started is just deleted; anything with chats is hidden, so they stay claimed.
         case "drop": if (t) { if (!t.sessions.length) s.threads = s.threads.filter((x) => x !== t); else t.hidden = true; } break;
         case "unarchive": if (t) { t.archived = false; t.autoDone = false; delete t.doneAt; } break;

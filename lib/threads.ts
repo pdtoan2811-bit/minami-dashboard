@@ -12,7 +12,7 @@ import { runPlan } from "@/lib/task-pace";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isBusy } from "@/lib/agent/manager";
+import { awaitingAgents, isBusy } from "@/lib/agent/manager";
 import { listSessions, topicOf, type SessionMeta } from "@/lib/claude-sessions";
 import { readFlow, type FlowDod, type TaskStep } from "@/lib/flow-store";
 import { todaySessionIds } from "@/lib/today-origin";
@@ -22,7 +22,10 @@ export const baseCwd = (cwd: string) => (cwd.includes(WT) ? cwd.slice(0, cwd.ind
 
 // Opening lines of sessions the dashboard or a tool writes, never Thomas. Matched on the title (the
 // first real line) — the transcript has no origin field (SessionMeta carries none).
-const MACHINE = /^(each line is a claude code chat|you classify|you are minami|you are a |reply with|<local-command|model_ok|write a one-line|summari[sz]e |classify |rate |score |return only|output only|merge conflict|resolve the merge)/i;
+// The last four were on the board as tasks on 2026-10-29: the merge resolver's and the worktree runner's
+// pasted prompts ("You are resolving a git merge conflict…" ×3), the Minami bot's Slack turns, and test
+// pings ("In pace-test: reply with the single word ok").
+const MACHINE = /^(each line is a claude code chat|you classify|you are minami|you are a |reply with|<local-command|model_ok|write a one-line|summari[sz]e |classify |rate |score |return only|output only|merge conflict|resolve the merge|you are resolving|you are in a git worktree|minami · slack turn|in pace-test:)/i;
 const HANDOFF = /^(today|autopilot|goal|runners?) ·/i;
 
 export function isMachine(m: SessionMeta, today: Set<string>): boolean {
@@ -137,10 +140,15 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
   // An archived thread still claims its sessions — otherwise archiving one hands its chats straight
   // back as a derived thread and it reappears on the next poll.
   // (They are still built below, into `done`, for the board's Done column.)
-  for (const t of store.threads) for (const sid of t.sessions) claimed.set(sid, t.id);
+  // A chat belongs to ONE task. Records that claim the same chat (made by racing first-writers before
+  // `storedFor` matched by session, 3 chats on 2026-10-29) showed it as two tasks with two lists. First
+  // claim wins: a task he named over one Minami stored, then an open one over a closed one, then newest.
+  const rank = (t: (typeof store.threads)[number]) => (t.auto ? 2 : 0) + (t.archived ? 1 : 0);
+  const order = [...store.threads].sort((a, b) => rank(a) - rank(b) || b.createdAt - a.createdAt);
+  for (const t of order) for (const sid of t.sessions) if (!claimed.has(sid)) claimed.set(sid, t.id);
 
   const groups = new Map<string, { stored?: (typeof store.threads)[number]; ids: Set<string> }>();
-  for (const t of store.threads) groups.set(t.id, { stored: t, ids: new Set(t.sessions) });
+  for (const t of store.threads) groups.set(t.id, { stored: t, ids: new Set(t.sessions.filter((sid) => claimed.get(sid) === t.id)) });
   for (const m of human) {
     const key = claimed.get(m.id) ?? claimed.get(root(m.id)) ?? "s:" + root(m.id);
     const g = groups.get(key) ?? { ids: new Set<string>() };
@@ -181,7 +189,9 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
       continue;
     }
     if (last.lastActivity < since && (!g.stored || g.stored.auto)) continue;
-    const busy = ms.some((m) => isBusy("live:" + m.id));
+    // Waiting on its own background agents is working: the chat wakes itself when they report. Reading
+    // it as idle put it in Paused and let auto-continue nudge it mid-wait (2026-10-29).
+    const busy = ms.some((m) => isBusy("live:" + m.id) || awaitingAgents("live:" + m.id));
     // A run stopped at a gate (lib/task-pace.ts) needs him even when the chat's last line isn't a question:
     // that is the one place a task should flag him, and an ungated next item never does (auto-continue).
     const gated = !!g.stored?.dod && (({ run, stop }) => !run.length && !!stop)(runPlan(g.stored.dod));

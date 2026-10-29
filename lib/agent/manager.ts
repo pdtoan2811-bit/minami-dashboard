@@ -2262,6 +2262,14 @@ export function isBusy(key: string): boolean {
   return !!s && !s.closed && s.busy;
 }
 
+/** The turn ended but agents it launched in the background are still out there: the chat is waiting on
+ *  them and wakes itself when they report. Agents only, like the deploy veto — a background shell is as
+ *  often a dev server left running. */
+export function awaitingAgents(key: string): boolean {
+  const s = store.get(key);
+  return !!s && !s.closed && fleetInFlight(s, true);
+}
+
 /** The pane key the session was spawned under (what its children see as MINAMI_SESSION_KEY) and its cwd,
  *  from any key the client holds — a pane switches to `live:<sid>` after its first turn, but the env
  *  was set at spawn with the original key. */
