@@ -83,8 +83,10 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
   const tasks = useMemo(() => [...(d?.threads ?? []), ...(d?.done ?? [])].filter((t) => t.project === project), [d, project]);
   const byCol = useMemo(() => {
     const m: Record<Col, ThreadView[]> = { todo: [], working: [], waiting: [], blocked: [], paused: [], done: [] };
-    for (const t of tasks) m[colOf(t)].push(t);
+    // Same stable order as the tile (TopicTasks): by when the task began, never by last activity.
+    for (const t of [...tasks].sort((a, b) => (b.born ?? b.at) - (a.born ?? a.at))) m[colOf(t)].push(t);
     m.todo.sort((a, b) => a.at - b.at); // oldest first: the order he wrote them down
+    m.done.sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)); // latest finished first, as the server sends it
     // A task whose every done-item is met rises to the top of its column with Close, before it's archived.
     for (const k of ["waiting", "paused"] as Col[]) m[k].sort((a, b) => Number(allMet(b)) - Number(allMet(a)));
     return m;

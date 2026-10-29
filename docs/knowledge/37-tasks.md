@@ -555,6 +555,12 @@ A thread is derived, not declared (`lib/threads.ts`):
 
 Opening a thread = its topic's panel with the thread's sessions as the tabs (newest four).
 
+**Cards hold their place** (2026-10-29). The tile and the board place cards by `born` (the stored task's
+`createdAt`), newest first — never by `at`, which is last activity and moves on every reply. Ordering by
+`at` shuffled the tile while he was reading it ("confuse to follow"). A card moves only when a task is
+created, closed or changes column. Kept on purpose: To do is oldest-first, an all-met task rises in
+Waiting/Paused, Done is latest-finished first. The tile shows the open chat's task even past the first six.
+
 | Piece | Role |
 |---|---|
 | `lib/threads.ts` | Derivation, the machine filter, the project list. Reads each transcript's head once (start time and first line) and caches it by id. |

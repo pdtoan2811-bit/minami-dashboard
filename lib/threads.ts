@@ -108,6 +108,9 @@ export type ThreadView = {
   id: string; stored: boolean; title: string; project: string; cwd: string;
   sessions: { id: string; cwd: string }[];
   latest: string; at: number; state: ThreadState; line: string; asks: number;
+  /** When the task was created. Cards are placed by this, never by `at`: `at` moves on every reply, and
+   *  ordering by it shuffled the tile under him while he read it (Thomas, 2026-10-29: "confuse to follow"). */
+  born: number;
   dod?: FlowDod[];
   /** Where it stands, in the chat's words (task_report `note`). */
   note?: string;
@@ -182,7 +185,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     if (st?.hidden) continue;
     // A To-do card: written down on the board, no chat yet.
     if (!ms.length && st?.queued && !st.archived) {
-      views.push({ id, stored: true, title: st.title, project: st.project, cwd: st.cwd, sessions: [], latest: "", at: st.createdAt,
+      views.push({ id, stored: true, title: st.title, project: st.project, cwd: st.cwd, sessions: [], latest: "", at: st.createdAt, born: st.createdAt,
         state: "queued", line: "", asks: 0, ...(st.dod ? { dod: st.dod } : {}) });
       continue;
     }
@@ -202,7 +205,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
       // Done keeps two weeks, so a finished task is still there to reopen the next week.
       if ((st.doneAt ?? st.updatedAt) > Date.now() - 14 * 86_400_000) done.push({
         id, stored: true, title: clip(st.title || titleOf(ms[ms.length - 1]), 90), project: st.project || ms[ms.length - 1].project, cwd: st.cwd,
-        sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: ms[ms.length - 1].id, at: ms[ms.length - 1].lastActivity,
+        sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: ms[ms.length - 1].id, at: ms[ms.length - 1].lastActivity, born: st.createdAt,
         state: "idle", line: "", asks: 0, archived: true, doneAt: st.doneAt ?? st.updatedAt, autoDone: !!st.autoDone, closedWhy: st.closedWhy, ...(st.dod ? { dod: st.dod } : {}),
       });
       continue;
@@ -240,7 +243,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
         })();
     views.push({
       id, stored: !!g.stored, title: clip(g.stored?.title || titleOf(last), 90), project: last.project, cwd: baseCwd(last.cwd),
-      sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: last.id, at: last.lastActivity, state,
+      sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: last.id, at: last.lastActivity, born: g.stored?.createdAt ?? ms[0].lastActivity, state,
       line: clip(need ? need.summary : state === "working" ? (last.now || tail || "working") : tail || last.lastPrompt || "", 140),
       asks: ms.reduce((n, m) => n + (m.askCount ?? 0), 0),
       ...(g.stored?.dod ? { dod: g.stored.dod } : {}),

@@ -31,12 +31,15 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
   const [draft, setDraft] = useState("");
   useEffect(() => { if (!writing) setDraft(readDraft(project)); }, [writing, project]);
   const [more, setMore] = useState(false);
-  const open = tasks.filter((t) => t.state !== "queued");
+  // Placed by when each task began, newest first, and never by activity: the server list is newest-
+  // activity first, so every reply jumped a card to the top and he lost his place (2026-10-29). A card
+  // only moves now when a task is created, closed or changes column.
+  const open = tasks.filter((t) => t.state !== "queued").sort((a, b) => (b.born ?? b.at) - (a.born ?? a.at));
   const pending = useStartingCards(project, tasks);
-  const shown = more ? open : open.slice(0, 6);
   // The task whose chat is open scrolls into view inside the tile, so "which one am I in" is answered
-  // without hunting through the list.
+  // without hunting through the list. Past the first six it is shown anyway, in its own place.
   const activeId = open.find((t) => t.sessions.some((x) => openSids.includes(x.id)))?.id;
+  const shown = more ? open : open.filter((t, i) => i < 6 || t.id === activeId);
   useEffect(() => {
     if (activeId) document.querySelector(`[data-expanded] [data-task="${CSS.escape(activeId)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [activeId]);
