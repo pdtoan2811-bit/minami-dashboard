@@ -22,7 +22,7 @@ const WILL: Record<string, string> = {
   "com.thomas.minami-heartbeat": "Plans the day: writes /today and the vault daily note",
   "com.thomas.minami-morning": "Notification + opens /today",
   "com.thomas.video-harness-week": "Weekly video harness review, one Slack line",
-  "com.thomas.video-opinion": "Drafts or locks the weekly opinion interview (/opinion)",
+  "com.thomas.video-opinion": "Refreshes /opinion topics; Saturday noon locks the week's takes",
   "com.thomas.video-ideas-prune": "Drops expired and old ideas from the idea store",
   "com.thomas.design-kit-harness": "Weekly design-kit audit; edits nothing",
 };
