@@ -12,7 +12,7 @@ import { runPlan } from "@/lib/task-pace";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { awaitingAgents, isBusy } from "@/lib/agent/manager";
+import { awaitingAgents, awaitingHuman, isBusy } from "@/lib/agent/manager";
 import { listSessions, topicOf, type SessionMeta } from "@/lib/claude-sessions";
 import { readFlow, type FlowDod, type TaskStep } from "@/lib/flow-store";
 import { todaySessionIds } from "@/lib/today-origin";
@@ -104,6 +104,9 @@ export type ThreadView = {
   dod?: FlowDod[];
   /** What it waits on him for now (TaskStep): only while no newer activity than the reading. */
   step?: TaskStep;
+  /** The turn is parked on him mid-flight (AskUserQuestion, plan review): state is "waiting", but the
+   *  turn isn't over, so nothing that reads a quiet chat (step, evaluate, auto-continue) may run on it. */
+  ask?: string;
   /** Archived (moved to Done). Only in `done`, never in `threads`. */
   archived?: boolean; doneAt?: number; autoDone?: boolean; closedWhy?: string;
 };
@@ -191,23 +194,27 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     if (last.lastActivity < since && (!g.stored || g.stored.auto)) continue;
     // Waiting on its own background agents is working: the chat wakes itself when they report. Reading
     // it as idle put it in Paused and let auto-continue nudge it mid-wait (2026-10-29).
-    const busy = ms.some((m) => isBusy("live:" + m.id) || awaitingAgents("live:" + m.id));
+    // A turn parked on his answer is still "busy" to the manager, but it is his move, not work: it goes
+    // to Needs you with the question as its line (🐛 2026-10-29: it sat in Working, unseen, §37).
+    const need = ms.map((m) => awaitingHuman("live:" + m.id)).find(Boolean);
+    const busy = !need && ms.some((m) => isBusy("live:" + m.id) || awaitingAgents("live:" + m.id));
     // A run stopped at a gate (lib/task-pace.ts) needs him even when the chat's last line isn't a question:
     // that is the one place a task should flag him, and an ungated next item never does (auto-continue).
     const gated = !!g.stored?.dod && (({ run, stop }) => !run.length && !!stop)(runPlan(g.stored.dod));
     // The step read off a quiet chat ("Merge and deploy it?") is his move too, and the card leads with it.
     // Any newer activity hides it until it's read again: a stale question is worse than none.
     const step = !busy && g.stored?.step && g.stored.step.at >= last.lastActivity ? g.stored.step : undefined;
-    const waiting = !busy && (!!last.review || gated || !!step || last.lastRole === "assistant" && /\?\s*$/.test(last.tail || ""));
+    const waiting = !!need || !busy && (!!last.review || gated || !!step || last.lastRole === "assistant" && /\?\s*$/.test(last.tail || ""));
     const state: ThreadState = busy ? "working" : waiting ? "waiting" : "idle";
     const tail = plain(last.tail || "");
     views.push({
       id, stored: !!g.stored, title: clip(g.stored?.title || titleOf(last), 90), project: last.project, cwd: baseCwd(last.cwd),
       sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: last.id, at: last.lastActivity, state,
-      line: clip(state === "working" ? (last.now || tail || "working") : tail || last.lastPrompt || "", 140),
+      line: clip(need ? need.summary : state === "working" ? (last.now || tail || "working") : tail || last.lastPrompt || "", 140),
       asks: ms.reduce((n, m) => n + (m.askCount ?? 0), 0),
       ...(g.stored?.dod ? { dod: g.stored.dod } : {}),
-      ...(step ? { step } : {}),
+      ...(step && !need ? { step } : {}),
+      ...(need ? { ask: need.summary } : {}),
     });
   }
   views.sort((a, b) => b.at - a.at);

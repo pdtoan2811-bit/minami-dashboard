@@ -391,6 +391,14 @@ launchd logs. Fixed in the same change:
 > `working`, and `maybeContinue` skips it. The first nudge now needs an item **ticked** after his last
 > message, not just any report.
 
+> 🐛 **A chat asking him a question sat in Working.** An AskUserQuestion (or a plan to review) parks
+> the turn *inside* the tool call, so the manager's `busy` stays true the whole time it waits. `threads()`
+> read busy as `working` and gated `waiting` on `!busy`, so the task never reached Needs you and the
+> card's line was the stale activity; he only found the question by opening the chat. Fix:
+> `awaitingHuman(key)` in `lib/agent/manager.ts` returns the parked `Need`; a thread with one is
+> `waiting`, its line is the question, and `ask` is set. The route treats `ask` as mid-turn (`mid`), so
+> the quiet-chat readers (step, evaluate) don't read a half-finished reply as the task's end.
+
 > 🐛 **Closed tasks kept an item "on now".** No close path cleared `doing`: 4 archived tasks had one, and
 > 3 open ones were 13–17h stale. `closeTask()` in `lib/task-report.ts` is now the only way to close a task.
 > It clears `doing` and `dodPending`. Of 58 lists, 52 were still "suggested": the Keep tap is almost never

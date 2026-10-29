@@ -2270,6 +2270,17 @@ export function awaitingAgents(key: string): boolean {
   return !!s && !s.closed && fleetInFlight(s, true);
 }
 
+/** What the turn is parked on, if it is parked on a human: an AskUserQuestion, a plan to review, a held
+ *  step. `busy` stays true the whole time (the tool call is still in flight), so anything that reads
+ *  busy as "working" files the one moment a chat needs him under Working — the task board did, and he
+ *  only found the question by opening the chat (§37, 2026-10-29). */
+export function awaitingHuman(key: string): Need | null {
+  const s = store.get(key);
+  if (!s || s.closed || !s.pending.size) return null;
+  const [id, p] = s.pending.entries().next().value as [string, Pending];
+  return needOf(id, p.toolName, p.input, !!p.timer, p.expiresAt, p.since);
+}
+
 /** The pane key the session was spawned under (what its children see as MINAMI_SESSION_KEY) and its cwd,
  *  from any key the client holds — a pane switches to `live:<sid>` after its first turn, but the env
  *  was set at spawn with the original key. */
