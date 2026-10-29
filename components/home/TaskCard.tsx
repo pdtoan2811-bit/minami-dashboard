@@ -86,7 +86,7 @@ function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<
   return (
     <li className={`group/item relative flex items-start gap-2 rounded-lg px-1.5 py-1 ${status === "on" ? "bg-[#f0a868]/[0.08]" : lead ? "bg-[var(--sakura)]/[0.06]" : ""}`}>
       <button onClick={() => void threadPost({ action: "dod.toggle", id: t.id, dodId: d.id })} aria-label={d.done ? "Mark not done" : "Mark done"}
-        title={d.by === "minami" ? `Ticked by Minami: ${d.why || "the chat says so"}. Tap to change.` : undefined}
+        title={d.by === "minami" ? `Ticked by ${SRC[d.src ?? ""] ?? "Minami"}: ${d.why || "the chat says so"}. Tap to change.` : d.seen ? `Looks met: ${d.seen.why}. Tap to tick it.` : undefined}
         className={`mt-[2px] flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] leading-none ${d.done ? "border-[#4ade80] bg-[#4ade80]/20 text-[#4ade80]" : status === "on" ? "border-[#f0a868]" : lead ? "border-[var(--sakura)]/70" : "border-white/25 hover:border-white/50"}`}>
         {d.done ? "✓" : status === "on" ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f0a868]" /> : ""}
       </button>
@@ -110,7 +110,7 @@ function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<
         )}
         {d.by === "minami" && d.done && (
           <span className="mt-0.5 block text-[11px] leading-snug text-neutral-500">
-            <span className="text-[#4ade80]/80">Minami:</span> {d.why || "the chat says so"}
+            <span className="text-[#4ade80]/80">{SRC[d.src ?? ""] ?? "Minami"}:</span> {d.why || "the chat says so"}
             {/* The words in the chat that met it, checked to be really there (evaluate in /api/threads).
                 Tapping opens the chat they came from. */}
             {d.quote && (
@@ -121,10 +121,21 @@ function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<
             )}
           </span>
         )}
+        {/* Minami's reading thinks it's met. A suggestion: not progress, never closes the task, one tap
+            on the circle makes it his tick (§37, 2026-10-29). */}
+        {!d.done && d.seen && (
+          <span className="mt-0.5 block text-[11px] leading-snug text-neutral-500">
+            <span className="text-[#4ade80]/60">Looks met?</span> {d.seen.why}
+            {d.seen.quote && <span className="mt-0.5 block border-l-2 border-white/10 pl-2 italic text-neutral-500">“{d.seen.quote}”</span>}
+          </span>
+        )}
       </span>
     </li>
   );
 }
+
+/** Who made a tick, for the line under it: the chat's own report, git, or the Today check. */
+const SRC: Record<string, string> = { chat: "The chat", git: "Git", today: "Today" };
 
 /** Where a run stops for him (lib/task-pace.ts). A gated item shows its chip; an ungated one shows "auto"
  *  on hover only, so the usual case adds nothing to read. One tap cycles auto → your pick → asks you, and

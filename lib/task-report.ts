@@ -9,7 +9,10 @@
 // never report: `reportAt` newer than `evalAt` skips its reading for that quiet (see `ensure` in the route).
 import { closeTask, fid, findStored, mutateFlow, type FlowDod, type FlowState, type FlowThread } from "@/lib/flow-store";
 export { closeTask };
-import { threads, type ThreadView } from "@/lib/threads";
+import { baseCwd, threads, type ThreadView } from "@/lib/threads";
+import { sessionIdentity } from "@/lib/agent/manager";
+import { topicOf } from "@/lib/claude-sessions";
+import path from "node:path";
 import { GATE_LABEL, insertItems, runRules } from "@/lib/task-pace";
 
 export const allDone = (dod?: FlowDod[]) => !!dod?.length && dod.every((d) => d.done);
@@ -45,7 +48,21 @@ export function storedFor(s: FlowState, v: ThreadView, o: { auto?: boolean } = {
   return t;
 }
 
-const itemLine = (d: FlowDod, i: number) =>
+/** A chat started as a task (POST /api/agent/send with `task: true`) gets its record here, the moment its
+ *  session id exists. Only these, To-do cards, named chats and Today hand-offs are tasks (Thomas,
+ *  2026-10-29). No title is stored: the view falls back to the chat's own rolling title, which is better
+ *  than the first line of a long brief. */
+export function registerTask(key: string, cwd: string, sid: string | null, tries = 0) {
+  const id = sid ?? sessionIdentity(key)?.sessionId ?? null;
+  if (!id) { if (tries < 60) setTimeout(() => registerTask(key, cwd, null, tries + 1), 700); return; }
+  const base = baseCwd(cwd);
+  mutateFlow((s) => {
+    if (s.threads.some((t) => t.sessions.includes(id))) return;
+    s.threads.unshift({ id: fid(), title: "", project: topicOf(base).project || path.basename(base), cwd: base, sessions: [id], origin: "ask", createdAt: Date.now(), updatedAt: Date.now() });
+  }, "start");
+}
+
+const itemLine =(d: FlowDod, i: number) =>
   `${i + 1}. [${d.done ? "x" : " "}] ${d.t}${d.done ? (d.by === "minami" ? " (ticked by Minami)" : " (ticked by Thomas)") : `${d.gate ? ` (gate: ${GATE_LABEL[d.gate]})` : ""}${d.doing ? " (on now)" : ""}`}`;
 
 /** What `task_status` hands the chat: the task and its numbered done-list. */
@@ -60,6 +77,7 @@ export function taskStatus(sessionId: string | null): string {
     dod.length
       ? `Done-list:\n${dod.map(itemLine).join("\n")}`
       : "No done-list yet. You may add 2-4 checkable outcomes with task_report's `add`.",
+    v.note ? `Where it stands (the last note):\n${v.note}` : "",
     runRules(dod),
   ].filter(Boolean).join("\n");
 }
@@ -75,6 +93,9 @@ export type TaskReport = {
   add?: string[];
   /** Thomas said the whole task is done, or it is finished with nothing left: closes it. */
   finished?: string;
+  /** Where the task stands now, for whoever picks it up next (a resumed chat, him in the morning):
+   *  done so far, what's next, what's blocking. Replaces the previous note. */
+  note?: string;
 };
 
 /** Apply a chat's own report to the task that holds it. Returns a line for the chat to read. */
@@ -98,7 +119,7 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
       if (cur.done) { said.push(`item ${d.n} was already met — nothing changed`); continue; }
       // `by: "minami"` keeps the card's mark and lets him untick it; no `quote`, because the chat is
       // reporting its own work, not quoting evidence someone has to check against a transcript.
-      dod[d.n - 1] = { id: cur.id, t: cur.t, ...gateOf(cur), done: true, by: "minami", why: String(d.why ?? "").slice(0, 120) || "reported by the chat", at: Date.now() };
+      dod[d.n - 1] = { id: cur.id, t: cur.t, ...gateOf(cur), done: true, by: "minami", src: "chat", why: String(d.why ?? "").slice(0, 120) || "reported by the chat", at: Date.now() };
       said.push(`ticked ${d.n} ("${cur.t}")`);
     }
     for (const n of r.undone ?? []) {
@@ -112,6 +133,8 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
       if (r.now > 0 && valid(r.now)) said.push(`on ${r.now}`);
     }
     t.dod = dod;
+    const note = String(r.note ?? "").trim().slice(0, 2000);
+    if (note) { t.note = note; said.push("note saved"); }
     t.reportAt = Date.now();
     t.updatedAt = Date.now();
     // A chat reports from INSIDE its turn, and the turn often goes on to ask him something — this task
@@ -128,6 +151,6 @@ export function taskReport(sessionId: string | null, r: TaskReport): string {
       const left = dod.map((d, i) => (d.done ? "" : `${i + 1}. ${d.t}`)).filter(Boolean);
       if (left.length) said.push(`still open: ${left.join("; ")}`);
     }
-  });
+  }, "chat");
   return said.length ? `Recorded: ${said.join(", ")}.` : "Nothing changed.";
 }

@@ -477,6 +477,67 @@ desktop tile and board.
 - The **dock chip** names the task the open chat belongs to, with its `met/total`.
 - Queued tasks (board To do) are left out: they have no chat to open yet.
 
+## A task is a folder with a log (2026-10-29, steps 0–1 of the "contract" plan)
+
+Thomas: "a lot of things resemble a harness, but it needs to be dynamic and flexible enough… works smoothly
+day after day". A research pass (the store, 5 days of transcripts, the concept map, outside designs:
+Anthropic's long-running-agent harness, Linear agent sessions, Copilot issue → PR, LangGraph interrupts) found:
+- about 14 mechanisms write one task's state, and most post-mortems above are two of them racing
+- 200 of 204 ticks were Minami's Haiku reading, and 36% of closed tasks closed with items still open
+- no task had ever held more than one chat
+- at least 11 of 76 records were machine chats.
+
+The plan: the task is a small contract on disk (goal, items, recipe, progress note, log). Chats are
+workers attached to it. Done is proven by the chat's own report and by artifacts, and rules become data
+(recipes). Steps: 0 cleanup → 1 contract + log → 2 sensors → 3 recipes → 4 daily rhythm.
+
+His picks: done = chat report + artifacts; a dead chat is resumed (the old session, not a fresh chat from
+the note); only tasks he starts are tasks.
+
+**Built (steps 0–1):**
+- **Storage** (`lib/flow-store.ts`): `~/.minami/tasks/<id>/task.json` + `events.jsonl` + `note.md`, and
+  `_meta.json` (dismissed). It is migrated once from `flow.json`, which is left untouched for a rollback.
+  - Existing records get an `origin`: `today` / `board` / `named` / `legacy` (derived, ages out).
+  - The API is the same (`readFlow`, `mutateFlow`). A mutation writes only the tasks it changed, so writers
+    on different tasks no longer overwrite each other.
+  - Each change appends one event, `{at, by, ticked, unticked, added, seen, closed, reopened, note, step,
+    fields}`. `by` is the actor: `thomas` (POST edits), `chat` (task_report), `reader` (Haiku), `sensor`
+    (git), `today`, `runner` (auto-continue), `start`, `server`. `taskEvents(id)` reads it.
+  - State is still the snapshot. The log is the audit trail, not yet folded into state.
+  - `MINAMI_TASKS_DIR` moves it.
+- **Minami's reading suggests** (`evaluate` in the route): a met item gets `seen {why, quote}` and shows as
+  "Looks met?" under it. It is not progress and never closes anything, and his tap ticks it.
+  - The reading still closes a task on **his** words. They must come from a `Thomas:` line, be at least
+    2 words, and Haiku must answer `finishedBy: "Thomas"`.
+  - 🐛 found on :3001: a one-word "Done." matched inside his own brief ("…then reply done.") and closed a test
+    task on its first quiet.
+- **What ticks**: the chat (`task_report`, `src: "chat"`), git / the live build (`tickShipped`, `src: "git"`),
+  the Today check, and him. The card names the source under a tick ("The chat: …", "Git: …").
+- **Only tasks he starts** (`lib/threads.ts`): a chat joins a view only when a stored task claims it or the
+  chat it continues. There are no derived `s:` tasks any more.
+  - `startAsk` sends `task: true`, and the send route's `registerTask` writes `{origin: "ask"}` once the
+    session id exists. That covers the Ask line, the New task sheet and the phone ＋ Task.
+  - The board's ▶ Start passes `task: false`: it joins its To-do card instead.
+  - Naming a chat makes it a task (`origin: "named"`).
+  - Its title is left empty, so the card uses the chat's rolling title.
+- **The note**: `task_report {note}` writes `note.md`, `task_status` returns it ("Where it stands"), and
+  `TASK_PROMPT` asks for one whenever the chat stops. The note is what a resumed chat reads first.
+- **Cost is visible**: every `runHaiku` call goes to `~/.minami/headless-usage.jsonl`, tagged
+  `dashboard:task-suggest|evaluate|focus|step|gate` (or `dashboard:bento-enrich`).
+
+Tested on `:3001` against a copy (`MINAMI_FLOW_FILE` + `MINAMI_TASKS_DIR` in `/tmp`):
+- 76 records migrated, and the open list matched `:3000`.
+- A `task: true` send created an `ask` task.
+- The chat's report ticked an item and saved a note.
+- Haiku's reading left `seen`, not a tick.
+- Auto-continue nudged the chat, the chat ticked the last item itself, and the held close closed it once
+  the turn was quiet.
+- All of it was in `events.jsonl`.
+
+**Not done yet:** steps 2–4 (item checks against git / URL, recipes replacing `GATE_RULES` / `SHIP_ITEM`, the
+stale fold and the push grouped by whose move it is). The `s:` branches in the route and `storedFor` are now dead
+code, and so is Flow / Agents / Teams.
+
 ## Threads
 
 A thread is derived, not declared (`lib/threads.ts`):
