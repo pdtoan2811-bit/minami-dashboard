@@ -26,7 +26,7 @@ import { STATUS } from "./RunnersSection";
 import { AskBox } from "./AskBox";
 import { useAsks } from "./Asks";
 import { GoalTodos } from "./GoalTodos";
-import { GoalDays, PageBars, RankLine, SC, headline, localDate, rankText, useScoreCards, type Score } from "./Scoreboard";
+import { GoalDays, PageBars, RankLine, SC, headline, localDate, rankText, serpUrl, useScoreCards, type Score } from "./Scoreboard";
 
 const K = { ...TK, green: "#3ecf8e", amber: "#f3c766", red: "#ff8a8d" };
 const mix = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, transparent)`;
@@ -177,6 +177,7 @@ function GoalDetail({ g, busy, onRun, onChanged, runners }: { g: Goal; busy: boo
   const h = health(g);
   const { ranks, pages } = useScoreCards(g);
   const q = g.spec.target.queries ?? [];
+  const site = hostOf(g.ranks.findLast((r) => r.url)?.url);
   const hasPart = !!g.today && (g.today.todos.length > 0 || g.today.questions.length > 0);
   const { reload: reloadAsks } = useAsks();
   const [resolving, setResolving] = useState(false);
@@ -213,13 +214,15 @@ function GoalDetail({ g, busy, onRun, onChanged, runners }: { g: Goal; busy: boo
         <div className="mt-6 grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.max(1, ranks.length + (pages ? 1 : 0))}, minmax(0, 1fr))` }}>
           {ranks.map((s) => (
             <Tile key={s.key} k={`Rank · ${s.label}`} color={s.color} value={rankText(s.now)} change={rankChange(s)}
-              chart={s.series.filter((x) => x !== undefined).length >= 7 ? <RankLine series={s.series} color={s.color} h={30} /> : null}
-              note={s.now && s.day !== localDate() ? `as of ${short(s.day!)}` : undefined} />
+              chart={s.series.filter((x) => x !== undefined).length >= 2 ? <RankLine series={s.series} color={s.color} h={64} /> : null}
+              note={s.now && s.day !== localDate() ? `as of ${short(s.day!)}` : undefined}
+              evidence={<Evidence s={s} />} />
           ))}
           {pages && (
             <Tile k="Pages in Google" color={SC.green} value={<>{pages.value}{pages.total != null && <small className="ml-1 text-[16px] font-medium" style={{ color: K.faint }}>/ {pages.total}</small>}</>}
               change={countChange(pages.dayDelta, pages.weekDelta)}
-              chart={pages.days.filter((d) => d.indexed != null).length >= 7 ? <PageBars days={pages.days} h={30} /> : null} />
+              chart={pages.days.filter((d) => d.indexed != null).length >= 2 ? <PageBars days={pages.days} h={64} /> : null}
+              evidence={site && <a href={serpUrl(`site:${site}`)} target="_blank" rel="noreferrer" className="underline decoration-white/20 underline-offset-2 hover:decoration-white/60">Check on Google: site:{site} ↗</a>} />
           )}
         </div>
 
@@ -375,14 +378,35 @@ function More({ g, runners }: { g: Goal; runners: Automation[] }) {
   );
 }
 
-// A number tile (V4): label, the number, its change as words beside it, and a small line only once there's a shape.
-function Tile({ k, color, value, change, chart, note }: { k: string; color: string; value: React.ReactNode; change: React.ReactNode; chart: React.ReactNode; note?: string }) {
+// A number tile (V4): label, the number, its change as words beside it, then the labelled line full width and the
+// evidence — the link that lets Thomas check the number by eye (2026-10-29: "a search query as easy to check evidence").
+function Tile({ k, color, value, change, chart, note, evidence }: { k: string; color: string; value: React.ReactNode; change: React.ReactNode; chart: React.ReactNode; note?: string; evidence?: React.ReactNode }) {
   return (
-    <div className="min-w-0 rounded-2xl px-4 py-3.5" style={{ background: "rgba(0,0,0,.25)", border: `1px solid ${K.line}` }}>
+    <div className="flex min-w-0 flex-col rounded-2xl px-4 py-3.5" style={{ background: "rgba(0,0,0,.25)", border: `1px solid ${K.line}` }}>
       <div className="flex items-center gap-2 text-[13.5px]" style={{ color: K.muted }}><i className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} /><span className="truncate">{k}</span></div>
       <div className="mt-1.5 text-[32px] font-bold leading-none tracking-tight tabular-nums">{value}</div>
-      <div className="mt-2 flex items-end justify-between gap-3 text-[13px]"><span className="min-w-0">{change}{note && <span style={{ color: K.faint }}> · {note}</span>}</span>{chart && <span className="w-[90px] shrink-0">{chart}</span>}</div>
+      <div className="mt-2 text-[13px]">{change}{note && <span style={{ color: K.faint }}> · {note}</span>}</div>
+      {chart && <div className="mt-3">{chart}</div>}
+      {evidence && <div className="mt-auto pt-3 text-[12.5px] leading-relaxed" style={{ color: K.muted }}>{evidence}</div>}
     </div>
+  );
+}
+
+const hostOf = (u: string | null | undefined) => { try { return u ? new URL(u).hostname.replace(/^www\./, "") : ""; } catch { return ""; } };
+
+// Under a rank: the exact search, opened at our results page, plus what Google matched and Search Console's own number.
+function Evidence({ s }: { s: Score }) {
+  const r = s.now;
+  const page = r?.rank ? Math.ceil(r.rank / 10) : null;
+  return (
+    <>
+      <a href={serpUrl(s.key, r?.rank)} target="_blank" rel="noreferrer" title="Google US, English, not personalised — the same search the runner reads"
+        className="underline decoration-white/20 underline-offset-2 hover:decoration-white/60" style={{ color: K.ink }}>
+        Check on Google{page && page > 1 ? ` · page ${page}` : ""} ↗
+      </a>
+      {r?.url && <span className="block truncate" style={{ color: K.faint }}>Found <span style={MONO}>{r.url.replace(/^https?:\/\/(www\.)?/, "")}</span></span>}
+      {r?.gsc_position != null && <span className="block" style={{ color: K.faint }}>Search Console avg #{r.gsc_position.toFixed(1)}</span>}
+    </>
   );
 }
 const Up = ({ v, label }: { v: number; label: string }) => <span style={{ color: v > 0 ? K.green : v < 0 ? K.red : K.faint }}>{v === 0 ? `same as ${label}` : `${v > 0 ? "▲" : "▼"} ${Math.abs(v)} vs ${label}`}</span>;

@@ -104,21 +104,51 @@ export function ScoreDeltas({ s }: { s: Score }) {
 }
 
 /** Rank by day, #1 at the top, log scale (the climb from #55 to #10 matters more than #95 to #55). null sits on
- *  the floor; undefined (no reading) leaves a gap rather than a point. */
-export function RankLine({ series, color, w = 240, h = 56 }: { series: (number | null | undefined)[]; color: string; w?: number; h?: number }) {
-  const n = Math.max(2, series.length), x = (i: number) => 4 + (i / (n - 1)) * (w - 8);
-  const y = (r: number | null) => (r == null ? h - 4 : 4 + (Math.log(r) / Math.log(100)) * (h - 14));
-  const pts = series.map((r, i) => (r === undefined ? null : ([x(i), y(r)] as const)));
-  const drawn = pts.filter(Boolean) as (readonly [number, number])[];
+ *  the "100+" floor; undefined (no reading) leaves a gap, bridged by a faint dash so the eye doesn't read it as a drop.
+ *  2026-10-29: Thomas called the unlabelled sparkline "ugly and confusing as hell" — two dashed red/green lines with no
+ *  words, and nothing said that UP meant BETTER. So the axis now says #1 / #10 / 100+, the days are named, and the
+ *  last point carries its number. The labels are HTML, not SVG text, because the SVG stretches to the width. */
+export function RankLine({ series, color, h = 56 }: { series: (number | null | undefined)[]; color: string; w?: number; h?: number }) {
+  const w = 240, n = Math.max(2, series.length), x = (i: number) => (i / (n - 1)) * w;
+  const top = 6, floor = h - 6;
+  const yr = (r: number | null) => (r == null ? floor : top + (Math.log(r) / Math.log(100)) * (floor - top));
+  const pct = (v: number) => `${(v / h) * 100}%`;
+  const pts = series.map((r, i) => (r === undefined ? null : { i, x: x(i), y: yr(r), r }));
+  const drawn = pts.filter(Boolean) as { i: number; x: number; y: number; r: number | null }[];
+  const lastI = drawn.at(-1)?.i;
+  // Solid between consecutive days, dashed across a missing day.
+  const segs = drawn.slice(1).map((p, k) => ({ a: drawn[k], b: p, gap: p.i - drawn[k].i > 1 }));
+  const ticks: [string, number][] = [["#1", yr(1)], ["#10", yr(10)], ["100+", floor]];
+  const first = addDays(localDate(), -(series.length - 1));
   return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="block" style={{ height: h, overflow: "visible" }} aria-hidden>
-      <line x1="0" x2={w} y1={h - 4} y2={h - 4} stroke={tint(SC.red, 35)} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
-      <line x1="0" x2={w} y1="4" y2="4" stroke={tint(SC.green, 35)} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
-      {drawn.length > 1 && <polyline points={drawn.map((p) => p.join(",")).join(" ")} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />}
-      {pts.map((p, i) => p && <circle key={i} cx={p[0]} cy={p[1]} r={i === series.length - 1 ? 4.5 : 2.5} fill={color} />)}
-    </svg>
+    <div className="flex gap-2" aria-hidden>
+      <div className="relative w-8 shrink-0 text-[10.5px] tabular-nums" style={{ height: h, color: K.faint, fontFamily: "var(--today-mono)" }}>
+        {ticks.map(([t, y]) => <span key={t} className="absolute right-0 -translate-y-1/2 leading-none" style={{ top: pct(y) }}>{t}</span>)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="relative" style={{ height: h }}>
+          <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="absolute inset-0 block h-full w-full" style={{ overflow: "visible" }}>
+            {ticks.map(([t, y]) => <line key={t} x1="0" x2={w} y1={y} y2={y} stroke="rgba(255,255,255,.08)" vectorEffect="non-scaling-stroke" />)}
+            {segs.map(({ a, b, gap }, k) => <line key={k} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeOpacity={gap ? 0.4 : 1} strokeWidth="2" strokeDasharray={gap ? "2 4" : undefined} vectorEffect="non-scaling-stroke" />)}
+          </svg>
+          {/* Dots and the last value in HTML, so they stay round when the SVG stretches. */}
+          {drawn.map((p) => (
+            <i key={p.i} className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ left: `${(p.x / w) * 100}%`, top: pct(p.y), width: p.i === lastI ? 9 : 5, height: p.i === lastI ? 9 : 5, background: color }} />
+          ))}
+          {drawn.length > 0 && (() => { const p = drawn.at(-1)!; return (
+            <span className="absolute whitespace-nowrap text-[11px] font-semibold tabular-nums" style={{ right: 10, top: pct(p.y), color, transform: `translateY(${p.y < h / 2 ? "40%" : "-140%"})` }}>{p.r == null ? "100+" : `#${p.r}`}</span>
+          ); })()}
+        </div>
+        <div className="mt-1 flex justify-between text-[10.5px]" style={{ color: K.faint, fontFamily: "var(--today-mono)" }}><span>{shortDay(first)}</span><span>today</span></div>
+      </div>
+    </div>
   );
 }
+
+/** The search itself, as the runner reads it (sensors.mjs serp(): US, English, no personalisation), opened at the
+ *  results page where ecvision.ai sits — so a rank is one click from being checked by eye. */
+export const serpUrl = (q: string, rank?: number | null) =>
+  `https://www.google.com/search?q=${encodeURIComponent(q)}&hl=en&gl=us&pws=0${rank && rank > 10 ? `&start=${Math.floor((rank - 1) / 10) * 10}` : ""}`;
 export function PageBars({ days, h = 56 }: { days: { indexed: number | null; total: number | null }[]; h?: number }) {
   const top = Math.max(1, ...days.map((d) => d.total ?? d.indexed ?? 0));
   return (
