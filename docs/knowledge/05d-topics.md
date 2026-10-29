@@ -110,6 +110,19 @@ account for reads as arbitrary — and this one is a formula, so it owes an expl
 > the same one behind most entries in this file — every layer failed *silently*, reporting success or
 > nothing rather than the thing it couldn't do.
 
+> 🐛 **2026-10-29 — "topic just vanish": Minami's own Haiku calls pushed real topics off the board.**
+> Reported by user: *"I have multiple back and forth with the ecvision topic but cant find it in the
+> bento"*, so a task couldn't be started there without going through the folder picker. `listSessions()`
+> parses only the 150 most recently touched transcripts box-wide, and dropped the summarizer's own
+> (`~/.minami-bento`) sessions only *after* that cut. The §37 task readers (`runHaiku`: evaluate, focus,
+> step, gate) run ~100–180 times an hour, and each saved a transcript there. Measured: 134 of the newest
+> 150 transcripts were these, so the board held 16 real chats (about the last hour) and ecvision's
+> morning chats were gone. Fix, two layers: `runHaiku` (and `flow-narrate`'s copy) pass
+> `--no-session-persistence`, so the calls write nothing; `listSessions` skips the `-minami-bento`
+> folder before the window, which covers the ~1.8k files already on disk. After: 60 sessions, ecvision
+> and ecvisionContent back. Same shape as the 2026-10-07 `/tmp` loop (SCRATCH_CAP): anything that writes
+> transcripts in bulk competes with real chats for the window, so it has to leave before the cut.
+
 ### A topic ends when it becomes a real one
 
 `newTopic` is scaffolding, not a mode. It holds the panel together between "you picked a folder" and

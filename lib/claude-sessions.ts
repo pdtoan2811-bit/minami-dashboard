@@ -509,6 +509,10 @@ export function listSessions(): SessionMeta[] {
   // can't wrongly drop a genuinely active session outside the window.
   const candidates: { file: string; id: string; mtime: number; scratch: boolean }[] = [];
   for (const d of dirs) {
+    // The summarizer's own sessions are dropped HERE, before the window, not only after it (below).
+    // Filtered after, they still took window places: on 2026-10-29 they were 134 of the newest 150, so
+    // the board held ~16 real chats and a topic worked on that morning had no tile (§5d).
+    if (d.includes(ENRICH_DIR)) continue;
     const scratch = isScratchDir(d);
     const dir = path.join(PROJECTS, d);
     let files: string[];
@@ -553,6 +557,8 @@ export function listSessions(): SessionMeta[] {
   return sorted.filter((m) => !isScratchCwd(m.cwd) || m.active || m.lastActivity > Date.now() - SCRATCH_FRESH_MS || ++scratch <= SCRATCH_CAP).slice(0, 60);
 }
 
+/** ENRICH_MARKER as it appears in a ~/.claude/projects folder name (every / and . turned into -). */
+const ENRICH_DIR = ENRICH_MARKER.replace(/[/.]/g, "-");
 const READ_CHUNK = 4 * 1024 * 1024;
 const SCRATCH_CAP = 5;
 const SCRATCH_FRESH_MS = 15 * 60_000;

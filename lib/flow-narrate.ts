@@ -71,7 +71,7 @@ function writeStore(s: Store) {
 function runHaiku(prompt: string): Promise<string> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
-    try { fs.mkdirSync(DIR, { recursive: true }); child = spawn("claude", ["-p", prompt, "--model", CHEAP_MODEL, "--output-format", "json"], { cwd: DIR }); }
+    try { fs.mkdirSync(DIR, { recursive: true }); child = spawn("claude", ["-p", prompt, "--model", CHEAP_MODEL, "--output-format", "json", "--no-session-persistence"], { cwd: DIR }); } // not a chat: see runHaiku in bento-enrich
     catch { resolve(""); return; }
     let out = "", done = false;
     const finish = (v: string) => { if (!done) { done = true; clearTimeout(to); resolve(v); } };
