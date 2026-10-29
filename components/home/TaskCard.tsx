@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useSetting } from "@/lib/use-settings";
 import { answerStep, doDodItem, openThread, threadPost, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
-import { GATE_LABEL, nextGate, paceLine, runPlan } from "@/lib/task-pace";
+import { GATE_LABEL, SHIP_ITEM, nextGate, paceLine, runPlan } from "@/lib/task-pace";
 
 export const TINT = { working: "#f0a868", waiting: "var(--sakura)", idle: "rgba(255,255,255,0.22)", queued: "rgba(255,255,255,0.12)" } as const;
 const STATE = { working: "working", waiting: "waiting on you", idle: "", queued: "to do" } as const;
@@ -133,7 +133,7 @@ function GateChip({ t, d }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[n
   const g = d.gate ?? null;
   const tip = `${g ? `${GATE_LABEL[g]}${d.gateWhy ? ` — ${d.gateWhy}` : ""}` : "Minami does this one and moves on"}${d.gateBy ? " (your setting)" : ""}. Tap to change.`;
   return (
-    <button onClick={() => void threadPost({ action: "gate", id: t.id, dodId: d.id, gate: nextGate(g) })} title={tip}
+    <button onClick={() => void threadPost({ action: "gate", id: t.id, dodId: d.id, gate: nextGate(g, SHIP_ITEM.test(d.t)) })} title={tip}
       className={`shrink-0 rounded px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider ${g ? "bg-[var(--sakura)]/15 text-[var(--sakura)]" : "text-neutral-500 hover:text-neutral-300"}`}>
       {g ? `✋ ${GATE_LABEL[g]}` : "auto"}
     </button>
