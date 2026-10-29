@@ -13,20 +13,30 @@ import { ensureDod, threadPost, useThreads, type ThreadView } from "@/lib/use-th
 import type { AgentMode } from "@/lib/use-agent";
 import { DodBar, TaskCard, TINT } from "./TaskCard";
 
-type Col = "todo" | "working" | "waiting" | "paused" | "done";
+// Lanes by WHO holds the next move (pitch waiting-chain V1, picked 2026-10-29), read from the server's
+// `wait.holder` (lib/threads.ts). The columns used to be the chat's state, so a task that was merged and
+// live, one stuck on another chat's unsaved file and one that needed his pick all read "Needs you" and he
+// had to open five chats to tell them apart. "Another task" shows only when something is in it.
+type Col = "todo" | "working" | "waiting" | "blocked" | "paused" | "done";
 const COLS: { id: Col; label: string; tint: string; hint: string }[] = [
   { id: "todo", label: "To do", tint: "rgba(255,255,255,0.35)", hint: "Written down, not started" },
-  { id: "working", label: "Working", tint: TINT.working, hint: "A chat is running" },
-  { id: "waiting", label: "Needs you", tint: TINT.waiting, hint: "The chat is waiting on your reply" },
+  { id: "waiting", label: "You", tint: TINT.waiting, hint: "Your move: a reply, a pick, a go" },
+  { id: "working", label: "Running", tint: TINT.working, hint: "A chat or its agents are working" },
+  { id: "blocked", label: "Another task", tint: TINT.blocked, hint: "Stuck on something another chat left behind" },
   { id: "paused", label: "Paused", tint: "rgba(255,255,255,0.35)", hint: "Quiet, not finished" },
-  { id: "done", label: "Done", tint: "#4ade80", hint: "Moved here with ✓ Done" },
+  { id: "done", label: "Done", tint: "#4ade80", hint: "Closing on their own, or moved here with ✓ Done" },
 ];
 const allMet = (t: ThreadView) => !!t.dod?.length && t.dod.every((d) => d.done);
 function colOf(t: ThreadView): Col {
   if (t.archived) return "done";
   if (t.state === "queued") return "todo";
-  if (t.state === "working") return "working";
-  return t.state === "waiting" ? "waiting" : "paused";
+  switch (t.wait?.holder) {
+    case "you": return "waiting";
+    case "machine": return "working";
+    case "task": return "blocked";
+    case "done": return "done";
+    default: return t.state === "working" ? "working" : t.state === "waiting" ? "waiting" : "paused";
+  }
 }
 const btn = "shrink-0 rounded-lg border border-white/12 px-2.5 py-1 text-[12px] text-neutral-200 transition-colors hover:border-white/30 pointer-coarse:py-2";
 const mini = "rounded-md border border-white/12 px-2 py-0.5 text-[11px] text-neutral-300 transition-colors hover:border-white/30 hover:text-neutral-100 pointer-coarse:py-1.5";
@@ -37,7 +47,7 @@ const mini = "rounded-md border border-white/12 px-2 py-0.5 text-[11px] text-neu
 // dragging the divider and shrinking the chat ("don't make me reduce chat area"). Chosen by the board's
 // own width, never a setting: the same board is 1185px alone and 442px beside a chat.
 const STACK_BELOW = 1060;
-const STACK_ORDER: Col[] = ["waiting", "working", "todo", "paused", "done"];
+const STACK_ORDER: Col[] = ["waiting", "working", "blocked", "todo", "paused", "done"];
 
 export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = [], focusSid }: {
   project: string; cwd: string; onSwitch: (project: string) => void; onClose: () => void; onAllChats: () => void;
@@ -67,7 +77,7 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
 
   const tasks = useMemo(() => [...(d?.threads ?? []), ...(d?.done ?? [])].filter((t) => t.project === project), [d, project]);
   const byCol = useMemo(() => {
-    const m: Record<Col, ThreadView[]> = { todo: [], working: [], waiting: [], paused: [], done: [] };
+    const m: Record<Col, ThreadView[]> = { todo: [], working: [], waiting: [], blocked: [], paused: [], done: [] };
     for (const t of tasks) m[colOf(t)].push(t);
     m.todo.sort((a, b) => a.at - b.at); // oldest first: the order he wrote them down
     // A task whose every done-item is met rises to the top of its column with Close, before it's archived.
@@ -111,7 +121,7 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
     if (to === "done") { void threadPost({ action: "archive", id: t.id }); return; }
     if (t.archived) { void threadPost({ action: "unarchive", id: t.id }); return; }
     if (from === "todo" && to === "working") { void start(t); return; }
-    setNote(from === "todo" ? "Drag it to Working (or press Start) to begin it." : "Working, Needs you and Paused follow the chat — open it to move it along.");
+    setNote(from === "todo" ? "Drag it to Running (or press Start) to begin it." : "You, Running, Another task and Paused follow the chat — open it to move it along.");
   };
   const onDrop = (e: React.DragEvent, to: Col) => {
     e.preventDefault(); setOver(null);
@@ -184,6 +194,19 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
         )}
       </div>
 
+      {/* Whose move, in one line (V1): the count that matters first, the rest after it. */}
+      {live.length > 0 && (() => {
+        const n = (h: string) => live.filter((t) => t.wait?.holder === h).length;
+        const rest = [n("machine") && `${n("machine")} running`, n("task") && `${n("task")} stuck on another task`, n("done") && `${n("done")} done`].filter(Boolean);
+        return (
+          <p className="mb-2 flex flex-wrap items-baseline gap-x-2 px-1">
+            <span className="text-[18px] font-semibold" style={{ color: n("you") ? TINT.waiting : "rgb(115 115 115)" }}>{n("you")}</span>
+            <span className="text-[13px] text-neutral-300">need you</span>
+            {rest.length > 0 && <span className="text-[12px] text-neutral-500">· {rest.join(" · ")}</span>}
+          </p>
+        );
+      })()}
+
       {note && <p className="mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-neutral-300">{note}</p>}
 
       {stacked ? (
@@ -201,20 +224,20 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
             );
           })}
           {(() => {
-            const empty = STACK_ORDER.filter((id) => id !== "done" && id !== "todo" && !byCol[id].length);
+            const empty = STACK_ORDER.filter((id) => id !== "done" && id !== "todo" && id !== "blocked" && !byCol[id].length);
             return empty.length > 0 && <p className="px-1 text-[11px] text-neutral-600">{empty.map((id) => `${COLS.find((x) => x.id === id)!.label} 0`).join(" · ")}</p>;
           })()}
           {byCol.done.length > 0 && (
             <section>
               <button onClick={() => { const v = !showDone; setShowDone(v); try { localStorage.setItem("minami.boardDone", v ? "1" : "0"); } catch { /* private mode */ } }}
-                className="mb-1.5 flex items-center gap-2 px-1">{colHead(COLS[4], byCol.done.length)}<span className="text-[12px] text-neutral-600">{showDone ? "▾" : "›"}</span></button>
+                className="mb-1.5 flex items-center gap-2 px-1">{colHead(COLS.find((x) => x.id === "done")!, byCol.done.length)}<span className="text-[12px] text-neutral-600">{showDone ? "▾" : "›"}</span></button>
               {showDone && <div className="flex flex-col gap-2">{byCol.done.map((t) => card(t, "done"))}</div>}
             </section>
           )}
         </div>
       ) : (
       <div className="flex min-h-0 flex-1 gap-3 pb-2">
-        {COLS.map((c) => {
+        {COLS.filter((c) => c.id !== "blocked" || byCol.blocked.length).map((c) => {
           const list = byCol[c.id];
           return (
             <section key={c.id}

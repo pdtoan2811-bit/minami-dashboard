@@ -8,7 +8,8 @@
 //   · that session plus the continuation that picked it up after its context ran out, or
 //   · whatever he joined by hand / named (lib/flow-store.ts keeps only those).
 // Nothing has to be created for this list to be right on the first morning.
-import { runPlan } from "@/lib/task-pace";
+import { GATE_LABEL, runPlan } from "@/lib/task-pace";
+import { mergeBlock } from "@/lib/task-ship";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -97,6 +98,12 @@ export function recentText(id: string, cwd: string, max = 6000): string {
 const CONTINUED = /^This session is being continued from a previous conversation/;
 
 export type ThreadState = "working" | "waiting" | "idle" | "queued";
+/** Who holds a task's next move, and what it is (§37, pitch waiting-chain V1 "Lanes by holder"). Thomas,
+ *  2026-10-29: "feel like everything is waiting for each other". Five tasks read Waiting; three were shipped,
+ *  one was stuck on another chat's unsaved file, one was a render. State said WHEN a chat last spoke; this
+ *  says WHOSE move it is. "task" = blocked by leftovers that aren't this task's own (lib/task-ship.ts). */
+export type Holder = "you" | "machine" | "task" | "done" | "paused";
+export type Wait = { holder: Holder; what: string; detail?: string };
 export type ThreadView = {
   id: string; stored: boolean; title: string; project: string; cwd: string;
   sessions: { id: string; cwd: string }[];
@@ -107,6 +114,8 @@ export type ThreadView = {
   /** The turn is parked on him mid-flight (AskUserQuestion, plan review): state is "waiting", but the
    *  turn isn't over, so nothing that reads a quiet chat (step, evaluate, auto-continue) may run on it. */
   ask?: string;
+  /** Whose move it is; absent on To do and Done. */
+  wait?: Wait;
   /** Archived (moved to Done). Only in `done`, never in `threads`. */
   archived?: boolean; doneAt?: number; autoDone?: boolean; closedWhy?: string;
 };
@@ -207,6 +216,21 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     const waiting = !!need || !busy && (!!last.review || gated || !!step || last.lastRole === "assistant" && /\?\s*$/.test(last.tail || ""));
     const state: ThreadState = busy ? "working" : waiting ? "waiting" : "idle";
     const tail = plain(last.tail || "");
+    const plan = g.stored?.dod ? runPlan(g.stored.dod) : undefined;
+    const allMet = !!g.stored?.dod?.length && g.stored.dod.every((x) => x.done);
+    // Order matters: a parked question beats everything, a finished list beats a stale "?" at the end.
+    const wait: Wait = need ? { holder: "you", what: clip(need.summary, 90) }
+      : busy ? { holder: "machine", what: ms.some((m) => awaitingAgents("live:" + m.id)) && !ms.some((m) => isBusy("live:" + m.id)) ? "Its agents are running" : "Chat working" }
+      : allMet ? { holder: "done", what: "All met, closes itself" }
+      : step ? { holder: "you", what: step.q }
+      : gated && plan?.stop ? { holder: "you", what: clip(plan.stop.d.t, 90), detail: GATE_LABEL[plan.stop.gate] }
+      : (() => {
+          const block = mergeBlock(last.cwd);
+          if (block) return { holder: "task", what: "Merge into main", detail: `main has unsaved work: ${block}` } as Wait;
+          if (waiting) return { holder: "you", what: last.review ? "Your review" : "Your reply" } as Wait;
+          const next = plan?.run[0]?.d.t;
+          return { holder: "paused", what: next ? `Next: ${clip(next, 80)}` : "Quiet, not finished" } as Wait;
+        })();
     views.push({
       id, stored: !!g.stored, title: clip(g.stored?.title || titleOf(last), 90), project: last.project, cwd: baseCwd(last.cwd),
       sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: last.id, at: last.lastActivity, state,
@@ -215,6 +239,7 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
       ...(g.stored?.dod ? { dod: g.stored.dod } : {}),
       ...(step && !need ? { step } : {}),
       ...(need ? { ask: need.summary } : {}),
+      wait,
     });
   }
   views.sort((a, b) => b.at - a.at);

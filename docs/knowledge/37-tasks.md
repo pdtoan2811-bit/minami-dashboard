@@ -537,3 +537,26 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 >   gate sites (suggest, classify, the chip's `gate` action), the chip cycles auto → asks you → auto for
 >   them (`nextGate(g, ship)`), and `GATE_RULES` says so. Thomas: merges run on their own.
 
+## Whose move it is: `wait` and the lanes (2026-10-29, pitch waiting-chain V1)
+
+The board's columns used to be the chat's state (Working / Needs you / Paused), which says when a chat last
+spoke, not whose move it is. `threads()` now derives `wait: {holder, what, detail}` per task, in this order:
+a parked question → `you`; a turn in flight or its agents → `machine`; every item met → `done` ("All met,
+closes itself"); the step read off the chat → `you`; a gated next item → `you` (detail "your pick" / "asks
+you"); a finished task tree that can't merge because the main checkout holds unsaved files → `task`
+(`mergeBlock` in `lib/task-ship.ts`, names the files); a question at the end of the chat → `you`; else
+`paused` ("Next: <item>").
+
+- **Board** (`Board.tsx`): lanes You · Running · Another task (only when non-empty) · Paused · Done, and one
+  count line on top ("2 need you · 1 running · 1 stuck on another task · 3 done"). All-met tasks sit in
+  Done with Close until they archive.
+- **Card** (`TaskCard.tsx`): when the chat's question doesn't already say it, one line says what it waits
+  on: ✋ for his move, ↪ (violet, `TINT.blocked`) for another task's leftovers. Paused and running cards
+  don't get the line: the pace line and the chat's own line already say it.
+- **Text** (`node bin/waits.mjs [--port] [--all]`): the same lanes printed, for a chat asked "what's
+  waiting?". This is what answering that took ad-hoc scripts and five transcripts for.
+
+> 🐛 2026-10-29: `mergeBlock` first named a dirty `a.txt` as ".txt". The shared `git()` helper trims its
+> output, which eats the leading space of the first `--porcelain` line (" M a.txt"), and the fixed-width
+> `slice(3)` then cut a letter. Caught in a scratch repo before it shipped; that call now reads untrimmed.
+
