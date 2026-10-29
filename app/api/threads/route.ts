@@ -4,10 +4,10 @@
 // task that has none and to tick the items its chats show are met.
 import { isBusy, sendMessage, sessionIdentity } from "@/lib/agent/manager";
 import { runHaiku } from "@/lib/bento-enrich";
-import { fid, mutateFlow, readFlow, type FlowDod, type FlowThread, type TaskStep } from "@/lib/flow-store";
+import { fid, findStored, mutateFlow, readFlow, type FlowDod, type FlowThread, type TaskStep } from "@/lib/flow-store";
 import { listSessions, topicOf } from "@/lib/claude-sessions";
 import { baseCwd, recentText, threads, type ThreadView } from "@/lib/threads";
-import { allDone, closeIfDone, gateOf, taskReport, type TaskReport } from "@/lib/task-report";
+import { allDone, closeIfDone, gateOf, storedFor, taskReport, type TaskReport } from "@/lib/task-report";
 import { GATE_RULES, parseGate, runMessage, runPlan } from "@/lib/task-pace";
 
 export const dynamic = "force-dynamic";
@@ -90,12 +90,8 @@ async function suggest(v: ThreadView) {
   const items = (Array.isArray(arr) ? arr : []).map((x) => typeof x === "string" ? { t: x.trim() } : { t: String((x as { t?: unknown })?.t ?? "").trim(), gate: parseGate((x as { gate?: unknown })?.gate), why: String((x as { why?: unknown })?.why ?? "").slice(0, 80) })
     .filter((x) => x.t).slice(0, 4);
   mutateFlow((s) => {
-    let t = s.threads.find((x) => x.id === v.id);
-    if (!t) {
-      if (!items.length) return;
-      t = { id: v.id.startsWith("s:") ? fid() : v.id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), auto: true, createdAt: Date.now(), updatedAt: Date.now() };
-      s.threads.unshift(t);
-    }
+    if (!items.length && !findStored(s, v)) return;
+    const t = storedFor(s, v);
     if (t.dod?.length) return;
     if (!items.length) { t.dodTriedAt = Date.now(); return; }
     t.dod = items.map((x, i): FlowDod => ({ id: t!.id + "-" + i, t: x.t, done: false, ...("gate" in x ? { gate: x.gate, ...(x.gate && x.why ? { gateWhy: x.why } : {}) } : {}) }));
@@ -110,7 +106,7 @@ async function suggest(v: ThreadView) {
 async function evaluate(v: ThreadView, focusOnly = false) {
   const dod = v.dod ?? [];
   const chat = chatOf(v);
-  if (!dod.length || !chat) { mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) { if (focusOnly) t.focusAt = Date.now(); else t.evalAt = v.at; } }); return; }
+  if (!dod.length || !chat) { mutateFlow((s) => { const t = findStored(s, v); if (t) { if (focusOnly) t.focusAt = Date.now(); else t.evalAt = v.at; } }); return; }
   const prompt = `Definition of Done for "${v.title}":\n${dod.map((d, i) => `${i + 1}. ${d.t}`).join("\n")}\n\nThe end of the work chat:\n${chat}\n\nWhich items does the chat show are actually met (done and confirmed, not planned or promised)? For each met item, copy the evidence word for word from the chat (one sentence, under 30 words, no paraphrase) and say who said it. Also: which NOT-met item is the end of the chat working on or asking about right now (0 if none, or if it's about something else)? And list any item the chat says was done but is now broken or reverted (usually none). Finally: did Thomas say the WHOLE task is done or to close it, or did the chat end by declaring the whole task finished with nothing left to do? Only the whole task counts, never one step; if yes, copy those words exactly. Reply with ONLY JSON: {"met":[{"n":<item number>,"why":"<under 12 words: what in the chat shows it>","quote":"<exact words from the chat>","by":"Thomas"|"Minami"}],"now":<item number or 0>,"undone":[<item numbers>],"finished":<"exact words" or null>}`;
   const j = haikuJSON(await runHaiku(prompt)) as { met?: { n?: number; why?: string }[]; now?: number } | null;
   const nowIdx = typeof j?.now === "number" && j.now > 0 ? j.now - 1 : -1;
@@ -134,7 +130,7 @@ async function evaluate(v: ThreadView, focusOnly = false) {
     if (q.length >= 8 && hay.includes(norm(q))) ev.set(x.n - 1, { quote: q, quoteBy: x.by === "Thomas" ? "Thomas" : "Minami" });
   }
   mutateFlow((s) => {
-    const t = s.threads.find((x) => x.id === v.id);
+    const t = findStored(s, v);
     if (!t?.dod) return;
     if (focusOnly) t.focusAt = Date.now(); else t.evalAt = v.at;
     if (!j) return; // a failed call says nothing about the items
@@ -179,7 +175,7 @@ async function readStep(v: ThreadView) {
   const ok = j && typeof j === "object" && typeof (j as TaskStep).q === "string" && (j as TaskStep).q.trim() ? (j as TaskStep) : null;
   const step: TaskStep | undefined = ok ? { q: ok.q.trim().slice(0, 90), yes: String(ok.yes || "Yes, go ahead").trim().slice(0, 24), reply: String(ok.reply || "Yes, go ahead.").trim().slice(0, 200), ...(ok.ship === true ? { ship: true } : {}), at: v.at } : undefined;
   mutateFlow((s) => {
-    const t = s.threads.find((x) => x.id === v.id);
+    const t = findStored(s, v);
     if (!t) return;
     t.stepAt = v.at;
     if (step) t.step = step; else delete t.step;
@@ -203,7 +199,7 @@ async function classify(v: ThreadView) {
     if (typeof n === "number" && todo[n - 1]) got.set(todo[n - 1].id, { gate: parseGate((x as { gate?: unknown }).gate), why: String((x as { why?: unknown }).why ?? "").slice(0, 80) });
   }
   mutateFlow((s) => {
-    const t = s.threads.find((x) => x.id === v.id);
+    const t = findStored(s, v);
     if (!t?.dod) return;
     t.gateTriedAt = Date.now();
     t.dod = t.dod.map((d) => { const g = got.get(d.id); return g && d.gate === undefined ? { ...d, gate: g.gate, ...(g.gate && g.why ? { gateWhy: g.why } : {}) } : d; });
@@ -262,7 +258,7 @@ function ensure(ids: string[]) {
   for (const id of ids.slice(0, 40)) {
     const v = byId.get(id);
     if (!v || v.archived) continue;
-    const st = store.threads.find((x) => x.id === v.id);
+    const st = findStored(store, v);
     // Gates are their own small call, independent of ticking; `enqueue` keeps it to one job per task.
     if (v.dod?.some((d) => !d.done && d.gate === undefined) && Date.now() - (st?.gateTriedAt ?? 0) > RETRY_EMPTY_MS / 6) enqueue(v.id + ":gate", () => classify(v));
     if (v.dod?.length && v.state === "idle") maybeContinue(v.id);
@@ -275,7 +271,7 @@ function ensure(ids: string[]) {
     } else if (st?.reportAt && st.reportAt > (st.evalAt ?? 0)) {
       // The chat reported for itself since the last reading: its word stands in for Haiku's this quiet.
       // Marked checked as of now, so a later stretch of work that goes unreported is read as usual.
-      if (v.state !== "working") mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) t.evalAt = Math.max(v.at, t.reportAt ?? 0); });
+      if (v.state !== "working") mutateFlow((s) => { const t = findStored(s, v); if (t) t.evalAt = Math.max(v.at, t.reportAt ?? 0); });
     } else if (v.state !== "working" && v.sessions.length && (st?.evalAt ?? 0) < v.at) {
       // Checked when the chat goes quiet, not mid-turn: a half-finished reply reads as "not yet".
       enqueue(v.id, () => evaluate(v));
@@ -308,7 +304,7 @@ function doItem(b: { id: string; dodId?: string }): { key?: string; cwd?: string
     ? `Next on the done-list for "${v.title}" — item ${n} of ${v.dod!.length}: ${item.t}\n\nDo this now. When it's done and checked, tick item ${n} (task_report done n=${n}) and say so plainly.${item.gate === "pitch" ? " It's a look to decide: pitch versions and let Thomas pick." : ""}`
     : runMessage(v.title, v.dod)!;
   // This item is the one on now: he just handed it over.
-  mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t?.dod) t.dod = t.dod.map((d) => (d.id === item.id ? { ...d, doing: Date.now() } : d.doing ? (({ doing: _, ...r }) => r)(d) : d)); });
+  mutateFlow((s) => { const t = findStored(s, v); if (t?.dod) t.dod = t.dod.map((d) => (d.id === item.id ? { ...d, doing: Date.now() } : d.doing ? (({ doing: _, ...r }) => r)(d) : d)); });
   return { key, cwd: owner?.cwd ?? last.cwd, resume: last.id, message };
 }
 
@@ -320,7 +316,7 @@ function answerStep(id: string): { key?: string; cwd?: string; resume?: string; 
   const last = v.sessions[v.sessions.length - 1];
   if (!last) return { error: "the task has no chat yet" };
   const owner = sessionIdentity("live:" + last.id);
-  mutateFlow((s) => { const t = s.threads.find((x) => x.id === v.id); if (t) delete t.step; });
+  mutateFlow((s) => { const t = findStored(s, v); if (t) delete t.step; });
   return { key: owner?.key ?? "live:" + last.id, cwd: owner?.cwd ?? last.cwd, resume: last.id, message: v.step.reply };
 }
 
@@ -337,8 +333,7 @@ export async function POST(req: Request) {
       if (!v) throw new Error("no open task holds that chat");
       let id = v.id;
       mutateFlow((s) => {
-        let t = s.threads.find((x) => x.id === v.id);
-        if (!t) { id = fid(); t = { id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), createdAt: Date.now(), updatedAt: Date.now() }; s.threads.unshift(t); }
+        const t = storedFor(s, v); id = t.id;
         t.archived = true; t.autoDone = true; t.doneAt = Date.now(); t.auto = false; t.closedWhy = "closed from the chat"; t.updatedAt = Date.now();
       });
       return Response.json({ ok: true, id, title: v.title });
@@ -380,8 +375,8 @@ export async function POST(req: Request) {
     if ("id" in b && b.id.startsWith("s:") && (b.action === "archive" || b.action === "dod.add" || b.action === "drop" || b.action === "gate")) {
       const v = threads(14).threads.find((t) => t.id === b.id);
       if (!v) throw new Error("no such task");
-      const id = fid();
-      mutateFlow((s) => { s.threads.unshift({ id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), auto: true, createdAt: Date.now(), updatedAt: Date.now() }); });
+      let id = "";
+      mutateFlow((s) => { id = storedFor(s, v).id; });
       b.id = id;
     }
     mutateFlow((s) => {

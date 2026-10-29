@@ -91,8 +91,36 @@ export function readFlow(): FlowState {
     for (const t of s.threads) if (t.dodSuggested?.length && !t.dod) {
       t.dod = t.dodSuggested.map((x, i) => ({ id: t.id + "-" + i, t: x, done: false })); t.dodPending = true; delete t.dodSuggested;
     }
+    s.threads = oneOwnerPerChat(s.threads);
     return s;
   } catch { return empty(); }
+}
+
+/** The stored record for a task view, or undefined. A derived view ("s:<session>") never has a record
+ *  under its own id — the record gets a fresh `fid()` — so it is found by the chats it holds. Looking it
+ *  up by id alone is what made duplicates (🐛 2026-10-29, §37): `suggest`, the chat's `task_report` and the
+ *  edit actions each missed the record another had just made, and each added its own. */
+export function findStored(s: FlowState, v: { id: string; sessions: { id: string }[] }): FlowThread | undefined {
+  const byId = s.threads.find((x) => x.id === v.id);
+  if (byId || !v.id.startsWith("s:")) return byId;
+  const ids = new Set(v.sessions.map((x) => x.id));
+  return s.threads.find((x) => x.sessions.some((sid) => ids.has(sid)));
+}
+
+// A chat belongs to one task. Records written before `findStored` can claim the same chat two or three
+// times, which showed as several cards with one chat and different done-lists. The one with the most
+// met items keeps the chat (then the oldest); a loser left with no chats is dropped.
+function oneOwnerPerChat(threads: FlowThread[]): FlowThread[] {
+  const met = (t: FlowThread) => t.dod?.filter((d) => d.done).length ?? 0;
+  const rank = [...threads].sort((a, b) => met(b) - met(a) || a.createdAt - b.createdAt);
+  const owner = new Map<string, FlowThread>();
+  for (const t of rank) for (const sid of t.sessions) if (!owner.has(sid)) owner.set(sid, t);
+  return threads.flatMap((t) => {
+    if (!t.sessions.length) return [t];
+    const mine = t.sessions.filter((sid) => owner.get(sid) === t);
+    if (!mine.length) return [];
+    return [mine.length === t.sessions.length ? t : { ...t, sessions: mine }];
+  });
 }
 
 // Write-then-rename with a per-process tmp name: two servers writing at once each land a whole file,

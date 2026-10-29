@@ -433,6 +433,15 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 - **Retiring Flow and Agents/Teams** is agreed. The tile's Flow switch is gone; the code goes in a
   separate change.
 
+> 🐛 2026-10-29 — "several tasks sharing the same subtask content and sessions". One chat showed as two
+> or three cards, each with its own done-list. Cause: a derived task's id is `s:<session>` and its stored
+> record gets a fresh `fid()`, but `suggest`, `storedFor` (the chat's `task_report`) and the edit actions
+> looked the record up by `v.id` alone. Each missed the record another had just made and added its own.
+> Haiku's ~10s done-list call overlapping a `task_report`, or `:3000` and `:3001` both polling, was enough.
+> `flow.json` had 3 chats claimed 2–3 times. Fix: `findStored` (`lib/flow-store.ts`) finds a derived
+> view's record by the chats it holds, and every lookup goes through it. `readFlow` gives each chat one
+> owner: the record with the most met items wins, then the oldest, and a record left with no chats is dropped.
+
 > 🐛 2026-10-28: an archived thread came straight back. Archived threads stopped claiming their sessions,
 > so the next poll derived a new thread from the same chats. They now still claim them, and the chats stay hidden.
 

@@ -7,7 +7,7 @@
 // (`taskMcpServer` in lib/agent/manager.ts — typed, no key to pass, the server knows the session), and
 // `POST /api/threads {"action":"report"}` for anything else. Haiku stays as the backup for chats that
 // never report: `reportAt` newer than `evalAt` skips its reading for that quiet (see `ensure` in the route).
-import { fid, mutateFlow, type FlowDod, type FlowState, type FlowThread } from "@/lib/flow-store";
+import { fid, findStored, mutateFlow, type FlowDod, type FlowState, type FlowThread } from "@/lib/flow-store";
 import { threads, type ThreadView } from "@/lib/threads";
 import { GATE_LABEL, runRules } from "@/lib/task-pace";
 
@@ -33,7 +33,7 @@ export function taskOfSession(sessionId: string): ThreadView | undefined {
 
 /** The stored record for a task, made on the spot for a derived one ("s:…" has nothing stored yet). */
 export function storedFor(s: FlowState, v: ThreadView): FlowThread {
-  let t = s.threads.find((x) => x.id === v.id);
+  let t = findStored(s, v);
   if (!t) {
     t = { id: v.id.startsWith("s:") ? fid() : v.id, title: v.title, project: v.project, cwd: v.cwd, sessions: v.sessions.map((x) => x.id), auto: true, createdAt: Date.now(), updatedAt: Date.now() };
     s.threads.unshift(t);
