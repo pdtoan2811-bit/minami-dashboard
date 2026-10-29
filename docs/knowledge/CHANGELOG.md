@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-29
+- **Done-list items read in one column** (§37; `components/home/TaskCard.tsx`). An item's words now take the full row width. The status pill, a set gate and ▶ Do it on the lead item moved to a line under the text. A plain item's hover controls (auto, ▶ Do it) float over the row's right edge, and on touch they sit inline. Before this, the inline pills squeezed the text into two-word lines in a narrow tile.
 - **Phone sheets list tasks, not sessions** (§37, §23; `components/PhoneTasks.tsx`, `components/Focus.tsx`). ☰ and the current-chip sheet open on Tasks (Needs you · Working · Recent) with each task's done-list bar and next item; one tap opens its latest chat. The old session list is the Chats tab. The dock chip shows the task's name and `met/total`.
 - **The Today plan runs itself** (§26; `lib/today-autorun.ts`, `lib/today.ts`, `instrumentation.ts`, `app/today/Today.tsx`). A server tick each minute hands off answered decisions, then to-dos whose `after` is met, then questions with a recommendation — two chats at a time, 20 a day max. Runner-started chats are told nobody is watching: outward-facing work ends on `TODAY: yours`, not a question. One switch per day on the page (Pause / Run on its own). `MINAMI_TODAY_AUTORUN=0` turns it off.
 

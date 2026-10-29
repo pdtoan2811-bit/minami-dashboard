@@ -62,21 +62,49 @@ function statusesOf(t: ThreadView): Map<string, ItemStatus> {
     : d === next ? (d.gate && t.state === "waiting" ? "asks" : "next") : "todo"]));
 }
 
+// The item's words get the full width of the row. Pills and buttons used to sit inline (status pill before
+// the text, gate chip and ▶ Do it beside it), which in a narrow tile squeezed the text into a column of
+// two-word lines (Thomas, 2026-10-29). Now the always-visible chips go on their own line under the text,
+// and the hover-only controls of a plain item float over the row's right edge instead of reserving room.
 function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[number]; status: ItemStatus; onDo?: () => void; doing: boolean }) {
   const lead = status !== "done" && status !== "todo";
   const pill = status !== "done" && status !== "todo" ? PILL[status] : null;
+  const showDo = !d.done && !!onDo && status !== "on";
+  const doBtn = showDo && (
+    <button onClick={onDo} disabled={doing} title="Send this item to the task's chat and let Minami do it"
+      className="shrink-0 rounded-md border border-[var(--sakura)]/40 px-1.5 py-0.5 text-[10px] text-[var(--sakura)] hover:bg-[var(--sakura)]/10 disabled:opacity-50 pointer-coarse:py-1">
+      {doing ? "sending…" : "▶ Do it"}
+    </button>
+  );
+  // On the meta line: the status pill, a set gate, and ▶ Do it on the lead item.
+  const meta = !d.done && (pill || d.gate || (lead && showDo));
+  // Floating on hover (inline on touch, which has no hover): "auto" for an ungated item, ▶ Do it on the rest.
+  const hover = !d.done && (!d.gate || (!lead && showDo));
   return (
-    <li className={`group/item flex items-start gap-2 rounded-lg px-1.5 py-1 ${status === "on" ? "bg-[#f0a868]/[0.08]" : lead ? "bg-[var(--sakura)]/[0.06]" : ""}`}>
+    <li className={`group/item relative flex items-start gap-2 rounded-lg px-1.5 py-1 ${status === "on" ? "bg-[#f0a868]/[0.08]" : lead ? "bg-[var(--sakura)]/[0.06]" : ""}`}>
       <button onClick={() => void threadPost({ action: "dod.toggle", id: t.id, dodId: d.id })} aria-label={d.done ? "Mark not done" : "Mark done"}
         title={d.by === "minami" ? `Ticked by Minami: ${d.why || "the chat says so"}. Tap to change.` : undefined}
         className={`mt-[2px] flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] leading-none ${d.done ? "border-[#4ade80] bg-[#4ade80]/20 text-[#4ade80]" : status === "on" ? "border-[#f0a868]" : lead ? "border-[var(--sakura)]/70" : "border-white/25 hover:border-white/50"}`}>
         {d.done ? "✓" : status === "on" ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f0a868]" /> : ""}
       </button>
       <span className="min-w-0 flex-1">
-        <span className={`block text-[13px] leading-[1.35] ${d.done ? "text-neutral-500" : t.dodPending ? "text-neutral-300" : "text-neutral-100"}`}>
-          {pill && <span className={`mr-1.5 rounded px-1 py-px align-[1px] text-[9px] font-semibold uppercase tracking-wider ${pill.cls}`}>{pill.label}</span>}
+        <span className={`block text-pretty break-words text-[13px] leading-[1.4] ${d.done ? "text-neutral-500" : t.dodPending ? "text-neutral-300" : "text-neutral-100"}`}>
           {d.t}
         </span>
+        {meta && (
+          <span className="mt-1 flex flex-wrap items-center gap-1.5">
+            {pill && <span className={`rounded px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider ${pill.cls}`}>{pill.label}</span>}
+            {d.gate && <GateChip t={t} d={d} />}
+            {lead && doBtn}
+          </span>
+        )}
+        {hover && (
+          <span className="pointer-events-none absolute right-1 top-0.5 flex items-center gap-1 rounded-md bg-neutral-900/95 py-0.5 pl-1.5 pr-0.5 opacity-0 shadow-[-8px_0_8px_-2px_rgba(23,23,23,0.95)] transition-opacity group-hover/item:pointer-events-auto group-hover/item:opacity-100
+            pointer-coarse:pointer-events-auto pointer-coarse:static pointer-coarse:mt-1 pointer-coarse:bg-transparent pointer-coarse:p-0 pointer-coarse:opacity-100 pointer-coarse:shadow-none">
+            {!d.gate && <GateChip t={t} d={d} />}
+            {!lead && doBtn}
+          </span>
+        )}
         {d.by === "minami" && d.done && (
           <span className="mt-0.5 block text-[11px] leading-snug text-neutral-500">
             <span className="text-[#4ade80]/80">Minami:</span> {d.why || "the chat says so"}
@@ -91,13 +119,6 @@ function DodItem({ t, d, status, onDo, doing }: { t: ThreadView; d: NonNullable<
           </span>
         )}
       </span>
-      {!d.done && <GateChip t={t} d={d} />}
-      {!d.done && onDo && status !== "on" && (
-        <button onClick={onDo} disabled={doing} title="Send this item to the task's chat and let Minami do it"
-          className={`shrink-0 rounded-md border border-[var(--sakura)]/40 px-1.5 py-0.5 text-[10px] text-[var(--sakura)] transition-opacity hover:bg-[var(--sakura)]/10 disabled:opacity-50 ${lead ? "" : "opacity-0 group-hover/item:opacity-100 pointer-coarse:opacity-100"}`}>
-          {doing ? "sending…" : "▶ Do it"}
-        </button>
-      )}
     </li>
   );
 }
@@ -110,7 +131,7 @@ function GateChip({ t, d }: { t: ThreadView; d: NonNullable<ThreadView["dod"]>[n
   const tip = `${g ? `${GATE_LABEL[g]}${d.gateWhy ? ` — ${d.gateWhy}` : ""}` : "Minami does this one and moves on"}${d.gateBy ? " (your setting)" : ""}. Tap to change.`;
   return (
     <button onClick={() => void threadPost({ action: "gate", id: t.id, dodId: d.id, gate: nextGate(g) })} title={tip}
-      className={`shrink-0 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wider transition-opacity ${g ? "bg-[var(--sakura)]/15 text-[var(--sakura)]" : "text-neutral-600 opacity-0 hover:text-neutral-300 group-hover/item:opacity-100 pointer-coarse:opacity-100"}`}>
+      className={`shrink-0 rounded px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider ${g ? "bg-[var(--sakura)]/15 text-[var(--sakura)]" : "text-neutral-500 hover:text-neutral-300"}`}>
       {g ? `✋ ${GATE_LABEL[g]}` : "auto"}
     </button>
   );
