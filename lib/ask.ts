@@ -38,7 +38,7 @@ export function splitAsks(text: string): string[] {
 
 /** Start a chat in a project and open it as a bento tab. Its own worktree when the folder is a repo,
  *  like a Today hand-off — a fresh ask beside other running chats would otherwise share their tree. */
-export async function startAsk(p: ProjectRef, text: string, opts: { mode?: string; model?: string | null; open?: boolean | "quiet" } = {}): Promise<{ key: string; sid: string | null }> {
+export async function startAsk(p: ProjectRef, text: string, opts: { mode?: string; model?: string | null; open?: boolean | "quiet"; onStep?: (step: "sent") => void } = {}): Promise<{ key: string; sid: string | null }> {
   let cwd = p.cwd;
   try {
     const w = await (await fetch("/api/worktree", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "isolate", cwd: p.cwd, label: "chat" }) })).json();
@@ -47,6 +47,7 @@ export async function startAsk(p: ProjectRef, text: string, opts: { mode?: strin
   const key = `ask-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const r = await fetch("/api/agent/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, cwd, message: text, mode: opts.mode, model: opts.model ?? undefined }) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error || `send ${r.status}`);
+  opts.onStep?.("sent");
   if (opts.open === false) return { key, sid: null };
   // Open it by session id, the way a notification link does (`minami:open-chat` waits for the list to
   // have it). The id arrives with the SDK's init a second or two after the send.
@@ -66,7 +67,22 @@ export async function startAsk(p: ProjectRef, text: string, opts: { mode?: strin
 // The shell's <Starting> chip shows progress and offers Open once the session id arrives; it does not
 // open the chat by itself, because by then Thomas may be somewhere else and a pane jumping open under
 // him is the same interruption the freeze was.
-export type Starting = { id: string; project: string; title: string; state: "starting" | "ready" | "failed"; sid?: string | null; error?: string };
+//
+// The same entry drives the dashed placeholder card in the topic tile and the board (StartingCard,
+// Thomas's pick from pitch `task-lands`, 2026-10-29): it holds the first slot from the click until the
+// real task card exists. So dismissing the chip only HIDES the entry — the card still needs it until
+// the thread shows up (the first reply can land well after the chip's 15s) — and entries are dropped
+// for good after KEEP_MS, by which point the real card has long replaced the placeholder.
+export type Starting = {
+  id: string; project: string; title: string; at: number;
+  state: "starting" | "ready" | "failed";
+  /** How far it got: the worktree is being made, or the message is sent and the session id awaited. */
+  step: "worktree" | "sent";
+  sid?: string | null; error?: string;
+  /** The chip was dismissed or timed out; the placeholder card may still be showing. */
+  hidden?: boolean;
+};
+const KEEP_MS = 5 * 60_000;
 let starting: Starting[] = [];
 const subs = new Set<() => void>();
 const emit = () => subs.forEach((f) => f());
@@ -74,15 +90,16 @@ const patch = (id: string, v: Partial<Starting>) => { starting = starting.map((s
 
 export function subscribeStarting(f: () => void) { subs.add(f); return () => { subs.delete(f); }; }
 export const getStarting = () => starting;
-export function dismissStarting(id: string) { starting = starting.filter((s) => s.id !== id); emit(); }
+export function dismissStarting(id: string) { patch(id, { hidden: true }); }
 
 /** Fire-and-forget start. `onFail` runs if it never got going — the sheets use it to put the draft back. */
 export function startInBackground(p: ProjectRef, text: string, opts: { mode?: string; model?: string | null }, onFail?: () => void): void {
   const id = Math.random().toString(36).slice(2, 9);
   const title = text.split("\n").find((l) => l.trim())?.trim() ?? text;
-  starting = [...starting, { id, project: p.project, title, state: "starting" }];
+  starting = [...starting, { id, project: p.project, title, at: Date.now(), state: "starting", step: "worktree" }];
   emit();
-  startAsk(p, text, { ...opts, open: "quiet" }).then(
+  setTimeout(() => { starting = starting.filter((s) => s.id !== id); emit(); }, KEEP_MS);
+  startAsk(p, text, { ...opts, open: "quiet", onStep: () => patch(id, { step: "sent" }) }).then(
     ({ sid }) => patch(id, { state: "ready", sid }),
     (e) => { onFail?.(); patch(id, { state: "failed", error: String((e as Error)?.message || e) }); },
   );

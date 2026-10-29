@@ -12,6 +12,7 @@ import { ensureDod, useThreads, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
 import { TaskCard } from "./TaskCard";
 import { NewTask, readDraft, restoreDraft } from "./NewTask";
+import { StartingCard, useStartingCards } from "./StartingCard";
 
 const btn = "shrink-0 rounded-lg border border-white/12 px-2.5 py-1 text-[12px] text-neutral-200 transition-colors hover:border-white/30 pointer-coarse:py-2";
 
@@ -31,6 +32,7 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
   useEffect(() => { if (!writing) setDraft(readDraft(project)); }, [writing, project]);
   const [more, setMore] = useState(false);
   const open = tasks.filter((t) => t.state !== "queued");
+  const pending = useStartingCards(project, tasks);
   const shown = more ? open : open.slice(0, 6);
   // The task whose chat is open scrolls into view inside the tile, so "which one am I in" is answered
   // without hunting through the list.
@@ -72,10 +74,11 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
         })} />
 
       <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
-        {open.length === 0 ? (
+        {open.length === 0 && pending.length === 0 ? (
           <p className="py-6 text-center text-[13px] text-neutral-500">No tasks in the last week. Start one above, or open All chats.</p>
         ) : (
           <div className="grid items-start gap-2.5 @min-[520px]:grid-cols-2 @min-[820px]:grid-cols-3">
+            {pending.map((s) => <StartingCard key={s.id} s={s} />)}
             {shown.map((t) => <TaskCard key={t.id} t={t} busy={busy.has(t.id)} active={t.sessions.some((x) => openSids.includes(x.id))} />)}
           </div>
         )}

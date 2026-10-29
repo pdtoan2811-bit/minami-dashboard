@@ -11,7 +11,7 @@ import { K, mix } from "@/app/today/ui";
 const none: S[] = [];
 
 export function Starting({ bottom }: { bottom: number }) {
-  const list = useSyncExternalStore(subscribeStarting, getStarting, () => none);
+  const list = useSyncExternalStore(subscribeStarting, getStarting, () => none).filter((s) => !s.hidden);
   if (!list.length) return null;
   return (
     <div className="pointer-events-none fixed right-4 z-[70] flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2"

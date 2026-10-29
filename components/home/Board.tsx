@@ -12,6 +12,7 @@ import { useSetting } from "@/lib/use-settings";
 import { ensureDod, threadPost, useThreads, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
 import { DodBar, TaskCard, TINT } from "./TaskCard";
+import { StartingCard, useStartingCards } from "./StartingCard";
 
 // Lanes by WHO holds the next move (pitch waiting-chain V1, picked 2026-10-29), read from the server's
 // `wait.holder` (lib/threads.ts). The columns used to be the chat's state, so a task that was merged and
@@ -73,6 +74,10 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
     return () => ro.disconnect();
   }, []);
   const stacked = width < STACK_BELOW;
+  // A task being started holds the top of Working with a dashed card until its real card exists (§37).
+  const pending = useStartingCards(project, [...(d?.threads ?? []), ...(d?.done ?? [])]);
+  const lead = (id: Col) => (id === "working" ? pending.map((s) => <StartingCard key={s.id} s={s} />) : null);
+  const count = (id: Col) => byCol[id].length + (id === "working" ? pending.length : 0);
   const busy = new Set(d?.busy ?? []);
 
   const tasks = useMemo(() => [...(d?.threads ?? []), ...(d?.done ?? [])].filter((t) => t.project === project), [d, project]);
@@ -214,17 +219,17 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
         // single muted line; Done folds unless opened (remembered).
         <div className="flex flex-col gap-3 pb-6">
           <div>{addForm}</div>
-          {STACK_ORDER.filter((id) => id !== "done" && byCol[id].length).map((id) => {
+          {STACK_ORDER.filter((id) => id !== "done" && count(id)).map((id) => {
             const c = COLS.find((x) => x.id === id)!;
             return (
               <section key={id}>
-                <header className="mb-1.5 flex items-center gap-2 px-1" title={c.hint}>{colHead(c, byCol[id].length)}</header>
-                <div className="flex flex-col gap-2">{byCol[id].map((t) => card(t, id))}</div>
+                <header className="mb-1.5 flex items-center gap-2 px-1" title={c.hint}>{colHead(c, count(id))}</header>
+                <div className="flex flex-col gap-2">{lead(id)}{byCol[id].map((t) => card(t, id))}</div>
               </section>
             );
           })}
           {(() => {
-            const empty = STACK_ORDER.filter((id) => id !== "done" && id !== "todo" && id !== "blocked" && !byCol[id].length);
+            const empty = STACK_ORDER.filter((id) => id !== "done" && id !== "todo" && id !== "blocked" && !count(id));
             return empty.length > 0 && <p className="px-1 text-[11px] text-neutral-600">{empty.map((id) => `${COLS.find((x) => x.id === id)!.label} 0`).join(" · ")}</p>;
           })()}
           {byCol.done.length > 0 && (
@@ -243,11 +248,12 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
             <section key={c.id}
               onDragOver={(e) => { e.preventDefault(); setOver(c.id); }} onDragLeave={() => setOver((o) => (o === c.id ? null : o))} onDrop={(e) => onDrop(e, c.id)}
               className={`flex min-w-0 flex-1 basis-0 flex-col rounded-2xl border bg-white/[0.02] ${over === c.id ? "border-[var(--sakura)]/60" : "border-white/[0.07]"}`}>
-              <header className="flex items-center gap-2 px-3 pt-3 pb-2" title={c.hint}>{colHead(c, list.length)}</header>
+              <header className="flex items-center gap-2 px-3 pt-3 pb-2" title={c.hint}>{colHead(c, count(c.id))}</header>
               {c.id === "todo" && <div className="px-2 pb-2">{addForm}</div>}
               <div className="flex min-h-[4rem] flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
+                {lead(c.id)}
                 {list.map((t) => card(t, c.id))}
-                {!list.length && <p className="px-1 py-3 text-center text-[11px] text-neutral-600">{c.hint}</p>}
+                {!count(c.id) && <p className="px-1 py-3 text-center text-[11px] text-neutral-600">{c.hint}</p>}
               </div>
             </section>
           );

@@ -88,6 +88,12 @@ trigger used to be a one-line `<input>`, which could hold "fix the favicon" but 
   `onFail` if the start never got going (unless a newer draft has been begun). Progress shows in the
   shell's **Starting chip** (`components/shell/Starting.tsx`, every page): spinner → **Task started ·
   Open** (auto-hides after 15s) or **Couldn't start — draft kept**. It never opens the chat by itself.
+- **A dashed placeholder card holds the task's slot from the click** (`components/home/StartingCard.tsx`,
+  pick V1 of pitch `task-lands`, 2026-10-29): first in the expanded topic tile, top of Working on the
+  board. It reads "Making its worktree…" → "✓ Worktree · ✓ Sent · …" and goes when a task contains the
+  start's session id. The same store entry drives it, so dismissing the chip only sets `hidden`; entries
+  drop after 5 min. A failed start shows no card (the chip says it). Measured on :3001: placeholder at
+  0s, real card ~5s after the send.
 
 > 🐛 2026-10-29 — Start task froze the board. The sheet awaited `startAsk` with its backdrop up: the
 > worktree, the send, then up to ~20s polling `/api/threads?key=` for the session id. Nothing behind it
@@ -483,6 +489,7 @@ Opening a thread = its topic's panel with the thread's sessions as the tabs (new
 | `lib/use-threads.ts` | One shared poll per tab; `openThread()` (event `minami:open-thread`). |
 | `lib/ask.ts` | `guessProject`, `splitAsks`, `startAsk` (isolate → send → wait for the id → `minami:open-chat`), `startInBackground` + the starting store. |
 | `components/shell/Starting.tsx` | The shell's chip for background task starts: spinner, Open, or the error. |
+| `components/home/StartingCard.tsx` | The dashed placeholder card a starting task holds its slot with (tile + board). |
 | `components/home/Home.tsx` | Ask line, Needs you, Where you left off, Today. |
 | `components/home/TopicTasks.tsx`, `TaskCard.tsx`, `Board.tsx`, `Celebrate.tsx` | The expanded tile, the shared task card (done-list always visible), the project board. |
 | `components/home/NewTask.tsx`, `lib/image-refs.ts` | The New task sheet (long brief, images, saved draft); image-path parsing shared with the transcript. |
