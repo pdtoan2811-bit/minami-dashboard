@@ -170,8 +170,11 @@ function acquireLock(what) {
   catch {
     const holder = (() => { try { return fs.readFileSync(path.join(LOCK, "pid"), "utf8").trim(); } catch { return ""; } })();
     // A crashed merge must not block every future one.
+    // No pid (a plain file left at LOCK, or a dir from a merge killed before it wrote one) is a dead holder:
+    // Number("") is 0, and kill(0, 0) signals our own process group — it always "succeeded", so a stray empty
+    // /tmp/minami-merge.lock blocked every merge on the box (2026-10-29).
     let alive = false;
-    try { process.kill(Number(holder), 0); alive = true; } catch { alive = false; }
+    if (/^\d+$/.test(holder) && Number(holder) > 0) { try { process.kill(Number(holder), 0); alive = true; } catch { alive = false; } }
     if (!alive) { fs.rmSync(LOCK, { recursive: true, force: true }); return acquireLock(what); }
     console.error(`✋ another ${what} is running (pid ${holder}). Merges are serialised on purpose.`);
     return false;
