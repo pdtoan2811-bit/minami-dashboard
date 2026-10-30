@@ -57,9 +57,15 @@ export type Automation = {
   today?: RunRecord[];
   /** False for a plist that isn't wrapped yet — it has no run record, so the page can't vouch for its runs. */
   recorded?: boolean;
+  /** The last finished run's record, for its `reason` (a limit run exits 0 to launchd, so status alone hides it). */
+  lastEnd?: RunRecord | null;
 };
 export type Effect = { kind: "posts" | "spends"; what: string };
-export type RunRecord = { start: string; end?: string; exit?: number; secs?: number; last_line?: string };
+/** `reason` and `attempt` come from minami-run's self-healing (2026-10-30): why a run ended badly, and 2 on its retry. */
+export type RunRecord = { start: string; end?: string; exit?: number; secs?: number; last_line?: string;
+  reason?: "timeout" | "limit" | "crash" | "stopped"; attempt?: number };
+/** ~/.minami/heal.json, written by bin/minami-heal.mjs every 30 min, plus what fixed itself today. */
+export type Heal = { at: string | null; healedToday: { id: string; name: string; why: string; at: string }[]; needsYou: { id: string; name: string; why: string }[] };
 
 type Meta = Record<string, { name?: string; description?: string; project?: string; pausedAt?: string }>;
 
@@ -215,7 +221,7 @@ function runRecords(): Map<string, RunRecord[]> {
     const list = by.get(r.id) ?? [];
     // An end line repeats its start, so it replaces the start line it closes rather than adding a second run.
     const open = r.event === "end" ? list.findIndex((x) => x.start === r.start && !x.end) : -1;
-    const rec: RunRecord = { start: r.start, end: r.end, exit: r.exit, secs: r.secs, last_line: r.last_line };
+    const rec: RunRecord = { start: r.start, end: r.end, exit: r.exit, secs: r.secs, last_line: r.last_line, reason: r.reason, attempt: r.attempt };
     if (open >= 0) list[open] = rec; else list.push(rec);
     by.set(r.id, list);
   }
@@ -227,6 +233,23 @@ const wrap = (label: string, args: string[]) => (fs.existsSync(RUN) ? [RUN, labe
 function logTime(file?: string): string | null {
   if (!file) return null;
   try { return fs.statSync(file).mtime.toISOString(); } catch { return null; }
+}
+
+// What fixed itself today: the healer's re-runs (heal.jsonl) and minami-run's retries that then succeeded.
+export function heal(items: Automation[]): Heal {
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+  const state = (() => { try { return JSON.parse(fs.readFileSync(path.join(HOME, ".minami", "heal.json"), "utf8")); } catch { return {}; } })();
+  const name = (id: string) => items.find((a) => a.id === id)?.name ?? id.slice(PREFIX.length);
+  const healedToday: Heal["healedToday"] = [];
+  try {
+    for (const l of fs.readFileSync(path.join(HOME, ".minami", "heal.jsonl"), "utf8").split("\n").slice(-500)) {
+      try { const h = JSON.parse(l); if (Date.parse(h.at) >= midnight.getTime()) healedToday.push({ ...h, name: name(h.id) }); } catch {}
+    }
+  } catch {}
+  for (const a of items) for (const r of a.today ?? [])
+    if (r.attempt === 2 && r.exit === 0) healedToday.push({ id: a.id, name: a.name, why: "crashed, then passed on its retry", at: r.end ?? r.start });
+  const needsYou = ((state.needsYou ?? []) as Heal["needsYou"]).map((n) => ({ ...n, name: name(n.id) }));
+  return { at: state.at ?? null, healedToday, needsYou };
 }
 
 // ── read ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -257,7 +280,8 @@ export function list(): Automation[] {
       command: args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ").replaceAll(HOME, "~"), workdir: p.WorkingDirectory?.replace(HOME, "~"),
       log: p.StandardOutPath, status, pid: st.pid, lastExit: st.lastExit ?? null, runs: st.runs, lastRun, protected: PROTECTED.has(label), effects: EFFECTS[label],
       pausedAt: status === "paused" ? m.pausedAt ?? null : null, upSec: upSeconds(st.pid), lastLine: lastLineOf(p.StandardOutPath || p.StandardErrorPath),
-      today: runs.filter((r) => Date.parse(r.start) >= midnight.getTime()).slice(-200), recorded });
+      today: runs.filter((r) => Date.parse(r.start) >= midnight.getTime()).slice(-200), recorded,
+      lastEnd: runs.findLast((r) => r.end) ?? null });
   }
   for (const j of INPROC) {
     const host = items.find((i) => i.id === j.host);

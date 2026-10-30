@@ -32,6 +32,12 @@ export type Look = { big: string; why: string };
 /** One rule set for the whole page: failed, off, unfiled, quiet past its period, missed its time, or a partial run. */
 export function lookOf(a: Automation, now = new Date()): Look | null {
   if (a.status === "paused") return null;
+  // minami-run's reasons (2026-10-30): say what happened instead of a bare exit code.
+  const end = a.lastEnd;
+  if (end?.reason === "limit" && a.status !== "running")
+    return { big: "limit", why: `Hit the Claude limit: “${end.last_line}”. Self-heal re-runs it after the reset if it's safe to repeat; otherwise it's yours to run.` };
+  if (a.status === "failing" && end?.reason === "timeout")
+    return { big: "too long", why: `Ran ${dur(end.secs ?? 0)}, past its time limit, so it was stopped and the next run can go ahead. Last line: “${end.last_line || "—"}”.` };
   if (a.status === "failing") return { big: `exit ${a.lastExit}`, why: `Its last run failed${a.lastLine ? `: “${a.lastLine}”` : "."}` };
   if (a.status === "not-loaded" && a.kind === "launchd") return { big: "off", why: "launchd isn't holding it, so it won't run until the next login." };
   const since = a.lastRun ? (now.getTime() - Date.parse(a.lastRun)) / 1000 : null;

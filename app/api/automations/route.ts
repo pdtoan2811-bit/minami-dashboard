@@ -1,16 +1,16 @@
-import { list, logs, pause, resume, runNow, update, create, remove, trash, restore } from "@/lib/automations";
+import { list, logs, pause, resume, runNow, update, create, remove, trash, restore, heal } from "@/lib/automations";
 import { upNext } from "@/lib/upnext";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// GET → { items, trash, upNext } — every automation on this Mac (§27). GET ?logs=<id> → { text }, the log's tail.
+// GET → { items, trash, upNext, heal } — every automation on this Mac (§27). GET ?logs=<id> → { text }, the log's tail.
 export async function GET(req: Request) {
   const id = new URL(req.url).searchParams.get("logs");
   try {
     if (id) return Response.json({ text: logs(id) });
     const items = list();
-    return Response.json({ items, trash: trash(), upNext: upNext(items) });
+    return Response.json({ items, trash: trash(), upNext: upNext(items), heal: heal(items) });
   } catch (e) { return Response.json({ error: String((e as Error).message || e) }, { status: 400 }); }
 }
 

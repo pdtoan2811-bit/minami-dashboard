@@ -7,7 +7,7 @@
 // the 16 stacked cards are gone — clicking any pin, track or name opens that runner's card (state, last log line,
 // run / pause / edit / log / delete) right under the strip. Nothing that was editable before became unreachable.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Automation, Effect, Schedule } from "@/lib/automations";
+import type { Automation, Effect, Heal, Schedule } from "@/lib/automations";
 import { K as TK } from "../today/ui";
 import { AskBox } from "./AskBox";
 import { useAsks } from "./Asks";
@@ -65,6 +65,24 @@ function EffectsLine({ items, jump }: { items: Automation[]; jump: (id: string) 
     </div>
   );
 }
+// What fixed itself today, and what self-heal won't touch (posting / spending runners) — so the only red left is
+// what actually needs Thomas. From bin/minami-heal.mjs and minami-run's retries (2026-10-30).
+function HealLine({ heal, jump }: { heal: Heal; jump: (id: string) => void }) {
+  const { healedToday: h, needsYou: n } = heal;
+  if (!h.length && !n.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-[13px]">
+      {h.length > 0 && <span title={h.map((x) => `${x.name}: ${x.why}`).join("\n")} className="rounded-xl px-3 py-1.5" style={{ background: mix(K.green, 8), border: `1px solid ${mix(K.green, 30)}` }}>
+        <b style={{ color: K.green }}>↻ Fixed itself today: {h.length}</b> <span style={{ color: K.muted }}>· {[...new Set(h.map((x) => x.name))].join(", ")}</span>
+      </span>}
+      {n.map((x) => (
+        <button key={x.id} onClick={() => jump(x.id)} className="rounded-xl px-3 py-1.5 text-left" style={{ background: mix(DC.amber, 8), border: `1px solid ${mix(DC.amber, 35)}` }}>
+          <b style={{ color: DC.amber }}>Needs you:</b> {x.name} <span style={{ color: K.muted }}>· {x.why}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 const ago = (iso?: string | null) => (iso ? (Date.now() - Date.parse(iso) < 60e3 ? "just now" : `${dur((Date.now() - Date.parse(iso)) / 1000)} ago`) : "");
 const inT = (iso?: string | null) => (iso ? `in ${dur(Math.max(0, (Date.parse(iso) - Date.now()) / 1000))}` : "");
 
@@ -80,10 +98,11 @@ export function useAutomations() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [up, setUp] = useState<UpNext | null>(null);
+  const [heal, setHeal] = useState<Heal | null>(null);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/automations").then((r) => r.json()).catch((e) => ({ error: String(e) }));
-    if (r.error) setErr(r.error); else { setErr(""); setItems(r.items); setBin(r.trash); setUp(r.upNext ?? null); }
+    if (r.error) setErr(r.error); else { setErr(""); setItems(r.items); setBin(r.trash); setUp(r.upNext ?? null); setHeal(r.heal ?? null); }
   }, []);
   useEffect(() => {
     load();
@@ -101,7 +120,7 @@ export function useAutomations() {
     } finally { setBusy(null); }
   }, []);
 
-  return { items, bin, err, busy, act, up, reload: load };
+  return { items, bin, err, busy, act, up, heal, reload: load };
 }
 export type AutomationsFeed = ReturnType<typeof useAutomations>;
 
@@ -182,6 +201,7 @@ export function RunnersSection({ feed, items }: { feed: AutomationsFeed; items: 
       </div>
 
       {items && <EffectsLine items={items} jump={jump} />}
+      {items && feed.heal && <HealLine heal={feed.heal} jump={jump} />}
       {items && feed.up && <UpNextPanel up={feed.up} visible={new Set(items.map((a) => a.id))} jump={jump} reload={feed.reload} now={now} />}
       {err && <p className="mt-4 rounded-lg px-3 py-2 text-[13px]" style={{ background: mix(K.red, 14), color: K.red }}>{err}</p>}
       {creating && <div className="mt-4">
