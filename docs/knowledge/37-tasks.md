@@ -129,7 +129,7 @@ I can focus when I need on a project".
 | Working | A chat in the task is running. |
 | Needs you | The chat ended on a question or is waiting for review. |
 | Paused | Quiet, not finished. |
-| Done | Moved here (✓ Done or drag → `archive`, kept 14 days, **Reopen** brings it back). A task with every item met shows **Close** in its own column first. |
+| Done | Moved here (✓ Done or drag → `archive`, kept 14 days, **Reopen** brings it back). A task with every item met shows **Close** in its own column first. **✕ Abort** lands here too, marked aborted (below). |
 
 Only the two ends are his to move. The middle columns are read from the chats, so a card moves by itself
 when a reply lands. Dragging into a middle column shows a note that says so instead of faking a status.
@@ -156,6 +156,18 @@ pass the same day.
 
 > Working only shows chats hosted by the server you are looking at (`isBusy`), so the `:3001` preview
 > shows the `:3000` server's running chats as Needs you or Paused.
+
+### Abort: no longer needed, not done (2026-10-30)
+
+Thomas: "an abort button for the task — for a task no longer needed — but not a done task". **✕ Abort**
+sits next to ✓ Done on every open card (board and tile). It is `{action:"abort"}` → `closeTask(t, {abort:true})`,
+which archives like ✓ Done but sets `aborted`. What that changes:
+- The card in Done reads "✕ Aborted — no longer needed" and "aborted 2h ago", grey, never "✓ Done".
+- No celebration (`autoDone` is cleared), and no Today tick: `linkTasks` leaves the to-do open, because
+  dropping it from the day is his call on the Today page.
+- A later message in its chat doesn't bring it back (`revived` skips aborted). Reopen does, and clears the flag.
+- The event line reads `closed: {auto:false, aborted:true}`, so the log tells abandoned from finished.
+- No confirm: Reopen undoes it in one tap. A To-do with no chat keeps **Drop**, which deletes it.
 
 ## Done-lists and progress
 

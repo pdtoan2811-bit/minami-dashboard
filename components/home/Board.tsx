@@ -11,7 +11,7 @@ import { startAsk } from "@/lib/ask";
 import { useSetting } from "@/lib/use-settings";
 import { ensureDod, threadPost, useThreads, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
-import { DodBar, TaskCard, TINT } from "./TaskCard";
+import { AbortButton, DodBar, TaskCard, TINT } from "./TaskCard";
 import { StartingCard, useStartingCards } from "./StartingCard";
 
 // Lanes by WHO holds the next move (pitch waiting-chain V1, picked 2026-10-29), read from the server's
@@ -147,7 +147,7 @@ export function Board({ project, cwd, onSwitch, onClose, onAllChats, openSids = 
     </>;
     if (t.archived) return <button className={mini} onClick={() => void threadPost({ action: "unarchive", id: t.id })}>Reopen</button>;
     if (allMet(t)) return <><span className="text-[11px] text-[#4ade80]/80">All met</span><button className={mini} onClick={() => void threadPost({ action: "archive", id: t.id })}>Close</button></>;
-    return <button className={mini} onClick={() => moveTo(t, "done")} title="Move to Done">✓ Done</button>;
+    return <><button className={mini} onClick={() => moveTo(t, "done")} title="Move to Done">✓ Done</button><AbortButton t={t} /></>;
   };
 
   const activeOf = (t: ThreadView) => t.sessions.some((x) => openSids.includes(x.id));

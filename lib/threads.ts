@@ -123,6 +123,8 @@ export type ThreadView = {
   wait?: Wait;
   /** Archived (moved to Done). Only in `done`, never in `threads`. */
   archived?: boolean; doneAt?: number; autoDone?: boolean; closedWhy?: string;
+  /** Closed with Abort: no longer needed, not done (FlowThread.aborted). */
+  aborted?: boolean;
 };
 export type ProjectRef = { project: string; cwd: string; at: number };
 
@@ -200,13 +202,13 @@ export function threads(days = 7): { threads: ThreadView[]; done: ThreadView[]; 
     //  - a task closed by words ("this one is done", task_report finished, the close API — `closedWhy`).
     //    He said the whole thing is done; open items don't overrule that, and Reopen is one tap.
     const typed = Math.max(0, ...ms.map((m) => m.lastUserAt ?? 0));
-    const revived = !!st?.archived && !!st.autoDone && !st.closedWhy && typed > (st.doneAt ?? 0) + 120_000;
+    const revived = !!st?.archived && !!st.autoDone && !st.closedWhy && !st.aborted && typed > (st.doneAt ?? 0) + 120_000;
     if (st?.archived && !revived) {
       // Done keeps two weeks, so a finished task is still there to reopen the next week.
       if ((st.doneAt ?? st.updatedAt) > Date.now() - 14 * 86_400_000) done.push({
         id, stored: true, title: clip(st.title || titleOf(ms[ms.length - 1]), 90), project: st.project || ms[ms.length - 1].project, cwd: st.cwd,
         sessions: ms.map((m) => ({ id: m.id, cwd: m.cwd })), latest: ms[ms.length - 1].id, at: ms[ms.length - 1].lastActivity, born: st.createdAt,
-        state: "idle", line: "", asks: 0, archived: true, doneAt: st.doneAt ?? st.updatedAt, autoDone: !!st.autoDone, closedWhy: st.closedWhy, ...(st.dod ? { dod: st.dod } : {}),
+        state: "idle", line: "", asks: 0, archived: true, doneAt: st.doneAt ?? st.updatedAt, autoDone: !!st.autoDone, closedWhy: st.closedWhy, ...(st.aborted ? { aborted: true } : {}), ...(st.dod ? { dod: st.dod } : {}),
       });
       continue;
     }
