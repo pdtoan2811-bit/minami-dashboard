@@ -380,6 +380,26 @@ Verified 2026-10-12 on a production preview (:3012):
 - The phone recording flow (pick file → upload → progress → Saved + "Audio saved") ran end to end
   at 412×915.
 
+### The laptop start bar on `/meetings` (2026-10-30)
+
+`/meet` always worked from the Mac's own mic, but it was phone-styled, in `BARE` and in no nav, so
+starting a meeting at the desk meant knowing a URL. `app/meetings/StartBar.tsx` (pitch
+`meeting-start` round 3 V2, Thomas's pick) is the desk door: an optional name, "board in a 2nd window",
+**🎙 Start listening**. The bar then turns into a live strip: dot, level meter, clock, a one-line
+verdict, Board ↗ and End. It uses the same `/api/meet/mic` + `/api/meet/status` and the same pure audio
+helpers, now in `lib/meet-audio.ts` and shared with `Meet.tsx` (moved, not changed).
+
+It is deliberately smaller than `/meet`: no wake lock, no backgrounded-tab check, no recording upload.
+A desktop background tab keeps capturing, so Android's problems don't apply. It keeps the one rule
+that matters. The verdict names the first broken thing: token not set, no audio reaching the box,
+or the last ingest result failing. Only then does it say "hearing you".
+
+**The meeting lives in the page** (an accepted trade-off of V2). Leaving `/meetings` unmounts the bar.
+That stops the mic and **ends the meeting on the box** with a `keepalive` POST, so it isn't left open
+to hear nothing. Closing the tab asks first. Verified 2026-10-30 in headless Chrome with a fake mic
+on :3001: Start → "hearing you" at 0:09 → End → Saved, no console errors. Not yet tried with a real
+voice on the laptop mic.
+
 ### Not verified / not built
 
 - **Not yet tried on the real Find N5 / Flip 7 mic.** The chunker's speech floor is calibrated against

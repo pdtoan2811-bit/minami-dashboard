@@ -9,6 +9,8 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-30
+- **Start a meeting from /meetings on the laptop mic** (§17b; `app/meetings/StartBar.tsx`, `lib/meet-audio.ts`). Start bar above the search becomes a live strip (meter, clock, verdict, Board ↗, End); same pipeline as `/meet`. "Send the bot →" opens On Call in Terminal through `/api/meetings/oncall` (§18).
+- **On Call no longer refuses to start because of Tailscale** (§18). `tailscale serve` listens on the tailnet address of :3011, and the launcher's port check took it for a foreign app. Only loopback/wildcard listeners count now.
 - **✕ Abort on a task** (§37). Closes a task that is no longer needed into Done marked aborted. It is not done: no ✓, no celebration, no Today tick, and it isn't revived by a later message. Reopen clears it. `FlowThread.aborted`, `{action:"abort"}`.
 - **Work receipt + agent pill in the chat pane** (§39). Each reply's tool calls fold into one line under the answer that opens to the per-call rows; the in-flow agent card and idle bay become a header pill that opens to the same board. "Show tool logs" now only sets whether receipts start open.
 - **Tasks and chats with a question stand out** (§37). `asksYou` (ask or step) puts one "?" mark on the card (wash, stripe, tag, Answer ›), the collapsed tile's Tasks chip, a jump-to pill in the expanded tile, and the awaiting chat tab.
