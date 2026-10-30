@@ -50,6 +50,7 @@ import { ChatHints } from "@/components/home/ChatHints";
 import { TopicTasks } from "@/components/home/TopicTasks";
 import { imageRefs } from "@/lib/image-refs";
 import { Board } from "@/components/home/Board";
+import { asksYou } from "@/components/home/TaskCard";
 import { Celebrate } from "@/components/home/Celebrate";
 import { startAsk } from "@/lib/ask";
 import { useThreads } from "@/lib/use-threads";
@@ -1724,6 +1725,9 @@ export default function BentoHome() {
                   <button onClick={(e) => { e.stopPropagation(); expandTile(p.name); }}
                     title={ts.length ? `${ts.length} task${ts.length > 1 ? "s" : ""} — show them here` : "No tasks yet — start one here"}
                     className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-lg border border-white/15 bg-black/30 px-2 py-0.5 text-[10px] text-neutral-300 transition-colors hover:border-[var(--sakura)]/60 pointer-coarse:px-2.5 pointer-coarse:py-1.5">
+                    {/* A topic with a task asking him leads with the "?" count: the bento is where the
+                        hunt for "which one needs an answer" starts, and "Tasks 4" said nothing about it. */}
+                    {ts.some(asksYou) && <span className="-ml-0.5 mr-0.5 flex items-center gap-1 font-semibold text-[var(--sakura)]"><span className="flex h-3 w-3 items-center justify-center rounded-full bg-[var(--sakura)] text-[8px] text-neutral-950">?</span>{ts.filter(asksYou).length}</span>}
                     {ts.length ? <>Tasks <span className="text-neutral-500">{ts.length}</span></> : "+ Task"}
                   </button>
                   </>
@@ -1890,7 +1894,12 @@ export default function BentoHome() {
                         // color-mix rather than an `#rrggbbaa` concat: PHASE_TINT holds `var(--sakura)`
                         // for `thinking`, and appending an alpha suffix to a var() reference yields an
                         // invalid colour that silently drops the border entirely.
-                        style={!on && (running || wants) ? {
+                        // A question uses sakura with a wash, not the phase map's green: green reads as
+                        // "fine / done", the opposite of "this one is blocked on you". Border only — fill
+                        // stays reserved for the selected tab.
+                        style={!on && wants ? {
+                          borderColor: "color-mix(in srgb, var(--sakura) 75%, transparent)",
+                        } : !on && running ? {
                           borderColor: `color-mix(in srgb, ${tint} 55%, transparent)`,
                         } : undefined}
                         // Middle-click closes, as it has on every browser tab for twenty years. On
@@ -1909,10 +1918,18 @@ export default function BentoHome() {
                               Only a genuinely running turn animates — same rule as the bento tiles, and
                               for the same measured reason (a permanent pulse costs a frame loop forever);
                               at rest this is a static grey dot with no animation attached. */}
-                          <span className="relative flex h-1.5 w-1.5 shrink-0 items-center justify-center">
-                            {running && <span className="tab-live-ring absolute inset-0 rounded-full" style={{ background: tint }} />}
-                            <span className="h-1.5 w-1.5 rounded-full transition-colors" style={{ background: tint, opacity: act?.busy ? 1 : 0.3 }} />
-                          </span>
+                          {/* A tab parked on a question swaps its dot for a solid "?" — the same mark the
+                              task cards and tile header use, so "which chat is asking me" reads the same
+                              everywhere (2026-10-30). Same 1.5 slot widened only for this case; the label
+                              shift is once per question, not per turn. */}
+                          {wants ? (
+                            <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-[var(--sakura)] text-[9px] font-bold text-neutral-950">?</span>
+                          ) : (
+                            <span className="relative flex h-1.5 w-1.5 shrink-0 items-center justify-center">
+                              {running && <span className="tab-live-ring absolute inset-0 rounded-full" style={{ background: tint }} />}
+                              <span className="h-1.5 w-1.5 rounded-full transition-colors" style={{ background: tint, opacity: act?.busy ? 1 : 0.3 }} />
+                            </span>
+                          )}
                           <span className="truncate">{s ? titleOf(s) : "New chat"}</span>
                         </button>
                         {/* Always rendered, only sometimes visible. Revealing it on hover ALONE would

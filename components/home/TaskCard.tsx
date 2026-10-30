@@ -16,6 +16,11 @@ const ago = (ms: number) => {
   const m = Math.round((Date.now() - ms) / 60e3);
   return m < 1 ? "now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
 };
+/** The task has a question for him: a turn parked on AskUserQuestion / plan review (`ask`), or a chat that
+ *  ended on one (`step`). These are the cards he has to find in a full tile, so every surface that lists
+ *  tasks marks them the same way (Thomas, 2026-10-30: "make the task that has a question easier to find").
+ *  Not `state === "waiting"` alone: that also covers "your reply" after any quiet turn, which is most cards. */
+export const asksYou = (t: ThreadView) => !t.archived && (!!t.ask || !!t.step);
 const mini = "rounded-md border border-white/12 px-2 py-0.5 text-[11px] text-neutral-300 transition-colors hover:border-white/30 hover:text-neutral-100 pointer-coarse:py-1.5";
 
 /** Segmented bar: one segment per done-list item. Minami's ticks are the paler green. */
@@ -220,7 +225,20 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
           V1): a gated item ("your pick"), another chat's leftovers (wait.holder "task", lib/task-ship.ts
           mergeBlock — not his move and not this chat's, the case he couldn't see on 2026-10-29), . A paused
           task's next item is already in the pace line, and a running chat says what it's doing in its own line below. */}
-      {t.wait && !t.step && !compact && (t.wait.holder === "you" || t.wait.holder === "task") && (
+      {/* A live question (AskUserQuestion, plan review): the turn is parked mid-flight and only the chat's
+          own card can answer it, so the button opens the chat rather than sending a canned reply. */}
+      {t.ask && !compact && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-[var(--sakura)]/[0.08] px-2 py-1.5">
+          <span className="min-w-0 flex-1 basis-40 text-[13px] leading-snug text-neutral-100"><span className="mr-1 text-[var(--sakura)]">?</span>{t.ask}</span>
+          {canDo && (
+            <button onClick={() => openThread(t)} title="Open the chat and answer its question"
+              className="shrink-0 rounded-md bg-[var(--sakura)]/20 px-2 py-0.5 text-[11px] font-semibold text-[var(--sakura)] hover:bg-[var(--sakura)]/30 pointer-coarse:py-1.5">
+              Answer ›
+            </button>
+          )}
+        </div>
+      )}
+      {t.wait && !t.step && !t.ask && !compact && (t.wait.holder === "you" || t.wait.holder === "task") && (
         <div className="mt-1.5 rounded-lg px-2 py-1.5 text-[13px] leading-snug text-neutral-100"
           style={{ background: t.wait.holder === "you" ? "color-mix(in srgb, var(--sakura) 8%, transparent)" : "rgba(167,139,250,0.1)" }}>
           <span className="mr-1" style={{ color: t.wait.holder === "you" ? TINT.waiting : TINT.blocked }}>
@@ -232,7 +250,7 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
       )}
       {/* How the task runs: on its own to the end, or to a gate where it waits for him. ▶ Run sends the
           whole stretch in one message, so the ungated items need no click each (Thomas, 2026-10-28). */}
-      {!compact && pace && !t.step && (
+      {!compact && pace && !t.step && !t.ask && (
         <div className="mt-1 flex items-center gap-2 text-[11px] text-neutral-500">
           <span className="min-w-0 flex-1 truncate">{pace}</span>
           {doIt && plan.run.length > 0 && t.state !== "working" && !t.step && (
@@ -272,6 +290,7 @@ export function TaskCard({ t, busy, compact, fold, active, actions, drag }: {
   drag?: { onDragStart: (e: React.DragEvent) => void };
 }) {
   const st = t.archived ? "idle" : t.state;
+  const q = asksYou(t);
   const open = () => { if (t.sessions.length) { markSeen(t.id); openThread(t); } };
   // The whole card opens the task, not just the title block (Thomas, 2026-10-28: on a long card he "had
   // to scroll all the way up to click on the top area"). Clicks on the card's own controls (tick, Do it,
@@ -282,8 +301,19 @@ export function TaskCard({ t, busy, compact, fold, active, actions, drag }: {
     open();
   };
   return (
-    <div draggable={!!drag} onDragStart={drag?.onDragStart} data-task={t.id} onClick={onCard}
-      className={`flex min-w-0 flex-col gap-2 rounded-xl border bg-white/[0.035] ${compact ? "p-2.5" : "p-3"} ${active ? "border-[var(--sakura)]/70 ring-1 ring-[var(--sakura)]/40" : "border-white/10"} ${drag ? "cursor-grab active:cursor-grabbing" : t.sessions.length ? "cursor-pointer" : ""} ${t.sessions.length ? "transition-colors hover:border-white/20 hover:bg-white/[0.05]" : ""} ${t.archived ? "opacity-70" : ""}`}>
+    // A card with a question is the one filled card in the grid: sakura wash, sakura border, a stripe down
+    // its left edge and a QUESTION tag. Static on purpose — it waits on him, and motion next to "waiting"
+    // claims work is happening (the same rule as the `awaiting` tab). The open-chat ring still wins the
+    // border, since that card is already in front of him.
+    <div draggable={!!drag} onDragStart={drag?.onDragStart} data-task={t.id} data-asks={q || undefined} onClick={onCard}
+      className={`relative flex min-w-0 flex-col gap-2 overflow-hidden rounded-xl border ${q ? "bg-[var(--sakura)]/[0.07]" : "bg-white/[0.035]"} ${compact ? "p-2.5" : "p-3"} ${active ? "border-[var(--sakura)]/70 ring-1 ring-[var(--sakura)]/40" : q ? "border-[var(--sakura)]/55 shadow-[0_0_18px_-6px_var(--sakura)]" : "border-white/10"} ${drag ? "cursor-grab active:cursor-grabbing" : t.sessions.length ? "cursor-pointer" : ""} ${t.sessions.length ? `transition-colors ${q ? "hover:bg-[var(--sakura)]/[0.1]" : "hover:border-white/20 hover:bg-white/[0.05]"}` : ""} ${t.archived ? "opacity-70" : ""}`}>
+      {q && <span className="pointer-events-none absolute inset-y-0 left-0 w-[3px] bg-[var(--sakura)]" aria-hidden />}
+      {q && (
+        <span className="-mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--sakura)]">
+          <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--sakura)] text-[9px] text-neutral-950">?</span>
+          {t.ask ? "Question for you" : "Waiting on your answer"}
+        </span>
+      )}
       <button onClick={open} disabled={!t.sessions.length} className="min-w-0 text-left disabled:cursor-default" title={t.sessions.length ? "Open this task's chats" : undefined}>
         <span className="flex items-start gap-2">
           <span className={`mt-[6px] h-2 w-2 shrink-0 rounded-full ${st === "working" ? "animate-pulse" : ""}`} style={{ background: TINT[st] }} />

@@ -403,6 +403,24 @@ Tested on an isolated `:3027` server with a copy of `flow.json`: the screenshot'
 ship: true}`, state `waiting`, and gained "Merged and deployed"; `answer` returned the owner key and
 message, and a second `answer` was refused.
 
+### Finding the ones with a question (2026-10-30)
+
+Thomas: "need a highlight somehow to make the task - session that has question is easier to find".
+"waiting on you" was a grey-sized word in the card's meta line, and a live AskUserQuestion (`ask`) only
+showed as the `wait` line, same as "your reply". One predicate, `asksYou(t)` in `TaskCard.tsx` =
+`!archived && (ask || step)`, drives the same "?" mark on every surface. Not `state === "waiting"`:
+that covers any quiet turn, which is most cards, and a highlight on most cards finds nothing.
+
+- **Card**: sakura wash + border + 3px left stripe + a "? QUESTION FOR YOU" (`ask`) / "? WAITING ON YOUR
+  ANSWER" (`step`) tag. Static, no pulse: same rule as the `awaiting` tab. `ask` gets its own banner with
+  **Answer ›** (opens the chat; the parked turn's own AskCard is the only thing that can answer it), and
+  ▶ Run is hidden while it's up, since sending into a parked turn would queue behind the question.
+- **Collapsed tile**: the "Tasks n" corner chip leads with "? n" when any of its tasks asks.
+- **Expanded tile**: a "? n questions" pill in the header scrolls to the first; an asking card is never
+  folded behind "n more".
+- **Chat tab** (`phase=awaiting`): the dot becomes a solid sakura "?" and the border goes sakura.
+  It was the phase map's green, which reads as "fine".
+
 ## What the logs showed (2026-10-29)
 
 A sweep of `~/.minami/flow.json` (58 tasks), 293 transcripts from four days, and the deploy, event and
