@@ -9,7 +9,8 @@
 #
 # RECORDS (one JSON object per line, appended to ${MINAMI_RUNS_FILE:-~/.minami/runs.jsonl}):
 #   start: {"id","event":"start","start":ISO}          written at launch, so a long/always-on job shows as running
-#   end:   {"id","event":"end","start","end","exit","secs","last_line"}   last_line = last non-empty output line, <=300 chars
+#   end:   {"id","event":"end","start","end","exit","secs","last_line"[,"reason"][,"attempt"]}   last_line = last non-empty
+#          output line, <=300 chars; reason/attempt: see SELF-HEALING below
 # A start with no later end for the same id (and start time) = still running (or killed hard).
 #
 # Env: MINAMI_RUNS_FILE overrides the record file (used by tests).
@@ -28,12 +29,14 @@ ID="$1"; shift 2
 # Appends one whole line with a single O_APPEND write, so concurrent jobs can't interleave.
 record() { # $1=event
   MR_FILE="$RUNS" MR_ID="$ID" MR_EVENT="$1" MR_START="$START" MR_END="$END" \
-  MR_EXIT="$CODE" MR_SECS="$SECS" MR_LAST="$LAST" "$NODE" -e '
+  MR_EXIT="$CODE" MR_SECS="$SECS" MR_LAST="$LAST" MR_REASON="$REASON" MR_ATTEMPT="$ATTEMPT" "$NODE" -e '
     const e = process.env, fs = require("fs"), path = require("path");
     const o = { id: e.MR_ID, event: e.MR_EVENT, start: e.MR_START };
+    if (e.MR_ATTEMPT) o.attempt = Number(e.MR_ATTEMPT);
     if (e.MR_EVENT === "end") {
       o.end = e.MR_END; o.exit = Number(e.MR_EXIT); o.secs = Number(e.MR_SECS);
       o.last_line = Array.from(e.MR_LAST || "").slice(0, 300).join("");
+      if (e.MR_REASON) o.reason = e.MR_REASON;
     }
     fs.mkdirSync(path.dirname(e.MR_FILE), { recursive: true });
     fs.appendFileSync(e.MR_FILE, JSON.stringify(o) + "\n");
@@ -83,35 +86,92 @@ release() { MR_LOCK="$LOCK" MR_PID="$$" "$NODE" -e '
 ' 2>/dev/null; }
 trap release EXIT
 
-T0=$(date +%s); START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-record start
+# SELF-HEALING (2026-10-30). Every morning showed the same red: runs that finished their work and never exited
+# (video-pitch / video-overnight sat "running" 1.5–2 days, and launchd silently dropped every scheduled run behind
+# them), one-in-900 Node crashes, and Claude weekly-limit 429s counted as failures. Policy per runner lives in
+# ~/.minami/automations/meta.json next to its name, so it is data, not code:
+#   maxSecs  stop the run after this long (TERM to its whole process group, KILL 30 s later). Unset = 6 h. 0 = never
+#            (the always-on bot). Set well above the runner's slowest normal run and below its schedule interval.
+#   retry    true = after a crash (non-zero exit, not a timeout, not a limit, not a stop) wait 60 s and run once more.
+#            ONLY for runners that are safe to repeat. Never for anything that posts, spends, opens PRs or deletes
+#            what isn't regenerable (EXPERIENCE.md: a publish run twice posted three videos twice, 2026-10-21).
+# The end record gains `reason`: "timeout" | "limit" | "crash" | "stopped", and `attempt` on a retry.
+# A limit failure exits 0, so launchd doesn't mark the runner failing for the account being out of quota;
+# the record keeps the real exit, and ~/.minami/bin/minami-heal re-runs it after the reset when it is safe to.
+META="${MINAMI_META_FILE:-$HOME/.minami/automations/meta.json}"
+POLICY=$(MR_META="$META" MR_ID="$ID" "$NODE" -e '
+  const e = process.env; let m = {};
+  try { m = JSON.parse(require("fs").readFileSync(e.MR_META, "utf8"))[e.MR_ID] || {}; } catch {}
+  const max = Number.isFinite(m.maxSecs) ? m.maxSecs : 21600;
+  process.stdout.write(`${max} ${m.retry === true ? 1 : 0}`);
+' 2>/dev/null) || POLICY=""
+read -r MAXSECS RETRY <<< "${POLICY:-21600 0}"
+# Claude's usage/weekly limit, as the CLI and the SDK print it.
+LIMIT_RE='(usage|weekly|session|5-hour) limit|limit (reached|will reset)|hit your limit|rate_limit_error|resets [0-9]{1,2}(:[0-9]{2})? ?(am|pm)'
 
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/minami-run.XXXXXX")
-mkfifo "$TMP/f"
-# Keeps only the latest non-empty line (bounded memory, and already on disk if we must stop waiting).
-# Pass-through is done by tee below, so this reader never alters what the log sees.
-: > "$TMP/last"
-while IFS= read -r l || [ -n "$l" ]; do
-  l=${l//$'\r'/}
-  [[ $l =~ [^[:space:]] ]] && printf '%s' "${l:0:2000}" > "$TMP/last"
-done < "$TMP/f" &
-TAILPID=$!
+# Job control: each attempt runs in its own process group, so a timeout or a stop reaches the grandchildren too
+# (caffeinate → node, sh -c → node), not just the direct child.
+set -m
+STOPPED=""
+trap 'STOPPED=1; kill -TERM -- -"$CHILD" 2>/dev/null' TERM
+trap 'STOPPED=1; kill -INT -- -"$CHILD" 2>/dev/null' INT
 
-"$@" > >(tee "$TMP/f") 2> >(tee "$TMP/f" >&2) &
-CHILD=$!
-trap 'kill -TERM "$CHILD" 2>/dev/null' TERM
-trap 'kill -INT "$CHILD" 2>/dev/null' INT
+run_once() { # sets CODE, LAST, REASON, START, END, SECS
+  T0=$(date +%s); START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  record start
 
-wait "$CHILD"; CODE=$?
-# A trapped signal makes wait return early (>128) while the child is still alive: keep waiting.
-while kill -0 "$CHILD" 2>/dev/null; do wait "$CHILD"; CODE=$?; done
-# tail ends once both tees close (all output flushed). A grandchild that outlives the child can hold
-# the pipe open forever, so give it ~3s and then stop waiting rather than delay the end record.
-for _ in 1 2 3 4 5 6; do kill -0 "$TAILPID" 2>/dev/null || break; sleep 0.5; done
-kill "$TAILPID" 2>/dev/null; wait "$TAILPID" 2>/dev/null
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/minami-run.XXXXXX")
+  mkfifo "$TMP/f"
+  # Keeps only the latest non-empty line (bounded memory, and already on disk if we must stop waiting), and notes
+  # any line that reads like the Claude limit. Pass-through is done by tee below, so the log sees it unaltered.
+  : > "$TMP/last"
+  ( shopt -s nocasematch
+    while IFS= read -r l || [ -n "$l" ]; do
+      l=${l//$'\r'/}
+      [[ $l =~ [^[:space:]] ]] && printf '%s' "${l:0:2000}" > "$TMP/last"
+      [[ $l =~ $LIMIT_RE ]] && printf '%s' "${l:0:300}" > "$TMP/limit"
+    done ) < "$TMP/f" &
+  TAILPID=$!
 
-LAST=$(cat "$TMP/last")
-rm -rf "$TMP"
-END=$(date -u +%Y-%m-%dT%H:%M:%SZ); SECS=$(( $(date +%s) - T0 ))
-record end
+  "$@" > >(tee "$TMP/f") 2> >(tee "$TMP/f" >&2) &
+  CHILD=$!
+
+  WATCH=""
+  if [ "$MAXSECS" -gt 0 ] 2>/dev/null; then
+    ( sleep "$MAXSECS"
+      kill -0 "$CHILD" 2>/dev/null || exit 0
+      : > "$TMP/timeout"
+      echo "minami-run: $ID passed its ${MAXSECS}s limit — stopping it" >&2
+      kill -TERM -- -"$CHILD" 2>/dev/null; sleep 30; kill -KILL -- -"$CHILD" 2>/dev/null ) &
+    WATCH=$!
+  fi
+
+  wait "$CHILD"; CODE=$?
+  # A trapped signal makes wait return early (>128) while the child is still alive: keep waiting.
+  while kill -0 "$CHILD" 2>/dev/null; do wait "$CHILD"; CODE=$?; done
+  [ -n "$WATCH" ] && { kill -- -"$WATCH" 2>/dev/null; wait "$WATCH" 2>/dev/null; }
+  # tail ends once both tees close (all output flushed). A grandchild that outlives the child can hold
+  # the pipe open forever, so give it ~3s and then stop waiting rather than delay the end record.
+  for _ in 1 2 3 4 5 6; do kill -0 "$TAILPID" 2>/dev/null || break; sleep 0.5; done
+  kill -- -"$TAILPID" 2>/dev/null; wait "$TAILPID" 2>/dev/null
+
+  LAST=$(cat "$TMP/last"); REASON=""
+  if [ -e "$TMP/timeout" ]; then REASON=timeout
+  elif [ -n "$STOPPED" ]; then REASON=stopped
+  elif [ "$CODE" -ne 0 ] && [ -e "$TMP/limit" ]; then REASON=limit; LAST=$(cat "$TMP/limit")
+  elif [ "$CODE" -ne 0 ]; then REASON=crash
+  fi
+  rm -rf "$TMP"
+  END=$(date -u +%Y-%m-%dT%H:%M:%SZ); SECS=$(( $(date +%s) - T0 ))
+  record end
+}
+
+ATTEMPT=""
+run_once "$@"
+if [ "$REASON" = crash ] && [ "$RETRY" = 1 ]; then
+  echo "minami-run: $ID crashed (exit $CODE) — retrying once in ${MINAMI_RETRY_DELAY:-60}s" >&2
+  sleep "${MINAMI_RETRY_DELAY:-60}" & wait $!
+  [ -z "$STOPPED" ] && { ATTEMPT=2; run_once "$@"; }
+fi
+[ "$REASON" = limit ] && exit 0
 exit "$CODE"
