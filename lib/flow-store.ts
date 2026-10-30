@@ -72,6 +72,10 @@ export type FlowThread = {
    *  done, or "closed from the chat" (the `close` API). Also how a revived task avoids re-closing on the
    *  same old words. */
   closedWhy?: string;
+  /** Closed with Abort: no longer needed, not finished. It sits in Done (Reopen still works) but never
+   *  counts as done anywhere: no "✓ Done", no Today tick, and a later message in its chat doesn't revive
+   *  it. Thomas, 2026-10-30: "for task no longer needed — but not a done task". */
+  aborted?: boolean;
   /** Every item is met but the chat was mid-turn or asking him when that happened, so the close waits
    *  for a reading of a quiet chat (evaluate in /api/threads). See closeIfDone in lib/task-report.ts. */
   closeHeld?: boolean;
@@ -193,7 +197,7 @@ function diff(a: FlowThread | null, b: FlowThread): Record<string, unknown> {
   if (unticked.length) out.unticked = unticked;
   if (added.length) out.added = added;
   if (seen.length) out.seen = seen;
-  if (b.archived && !a.archived) out.closed = { auto: !!b.autoDone, why: b.closedWhy };
+  if (b.archived && !a.archived) out.closed = { auto: !!b.autoDone, why: b.closedWhy, ...(b.aborted ? { aborted: true } : {}) };
   if (!b.archived && a.archived) out.reopened = true;
   if (b.note !== a.note) out.note = true;
   if (b.step?.q !== a.step?.q) out.step = b.step?.q ?? null;
@@ -264,9 +268,10 @@ function writeFlow(before: FlowState, s: FlowState, by: Actor, why?: string) {
  *  cleared an item's `doing`, so a closed task kept an item "on now" for hours (4 archived tasks, and 3
  *  open ones 13–17h stale, in flow.json on 2026-10-29) and the board showed a done task as being worked.
  *  Lives here, not in lib/task-report.ts, so lib/today.ts can close a task without importing the session parser. */
-export function closeTask(t: FlowThread, o: { auto?: boolean; why?: string } = {}) {
+export function closeTask(t: FlowThread, o: { auto?: boolean; why?: string; abort?: boolean } = {}) {
   t.archived = true; t.doneAt = Date.now(); t.auto = false; t.updatedAt = Date.now();
   if (o.auto) t.autoDone = true;
+  if (o.abort) { t.aborted = true; t.autoDone = false; }
   if (o.why) t.closedWhy = o.why;
   t.dodPending = false;
   // A hold left on a closed task would re-close it the moment he reopens it (`ensure` honours holds).

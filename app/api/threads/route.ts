@@ -31,6 +31,8 @@ type Body =
   | { action: "dod.toggle"; id: string; dodId: string }
   | { action: "dod.add"; id: string; t: string }
   | { action: "archive"; id: string }
+  /** No longer needed: closed into Done without counting as done (FlowThread.aborted). */
+  | { action: "abort"; id: string }
   | { action: "unarchive"; id: string }
   | { action: "drop"; id: string }
   | { action: "queue"; project: string; cwd: string; title: string }
@@ -424,7 +426,7 @@ export async function POST(req: Request) {
       return Response.json({ ok: true, id });
     }
     // A derived task (id "s:…") has nothing stored yet; the edits below that need a record make one.
-    if ("id" in b && b.id.startsWith("s:") && (b.action === "archive" || b.action === "dod.add" || b.action === "drop" || b.action === "gate")) {
+    if ("id" in b && b.id.startsWith("s:") && (b.action === "archive" || b.action === "abort" || b.action === "dod.add" || b.action === "drop" || b.action === "gate")) {
       const v = threads(14).threads.find((t) => t.id === b.id);
       if (!v) throw new Error("no such task");
       let id = "";
@@ -441,9 +443,10 @@ export async function POST(req: Request) {
         case "dod.add": if (t && b.t.trim()) { t.dod = insertItems(t.dod ?? [], [{ id: fid(), t: b.t.trim().slice(0, 140), done: false }]); t.dodPending = false; } break;
         case "gate": if (t?.dod) t.dod = t.dod.map((d) => (d.id === b.dodId ? { ...d, gate: gateFor(d.t, parseGate(b.gate)), gateBy: "thomas" as const, gateWhy: undefined } : d)); break;
         case "archive": if (t) closeTask(t); break;
+        case "abort": if (t) closeTask(t, { abort: true }); break;
         // A To-do never started is just deleted; anything with chats is hidden, so they stay claimed.
         case "drop": if (t) { if (!t.sessions.length) s.threads = s.threads.filter((x) => x !== t); else t.hidden = true; } break;
-        case "unarchive": if (t) { t.archived = false; t.autoDone = false; delete t.doneAt; t.reopenedAt = Date.now(); } break;
+        case "unarchive": if (t) { t.archived = false; t.autoDone = false; delete t.aborted; delete t.doneAt; t.reopenedAt = Date.now(); } break;
         case "start": if (t) { t.queued = false; if (!t.sessions.includes(b.sessionId)) t.sessions.push(b.sessionId); } break;
       }
       if (t) t.updatedAt = Date.now();

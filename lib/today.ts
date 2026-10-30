@@ -346,7 +346,8 @@ export function linkTasks(day: TodayDay): boolean {
     if (done && !st.archived && (Date.parse(it.done_at ?? "") || Date.now()) > (st.reopenedAt ?? 0)) {
       const why = it.done_evidence || (it.done_by ? "ticked on the Today page" : "Thomas ticked it on Today");
       edits.push((s) => { const t = s.threads.find((x) => x.id === st.id); if (t && !t.archived) closeTask(t, { auto: true, why: why.slice(0, 300) }); });
-    } else if (!done && st.archived && !("manual" in it && it.manual)) {
+    // An aborted task wasn't done, so its to-do stays as it is; dropping it from the day is his call there.
+    } else if (!done && st.archived && !st.aborted && !("manual" in it && it.manual)) {
       it.done = true; it.done_at = new Date(st.doneAt ?? Date.now()).toISOString(); it.done_by = "minami";
       it.done_evidence = `Its task closed${st.closedWhy ? ` — ${st.closedWhy}` : " with every done-item met"}.`;
       log(day, "auto", `Done (task closed): ${handoffLabel(it)}`);

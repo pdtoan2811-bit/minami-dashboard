@@ -172,6 +172,8 @@ export function Dod({ t, busy, compact, fold }: { t: ThreadView; busy: boolean; 
   // have to do subtask even when I told that the mother task is done"). His word closes the whole task;
   // listing what was left, or a 2/3 bar, reads as unfinished work. Reopen brings the list back.
   if (t.archived) {
+    // Aborted reads as set aside, never as done: grey, no tick (Thomas, 2026-10-30).
+    if (t.aborted) return <p className="text-[11px] text-neutral-500">✕ Aborted — no longer needed</p>;
     if (!dod.length) return null;
     return <p className="text-[11px] text-[#4ade80]/80">✓ Done{t.closedWhy && t.closedWhy !== "closed from the chat" ? <span className="italic text-neutral-500"> — “{t.closedWhy}”</span> : ""}</p>;
   }
@@ -322,20 +324,29 @@ export function TaskCard({ t, busy, compact, fold, active, actions, drag }: {
         <span className="mt-0.5 block truncate pl-4 text-[11px] text-neutral-500">
           {active && <span className="font-medium text-[var(--sakura)]">● chatting now · </span>}
           {!t.archived && STATE[st] && t.wait?.holder !== "done" && <span style={{ color: st === "queued" ? undefined : TINT[st] }}>{STATE[st]} · </span>}
-          {t.archived ? `done ${ago(t.doneAt ?? t.at)} ago` : ago(t.at)}
+          {t.archived ? `${t.aborted ? "aborted" : "done"} ${ago(t.doneAt ?? t.at)} ago` : ago(t.at)}
           {t.sessions.length > 0 && ` · ${t.sessions.length} chat${t.sessions.length > 1 ? "s" : ""}`}
         </span>
         {t.line && !compact && !fold && <span className="mt-1 line-clamp-2 pl-4 text-[12px] leading-snug text-neutral-400">{t.line}</span>}
         {t.line && fold && <span className="mt-1 line-clamp-1 pl-4 text-[12px] leading-snug text-neutral-400">{t.line}</span>}
       </button>
-      {(!!t.dod?.length || !compact) && <div className="pl-4"><Dod t={t} busy={busy} compact={compact} fold={fold} /></div>}
+      {(!!t.dod?.length || !compact || t.aborted) && <div className="pl-4"><Dod t={t} busy={busy} compact={compact} fold={fold} /></div>}
       {/* Every open card can be closed by hand — the tile had no way to (Thomas, 2026-10-28). The board
           passes its own actions; the tile gets this. */}
       {actions ? <div className="flex flex-wrap items-center gap-1.5 pl-4">{actions}</div>
         : !t.archived && t.state !== "queued" && (
-          <div className="pl-4"><button onClick={() => void threadPost({ action: "archive", id: t.id })} title="Mark this task done and move it to Done"
-            className="rounded-md border border-white/12 px-2 py-0.5 text-[11px] text-neutral-400 transition-colors hover:border-[#4ade80]/50 hover:text-[#4ade80] pointer-coarse:py-1.5">✓ Done</button></div>
+          <div className="flex items-center gap-1.5 pl-4"><button onClick={() => void threadPost({ action: "archive", id: t.id })} title="Mark this task done and move it to Done"
+            className="rounded-md border border-white/12 px-2 py-0.5 text-[11px] text-neutral-400 transition-colors hover:border-[#4ade80]/50 hover:text-[#4ade80] pointer-coarse:py-1.5">✓ Done</button>
+            <AbortButton t={t} /></div>
         )}
     </div>
   );
+}
+
+/** Close a task that is no longer needed without calling it done. It still lands in Done, marked
+ *  aborted, so Reopen undoes it in one tap. */
+export function AbortButton({ t }: { t: ThreadView }) {
+  return <button type="button" title="No longer needed: close it without marking it done"
+    onClick={() => void threadPost({ action: "abort", id: t.id })}
+    className={"rounded-md border border-white/12 px-2 py-0.5 text-[11px] text-neutral-500 transition-colors hover:border-[#f87171]/50 hover:text-[#f87171] pointer-coarse:py-1.5"}>✕ Abort</button>;
 }
