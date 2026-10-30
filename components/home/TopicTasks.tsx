@@ -10,7 +10,7 @@ import { startAsk, startInBackground } from "@/lib/ask";
 import { useSetting } from "@/lib/use-settings";
 import { ensureDod, useThreads, type ThreadView } from "@/lib/use-threads";
 import type { AgentMode } from "@/lib/use-agent";
-import { TaskCard } from "./TaskCard";
+import { TaskCard, asksYou } from "./TaskCard";
 import { NewTask, readDraft, restoreDraft } from "./NewTask";
 import { StartingCard, useStartingCards } from "./StartingCard";
 
@@ -39,7 +39,13 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
   // The task whose chat is open scrolls into view inside the tile, so "which one am I in" is answered
   // without hunting through the list. Past the first six it is shown anyway, in its own place.
   const activeId = open.find((t) => t.sessions.some((x) => openSids.includes(x.id)))?.id;
-  const shown = more ? open : open.filter((t, i) => i < 6 || t.id === activeId);
+  // A card with a question is never folded behind "n more": it's the one he opened the tile to find.
+  const shown = more ? open : open.filter((t, i) => i < 6 || t.id === activeId || asksYou(t));
+  const asking = open.filter(asksYou);
+  const jumpToAsk = () => {
+    const el = document.querySelector(`[data-expanded] [data-task="${CSS.escape(asking[0].id)}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
   useEffect(() => {
     if (activeId) document.querySelector(`[data-expanded] [data-task="${CSS.escape(activeId)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [activeId]);
@@ -54,6 +60,13 @@ export function TopicTasks({ project, cwd, tasks, onAllChats, onBoard, onClose, 
           <span className="ml-2 text-[12px] font-normal text-neutral-500">{open.length} task{open.length === 1 ? "" : "s"}{all ? ` · ${met}/${all} done-items met` : ""}</span>
           {doneToday > 0 && <button onClick={onBoard} className="ml-2 text-[12px] font-normal text-[#4ade80]/80 hover:text-[#4ade80]" title="Finished tasks are on the board's Done column">✓ {doneToday} done today</button>}
         </p>
+        {asking.length > 0 && (
+          <button onClick={jumpToAsk} title="Scroll to the first task with a question for you"
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--sakura)]/20 px-2.5 py-1 text-[12px] font-semibold text-[var(--sakura)] hover:bg-[var(--sakura)]/30">
+            <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--sakura)] text-[9px] text-neutral-950">?</span>
+            {asking.length} question{asking.length === 1 ? "" : "s"}
+          </button>
+        )}
         <button onClick={onBoard} className={`${btn} border-[var(--sakura)]/40`} title="Focus on this project: its tasks as a board">⤢ Board</button>
         <button onClick={onAllChats} className={btn} title="Open the topic's chat panel, as a tile click used to">All chats</button>
         <button onClick={() => send("Pull the latest code and let me preview it.")} className={`${btn} hidden @min-[640px]:block`}>▶ Preview</button>

@@ -8,6 +8,9 @@ this to do a piece of work; read the subsystem's own doc.
 
 ---
 
+### 2026-10-30
+- **Tasks and chats with a question stand out** (§37). `asksYou` (ask or step) puts one "?" mark on the card (wash, stripe, tag, Answer ›), the collapsed tile's Tasks chip, a jump-to pill in the expanded tile, and the awaiting chat tab.
+
 ### 2026-10-29
 - **Opinion Reveal is never closed** (§38). Thomas: "should not block my access like this, but I can randomly visit and pick topic". /opinion is now a list of every recent daily story; any can be ranted about any time, one takes/<id>.json each; the Saturday lock gathers what is waiting.
 - **Opinion Reveal interview page** (§38; `app/opinion/`, `app/api/opinion`, `lib/opinion.ts`, nav, automations). The weekly interview behind Video Studio's opinion video, as the "rant to a friend" chat Thomas picked (pitch opinion-interview V2). Writes `~/tiktok-studio/harness/opinion/<week>/interview.json`; drafted Fri 14:00 and locked Sat 12:05 by `com.thomas.video-opinion`.
