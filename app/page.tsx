@@ -416,6 +416,52 @@ function AgentBoard({ tasks, finished }: { tasks: LiveTask[]; finished: Notice[]
   );
 }
 
+/**
+ * The fleet, shrunk to a pill in the pane header (§39, pitch chat-panel V1 — Shrink · Hide · Embody).
+ *
+ * Shrink: one capsule, "2 agents · 1:04", glowing while any flies. Hide: nothing at all when no agent
+ * ran recently. Embody: tap it and the full AgentBoard opens as a popover — the same rows, so nothing
+ * the old in-flow card told you is lost, it just stopped taking reading space while you weren't asking.
+ *
+ * The 3-minute grace on finished agents is the old idle bay's: long enough that the ✓/✗ verdict is
+ * seen, short enough that yesterday's fleet doesn't sit in the header.
+ */
+function AgentPill({ tasks, notices, busy }: { tasks: LiveTask[]; notices: Notice[]; busy: boolean }) {
+  const trays = useUploadTrays();
+  const [open, setOpen] = useState(false);
+  const finished = notices.filter((n) => n.kind === "task" && (busy || n.at > Date.now() - 3 * 60_000));
+  if (!tasks.length && !finished.length && !trays.length) return null;
+  const live = tasks.length > 0 || trays.length > 0;
+  const failed = finished.some((n) => n.status === "failed");
+  const since = Math.min(...tasks.map((k) => k.since || Date.now()));
+  const n = live ? tasks.length : finished.length;
+  const label = live && !tasks.length ? "publishing" : `${n} agent${n === 1 ? "" : "s"}`;
+  const tint = TOOL_TINT.task;
+  return (
+    <span className="relative shrink-0">
+      <button onClick={() => setOpen((v) => !v)} title={live ? "Agents working — open the board" : "Agents finished — open the board"}
+        className="flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] font-semibold transition-colors pointer-coarse:h-9"
+        style={live
+          ? { borderColor: tint + "70", background: `linear-gradient(90deg, ${tint}38, #6c9cf52e)`, boxShadow: `0 0 16px -4px ${tint}aa`, color: "#fff" }
+          : { borderColor: "rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: failed ? "#ef7c7c" : "#a3a3a3" }}>
+        {live
+          ? <span className="agent-dot h-1.5 w-1.5 rounded-full" style={{ background: tint }} />
+          : <span className="text-[10px] leading-none">{failed ? "✗" : "✓"}</span>}
+        <span>{label}</span>
+        {live && tasks.length > 0 && <TurnClock since={since} />}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full z-20 mt-1.5 w-[min(36rem,85vw)] rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl">
+            <AgentBoard tasks={tasks} finished={finished} />
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 function ActivityLine({ activity, elapsed, turnElapsed, link, compact, busy, hideTime, notices }: { activity: ActivityState; elapsed: number; turnElapsed?: number; link?: "live" | "stale"; compact?: boolean; busy?: boolean; hideTime?: boolean; notices?: Notice[] }) {
   // `busy` without a phase shouldn't happen (the server always sets one), but if the two ever
   // disagree, err toward animating: a silent blank line is the exact failure we're fixing.
@@ -435,7 +481,6 @@ function ActivityLine({ activity, elapsed, turnElapsed, link, compact, busy, hid
   const tint = activeCat ? TOOL_TINT[activeCat] : PHASE_TINT[phase];
   const Icon = activeCat ? TOOL_ICON[activeCat] : null;
   const frozen = phase === "awaiting"; // nothing is moving — don't pretend otherwise
-  const finished = compact ? [] : (notices || []).filter((n) => n.kind === "task");
   // The clock the user actually wants. `elapsed` is PHASE-elapsed and restarts on every phase and
   // label change — several times a second during tool work — so for years the only number on screen
   // said "3s" no matter how long the turn had really been grinding. Prefer the turn clock where the
@@ -484,12 +529,12 @@ function ActivityLine({ activity, elapsed, turnElapsed, link, compact, busy, hid
           </span>
         )}
       </span>
-      {/* The fleet, one row per agent — see AgentBoard for the lineage (full-sentence notices → inline
-          pills → this). Compact contexts skip it and rely on taskLabel's one-liner instead. */}
       {/* The ask's plan as a bar + ETA. Hidden while the link is stale: a projection from a server we
           have stopped hearing from is exactly the photograph-as-report the stale label warns about. */}
       {activity.progress && !dead && <TaskProgressBar compact={compact} p={activity.progress} />}
-      {!compact && <AgentBoard tasks={activity.tasks} finished={finished} />}
+      {/* The fleet used to render here as a full card, one row per agent, in the message flow. It is the
+          header's AgentPill now (§39): a reply with four agents pushed the answer half a pane down while
+          you were trying to read it. Compact contexts still rely on taskLabel's one-liner. */}
     </span>
   );
 }
@@ -2607,9 +2652,125 @@ function TaskNoteRows({ notes }: { notes: TaskNote[] }) {
   );
 }
 
-const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, onOpenFile, onComment, live, sameSpeaker }: {
+
+/** One tool call, as it has always rendered: a folded row that opens onto its input, its text result and
+ *  its screenshots. Lives inside WorkReceipt now rather than straight in the turn (§39). */
+function ToolCallRow({ tool, shots, onOpenShot }: { tool: AgentToolCall; shots: BrowserState["shots"]; onOpenShot: (i: number) => void }) {
+  const cat = toolCategory(tool.name);
+  const tint = TOOL_TINT[cat];
+  const Icon = TOOL_ICON[cat];
+  // Result content, not just the input — a browser tool's screenshot lives here, and any
+  // tool's text result is now worth showing instead of just what was asked of it.
+  const images = tool.output?.blocks.filter((b): b is Extract<ToolOutputBlock, { type: "image" }> => b.type === "image") || [];
+  const textOut = tool.output?.blocks.find((b): b is Extract<ToolOutputBlock, { type: "text" }> => b.type === "text");
+  return (
+    <details className="mt-2 rounded-lg border-l-2 bg-black/40 px-2.5 py-1.5 text-xs" style={{ borderLeftColor: tint + "80", borderTop: "1px solid rgba(255,255,255,0.06)", borderRight: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+      <summary className="flex cursor-pointer select-none items-center gap-1.5 text-neutral-400">
+        <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />
+        <span className="rounded px-1.5 py-0.5 text-[10px] font-medium" style={{ background: tint + "1e", color: tint }}>{tool.name}</span>
+        <span className="min-w-0 flex-1 truncate text-neutral-500">{activityLabel(tool.name, tool.input)}</span>
+        {/* Per-call outcome: without it every tool in the transcript looks in-flight. */}
+        {tool.done
+          ? <span className="shrink-0 text-[10px]" style={{ color: tool.ok ? "#4ade80" : "#ef7c7c" }}>{tool.ok ? "✓" : "✗"}{tool.ms != null ? ` ${fmtElapsed(tool.ms)}` : ""}</span>
+          : <span className="shrink-0 text-[10px] text-neutral-600">running…</span>}
+      </summary>
+      {/* Browser calls get Claude Code's compact one-field summary instead of a wall of
+          input JSON (`Claude in Chrome[navigate] example.com`). The JSON is still one
+          click away — this row is inside a <details> — but the default view stays
+          scannable across a 30-action QA pass. */}
+      {cat === "browser" && browserArg(tool.name, tool.input) && (
+        <p className="mt-1.5 font-mono text-[11px] text-neutral-400">
+          <span className="text-neutral-500">{browserVerb(tool.name)}</span> {browserArg(tool.name, tool.input)}
+        </p>
+      )}
+      <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
+      {textOut && (
+        <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-black/30 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-neutral-500">{textOut.text}</pre>
+      )}
+      {images.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {images.map((img, k) => {
+            // These used to be <a href="data:…" target="_blank">, which Chrome silently
+            // refuses to navigate to (top-level data: URLs blocked since v60) — the link
+            // never worked. Route them into the same lightbox as the panel instead,
+            // matching them up by identity so it opens on the right frame.
+            const at = shots.findIndex((s) => s.id === `${tool.id || ""}:${k}` || (!!img.data && s.data === img.data));
+            return (
+              <button key={k} onClick={() => onOpenShot(at >= 0 ? at : shots.length - 1)}
+                disabled={!shots.length} title="Open full size">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={imageSrc(img) || undefined} loading="lazy" alt="" className="h-24 rounded border border-white/10 object-cover transition-opacity hover:opacity-80" />
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </details>
+  );
+}
+
+/**
+ * A reply's work, folded under its answer: one line that says how much happened ("21 steps · 3 files ·
+ * 1 agent", a dot per kind of step), and the per-call rows behind it (§39, pitch chat-panel V1).
+ *
+ * Why one per REPLY rather than per row: a reply streams as several rows (a paragraph, a tool run,
+ * another paragraph), and a fold per row put five "3 steps" lines down one answer — the same noise the
+ * per-call rows were, just smaller. ChatColumn gathers the run and hands it to the run's last shown row.
+ *
+ * The rows only mount while open. A long run is hundreds of calls, each a JSON.stringify of its input;
+ * folded by default, that cost is now paid only for the reply you actually open.
+ */
+// Finished = `done` OR an `ok` verdict: calls read back from disk never carry `done` (claude-sessions.ts
+// only sets `ok` when the result lands), and keying on `done` alone said "56 running" on a reply that had
+// finished. `live` additionally limits "running" to the reply streaming now — an orphaned call (a killed
+// turn never got its result) is not running, it's just unanswered.
+function WorkReceipt({ tools, live, startOpen, shots, onOpenShot }: { tools: AgentToolCall[]; live: boolean; startOpen: boolean; shots: BrowserState["shots"]; onOpenShot: (i: number) => void }) {
+  const [open, setOpen] = useState(startOpen);
+  const files = new Set<string>();
+  const kinds = new Map<ToolCategory, number>();
+  let agents = 0, running = 0, failed = 0;
+  for (const x of tools) {
+    const w = writtenBy(x);
+    if (w) files.add(w.path);
+    const c = toolCategory(x.name);
+    kinds.set(c, (kinds.get(c) || 0) + 1);
+    if (c === "task") agents++;
+    if (!x.done && typeof x.ok !== "boolean") { if (live) running++; }
+    else if (x.ok === false) failed++;
+  }
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const parts = [plural(tools.length, "step"), files.size ? plural(files.size, "file") : "", agents ? plural(agents, "agent") : ""].filter(Boolean);
+  return (
+    <div className="mt-3 overflow-hidden rounded-xl border border-white/[0.07] bg-black/40 text-xs">
+      <button onClick={() => setOpen((v) => !v)} className="flex h-9 w-full items-center gap-2.5 px-3 text-left text-neutral-400 transition-colors hover:bg-white/[0.03]">
+        <span className="w-2.5 text-neutral-500">{open ? "▾" : "▸"}</span>
+        <span className="font-medium text-neutral-200">{parts.join(" · ")}</span>
+        <span className="flex items-center gap-[3px]">
+          {[...kinds].sort((a, b) => b[1] - a[1]).map(([c, n]) => (
+            <span key={c} title={`${c} ×${n}`} className="h-[7px] w-[7px] rounded-full" style={{ background: TOOL_TINT[c] }} />
+          ))}
+        </span>
+        {(running > 0 || failed > 0) && (
+          <span className="ml-auto shrink-0 text-[10px]" style={{ color: running ? "#9ca3af" : "#ef7c7c" }}>{running ? `${running} running` : `${failed} failed`}</span>
+        )}
+      </button>
+      {open && (
+        <div className="border-t border-white/[0.06] px-2 pb-2">
+          {tools.map((tool, j) => <ToolCallRow key={tool.id || j} tool={tool} shots={shots} onOpenShot={onOpenShot} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const TurnRow = memo(function TurnRow({ turn: t, receipt, receiptOpen, shots, onOpenShot, onOpenFile, onComment, live, sameSpeaker }: {
   turn: RenderTurn;
-  showTools: boolean;
+  /** The whole reply's tool calls when this is the reply's last shown row, else null. Identity is
+   *  cached by ChatColumn so a finished reply's array is stable and the memo still skips the row. */
+  receipt: AgentToolCall[] | null;
+  /** The "show tool logs" setting: it used to decide whether calls rendered at all; now it only says
+   *  whether a receipt starts open. */
+  receiptOpen: boolean;
   /** Previous row was the same role — suppress the repeated speaker label. Derived at the call site
    *  (a plain boolean) so TurnRow's memo comparison stays shallow. */
   sameSpeaker: boolean;
@@ -2677,59 +2838,7 @@ const TurnRow = memo(function TurnRow({ turn: t, showTools, shots, onOpenShot, o
                   <ActivityLine busy={live.busy} activity={live.activity} elapsed={live.elapsed} turnElapsed={live.turnElapsed} link={live.link} notices={live.notices} />
                 </div>
               )}
-              {showTools && t.tools.map((tool, j) => {
-                const cat = toolCategory(tool.name);
-                const tint = TOOL_TINT[cat];
-                const Icon = TOOL_ICON[cat];
-                // Result content, not just the input — a browser tool's screenshot lives here, and any
-                // tool's text result is now worth showing instead of just what was asked of it.
-                const images = tool.output?.blocks.filter((b): b is Extract<ToolOutputBlock, { type: "image" }> => b.type === "image") || [];
-                const textOut = tool.output?.blocks.find((b): b is Extract<ToolOutputBlock, { type: "text" }> => b.type === "text");
-                return (
-                  <details key={tool.id || j} className="mt-2 rounded-lg border-l-2 bg-black/40 px-2.5 py-1.5 text-xs" style={{ borderLeftColor: tint + "80", borderTop: "1px solid rgba(255,255,255,0.06)", borderRight: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    <summary className="flex cursor-pointer select-none items-center gap-1.5 text-neutral-400">
-                      <Icon className="h-3 w-3 shrink-0" style={{ color: tint }} strokeWidth={2.25} />
-                      <span className="rounded px-1.5 py-0.5 text-[10px] font-medium" style={{ background: tint + "1e", color: tint }}>{tool.name}</span>
-                      <span className="min-w-0 flex-1 truncate text-neutral-500">{activityLabel(tool.name, tool.input)}</span>
-                      {/* Per-call outcome: without it every tool in the transcript looks in-flight. */}
-                      {tool.done
-                        ? <span className="shrink-0 text-[10px]" style={{ color: tool.ok ? "#4ade80" : "#ef7c7c" }}>{tool.ok ? "✓" : "✗"}{tool.ms != null ? ` ${fmtElapsed(tool.ms)}` : ""}</span>
-                        : <span className="shrink-0 text-[10px] text-neutral-600">running…</span>}
-                    </summary>
-                    {/* Browser calls get Claude Code's compact one-field summary instead of a wall of
-                        input JSON (`Claude in Chrome[navigate] example.com`). The JSON is still one
-                        click away — this row is inside a <details> — but the default view stays
-                        scannable across a 30-action QA pass. */}
-                    {cat === "browser" && browserArg(tool.name, tool.input) && (
-                      <p className="mt-1.5 font-mono text-[11px] text-neutral-400">
-                        <span className="text-neutral-500">{browserVerb(tool.name)}</span> {browserArg(tool.name, tool.input)}
-                      </p>
-                    )}
-                    <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-neutral-400">{JSON.stringify(tool.input, null, 2)}</pre>
-                    {textOut && (
-                      <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-black/30 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-neutral-500">{textOut.text}</pre>
-                    )}
-                    {images.length > 0 && (
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {images.map((img, k) => {
-                          // These used to be <a href="data:…" target="_blank">, which Chrome silently
-                          // refuses to navigate to (top-level data: URLs blocked since v60) — the link
-                          // never worked. Route them into the same lightbox as the panel instead,
-                          // matching them up by identity so it opens on the right frame.
-                          const at = shots.findIndex((s) => s.id === `${tool.id || ""}:${k}` || (!!img.data && s.data === img.data));
-                          return (
-                            <button key={k} onClick={() => onOpenShot(at >= 0 ? at : shots.length - 1)}
-                              disabled={!shots.length} title="Open full size">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={imageSrc(img) || undefined} loading="lazy" alt="" className="h-24 rounded border border-white/10 object-cover transition-opacity hover:opacity-80" />
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </details>
-                );
-              })}
+              {receipt && receipt.length > 0 && <WorkReceipt tools={receipt} live={!!live} startOpen={receiptOpen} shots={shots} onOpenShot={onOpenShot} />}
             </div>
           </div>
   );
@@ -2992,7 +3101,39 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
   // not one of those turns carried assistant text, so every one of them was filtered out here and the
   // created/changed chips rendered exactly zero times. The panel still listed the files, which made it
   // worse — the transcript silently disagreed with the panel about whether anything had happened.
-  const allVisible = showTools ? source : source.filter((t) => t.text.trim() || t.streaming || t.tools.some((x) => writtenBy(x)));
+  //
+  // Tool-only rows no longer render even with "show tool logs" on: every call now lives in its reply's
+  // receipt (§39), so such a row would be an empty bubble. One exception keeps a reply that never said
+  // anything from vanishing: the last row of a run with tools is kept to carry the receipt.
+  const receiptCache = useRef(new WeakMap<RenderTurn, { sig: string; tools: AgentToolCall[] }>());
+  const { allVisible, receipts } = useMemo(() => {
+    const keep = (t: RenderTurn) => !!(t.text.trim() || t.streaming || t.tools.some((x) => writtenBy(x)));
+    const shown = new Set<RenderTurn>();
+    const receipts = new Map<RenderTurn, AgentToolCall[]>();
+    let run: AgentToolCall[] = [];
+    let anchor: RenderTurn | null = null, last: RenderTurn | null = null;
+    const flush = () => {
+      const at = anchor || last;
+      if (at && run.length) {
+        shown.add(at);
+        // The signature carries each call's done/ok, so a call that finishes yields a new array and the
+        // row re-renders; a finished reply hits the cache and hands TurnRow the same array as before.
+        const sig = run.map((x) => `${x.id || ""}${x.done ? (x.ok ? "+" : "!") : "~"}`).join(",");
+        const hit = receiptCache.current.get(at);
+        if (hit && hit.sig === sig) receipts.set(at, hit.tools);
+        else { receiptCache.current.set(at, { sig, tools: run }); receipts.set(at, run); }
+      }
+      run = []; anchor = null; last = null;
+    };
+    for (const t of source) {
+      if (t.role === "user") { flush(); if (keep(t)) shown.add(t); continue; }
+      run.push(...t.tools);
+      last = t;
+      if (keep(t)) { shown.add(t); anchor = t; }
+    }
+    flush();
+    return { allVisible: source.filter((t) => shown.has(t)), receipts };
+  }, [source]);
   // Lazy render: only the most recent `limit` messages (older revealed on demand). Rendering a long
   // transcript's worth of Markdown up front is a big cost; the tail is what the user actually reads.
   const [limit, setLimit] = useState(40);
@@ -3501,6 +3642,10 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
           )}
           <span className="text-neutral-500">⌄</span>
         </button>}
+        {/* The spacer, not ml-auto: three of the buttons below carry a conditional ml-auto of their own, and
+            a second auto margin would split the free space and strand the pill mid-header. */}
+        <span className="min-w-0 flex-1" />
+        <AgentPill tasks={agent.activity.tasks} notices={agent.notices} busy={agent.busy} />
         {/* Reopen the shared side slot. Two buttons rather than one, because "show the browser" and
             "show the files" are different intents and the slot has to know which one you meant. */}
         {canShowBrowser && slotHidden && (
@@ -3597,11 +3742,8 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
             slot, whenever the pane is idle with agents still in flight — plus a short grace window
             after the last one lands, so the ✓/✗ verdict is seen rather than vanishing with the
             fleet. */}
-        {!agent.busy && (agent.activity.tasks.length > 0 || agent.notices.some((n) => n.kind === "task" && n.at > Date.now() - 3 * 60_000)) && (
-          <div className="mb-1 flex justify-center">
-            <AgentBoard tasks={agent.activity.tasks} finished={agent.notices.filter((n) => n.kind === "task")} />
-          </div>
-        )}
+        {/* The idle bay for agents that outlived the turn moved into the header's AgentPill (§39), which
+            covers the same case — running with no row to carry it, plus a grace window for the verdict. */}
         {/* The factory strip, whenever this pane is a Blacksmith operator console. Persistent, not
             turn-scoped: the whole point is that the factory's state is INDEPENDENT of whether this
             chat is busy, and a strip that only appeared during a turn would answer the question it
@@ -3690,7 +3832,7 @@ function ChatColumn({ paneKey, sessionId, sessions, cwd: cwdProp, isolated, idx,
         )}
         {visible.map((t, i) => (
           <TurnRow
-            key={i} turn={t} showTools={showTools} shots={browser.shots} onOpenShot={setLightbox} onOpenFile={openFile} onComment={openPreview}
+            key={i} turn={t} receipt={receipts.get(t) || null} receiptOpen={showTools} shots={browser.shots} onOpenShot={setLightbox} onOpenFile={openFile} onComment={openPreview}
             sameSpeaker={i > 0 && visible[i - 1].role === t.role && !(visible[i - 1].role === "user" && taskNotesOf(visible[i - 1].text))}
             // Only the LAST row needs the live indicator, so only it receives props that change on
             // every token. Every earlier row gets a prop set that is identical between renders, and
