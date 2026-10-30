@@ -9,6 +9,7 @@ this to do a piece of work; read the subsystem's own doc.
 ---
 
 ### 2026-10-30
+- **Work receipt + agent pill in the chat pane** (§39). Each reply's tool calls fold into one line under the answer that opens to the per-call rows; the in-flow agent card and idle bay become a header pill that opens to the same board. "Show tool logs" now only sets whether receipts start open.
 - **Tasks and chats with a question stand out** (§37). `asksYou` (ask or step) puts one "?" mark on the card (wash, stripe, tag, Answer ›), the collapsed tile's Tasks chip, a jump-to pill in the expanded tile, and the awaiting chat tab.
 
 ### 2026-10-29
