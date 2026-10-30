@@ -195,7 +195,10 @@ The detail is now `app/autopilot/Scoreboard.tsx` (picked from the `autopilot` pi
     results, show as `46+`.
   - It has a ▲/▼ chip vs yesterday and vs 7 days. A lower rank is better, so ▲ is green. With no earlier row the chip
     reads "first reading".
-  - It has a 30-day line: log scale, #1 at the top, 100+ on the floor, and a gap for a day with no reading.
+  - It has a 30-day line, best rank at the top, with a dashed gap for a day with no reading. Since 2026-10-30 the scale
+    fits the ranks in view (linear, at least 8 ranks tall), and switches to log only when they span more than 4×
+    (100+ → #1). The fixed #1–100 log scale drew #51 → #60 as about 2 px. Hovering or touching a day shows that row:
+    rank, change vs the previous reading, Search Console's position, the URL Google ranked, and how many results were read.
 - **Beside the cards:** the one thing that needs you, then the runner's health line, then Run now.
 - **One click away:** the assessment, the run ledger, your part, the rules and the last 14 `ranks.jsonl` lines.
 - **Goal days:** a straight bar in the header, "day 7 of 28". They used to be an arc on the runners' ring.

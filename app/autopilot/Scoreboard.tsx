@@ -12,7 +12,7 @@
 // The ranks come from ~/.minami/goals/<id>/ranks.jsonl (one line per keyword per day, written by the runner); the
 // pages-in-Google count from log.jsonl, one point per day = that day's last run. Score cards come from the goal spec
 // (one per target query, plus pages when the runner measures them), so a new goal gets its cards with no new code.
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Goal, GoalRun, RankRow } from "@/lib/goals";
 import { K } from "../today/ui";
 
@@ -37,6 +37,8 @@ export type Score = {
   dayBefore: RankRow | undefined; weekBefore: RankRow | undefined;
   /** One point per day for the line, oldest first: a number, null (= not in the results read), undefined (no reading). */
   series: (number | null | undefined)[];
+  /** The ranks.jsonl row behind each point of `series` (same index), for the hover readout. */
+  rows: (RankRow | undefined)[];
   /** True when there has never been an earlier reading — the chips say "first reading" instead of a change. */
   first: boolean;
 };
@@ -48,12 +50,12 @@ export function rankScores(g: Goal, days = 30): Score[] {
     const at = (d: string) => rows.find((r) => r.date === d);
     const now = rows.at(-1), day = now?.date;
     const start = rows.length ? (rows[0].date > addDays(today, -(days - 1)) ? rows[0].date : addDays(today, -(days - 1))) : today;
-    const series: Score["series"] = [];
-    for (let d = start; d <= today; d = addDays(d, 1)) series.push(at(d) ? at(d)!.rank : undefined);
+    const series: Score["series"] = [], byDay: Score["rows"] = [];
+    for (let d = start; d <= today; d = addDays(d, 1)) { const r = at(d); series.push(r ? r.rank : undefined); byDay.push(r); }
     // At least a week wide, so the first reading sits on the right, at today, instead of alone at the left edge.
-    while (series.length < 7) series.unshift(undefined);
+    while (series.length < 7) { series.unshift(undefined); byDay.unshift(undefined); }
     return { key: kw, label: `“${kw}”`, color: kwColor(i), now, day, first: rows.length <= 1,
-      dayBefore: day ? at(addDays(day, -1)) : undefined, weekBefore: day ? at(addDays(day, -7)) : undefined, series };
+      dayBefore: day ? at(addDays(day, -1)) : undefined, weekBefore: day ? at(addDays(day, -7)) : undefined, series, rows: byDay };
   });
 }
 
@@ -107,40 +109,81 @@ export function ScoreDeltas({ s }: { s: Score }) {
  *  the "100+" floor; undefined (no reading) leaves a gap, bridged by a faint dash so the eye doesn't read it as a drop.
  *  2026-10-29: Thomas called the unlabelled sparkline "ugly and confusing as hell" — two dashed red/green lines with no
  *  words, and nothing said that UP meant BETTER. So the axis now says #1 / #10 / 100+, the days are named, and the
- *  last point carries its number. The labels are HTML, not SVG text, because the SVG stretches to the width. */
-export function RankLine({ series, color, h = 56 }: { series: (number | null | undefined)[]; color: string; w?: number; h?: number }) {
+ *  last point carries its number. The labels are HTML, not SVG text, because the SVG stretches to the width.
+ *  2026-10-30: "from afar it looks the same" — on a fixed #1–100 log scale, #51 → #60 moved ~2 px. The scale now
+ *  spans only the ranks in view (linear, padded, at least 8 ranks tall so #58 → #59 isn't a cliff); log only when the
+ *  window crosses orders of magnitude (100+ → #2 → #1). The axis names the best and worst rank shown. Hover (or touch)
+ *  a day for its reading: rank, change vs the reading before, Search Console's position, the URL Google ranked. */
+export function RankLine({ series, rows, color, h = 56 }: { series: (number | null | undefined)[]; rows?: (RankRow | undefined)[]; color: string; w?: number; h?: number }) {
+  const [hov, setHov] = useState<number | null>(null);
   const w = 240, n = Math.max(2, series.length), x = (i: number) => (i / (n - 1)) * w;
-  const top = 6, floor = h - 6;
-  const yr = (r: number | null) => (r == null ? floor : top + (Math.log(r) / Math.log(100)) * (floor - top));
+  const top = 8, floor = h - 8;
+  const val = (r: number | null) => r ?? 101;
+  const vals = series.filter((r) => r !== undefined).map((r) => val(r as number | null));
+  const best = vals.length ? Math.min(...vals) : 1, worst = vals.length ? Math.max(...vals) : 101;
+  const log = worst / best > 4;
+  let lo = best, hi = worst;
+  if (!log) { const pad = Math.max(1, (hi - lo) * 0.15), mid = (lo + hi) / 2, half = Math.max(4, (hi - lo) / 2 + pad); lo = Math.max(1, mid - half); hi = lo + 2 * half; }
+  const f = (v: number) => (log ? Math.log(v) : v);
+  const yr = (r: number | null) => (hi === lo ? (top + floor) / 2 : top + ((f(val(r)) - f(lo)) / (f(hi) - f(lo))) * (floor - top));
   const pct = (v: number) => `${(v / h) * 100}%`;
   const pts = series.map((r, i) => (r === undefined ? null : { i, x: x(i), y: yr(r), r }));
   const drawn = pts.filter(Boolean) as { i: number; x: number; y: number; r: number | null }[];
   const lastI = drawn.at(-1)?.i;
   // Solid between consecutive days, dashed across a missing day.
   const segs = drawn.slice(1).map((p, k) => ({ a: drawn[k], b: p, gap: p.i - drawn[k].i > 1 }));
-  const ticks: [string, number][] = [["#1", yr(1)], ["#10", yr(10)], ["100+", floor]];
+  const lab = (v: number) => (v > 100 ? "100+" : `#${v}`);
+  const ticks: [string, number][] = best === worst ? [[lab(best), yr(best)]] : [[lab(best), yr(best)], [lab(worst), yr(worst)]];
   const first = addDays(localDate(), -(series.length - 1));
+  const hp = hov == null ? null : drawn.find((p) => p.i === hov) ?? null;
+  const onMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!drawn.length) return;
+    const b = e.currentTarget.getBoundingClientRect(), fx = ((e.clientX - b.left) / b.width) * w;
+    setHov(drawn.reduce((m, p) => (Math.abs(p.x - fx) < Math.abs(m.x - fx) ? p : m)).i);
+  };
   return (
-    <div className="flex gap-2" aria-hidden>
-      <div className="relative w-8 shrink-0 text-[10.5px] tabular-nums" style={{ height: h, color: K.faint, fontFamily: "var(--today-mono)" }}>
+    <div className="flex gap-2">
+      <div className="relative w-8 shrink-0 text-[10.5px] tabular-nums" style={{ height: h, color: K.faint, fontFamily: "var(--today-mono)" }} aria-hidden>
         {ticks.map(([t, y]) => <span key={t} className="absolute right-0 -translate-y-1/2 leading-none" style={{ top: pct(y) }}>{t}</span>)}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="relative" style={{ height: h }}>
-          <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="absolute inset-0 block h-full w-full" style={{ overflow: "visible" }}>
+        <div className="relative cursor-crosshair" style={{ height: h }} onPointerMove={onMove} onPointerLeave={() => setHov(null)}>
+          <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="absolute inset-0 block h-full w-full" style={{ overflow: "visible" }} aria-hidden>
             {ticks.map(([t, y]) => <line key={t} x1="0" x2={w} y1={y} y2={y} stroke="rgba(255,255,255,.08)" vectorEffect="non-scaling-stroke" />)}
-            {segs.map(({ a, b, gap }, k) => <line key={k} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeOpacity={gap ? 0.4 : 1} strokeWidth="2" strokeDasharray={gap ? "2 4" : undefined} vectorEffect="non-scaling-stroke" />)}
+            {/* A faint wash under the line, so the shape reads from across the room. */}
+            {drawn.length > 1 && <path d={`M${drawn[0].x},${floor} ${drawn.map((p) => `L${p.x},${p.y}`).join(" ")} L${drawn.at(-1)!.x},${floor} Z`} fill={color} fillOpacity={0.1} />}
+            {segs.map(({ a, b, gap }, k) => <line key={k} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeOpacity={gap ? 0.4 : 1} strokeWidth="2.5" strokeDasharray={gap ? "2 4" : undefined} vectorEffect="non-scaling-stroke" />)}
+            {hp && <line x1={hp.x} x2={hp.x} y1={0} y2={h} stroke="rgba(255,255,255,.25)" vectorEffect="non-scaling-stroke" />}
           </svg>
           {/* Dots and the last value in HTML, so they stay round when the SVG stretches. */}
-          {drawn.map((p) => (
-            <i key={p.i} className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ left: `${(p.x / w) * 100}%`, top: pct(p.y), width: p.i === lastI ? 9 : 5, height: p.i === lastI ? 9 : 5, background: color }} />
-          ))}
-          {drawn.length > 0 && (() => { const p = drawn.at(-1)!; return (
-            <span className="absolute whitespace-nowrap text-[11px] font-semibold tabular-nums" style={{ right: 10, top: pct(p.y), color, transform: `translateY(${p.y < h / 2 ? "40%" : "-140%"})` }}>{p.r == null ? "100+" : `#${p.r}`}</span>
+          {drawn.map((p) => {
+            const big = p.i === lastI || p.i === hov;
+            return <i key={p.i} className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ left: `${(p.x / w) * 100}%`, top: pct(p.y), width: big ? 9 : 5, height: big ? 9 : 5, background: color, boxShadow: p.i === hov ? "0 0 0 3px rgba(255,255,255,.25)" : undefined }} />;
+          })}
+          {drawn.length > 0 && hov == null && (() => { const p = drawn.at(-1)!; return (
+            <span className="pointer-events-none absolute whitespace-nowrap text-[11px] font-semibold tabular-nums" style={{ right: 10, top: pct(p.y), color, transform: `translateY(${p.y < h / 2 ? "40%" : "-140%"})` }}>{p.r == null ? "100+" : `#${p.r}`}</span>
           ); })()}
+          {hp && (() => { const pv = drawn[drawn.indexOf(hp) - 1]; return <RankTip p={hp} prev={pv} prevDate={pv && (rows?.[pv.i]?.date ?? addDays(first, pv.i))} row={rows?.[hp.i]} date={rows?.[hp.i]?.date ?? addDays(first, hp.i)} left={hp.x / w} color={color} />; })()}
         </div>
-        <div className="mt-1 flex justify-between text-[10.5px]" style={{ color: K.faint, fontFamily: "var(--today-mono)" }}><span>{shortDay(first)}</span><span>today</span></div>
+        <div className="mt-1 flex justify-between text-[10.5px]" style={{ color: K.faint, fontFamily: "var(--today-mono)" }} aria-hidden><span>{shortDay(first)}</span><span>today</span></div>
       </div>
+    </div>
+  );
+}
+
+/** The hover card on a rank line: one day's reading, as the runner wrote it to ranks.jsonl. */
+function RankTip({ p, prev, prevDate, row, date, left, color }: { p: { r: number | null }; prev?: { r: number | null }; prevDate?: string; row?: RankRow; date: string; left: number; color: string }) {
+  const d = prev ? (prev.r ?? 101) - (p.r ?? 101) : null;
+  const path = row?.url ? row.url.replace(/^https?:\/\/[^/]+/, "") || "/" : null;
+  return (
+    <div className="pointer-events-none absolute bottom-full z-20 mb-2 min-w-[150px] whitespace-nowrap rounded-xl px-3 py-2 text-[12px] leading-[1.5] shadow-lg"
+      style={{ background: "#0d0f13", border: `1px solid ${K.line}`, color: K.muted, left: `${left * 100}%`, transform: `translateX(${left > 0.6 ? "-100%" : left < 0.4 ? "0" : "-50%"})` }}>
+      <div style={{ color: K.faint }}>{shortDay(date)}</div>
+      <div className="text-[16px] font-semibold tabular-nums" style={{ color }}>{row ? rankText(row) : p.r == null ? "100+" : `#${p.r}`}</div>
+      {d != null && <div className="tabular-nums" style={{ color: d > 0 ? SC.green : d < 0 ? SC.red : K.faint }}>{d > 0 ? `▲ ${d}` : d < 0 ? `▼ ${-d}` : "no change"} vs {prevDate ? shortDay(prevDate) : "before"}</div>}
+      {row?.gsc_position != null && <div className="tabular-nums">Search Console: {row.gsc_position.toFixed(1)}</div>}
+      {path && <div>Google ranked {path}</div>}
+      {row && <div style={{ color: K.faint }}>read {row.read} results</div>}
     </div>
   );
 }

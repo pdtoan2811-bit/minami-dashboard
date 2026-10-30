@@ -214,7 +214,7 @@ function GoalDetail({ g, busy, onRun, onChanged, runners }: { g: Goal; busy: boo
         <div className="mt-6 grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.max(1, ranks.length + (pages ? 1 : 0))}, minmax(0, 1fr))` }}>
           {ranks.map((s) => (
             <Tile key={s.key} k={`Rank · ${s.label}`} color={s.color} value={rankText(s.now)} change={rankChange(s)}
-              chart={s.series.filter((x) => x !== undefined).length >= 2 ? <RankLine series={s.series} color={s.color} h={64} /> : null}
+              chart={s.series.filter((x) => x !== undefined).length >= 2 ? <RankLine series={s.series} rows={s.rows} color={s.color} h={88} /> : null}
               note={s.now && s.day !== localDate() ? `as of ${short(s.day!)}` : undefined}
               evidence={<Evidence s={s} />} />
           ))}

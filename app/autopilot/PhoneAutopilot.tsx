@@ -141,7 +141,7 @@ function GoalCard({ g, a, onShrink, onMetric, onResolve, resolving, onChanged }:
           <button key={sc.key} onClick={() => onMetric("rank")} className="block w-full rounded-2xl px-3.5 py-3 text-left active:bg-white/[0.08]" style={{ background: "rgba(0,0,0,.24)" }}>
             <span className="flex items-baseline gap-2"><i className="h-[9px] w-[9px] shrink-0 rounded-full" style={{ background: sc.color }} /><span className="min-w-0 flex-1 truncate text-[15px]" style={{ color: K.muted }}>{sc.label}</span><b className="text-[28px] font-bold leading-none tabular-nums">{rankText(sc.now)}</b></span>
             <span className="mt-1.5 flex flex-wrap gap-1.5"><ScoreDeltas s={sc} /></span>
-            <span className="mt-2 block"><RankLine series={sc.series} color={sc.color} h={44} /></span>
+            <span className="mt-2 block"><RankLine series={sc.series} rows={sc.rows} color={sc.color} h={44} /></span>
           </button>
         ))}
         {cards.pages && (
@@ -214,7 +214,7 @@ function RankView({ g, qi, setQi }: { g: Goal; qi: number; setQi: (i: number) =>
       {all.length > 1 && <div className="mb-3 flex gap-1.5">{all.map((x, i) => <button key={x.key} onClick={() => setQi(i)} className="h-8 rounded-full px-3 text-[13px]" style={i === qi ? { background: tint(C.blue, 22), color: "#fff" } : { background: "rgba(255,255,255,.05)", color: K.muted }}>{x.label}</button>)}</div>}
       <Big verdict={v} value={rankText(sc.now)} rest={`→ goal #${g.spec.target.value}`} sub={`${sc.label} · ${rows.length} day${rows.length === 1 ? "" : "s"} on record`} />
       <div className="mt-2 flex flex-wrap gap-1.5"><ScoreDeltas s={sc} /></div>
-      <div className="mt-4"><RankLine series={sc.series} color={sc.color} h={180} /></div>
+      <div className="mt-4"><RankLine series={sc.series} rows={sc.rows} color={sc.color} h={180} /></div>
       <p className="mt-5 text-[10.5px] font-semibold tracking-[.09em]" style={{ color: K.faint }}>DAY BY DAY · ranks.jsonl</p>
       {rows.slice(0, 30).map((r) => (
         <div key={r.date} className="flex items-baseline gap-3 py-1.5 text-[14px]">
