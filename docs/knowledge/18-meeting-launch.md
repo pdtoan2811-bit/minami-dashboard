@@ -102,6 +102,24 @@ The chain: meeting app on **:3011** (never :3010, the dashboard) → `server/rec
 > **Fix:** before any HTTP probe, the launcher reads the listener's cwd from `lsof` and refuses
 > unless it is this repo, naming the owning folder and pid.
 
+> 🐛 **Tailscale was called "another app" on :3011.** 2026-10-30: `tailscale serve` publishes
+> 3001–3019 to the tailnet, so Tailscale's network extension listens on `100.x:3011` and
+> `[fd7a:…]:3011`. That listener proxies to `127.0.0.1:3011`, which is us. The check above asked `lsof`
+> for *any* listener, so every launch stopped at step 1 with "another app holds :3011 —
+> …/io.tailscale.ipn.macos.network-extension/Data" and told Thomas to `kill` Tailscale. A bind on one
+> tailnet address doesn't stop next from binding loopback or the wildcard (tested both).
+> **Fix:** `port_holders()` counts only listeners on `127.0.0.1`, `[::1]`, `*`, `0.0.0.0` or `[::]`.
+> Those are the only ones that can answer the launcher's `127.0.0.1` probes or take the bind from next.
+> A real rival on loopback or the wildcard is still caught (tested).
+
+### Starting it from the dashboard
+
+`/meetings` → "Send the bot →" (under the laptop start bar, §17b) POSTs `/api/meetings/oncall`, which
+runs `open "bin/Minami Call.command"`. It goes through **`open`, never as a child process**. A launcher spawned
+by next-server would die with the next deploy, mid client call. LaunchServices hands the file to
+Terminal, which owns it. The launcher stays interactive (template, context, Meet link), so the
+request carries nothing into it.
+
 ### Not built / not verified
 
 - No automated test drives a real cold start; the probe functions are verified by hand against a live

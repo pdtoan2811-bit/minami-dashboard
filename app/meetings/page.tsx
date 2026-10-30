@@ -18,6 +18,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { SendTo, type ActionCard } from "./SendTo";
+import { StartBar } from "./StartBar";
 
 type Hit = { kind: string; text: string };
 type Meeting = {
@@ -34,6 +35,8 @@ export default function MeetingsPage() {
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(true);
+  /** Bumped when a meeting started here ends, so the one it just saved appears without a reload. */
+  const [saved, setSaved] = useState(0);
 
   // Debounced: a search reads every transcript on the server, so typing "second brain" should not run
   // eleven full scans on the way there.
@@ -48,7 +51,7 @@ export default function MeetingsPage() {
       setLoading(false);
     }, q ? 260 : 0);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, saved]);
 
   const totalMin = rows.reduce((a, m) => a + m.minutes, 0);
   const totalCost = rows.reduce((a, m) => a + m.cost, 0);
@@ -72,6 +75,8 @@ export default function MeetingsPage() {
             {rows.length} call{rows.length === 1 ? "" : "s"} · {Math.round(totalMin)} min · ${totalCost.toFixed(2)}
           </p>
         </header>
+
+        <StartBar onSaved={() => setSaved((n) => n + 1)} />
 
         <div className="relative mb-5">
           <input

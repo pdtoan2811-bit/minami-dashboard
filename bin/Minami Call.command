@@ -143,13 +143,27 @@ b "  1/4  meeting app"
 #   nothing bound  -> start one, and verify it actually survived
 #   bound + healthy -> reuse it, and do NOT record APP_PID (cleanup must not kill what we did not start)
 #   bound + sick    -> STOP. Never try to start a second server on a taken port.
-if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+#
+# ⚠️ ONLY LISTENERS THAT CAN ANSWER 127.0.0.1 COUNT. `tailscale serve` publishes 3001–3019 to the
+# tailnet, so Tailscale's network extension sits on 100.x:3011 and [fd7a:…]:3011 — a PROXY to
+# 127.0.0.1:3011, i.e. to us. Counting it made every launch refuse with "another app holds :3011 —
+# …/io.tailscale.ipn.macos.network-extension/Data" and advise killing Tailscale (2026-10-30). A bind
+# on a specific tailnet address does not stop next from binding loopback or the wildcard (tested),
+# so only loopback/wildcard listeners are rivals.
+port_holders() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN -Fpn 2>/dev/null | awk '
+    /^p/ { pid = substr($0, 2) }
+    /^n/ { a = substr($0, 2); sub(/:[0-9]+$/, "", a)
+           if (a == "*" || a == "127.0.0.1" || a == "[::1]" || a == "0.0.0.0" || a == "[::]" || a == "localhost") print pid }' | sort -u
+}
+HOLDERS=$(port_holders "$PORT")
+if [ -n "$HOLDERS" ]; then
   # ⚠️ "BOUND + HEALTHY" IS NOT "BOUND + OURS". On 2026-10-01 ~/qikifyStoreLeadsKnowledge — whose
   # package.json hardcodes `next dev -p 3011` — was on this port. Its `/` answered 200, so it was
   # reused as the meeting app, and the only symptom was "ingest returned 000" one step later, which
   # points at the token rather than at a stranger on the port. Ask the kernel whose process it is
   # (its cwd) before asking it anything over HTTP.
-  OWNER_PID=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)
+  OWNER_PID=$(printf '%s\n' "$HOLDERS" | head -1)
   OWNER_CWD=$(lsof -a -p "$OWNER_PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
   if [ -n "$OWNER_CWD" ] && [ "$OWNER_CWD" != "$PWD" ]; then
     no "another app holds :${PORT} — ${OWNER_CWD} (pid ${OWNER_PID})"
